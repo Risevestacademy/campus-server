@@ -1,0 +1,17 @@
+# Only the two repo admins can approve. Their review is required on every PR
+
+# into dev and main.
+
+#
+
+# IMPORTANT: this file must exist on BOTH dev and main. GitHub reads CODEOWNERS
+
+# from the base branch of the pull request. Missing on main = release PRs can
+
+# never be approved.
+
+- @Risevestacademy/admins
+
+# GitHub blocks approving your own PR, so when one admin opens a PR the other
+
+# admin must approve it. No extra configuration needed.
