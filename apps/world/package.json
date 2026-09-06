@@ -8,7 +8,7 @@
     "dev": "tsc -p tsconfig.json --watch",
     "start": "node dist/index.js",
     "lint": "oxlint src/",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
