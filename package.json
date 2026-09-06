@@ -1,0 +1,35 @@
+{
+  "name": "campus-server",
+  "private": true,
+  "packageManager": "pnpm@10.26.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "dev:api": "pnpm --filter campus-api start:dev",
+    "dev:world": "pnpm --filter world dev",
+    "build:api": "pnpm --filter campus-api build",
+    "build:world": "pnpm --filter world build",
+    "start:api": "pnpm --filter campus-api start",
+    "start:world": "pnpm --filter world start",
+    "start:api:prod": "pnpm --filter campus-api start:prod",
+    "db:migrate": "pnpm --filter campus-api db:migrate",
+    "db:generate": "pnpm --filter campus-api db:generate",
+    "db:push": "pnpm --filter campus-api db:push",
+    "db:studio": "pnpm --filter campus-api db:studio",
+    "test:api": "pnpm --filter campus-api test",
+    "test:world": "pnpm --filter world test",
+    "lint:api": "pnpm --filter campus-api lint",
+    "lint:world": "pnpm --filter world lint",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
+    "husky": "^9.1.7"
+  }
+}
