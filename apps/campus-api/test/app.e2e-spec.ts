@@ -1,12 +1,22 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Body, Controller, INestApplication, Post, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  INestApplication,
+  Post,
+  ValidationPipe,
+} from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { IsEmail, IsNotEmpty } from 'class-validator';
 
 import { AppModule } from './../src/app.module.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
-import { DomainExceptionFilter, GlobalExceptionFilter, ValidationExceptionFilter } from './../src/shared/filters/index.js';
+import {
+  DomainExceptionFilter,
+  GlobalExceptionFilter,
+  ValidationExceptionFilter,
+} from './../src/shared/filters/index.js';
 
 class CreateUserDto {
   @IsNotEmpty()
@@ -19,8 +29,8 @@ class CreateUserDto {
 @Controller('test')
 class TestController {
   @Post()
-  create(@Body() dto: CreateUserDto): string {
-    return `created ${dto.name}`;
+  create(@Body() dto: CreateUserDto) {
+    return { created: dto.name };
   }
 }
 
@@ -42,7 +52,11 @@ describe('AppController (e2e)', () => {
         exceptionFactory: (errors) => new ValidationException(errors),
       }),
     );
-    app.useGlobalFilters(new GlobalExceptionFilter(), new DomainExceptionFilter(), new ValidationExceptionFilter());
+    app.useGlobalFilters(
+      new GlobalExceptionFilter(),
+      new DomainExceptionFilter(),
+      new ValidationExceptionFilter(),
+    );
     await app.init();
   });
 
