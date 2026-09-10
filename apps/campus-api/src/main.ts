@@ -8,9 +8,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Logger } from 'nestjs-pino';
+import { PostHogInterceptor } from 'posthog-node/nestjs';
 
 import { AppModule } from './app.module.js';
 import { loadEnv } from './infra/config/env.js';
+import { initPostHog } from './infra/posthog/posthog.js';
 import { initTelemetry } from './infra/telemetry/telemetry.js';
 import { ValidationException } from './shared/exceptions/index.js';
 import { DomainExceptionFilter, GlobalExceptionFilter, ValidationExceptionFilter } from './shared/filters/index.js';
@@ -25,12 +27,39 @@ function loadApiDescription(): string {
 
 async function bootstrap() {
   const config = loadEnv();
-  initTelemetry({
+  const telemetry = initTelemetry({
     serviceName: config.OTEL_SERVICE_NAME,
     version: '1.0.0',
     environment: config.DEPLOYMENT_ENVIRONMENT,
     enabled: config.FF_OTEL_ENABLED,
     metricsEnabled: config.FF_OTEL_METRICS_ENABLED,
+  });
+  const posthogClient = initPostHog({
+    apiKey: config.POSTHOG_API_KEY,
+    host: config.POSTHOG_HOST,
+    enabled: config.FF_POSTHOG_ENABLED,
+  });
+
+  // One handler for every resource that needs to flush before exit — each
+  // registering its own SIGTERM listener would race, since the first one to
+  // call process.exit() cuts off whichever hasn't finished flushing yet.
+  process.on('SIGTERM', () => {
+    Promise.allSettled([
+      config.FF_OTEL_ENABLED ? telemetry.shutdown() : Promise.resolve(),
+      posthogClient ? posthogClient.shutdown() : Promise.resolve(),
+    ])
+      .then((results) => {
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            console.error('Error during shutdown', result.reason);
+          }
+        }
+        process.exit(0);
+      })
+      .catch((err: unknown) => {
+        console.error('Error during shutdown', err);
+        process.exit(1);
+      });
   });
 
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -47,6 +76,10 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(new GlobalExceptionFilter(), new DomainExceptionFilter(), new ValidationExceptionFilter());
+
+  if (posthogClient) {
+    app.useGlobalInterceptors(new PostHogInterceptor(posthogClient, { captureExceptions: true }));
+  }
 
   const documentConfig = new DocumentBuilder()
     .setTitle('campus-api')
