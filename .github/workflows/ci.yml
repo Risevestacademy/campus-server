@@ -55,7 +55,7 @@ jobs:
         working-directory: apps/campus-api
         env:
           FF_POSTHOG_ENABLED: 'true'
-          POSTHOG_API_KEY: phc_dummy_key_for_ci_smoke_test
+          POSTHOG_PROJECT_TOKEN: phc_dummy_key_for_ci_smoke_test
         run: |
           node dist/main.js > boot.log 2>&1 &
           echo $! > app.pid

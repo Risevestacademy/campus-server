@@ -14,7 +14,14 @@ import {
   validateSync,
 } from 'class-validator';
 
-const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+const LOG_LEVELS = [
+  'trace',
+  'debug',
+  'info',
+  'warn',
+  'error',
+  'fatal',
+] as const;
 
 export function loadEnv(source: Record<string, unknown> = process.env): Env {
   const env = plainToInstance(Env, source, {});
@@ -81,12 +88,12 @@ export class Env {
 
   @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED)
   @IsNotEmpty()
-  @Matches(/^phc_/, { message: 'POSTHOG_API_KEY must start with "phc_"' })
-  POSTHOG_API_KEY?: string;
+  @Matches(/^phc_/, { message: 'POSTHOG_PROJECT_TOKEN must start with "phc_"' })
+  POSTHOG_PROJECT_TOKEN?: string;
 
   @IsOptional()
   @IsUrl({ protocols: ['https'], require_protocol: true })
-  POSTHOG_HOST: string = 'https://us.i.posthog.com';
+  POSTHOG_HOST: string = 'https://eu.i.posthog.com';
 
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => {

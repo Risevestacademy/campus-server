@@ -15,11 +15,18 @@ import { loadEnv } from './infra/config/env.js';
 import { initPostHog } from './infra/posthog/posthog.js';
 import { initTelemetry } from './infra/telemetry/telemetry.js';
 import { ValidationException } from './shared/exceptions/index.js';
-import { DomainExceptionFilter, GlobalExceptionFilter, ValidationExceptionFilter } from './shared/filters/index.js';
+import {
+  DomainExceptionFilter,
+  GlobalExceptionFilter,
+  ValidationExceptionFilter,
+} from './shared/filters/index.js';
 
 function loadApiDescription(): string {
   try {
-    return readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'intro.md'), 'utf8');
+    return readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'intro.md'),
+      'utf8',
+    );
   } catch {
     return 'Campus API. See the integration guide in docs/intro.md for conventions.';
   }
@@ -35,7 +42,7 @@ async function bootstrap() {
     metricsEnabled: config.FF_OTEL_METRICS_ENABLED,
   });
   const posthogClient = initPostHog({
-    apiKey: config.POSTHOG_API_KEY,
+    apiKey: config.POSTHOG_PROJECT_TOKEN,
     host: config.POSTHOG_HOST,
     enabled: config.FF_POSTHOG_ENABLED,
   });
@@ -75,10 +82,16 @@ async function bootstrap() {
       exceptionFactory: (errors) => new ValidationException(errors),
     }),
   );
-  app.useGlobalFilters(new GlobalExceptionFilter(), new DomainExceptionFilter(), new ValidationExceptionFilter());
+  app.useGlobalFilters(
+    new GlobalExceptionFilter(),
+    new DomainExceptionFilter(),
+    new ValidationExceptionFilter(),
+  );
 
   if (posthogClient) {
-    app.useGlobalInterceptors(new PostHogInterceptor(posthogClient, { captureExceptions: true }));
+    app.useGlobalInterceptors(
+      new PostHogInterceptor(posthogClient, { captureExceptions: true }),
+    );
   }
 
   const documentConfig = new DocumentBuilder()

@@ -4,7 +4,7 @@ Exception tracking only — no custom product events from the backend.
 
 ## How it's set up
 
-- Env vars: `FF_POSTHOG_ENABLED`, `POSTHOG_API_KEY` (must start with `phc_`),
+- Env vars: `FF_POSTHOG_ENABLED`, `POSTHOG_PROJECT_TOKEN` (must start with `phc_`),
   `POSTHOG_HOST` (must be HTTPS) — validated at boot in
   [env.ts](../apps/campus-api/src/infra/config/env.ts). Disabled by default;
   set per Railway environment only.
