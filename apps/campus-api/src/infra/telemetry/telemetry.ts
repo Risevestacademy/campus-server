@@ -43,17 +43,5 @@ export function initTelemetry(options: TelemetryOptions): NodeSDK {
 
   sdk.start();
 
-  process.on('SIGTERM', () => {
-    sdk
-      .shutdown()
-      .then(() => {
-        process.exit(0);
-      })
-      .catch((err) => {
-        console.error('Error shutting down telemetry', err);
-        process.exit(1);
-      });
-  });
-
   return sdk;
 }
