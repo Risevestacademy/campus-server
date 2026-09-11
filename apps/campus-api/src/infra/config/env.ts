@@ -1,8 +1,27 @@
 import { plainToInstance } from 'class-transformer';
 import { Type, Transform } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Min, validateSync } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Matches,
+  Min,
+  ValidateIf,
+  validateSync,
+} from 'class-validator';
 
-const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+const LOG_LEVELS = [
+  'trace',
+  'debug',
+  'info',
+  'warn',
+  'error',
+  'fatal',
+] as const;
 
 export function loadEnv(source: Record<string, unknown> = process.env): Env {
   const env = plainToInstance(Env, source, {});
@@ -66,4 +85,21 @@ export class Env {
   })
   @IsBoolean()
   FF_OTEL_METRICS_ENABLED: boolean = true;
+
+  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED)
+  @IsNotEmpty()
+  @Matches(/^phc_/, { message: 'POSTHOG_PROJECT_TOKEN must start with "phc_"' })
+  POSTHOG_PROJECT_TOKEN?: string;
+
+  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED)
+  @IsUrl({ protocols: ['https'], require_protocol: true })
+  POSTHOG_HOST: string = 'https://eu.i.posthog.com';
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_POSTHOG_ENABLED: boolean = false;
 }

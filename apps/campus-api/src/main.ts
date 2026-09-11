@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 
+import type { INestApplication } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -11,13 +12,23 @@ import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module.js';
 import { loadEnv } from './infra/config/env.js';
+import { initPostHog } from './infra/posthog/posthog.js';
+import { PostHogExceptionInterceptor } from './infra/posthog/posthog.interceptor.js';
+import { gracefulShutdown } from './infra/shutdown.js';
 import { initTelemetry } from './infra/telemetry/telemetry.js';
 import { ValidationException } from './shared/exceptions/index.js';
-import { DomainExceptionFilter, GlobalExceptionFilter, ValidationExceptionFilter } from './shared/filters/index.js';
+import {
+  DomainExceptionFilter,
+  GlobalExceptionFilter,
+  ValidationExceptionFilter,
+} from './shared/filters/index.js';
 
 function loadApiDescription(): string {
   try {
-    return readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'intro.md'), 'utf8');
+    return readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'intro.md'),
+      'utf8',
+    );
   } catch {
     return 'Campus API. See the integration guide in docs/intro.md for conventions.';
   }
@@ -25,15 +36,34 @@ function loadApiDescription(): string {
 
 async function bootstrap() {
   const config = loadEnv();
-  initTelemetry({
+  const telemetry = initTelemetry({
     serviceName: config.OTEL_SERVICE_NAME,
     version: '1.0.0',
     environment: config.DEPLOYMENT_ENVIRONMENT,
     enabled: config.FF_OTEL_ENABLED,
     metricsEnabled: config.FF_OTEL_METRICS_ENABLED,
   });
+  const posthogClient = initPostHog({
+    apiKey: config.POSTHOG_PROJECT_TOKEN,
+    host: config.POSTHOG_HOST,
+    enabled: config.FF_POSTHOG_ENABLED,
+  });
 
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  let app: INestApplication | undefined;
+
+  process.on('SIGTERM', () => {
+    gracefulShutdown(app, [
+      () => (config.FF_OTEL_ENABLED ? telemetry.shutdown() : Promise.resolve()),
+      () => (posthogClient ? posthogClient.shutdown() : Promise.resolve()),
+    ])
+      .then(() => process.exit(0))
+      .catch((err: unknown) => {
+        console.error('Error during shutdown', err);
+        process.exit(1);
+      });
+  });
+
+  app = await NestFactory.create(AppModule, { bufferLogs: true });
 
   app.useLogger(app.get(Logger));
 
@@ -46,7 +76,15 @@ async function bootstrap() {
       exceptionFactory: (errors) => new ValidationException(errors),
     }),
   );
-  app.useGlobalFilters(new GlobalExceptionFilter(), new DomainExceptionFilter(), new ValidationExceptionFilter());
+  app.useGlobalFilters(
+    new GlobalExceptionFilter(),
+    new DomainExceptionFilter(),
+    new ValidationExceptionFilter(),
+  );
+
+  if (posthogClient) {
+    app.useGlobalInterceptors(new PostHogExceptionInterceptor(posthogClient));
+  }
 
   const documentConfig = new DocumentBuilder()
     .setTitle('campus-api')

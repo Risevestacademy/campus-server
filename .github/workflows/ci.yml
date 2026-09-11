@@ -47,6 +47,37 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      # No test builds AppModule through main.ts's actual bootstrap() — e2e
+      # tests go through Test.createTestingModule instead. This catches
+      # wiring bugs in main.ts itself (interceptor registration, shutdown
+      # handling) that nothing else would.
+      - name: API boot smoke test
+        working-directory: apps/campus-api
+        env:
+          FF_POSTHOG_ENABLED: 'true'
+          POSTHOG_PROJECT_TOKEN: phc_dummy_key_for_ci_smoke_test
+        run: |
+          node dist/main.js > boot.log 2>&1 &
+          echo $! > app.pid
+
+          ready=false
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/v1/health > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" = false ]; then
+            echo "App failed to become healthy within 30s"
+            cat boot.log
+            kill "$(cat app.pid)" 2>/dev/null || true
+            exit 1
+          fi
+
+          kill "$(cat app.pid)"
+
   e2e:
     name: e2e
     runs-on: ubuntu-latest
