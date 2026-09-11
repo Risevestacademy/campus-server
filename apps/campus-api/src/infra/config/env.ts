@@ -91,7 +91,7 @@ export class Env {
   @Matches(/^phc_/, { message: 'POSTHOG_PROJECT_TOKEN must start with "phc_"' })
   POSTHOG_PROJECT_TOKEN?: string;
 
-  @IsOptional()
+  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED)
   @IsUrl({ protocols: ['https'], require_protocol: true })
   POSTHOG_HOST: string = 'https://eu.i.posthog.com';
 

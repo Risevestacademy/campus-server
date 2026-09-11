@@ -2,6 +2,7 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from
 import { Response } from 'express';
 
 import { ExceptionCode } from '../exceptions/exception-code.enum.js';
+import { resolveExceptionStatus } from '../exceptions/resolve-status.js';
 import type { ErrorResponse } from './error-response.js';
 
 @Catch()
@@ -10,7 +11,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
 
-    const status = this.resolveStatus(exception);
+    const status = resolveExceptionStatus(exception);
     const body: ErrorResponse = {
       error: {
         code: this.mapStatusToCode(status),
@@ -19,13 +20,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     };
 
     response.status(status).json(body);
-  }
-
-  private resolveStatus(exception: unknown): number {
-    if (exception instanceof HttpException) {
-      return exception.getStatus();
-    }
-    return HttpStatus.INTERNAL_SERVER_ERROR;
   }
 
   private resolveMessage(exception: unknown): string {

@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 
+import type { INestApplication } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -8,11 +9,12 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Logger } from 'nestjs-pino';
-import { PostHogInterceptor } from 'posthog-node/nestjs';
 
 import { AppModule } from './app.module.js';
 import { loadEnv } from './infra/config/env.js';
 import { initPostHog } from './infra/posthog/posthog.js';
+import { PostHogExceptionInterceptor } from './infra/posthog/posthog.interceptor.js';
+import { gracefulShutdown } from './infra/shutdown.js';
 import { initTelemetry } from './infra/telemetry/telemetry.js';
 import { ValidationException } from './shared/exceptions/index.js';
 import {
@@ -47,29 +49,21 @@ async function bootstrap() {
     enabled: config.FF_POSTHOG_ENABLED,
   });
 
-  // One handler for every resource that needs to flush before exit — each
-  // registering its own SIGTERM listener would race, since the first one to
-  // call process.exit() cuts off whichever hasn't finished flushing yet.
+  let app: INestApplication | undefined;
+
   process.on('SIGTERM', () => {
-    Promise.allSettled([
-      config.FF_OTEL_ENABLED ? telemetry.shutdown() : Promise.resolve(),
-      posthogClient ? posthogClient.shutdown() : Promise.resolve(),
+    gracefulShutdown(app, [
+      () => (config.FF_OTEL_ENABLED ? telemetry.shutdown() : Promise.resolve()),
+      () => (posthogClient ? posthogClient.shutdown() : Promise.resolve()),
     ])
-      .then((results) => {
-        for (const result of results) {
-          if (result.status === 'rejected') {
-            console.error('Error during shutdown', result.reason);
-          }
-        }
-        process.exit(0);
-      })
+      .then(() => process.exit(0))
       .catch((err: unknown) => {
         console.error('Error during shutdown', err);
         process.exit(1);
       });
   });
 
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app = await NestFactory.create(AppModule, { bufferLogs: true });
 
   app.useLogger(app.get(Logger));
 
@@ -89,9 +83,7 @@ async function bootstrap() {
   );
 
   if (posthogClient) {
-    app.useGlobalInterceptors(
-      new PostHogInterceptor(posthogClient, { captureExceptions: true }),
-    );
+    app.useGlobalInterceptors(new PostHogExceptionInterceptor(posthogClient));
   }
 
   const documentConfig = new DocumentBuilder()

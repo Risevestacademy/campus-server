@@ -27,7 +27,13 @@ describe('loadEnv PostHog validation', () => {
   });
 
   it('succeeds when disabled, regardless of key or host', () => {
-    expect(() => loadEnv({ FF_POSTHOG_ENABLED: 'false' })).not.toThrow();
+    expect(() =>
+      loadEnv({
+        FF_POSTHOG_ENABLED: 'false',
+        POSTHOG_PROJECT_TOKEN: 'not-a-valid-key',
+        POSTHOG_HOST: 'not-a-valid-url',
+      }),
+    ).not.toThrow();
   });
 
   it('succeeds when enabled with a well-formed key and HTTPS host', () => {

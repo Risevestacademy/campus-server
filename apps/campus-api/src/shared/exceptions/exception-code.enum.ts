@@ -8,3 +8,24 @@ export enum ExceptionCode {
   RateLimited = 'RATE_LIMITED',
   InternalError = 'INTERNAL_ERROR',
 }
+
+export function mapExceptionCodeToStatus(code: ExceptionCode): number {
+  switch (code) {
+    case ExceptionCode.InvalidArgument:
+      return 400;
+    case ExceptionCode.Unauthorized:
+      return 401;
+    case ExceptionCode.Forbidden:
+      return 403;
+    case ExceptionCode.NotFound:
+      return 404;
+    case ExceptionCode.Conflict:
+    case ExceptionCode.SpaceAtCapacity:
+      return 409;
+    case ExceptionCode.RateLimited:
+      return 429;
+    case ExceptionCode.InternalError:
+    default:
+      return 500;
+  }
+}
