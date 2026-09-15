@@ -2,7 +2,8 @@ import { Inject, Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
 
-import { CONFIG, type Env } from '../config/config.module.js';
+import { CONFIG } from '../config/config.constants.js';
+import type { Env } from '../config/env.js';
 import { DRIZZLE, type Db } from './database.constants.js';
 import * as schema from './schema/index.js';
 import { SystemRole, UserStatus } from '../../modules/users/schema.js';

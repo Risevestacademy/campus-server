@@ -2,7 +2,8 @@ import { Global, Module } from '@nestjs/common';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 
-import { CONFIG, type Env } from '../config/config.module.js';
+import { CONFIG } from '../config/config.constants.js';
+import type { Env } from '../config/env.js';
 import { DRIZZLE, type Db } from './database.constants.js';
 import * as schema from './schema/index.js';
 import { Seeder } from './seeder.js';
