@@ -26,14 +26,14 @@ describe('loadEnv PostHog validation', () => {
     ).toThrow();
   });
 
-  it('succeeds when disabled, regardless of key or host', () => {
+  it('ignores bogus PostHog values when disabled (missing DEFAULT_ADMIN_EMAIL still fails)', () => {
     expect(() =>
       loadEnv({
         FF_POSTHOG_ENABLED: 'false',
         POSTHOG_PROJECT_TOKEN: 'not-a-valid-key',
         POSTHOG_HOST: 'not-a-valid-url',
       }),
-    ).not.toThrow();
+    ).toThrow(/DEFAULT_ADMIN_EMAIL/);
   });
 
   it('succeeds when enabled with a well-formed key and HTTPS host', () => {
@@ -41,9 +41,27 @@ describe('loadEnv PostHog validation', () => {
       FF_POSTHOG_ENABLED: 'true',
       POSTHOG_PROJECT_TOKEN: 'phc_valid123',
       POSTHOG_HOST: 'https://us.i.posthog.com',
+      DEFAULT_ADMIN_EMAIL: 'admin@campus.local',
     });
 
     expect(env.FF_POSTHOG_ENABLED).toBe(true);
     expect(env.POSTHOG_PROJECT_TOKEN).toBe('phc_valid123');
+  });
+});
+
+describe('loadEnv DEFAULT_ADMIN_EMAIL validation', () => {
+  it('throws when DEFAULT_ADMIN_EMAIL is missing', () => {
+    expect(() => loadEnv({})).toThrow(/DEFAULT_ADMIN_EMAIL/);
+  });
+
+  it('throws when DEFAULT_ADMIN_EMAIL is not an email', () => {
+    expect(() => loadEnv({ DEFAULT_ADMIN_EMAIL: 'not-an-email' })).toThrow(
+      /DEFAULT_ADMIN_EMAIL/,
+    );
+  });
+
+  it('succeeds with a valid email', () => {
+    const env = loadEnv({ DEFAULT_ADMIN_EMAIL: 'admin@campus.local' });
+    expect(env.DEFAULT_ADMIN_EMAIL).toBe('admin@campus.local');
   });
 });
