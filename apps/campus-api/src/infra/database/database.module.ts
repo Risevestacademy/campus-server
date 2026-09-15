@@ -1,10 +1,11 @@
 import { Global, Module } from '@nestjs/common';
-import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 
 import { CONFIG, type Env } from '../config/config.module.js';
-import { DRIZZLE } from './database.constants.js';
+import { DRIZZLE, type Db } from './database.constants.js';
 import * as schema from './schema/index.js';
+import { Seeder } from './seeder.js';
 
 @Global()
 @Module({
@@ -12,12 +13,13 @@ import * as schema from './schema/index.js';
     {
       provide: DRIZZLE,
       inject: [CONFIG],
-      useFactory: (config: Env): PostgresJsDatabase<typeof schema> => {
+      useFactory: (config: Env): Db => {
         const sql = postgres(config.DATABASE_URL);
         return drizzle(sql, { schema });
       },
     },
+    Seeder,
   ],
-  exports: [DRIZZLE],
+  exports: [DRIZZLE, Seeder],
 })
 export class DatabaseModule {}

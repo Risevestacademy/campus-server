@@ -1,0 +1,518 @@
+%% =====================================================================
+%% Campus by Rise — full ERD
+%% GENERATED FROM campus_schema.dbml — do not hand-edit (TRD §10).
+%% 34 tables. Conforms to TRD v1.0 §10.1 invariants and §10.2 constraints.
+%% -
+%% Partial unique indexes and CHECK constraints cannot be expressed in
+%% Mermaid; they are documented in the DBML Note fields and listed at the
+%% bottom of this file.
+%% =====================================================================
+
+erDiagram
+
+    %% ---------------------------------------------------- org + identity
+
+    USERS {
+        uuid id PK
+        varchar email
+        varchar provider "google"
+        varchar provider_id
+        varchar first_name
+        varchar last_name
+        varchar display_name
+        varchar phone
+        text bio
+        varchar avatar_url "profile photo"
+        varchar sprite_key "map sprite"
+        system_role_enum system_role "user | admin"
+        user_status_enum status "active | suspended"
+        timestamptz last_login_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    TRACKS {
+        uuid id PK
+        varchar name
+        varchar code
+        text description
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    COHORTS {
+        uuid id PK
+        varchar name
+        varchar code
+        date start_date
+        date end_date
+        varchar status
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    COHORT_TRACKS {
+        uuid id PK
+        uuid cohort_id FK
+        uuid track_id FK
+        timestamptz created_at
+    }
+
+    COHORT_MEMBERS {
+        uuid id PK
+        uuid cohort_id FK
+        uuid user_id FK
+        uuid cohort_track_id FK "required for students"
+        cohort_role_enum role "student professor mentor"
+        student_status_enum status "students only"
+        text dismissal_reason "students only"
+        timestamptz joined_at
+        timestamptz left_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    INVITES {
+        uuid id PK
+        varchar email
+        uuid cohort_id FK "null for admin invites"
+        uuid cohort_track_id FK "required for student invites"
+        uuid mentorship_group_id FK "nullable, may be deferred"
+        cohort_role_enum cohort_role
+        system_role_enum system_role
+        varchar token_hash UK "hash only"
+        invite_status_enum status
+        uuid invited_by FK
+        timestamptz expires_at
+        timestamptz accepted_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    MENTORSHIP_GROUPS {
+        uuid id PK
+        uuid cohort_id FK
+        uuid mentor_member_id FK "FK to COHORT_MEMBERS"
+        uuid space_id FK "the pod, nullable"
+        varchar name
+        text description
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    MENTORSHIP_GROUP_STUDENTS {
+        uuid id PK
+        uuid mentorship_group_id FK
+        uuid cohort_member_id FK
+        timestamptz joined_at
+    }
+
+    %% ------------------------------------------------------------- world
+
+    MAPS {
+        uuid id PK
+        varchar key
+        varchar name
+        map_kind_enum kind "main faculty admin_block resource_centre meeting_rooms"
+        uuid track_id FK "faculty maps only"
+        varchar asset_key "versioned tilemap asset"
+        int width_tiles
+        int height_tiles
+        boolean is_entry
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    SPACES {
+        uuid id PK
+        uuid map_id FK
+        varchar key
+        varchar name
+        space_kind_enum kind
+        audio_mode_enum audio_mode "proximity boundary broadcast"
+        space_access_enum access "open cohort invite request"
+        outsider_visibility_enum outsider_visibility
+        int capacity "null is uncapped"
+        publish_policy_enum publish_policy
+        jsonb bounds "x y w h in tiles"
+        numeric audible_radius "gain falloff, client-side"
+        numeric subscribe_radius "drives LiveKit subscription"
+        numeric hysteresis_factor "default 1.2"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    SPACE_MEMBERSHIPS {
+        uuid id PK
+        uuid space_id FK
+        uuid cohort_track_id FK "cohort gating"
+        uuid user_id FK "invite gating"
+        uuid granted_by FK
+        timestamptz valid_from
+        timestamptz valid_to
+        timestamptz created_at
+    }
+
+    PORTALS {
+        uuid id PK
+        uuid from_map_id FK
+        uuid from_space_id FK
+        jsonb from_region "trigger region in tiles"
+        uuid to_map_id FK
+        uuid to_space_id FK
+        jsonb to_position "x y in tiles"
+        varchar label
+        timestamptz created_at
+    }
+
+    ACCESS_REQUESTS {
+        uuid id PK
+        uuid space_id FK
+        uuid user_id FK
+        access_request_status_enum status
+        uuid decided_by FK
+        timestamptz decided_at
+        timestamptz expires_at
+        timestamptz created_at
+    }
+
+    DESKS {
+        uuid id PK
+        uuid space_id FK "an assigned desk IS a space"
+        varchar key
+        jsonb position "x y in tiles"
+        uuid reserved_for_user_id FK "admin reservation"
+        timestamptz created_at
+    }
+
+    DESK_CLAIMS {
+        uuid id PK
+        uuid desk_id FK
+        uuid user_id FK
+        timestamptz claimed_at
+        timestamptz released_at
+        desk_release_reason_enum release_reason
+    }
+
+    %% -------------------------------------------------- sessions + media
+
+    SESSIONS {
+        uuid id PK
+        uuid space_id FK
+        media_provider_enum provider "only provider-aware column"
+        varchar provider_room_id "only provider-aware column"
+        session_status_enum status
+        timestamptz opened_at
+        timestamptz closed_at
+    }
+
+    SESSION_PARTICIPANTS {
+        uuid id PK
+        uuid session_id FK
+        uuid user_id FK
+        timestamptz joined_at
+        timestamptz left_at
+        int published_seconds
+        boolean video_enabled "true only on explicit opt-in"
+    }
+
+    %% --------------------------------------------- scheduling attendance
+
+    SCHEDULES {
+        uuid id PK
+        uuid space_id FK
+        schedule_kind_enum kind
+        varchar title
+        text description
+        uuid host_user_id FK
+        uuid cohort_track_id FK "audience for classes"
+        uuid mentorship_group_id FK "audience for pods"
+        timestamptz starts_at
+        int duration_minutes
+        varchar rrule "null is one-off"
+        varchar timezone
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    SCHEDULED_OCCURRENCES {
+        uuid id PK
+        uuid schedule_id FK
+        uuid space_id FK "overridable when moved"
+        timestamptz starts_at
+        timestamptz ends_at
+        occurrence_status_enum status
+        timestamptz closed_at
+        timestamptz created_at
+    }
+
+    ATTENDANCE {
+        uuid id PK
+        uuid occurrence_id FK
+        uuid user_id FK
+        int present_seconds
+        attendance_status_enum status
+        attendance_source_enum source "derived or override"
+        timestamptz finalized_at
+    }
+
+    ATTENDANCE_OVERRIDES {
+        uuid id PK
+        uuid occurrence_id FK
+        uuid user_id FK
+        uuid changed_by FK
+        attendance_status_enum old_status
+        attendance_status_enum new_status
+        int old_present_seconds
+        text reason
+        timestamptz created_at
+    }
+
+    %% ------------------------------------------------------ student work
+
+    PROJECTS {
+        uuid id PK
+        uuid user_id FK "belongs to student not desk"
+        varchar title
+        text description
+        varchar currently_working_on
+        boolean is_pinned "one pinned per user"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    PROJECT_LINKS {
+        uuid id PK
+        uuid project_id FK
+        project_link_kind_enum kind "repo demo design docs"
+        varchar url
+        varchar label
+        timestamptz created_at
+    }
+
+    COMMENTS {
+        uuid id PK
+        comment_subject_enum subject_type "project notice resource"
+        uuid subject_id
+        uuid author_user_id FK
+        text body
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz deleted_at
+    }
+
+    %% ----------------------------------------------------------- notices
+
+    NOTICES {
+        uuid id PK
+        uuid author_user_id FK
+        varchar title
+        text body
+        notice_kind_enum kind "announcement event deadline community"
+        notice_scope_enum scope "campus cohort cohort_track"
+        uuid scope_id "null when campus"
+        boolean is_pinned
+        timestamptz published_at
+        timestamptz expires_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    %% --------------------------------------------------------- resources
+
+    RESOURCE_CENTERS {
+        uuid id PK
+        uuid cohort_id FK
+        uuid track_id FK "nullable"
+        varchar name
+        text description
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RESOURCE_CATEGORIES {
+        uuid id PK
+        uuid resource_center_id FK
+        varchar name
+        varchar slug
+        text description
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RESOURCE_CENTER_RESOURCES {
+        uuid id PK
+        uuid resource_center_id FK "scope comes from the center"
+        uuid created_by FK
+        varchar title
+        text description
+        resource_type_enum resource_type
+        varchar url
+        varchar provider_asset_id "Cloudinary public_id"
+        boolean is_public
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    RESOURCE_CATEGORY_MAPPINGS {
+        uuid id PK
+        uuid resource_id FK
+        uuid category_id FK
+    }
+
+    %% --------------------------------------------------------- messaging
+
+    CONVERSATIONS {
+        uuid id PK
+        conversation_kind_enum kind "direct group space campus"
+        uuid space_id FK "set when kind is space"
+        group_scope_enum group_scope "set when kind is group"
+        uuid group_scope_id
+        timestamptz created_at
+    }
+
+    CONVERSATION_PARTICIPANTS {
+        uuid id PK
+        uuid conversation_id FK
+        uuid user_id FK
+        timestamptz last_read_at
+        timestamptz joined_at
+    }
+
+    MESSAGES {
+        uuid id PK
+        uuid conversation_id FK
+        uuid sender_user_id FK
+        text body
+        timestamptz created_at
+        timestamptz edited_at
+        timestamptz deleted_at
+    }
+
+    NOTIFICATIONS {
+        uuid id PK
+        uuid user_id FK
+        notification_kind_enum kind
+        varchar subject_type
+        uuid subject_id
+        jsonb payload
+        timestamptz read_at
+        timestamptz created_at
+    }
+
+    %% ------------------------------------------------------------- audit
+
+    AUDIT_LOG {
+        uuid id PK
+        uuid actor_user_id FK
+        varchar action "staff_bypass_entry user_suspended desk_freed"
+        varchar subject_type
+        uuid subject_id
+        uuid space_id FK
+        jsonb details
+        varchar correlation_id "ties to world log lines"
+        timestamptz created_at
+    }
+
+    %% ----------------------------------------------------- relationships
+
+    COHORTS ||--o{ COHORT_TRACKS : "runs"
+    TRACKS ||--o{ COHORT_TRACKS : "instantiated_as"
+    COHORT_TRACKS ||--o{ COHORT_MEMBERS : "places"
+    COHORTS ||--o{ COHORT_MEMBERS : "enrolls"
+    USERS ||--o{ COHORT_MEMBERS : "member_of"
+
+    COHORTS ||--o{ INVITES : "scopes"
+    COHORT_TRACKS ||--o{ INVITES : "places"
+    MENTORSHIP_GROUPS ||--o{ INVITES : "assigns"
+    USERS ||--o{ INVITES : "invited_by"
+
+    COHORTS ||--o{ MENTORSHIP_GROUPS : "contains"
+    COHORT_MEMBERS ||--o{ MENTORSHIP_GROUPS : "leads_as_mentor"
+    SPACES ||--o{ MENTORSHIP_GROUPS : "meets_in"
+    MENTORSHIP_GROUPS ||--o{ MENTORSHIP_GROUP_STUDENTS : "includes"
+    COHORT_MEMBERS ||--o{ MENTORSHIP_GROUP_STUDENTS : "joins_as_student"
+
+    TRACKS ||--o{ MAPS : "has_faculty_map"
+    MAPS ||--o{ SPACES : "contains"
+    SPACES ||--o{ SPACE_MEMBERSHIPS : "gated_by"
+    COHORT_TRACKS ||--o{ SPACE_MEMBERSHIPS : "grants"
+    USERS ||--o{ SPACE_MEMBERSHIPS : "granted"
+
+    MAPS ||--o{ PORTALS : "origin"
+    SPACES ||--o{ PORTALS : "leads_to"
+    SPACES ||--o{ ACCESS_REQUESTS : "knocked_on"
+    USERS ||--o{ ACCESS_REQUESTS : "requests"
+
+    SPACES ||--|| DESKS : "is_a_desk_space"
+    DESKS ||--o{ DESK_CLAIMS : "claimed_by"
+    USERS ||--o{ DESK_CLAIMS : "claims"
+
+    SPACES ||--o{ SESSIONS : "hosts"
+    SESSIONS ||--o{ SESSION_PARTICIPANTS : "records"
+    USERS ||--o{ SESSION_PARTICIPANTS : "participates"
+
+    SPACES ||--o{ SCHEDULES : "scheduled_in"
+    USERS ||--o{ SCHEDULES : "hosts"
+    COHORT_TRACKS ||--o{ SCHEDULES : "audience"
+    MENTORSHIP_GROUPS ||--o{ SCHEDULES : "audience"
+    SCHEDULES ||--o{ SCHEDULED_OCCURRENCES : "expands_to"
+    SCHEDULED_OCCURRENCES ||--o{ ATTENDANCE : "derives"
+    USERS ||--o{ ATTENDANCE : "attends"
+    SCHEDULED_OCCURRENCES ||--o{ ATTENDANCE_OVERRIDES : "corrected_for"
+    USERS ||--o{ ATTENDANCE_OVERRIDES : "corrected_by"
+
+    USERS ||--o{ PROJECTS : "owns"
+    PROJECTS ||--o{ PROJECT_LINKS : "links"
+    USERS ||--o{ COMMENTS : "authors"
+
+    USERS ||--o{ NOTICES : "publishes"
+
+    COHORTS ||--o{ RESOURCE_CENTERS : "scopes"
+    TRACKS ||--o{ RESOURCE_CENTERS : "scopes"
+    RESOURCE_CENTERS ||--o{ RESOURCE_CATEGORIES : "contains"
+    RESOURCE_CENTERS ||--o{ RESOURCE_CENTER_RESOURCES : "holds"
+    USERS ||--o{ RESOURCE_CENTER_RESOURCES : "creates"
+    RESOURCE_CENTER_RESOURCES ||--o{ RESOURCE_CATEGORY_MAPPINGS : "categorized_in"
+    RESOURCE_CATEGORIES ||--o{ RESOURCE_CATEGORY_MAPPINGS : "maps"
+
+    SPACES ||--o| CONVERSATIONS : "space_chat"
+    CONVERSATIONS ||--o{ CONVERSATION_PARTICIPANTS : "direct_and_group_only"
+    USERS ||--o{ CONVERSATION_PARTICIPANTS : "participates"
+    CONVERSATIONS ||--o{ MESSAGES : "contains"
+    USERS ||--o{ MESSAGES : "sends"
+
+    USERS ||--o{ NOTIFICATIONS : "receives"
+
+    USERS ||--o{ AUDIT_LOG : "acts"
+    SPACES ||--o{ AUDIT_LOG : "subject_of"
+
+%% =====================================================================
+%% CONSTRAINTS NOT EXPRESSIBLE ABOVE — enforce in the migration
+%% -
+%% COMPOSITE FK
+%%   cohort_members(cohort_track_id, cohort_id) -> cohort_tracks(id, cohort_id)
+%%   invites(cohort_track_id, cohort_id)        -> cohort_tracks(id, cohort_id)
+%% -
+%% PARTIAL UNIQUE
+%%   maps((is_entry)) WHERE is_entry                  one campus entry map
+%%   maps(track_id) WHERE kind='faculty'  one faculty map per track
+%%   spaces((kind)) WHERE kind='town_hall'        exactly one Town Hall
+%%   spaces((kind)) WHERE kind='notice_board'     exactly one Notice Wall
+%%   sessions(space_id) WHERE status='open'       one live session per space
+%%   desk_claims(desk_id) WHERE released_at IS NULL   one holder per desk
+%%   desk_claims(user_id) WHERE released_at IS NULL   one desk per student
+%%   projects(user_id) WHERE is_pinned            one pinned project
+%%   invites(email) WHERE status='pending' one live invite per address
+%%   access_requests(space_id,user_id) WHERE status='pending'
+%%   conversations((kind)) WHERE kind='campus'    one campus conversation
+%%   conversations(space_id) WHERE kind='space'
+%% -
+%% CHECK
+%%   portals.from_map_id <> portals.to_map_id
+%%   spaces: audio_mode <> 'broadcast' OR publish_policy <> 'all'
+%%   a guest is a USERS row with no COHORT_MEMBERS row at all
+%%   space_memberships: exactly one of cohort_track_id / user_id is set
+%%   maps: kind='faculty' => track_id IS NOT NULL
+%%   cohort_members: role='student' => cohort_track_id IS NOT NULL
+%% =====================================================================

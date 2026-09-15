@@ -52,6 +52,7 @@ a clear error.
 | `NODE_ENV`                        | *(unset)*                                 | Node runtime mode; **the app itself never branches on this** — feature behavior comes from the explicit `FF_` flags below |
 | `PORT`                            | `3000`                                    | HTTP port                            |
 | `DATABASE_URL`                    | `postgresql://postgres:postgres@localhost:5432/campus` | Postgres connection string |
+| `DEFAULT_ADMIN_EMAIL`             | *(required)*                              | Email of the default admin user, upserted by the Seeder. Startup fails if unset |
 | `FF_LOG_LEVEL`                    | `info`                                    | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `FF_LOG_PRETTY`                   | `false`                                   | Enable human-readable pino-pretty output (`true`) or JSON lines (`false`) |
 | `DEPLOYMENT_ENVIRONMENT`          | `development`                             | Label sent with traces (`deployment.environment`) |
