@@ -101,4 +101,6 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: API e2e tests
+        env:
+          DEFAULT_ADMIN_EMAIL: admin@gmail.com
         run: pnpm --filter campus-api test:e2e
