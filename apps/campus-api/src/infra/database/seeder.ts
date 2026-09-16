@@ -1,54 +1,58 @@
-import { Inject, Injectable, OnApplicationBootstrap } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
-import { InjectPinoLogger, PinoLogger } from 'nestjs-pino';
+import { sql } from 'drizzle-orm';
 
-import { CONFIG } from '../config/config.constants.js';
-import type { Env } from '../config/env.js';
-import { DRIZZLE, type Db } from './database.constants.js';
-import * as schema from './schema/index.js';
-import { SystemRole, UserStatus } from '../../modules/users/schema.js';
+import { SystemRole, UserStatus, users } from '../../modules/users/schema.js';
+import type { Db } from './database.constants.js';
 
-@Injectable()
-export class Seeder implements OnApplicationBootstrap {
-  constructor(
-    @Inject(DRIZZLE) private readonly db: Db,
-    @Inject(CONFIG) private readonly config: Env,
-    @InjectPinoLogger(Seeder.name) private readonly logger: PinoLogger,
-  ) {}
+export interface SeedLogger {
+  info: (obj: Record<string, unknown>, msg: string) => void;
+}
 
-  async onApplicationBootstrap(): Promise<void> {
-    await this.run();
-  }
+export type SeedOutcome = 'created' | 'promoted' | 'unchanged';
 
-  async run(): Promise<void> {
-    await this.seedAdmins();
-  }
+export async function seedAdmin(
+  db: Db,
+  email: string,
+  logger: SeedLogger,
+): Promise<SeedOutcome> {
+  const address = email.trim().toLowerCase();
 
-  async seedAdmins(): Promise<void> {
-    const email = this.config.DEFAULT_ADMIN_EMAIL;
-
-    const [existing] = await this.db
-      .select({ id: schema.users.id, systemRole: schema.users.systemRole })
-      .from(schema.users)
-      .where(eq(schema.users.email, email))
-      .limit(1);
-
-    if (existing) {
-      if (existing.systemRole !== SystemRole.Admin) {
-        await this.db
-          .update(schema.users)
-          .set({ systemRole: SystemRole.Admin })
-          .where(eq(schema.users.id, existing.id));
-        this.logger.info({ email }, 'promoted existing user to admin');
-      }
-      return;
-    }
-
-    await this.db.insert(schema.users).values({
-      email,
+  const [row] = await db
+    .insert(users)
+    .values({
+      email: address,
       systemRole: SystemRole.Admin,
       status: UserStatus.Active,
+    })
+    .onConflictDoUpdate({
+      target: users.email,
+      // updated_at is set explicitly built in hook only fires for db.update()
+      set: { systemRole: SystemRole.Admin, updatedAt: sql`now()` },
+      // Skip the write when the user is already an admin, so re-running the
+      setWhere: sql`${users.systemRole} <> ${SystemRole.Admin}`,
+    })
+    .returning({
+      id: users.id,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
     });
-    this.logger.info({ email }, 'seeded admin user');
+
+  if (!row) {
+    logger.info(
+      { email: address },
+      'admin user already present, nothing to do',
+    );
+    return 'unchanged';
   }
+
+  const outcome =
+    row.createdAt.getTime() === row.updatedAt.getTime()
+      ? 'created'
+      : 'promoted';
+  logger.info(
+    { email: address, userId: row.id },
+    outcome === 'created'
+      ? 'seeded admin user'
+      : 'promoted existing user to admin',
+  );
+  return outcome;
 }

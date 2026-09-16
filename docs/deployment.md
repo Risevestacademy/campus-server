@@ -23,9 +23,15 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
   `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED=false` (no collector deployed),
   `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST` (see
-  [posthog.md](./posthog.md) — region must match the frontend's project).
+  [posthog.md](./posthog.md) — region must match the frontend's project),
+  `DEFAULT_ADMIN_EMAIL` (address promoted to admin by the pre-deploy seed;
+  set it per environment before the first deploy, or the seed step fails).
   `PORT` is injected by Railway, not set manually.
-- Migrations run via a pre-deploy step: `pnpm --filter campus-api db:migrate`.
+- Migrations and seeding run via a pre-deploy step:
+  `pnpm --filter campus-api db:migrate && pnpm --filter campus-api db:seed`.
+  Seeding is deliberately **not** part of app boot — the API must not need a
+  writable database to report healthy, and two replicas starting at once must
+  not race each other.
 - `/docs` and `/docs-json` are unauthenticated by decision.
 
 ## world

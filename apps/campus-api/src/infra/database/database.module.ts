@@ -6,7 +6,6 @@ import { CONFIG } from '../config/config.constants.js';
 import type { Env } from '../config/env.js';
 import { DRIZZLE, type Db } from './database.constants.js';
 import * as schema from './schema/index.js';
-import { Seeder } from './seeder.js';
 
 @Global()
 @Module({
@@ -19,8 +18,7 @@ import { Seeder } from './seeder.js';
         return drizzle(sql, { schema });
       },
     },
-    Seeder,
   ],
-  exports: [DRIZZLE, Seeder],
+  exports: [DRIZZLE],
 })
 export class DatabaseModule {}

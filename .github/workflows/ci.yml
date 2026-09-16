@@ -56,7 +56,6 @@ jobs:
         env:
           FF_POSTHOG_ENABLED: 'true'
           POSTHOG_PROJECT_TOKEN: phc_dummy_key_for_ci_smoke_test
-          DEFAULT_ADMIN_EMAIL: admin@gmail.com
         run: |
           node dist/main.js > boot.log 2>&1 &
           echo $! > app.pid
@@ -101,6 +100,4 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: API e2e tests
-        env:
-          DEFAULT_ADMIN_EMAIL: admin@gmail.com
         run: pnpm --filter campus-api test:e2e

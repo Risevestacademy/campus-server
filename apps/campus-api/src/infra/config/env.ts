@@ -51,9 +51,9 @@ export class Env {
   @IsString()
   DATABASE_URL: string = 'postgresql://postgres:postgres@localhost:5432/campus';
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsEmail()
-  DEFAULT_ADMIN_EMAIL: string;
+  DEFAULT_ADMIN_EMAIL?: string;
 
   @IsOptional()
   @IsIn(LOG_LEVELS)
