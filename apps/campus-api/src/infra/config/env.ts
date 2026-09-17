@@ -2,6 +2,7 @@ import { plainToInstance } from 'class-transformer';
 import { Type, Transform } from 'class-transformer';
 import {
   IsBoolean,
+  IsEmail,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -49,6 +50,10 @@ export class Env {
   @IsNotEmpty()
   @IsString()
   DATABASE_URL: string = 'postgresql://postgres:postgres@localhost:5432/campus';
+
+  @IsNotEmpty()
+  @IsEmail()
+  DEFAULT_ADMIN_EMAIL: string;
 
   @IsOptional()
   @IsIn(LOG_LEVELS)

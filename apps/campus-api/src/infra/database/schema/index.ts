@@ -1,1 +1,1 @@
-export {};
+export * from '../../../modules/users/schema.js';
