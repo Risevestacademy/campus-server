@@ -1,85 +1,108 @@
-import type { PinoLogger } from 'nestjs-pino';
-
 import { SystemRole, UserStatus } from '../../modules/users/schema.js';
 import type { Db } from './database.constants.js';
-import type { Env } from '../config/env.js';
-import { Seeder } from './seeder.js';
+import { seedAdmin } from './seeder.js';
 
 const EMAIL = 'admin@campus.local';
 
-function makeConfig(email: string = EMAIL): Env {
-  return { DEFAULT_ADMIN_EMAIL: email } as Env;
+function makeLogger() {
+  return { info: vi.fn() };
 }
 
-function makeLogger(): PinoLogger {
-  return { info: vi.fn() } as unknown as PinoLogger;
-}
-
-function makeDb(existing?: { id: string; systemRole: SystemRole } | null) {
-  const insertValues = vi.fn().mockResolvedValue([]);
-  const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) });
+/**
+ * Captures the single upsert `seedAdmin` issues. `returning` resolves to the
+ * rows Postgres would hand back: one row when the statement inserted or
+ * updated, none when `setWhere` skipped the update.
+ */
+function makeDb(returning: { id: string; createdAt: Date; updatedAt: Date }[]) {
+  const calls = {
+    values: undefined as Record<string, unknown> | undefined,
+    conflict: undefined as Record<string, unknown> | undefined,
+  };
 
   const db = {
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          limit: vi.fn().mockResolvedValue(existing ? [existing] : []),
-        }),
-      }),
+    insert: vi.fn().mockReturnValue({
+      values: (values: Record<string, unknown>) => {
+        calls.values = values;
+        return {
+          onConflictDoUpdate: (conflict: Record<string, unknown>) => {
+            calls.conflict = conflict;
+            return { returning: vi.fn().mockResolvedValue(returning) };
+          },
+        };
+      },
     }),
-    insert: vi.fn().mockReturnValue({ values: insertValues }),
-    update: vi.fn().mockReturnValue({ set: updateSet }),
   };
 
-  return {
-    db: db as unknown as Db,
-    insertValues,
-    updateSet,
-  };
+  return { db: db as unknown as Db, calls };
 }
 
-describe('Seeder', () => {
-  it('seeds an admin when no user with the email exists', async () => {
-    const { db, insertValues } = makeDb(null);
-    const seeder = new Seeder(db, makeConfig(), makeLogger());
+const inserted = (at = new Date('2026-01-01T00:00:00Z')) => [
+  { id: 'user-1', createdAt: at, updatedAt: at },
+];
+const updated = () => [
+  {
+    id: 'user-1',
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    updatedAt: new Date('2026-06-01T00:00:00Z'),
+  },
+];
 
-    await seeder.run();
+describe('seedAdmin', () => {
+  it('inserts the configured address as an active admin', async () => {
+    const { db, calls } = makeDb(inserted());
 
-    expect(insertValues).toHaveBeenCalledTimes(1);
-    expect(insertValues).toHaveBeenCalledWith({
+    const outcome = await seedAdmin(db, EMAIL, makeLogger());
+
+    expect(outcome).toBe('created');
+    expect(calls.values).toEqual({
       email: EMAIL,
       systemRole: SystemRole.Admin,
       status: UserStatus.Active,
     });
   });
 
-  it('does nothing when an admin with the email already exists', async () => {
-    const { db, insertValues, updateSet } = makeDb({ id: 'user-1', systemRole: SystemRole.Admin });
-    const seeder = new Seeder(db, makeConfig(), makeLogger());
+  it('resolves the conflict in one statement instead of checking first', async () => {
+    const { db, calls } = makeDb(inserted());
 
-    await seeder.run();
+    await seedAdmin(db, EMAIL, makeLogger());
 
-    expect(insertValues).not.toHaveBeenCalled();
-    expect(updateSet).not.toHaveBeenCalled();
+    // No read before the write: concurrent seeds cannot both decide to insert.
+    expect((db as unknown as { select?: unknown }).select).toBeUndefined();
+    expect(calls.conflict?.target).toBeDefined();
+    expect(calls.conflict?.set).toMatchObject({ systemRole: SystemRole.Admin });
+    expect(calls.conflict?.setWhere).toBeDefined();
   });
 
-  it('promotes an existing non-admin user to admin', async () => {
-    const { db, insertValues, updateSet } = makeDb({ id: 'user-1', systemRole: SystemRole.User });
-    const seeder = new Seeder(db, makeConfig(), makeLogger());
+  it('never touches status, so a suspended admin stays suspended', async () => {
+    const { db, calls } = makeDb([]);
 
-    await seeder.run();
+    await seedAdmin(db, EMAIL, makeLogger());
 
-    expect(insertValues).not.toHaveBeenCalled();
-    expect(updateSet).toHaveBeenCalledTimes(1);
-    expect(updateSet).toHaveBeenCalledWith({ systemRole: SystemRole.Admin });
+    expect(calls.conflict?.set).not.toHaveProperty('status');
   });
 
-  it('runs on application bootstrap', async () => {
-    const { db, insertValues } = makeDb(null);
-    const seeder = new Seeder(db, makeConfig(), makeLogger());
+  it('lowercases and trims the address to match the unique index', async () => {
+    const { db, calls } = makeDb(inserted());
 
-    await seeder.onApplicationBootstrap();
+    await seedAdmin(db, '  Admin@Campus.Local  ', makeLogger());
 
-    expect(insertValues).toHaveBeenCalledTimes(1);
+    expect(calls.values).toMatchObject({ email: EMAIL });
+  });
+
+  it('reports a promotion when the statement updated an existing row', async () => {
+    const { db } = makeDb(updated());
+    const logger = makeLogger();
+
+    expect(await seedAdmin(db, EMAIL, logger)).toBe('promoted');
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ email: EMAIL }),
+      'promoted existing user to admin',
+    );
+  });
+
+  it('reports no change when the address is already an admin', async () => {
+    const { db } = makeDb([]);
+
+    expect(await seedAdmin(db, EMAIL, makeLogger())).toBe('unchanged');
   });
 });
