@@ -1,5 +1,5 @@
 {
-  "id": "8ceeda26-7f78-4fc3-b980-b1c2e9d83fc6",
+  "id": "98d5f571-67b0-4834-8369-c6f1087c1d3c",
   "prevId": "b6a676a5-5855-4d34-aa90-7484b6b7e922",
   "version": "7",
   "dialect": "postgresql",
@@ -80,8 +80,8 @@
         }
       },
       "indexes": {
-        "cohort_members_active_unique": {
-          "name": "cohort_members_active_unique",
+        "cohort_members_unique": {
+          "name": "cohort_members_unique",
           "columns": [
             {
               "expression": "cohort_id",
@@ -97,7 +97,6 @@
             }
           ],
           "isUnique": true,
-          "where": "\"cohort_members\".\"left_at\" is null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -154,9 +153,9 @@
           "name": "cohort_members_student_requires_track",
           "value": "\"cohort_members\".\"role\" is distinct from 'student' or \"cohort_members\".\"cohort_track_id\" is not null"
         },
-        "cohort_members_student_fields": {
-          "name": "cohort_members_student_fields",
-          "value": "(\"cohort_members\".\"role\" = 'student' and \"cohort_members\".\"status\" is not null) or (\"cohort_members\".\"role\" <> 'student' and \"cohort_members\".\"status\" is null and \"cohort_members\".\"dismissal_reason\" is null)"
+        "cohort_members_student_status": {
+          "name": "cohort_members_student_status",
+          "value": "\"cohort_members\".\"role\" = 'student' or \"cohort_members\".\"status\" is null"
         }
       },
       "isRLSEnabled": false
@@ -257,13 +256,13 @@
         },
         "name": {
           "name": "name",
-          "type": "varchar",
+          "type": "varchar(128)",
           "primaryKey": false,
           "notNull": true
         },
         "code": {
           "name": "code",
-          "type": "varchar",
+          "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true
         },
@@ -343,7 +342,7 @@
         },
         "email": {
           "name": "email",
-          "type": "varchar",
+          "type": "varchar(320)",
           "primaryKey": false,
           "notNull": true
         },
@@ -380,7 +379,7 @@
         },
         "token_hash": {
           "name": "token_hash",
-          "type": "varchar",
+          "type": "varchar(128)",
           "primaryKey": false,
           "notNull": true
         },
@@ -508,9 +507,13 @@
           "name": "invites_email_lowercase",
           "value": "\"invites\".\"email\" = lower(\"invites\".\"email\")"
         },
-        "invites_cohort_scope": {
-          "name": "invites_cohort_scope",
-          "value": "\"invites\".\"cohort_id\" is not null or (\"invites\".\"cohort_track_id\" is null and \"invites\".\"cohort_role\" is null)"
+        "invites_cohort_pairing": {
+          "name": "invites_cohort_pairing",
+          "value": "(\"invites\".\"cohort_id\" is null) = (\"invites\".\"cohort_role\" is null)"
+        },
+        "invites_scoped_fields_require_cohort": {
+          "name": "invites_scoped_fields_require_cohort",
+          "value": "\"invites\".\"cohort_id\" is not null or (\"invites\".\"cohort_track_id\" is null and \"invites\".\"mentorship_group_id\" is null)"
         },
         "invites_student_requires_track": {
           "name": "invites_student_requires_track",
@@ -532,13 +535,13 @@
         },
         "name": {
           "name": "name",
-          "type": "varchar",
+          "type": "varchar(128)",
           "primaryKey": false,
           "notNull": true
         },
         "code": {
           "name": "code",
-          "type": "varchar",
+          "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true
         },
@@ -776,7 +779,9 @@
       "values": [
         "active",
         "dismissed",
-        "graduated"
+        "graduated",
+        "withdrawn",
+        "deferred"
       ]
     },
     "public.invite_status": {

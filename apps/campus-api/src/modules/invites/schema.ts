@@ -22,6 +22,11 @@ export enum InviteStatus {
   Pending = 'pending',
   Accepted = 'accepted',
   Declined = 'declined',
+  /**
+   * Deliberately beyond the TRD's four values: an admin cancelling a live
+   * invite is not the same event as one lapsing, and squashing the two would
+   * lose that distinction in the audit trail.
+   */
   Revoked = 'revoked',
   Expired = 'expired',
 }
@@ -32,7 +37,7 @@ export const invites = pgTable(
   'invites',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    email: varchar('email').notNull(),
+    email: varchar('email', { length: 320 }).notNull(),
     /** Null for admin invites, which are not scoped to a cohort. */
     cohortId: uuid('cohort_id').references(() => cohorts.id),
     cohortTrackId: uuid('cohort_track_id'),
@@ -42,7 +47,7 @@ export const invites = pgTable(
     systemRole: systemRoleEnum('system_role')
       .notNull()
       .default(SystemRole.User),
-    tokenHash: varchar('token_hash').notNull(),
+    tokenHash: varchar('token_hash', { length: 128 }).notNull(),
     status: inviteStatusEnum('status').notNull().default(InviteStatus.Pending),
     invitedBy: uuid('invited_by')
       .notNull()
@@ -75,12 +80,18 @@ export const invites = pgTable(
       'invites_email_lowercase',
       sql`${table.email} = lower(${table.email})`,
     ),
-    // Without this, a NULL cohort_id makes the composite FK above skip its
-    // check (MATCH SIMPLE), so an invite could name a cohort_track that
-    // belongs to nobody. Either an invite is cohort-scoped or it is not.
+    // The two shapes an invite comes in: a guest invite carries neither a
+    // cohort nor a role, a cohort invite carries both. Anything between is a
+    // row nothing downstream can act on.
     check(
-      'invites_cohort_scope',
-      sql`${table.cohortId} is not null or (${table.cohortTrackId} is null and ${table.cohortRole} is null)`,
+      'invites_cohort_pairing',
+      sql`(${table.cohortId} is null) = (${table.cohortRole} is null)`,
+    ),
+    // A NULL cohort_id makes the composite FK above skip its check entirely
+    // (MATCH SIMPLE), so the scoped columns need a cohort of their own accord.
+    check(
+      'invites_scoped_fields_require_cohort',
+      sql`${table.cohortId} is not null or (${table.cohortTrackId} is null and ${table.mentorshipGroupId} is null)`,
     ),
     check(
       'invites_student_requires_track',

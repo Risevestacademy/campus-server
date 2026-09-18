@@ -13,8 +13,8 @@ export const tracks = pgTable(
   'tracks',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    name: varchar('name').notNull(),
-    code: varchar('code').notNull(),
+    name: varchar('name', { length: 128 }).notNull(),
+    code: varchar('code', { length: 32 }).notNull(),
     description: text('description'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

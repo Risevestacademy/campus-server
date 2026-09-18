@@ -32,6 +32,8 @@ export enum StudentStatus {
   Active = 'active',
   Dismissed = 'dismissed',
   Graduated = 'graduated',
+  Withdrawn = 'withdrawn',
+  Deferred = 'deferred',
 }
 
 export const cohortRoleEnum = pgEnum('cohort_role', CohortRole);
@@ -42,8 +44,8 @@ export const cohorts = pgTable(
   'cohorts',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    name: varchar('name').notNull(),
-    code: varchar('code').notNull(),
+    name: varchar('name', { length: 128 }).notNull(),
+    code: varchar('code', { length: 32 }).notNull(),
     startDate: date('start_date'),
     endDate: date('end_date'),
     status: cohortStatusEnum('status').notNull().default(CohortStatus.Upcoming),
@@ -118,19 +120,19 @@ export const cohortMembers = pgTable(
       foreignColumns: [cohortTracks.id, cohortTracks.cohortId],
       name: 'cohort_members_cohort_track_fk',
     }),
-    // One live membership per person per cohort; leaving and rejoining later
-    // is still allowed because a closed row has left_at set.
-    uniqueIndex('cohort_members_active_unique')
-      .on(table.cohortId, table.userId)
-      .where(sql`${table.leftAt} is null`),
+    // One row per person per cohort, ever: returning after leaving clears
+    // left_at on the existing row rather than adding a second one.
+    uniqueIndex('cohort_members_unique').on(table.cohortId, table.userId),
     check(
       'cohort_members_student_requires_track',
       sql`${table.role} is distinct from ${sql.raw(`'${CohortRole.Student}'`)} or ${table.cohortTrackId} is not null`,
     ),
 
+    // status belongs to students. Left as the spec states it: a student may
+    // still be status-less, so enrolment does not have to pick one up front.
     check(
-      'cohort_members_student_fields',
-      sql`(${table.role} = ${sql.raw(`'${CohortRole.Student}'`)} and ${table.status} is not null) or (${table.role} <> ${sql.raw(`'${CohortRole.Student}'`)} and ${table.status} is null and ${table.dismissalReason} is null)`,
+      'cohort_members_student_status',
+      sql`${table.role} = ${sql.raw(`'${CohortRole.Student}'`)} or ${table.status} is null`,
     ),
   ],
 );
