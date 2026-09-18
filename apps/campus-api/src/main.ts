@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 
+import type { HttpServer } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -121,7 +122,8 @@ async function bootstrap() {
     }),
   );
 
-  app.getHttpAdapter().get('/docs-json', (_req, res) => {
+  const httpAdapter: HttpServer = app.getHttpAdapter();
+  httpAdapter.get('/docs-json', (_req, res) => {
     res.json(document);
   });
 
