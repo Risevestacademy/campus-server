@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   text,
@@ -22,9 +23,7 @@ export const tracks = pgTable(
       .defaultNow()
       .$onUpdate(() => new Date()),
   },
-  // code is the handle everything refers to a track by, so it has to resolve
-  // to exactly one row.
-  (table) => [uniqueIndex('tracks_code_unique').on(table.code)],
+  (table) => [uniqueIndex('tracks_code_unique').on(sql`upper(${table.code})`)],
 );
 
 export type Track = typeof tracks.$inferSelect;

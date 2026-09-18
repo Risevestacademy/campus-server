@@ -1,9 +1,166 @@
 {
-  "id": "9a81ceaa-cae5-4857-a6d8-25c0b1cc23f3",
+  "id": "cf1b8287-446f-4c3d-9b0d-866b53995514",
   "prevId": "b6a676a5-5855-4d34-aa90-7484b6b7e922",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.cohort_members": {
+      "name": "cohort_members",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "cohort_id": {
+          "name": "cohort_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cohort_track_id": {
+          "name": "cohort_track_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "role": {
+          "name": "role",
+          "type": "cohort_role",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "student_status",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dismissal_reason": {
+          "name": "dismissal_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "joined_at": {
+          "name": "joined_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "left_at": {
+          "name": "left_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "cohort_members_active_unique": {
+          "name": "cohort_members_active_unique",
+          "columns": [
+            {
+              "expression": "cohort_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cohort_members\".\"left_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "cohort_members_cohort_id_cohorts_id_fk": {
+          "name": "cohort_members_cohort_id_cohorts_id_fk",
+          "tableFrom": "cohort_members",
+          "tableTo": "cohorts",
+          "columnsFrom": [
+            "cohort_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "cohort_members_user_id_users_id_fk": {
+          "name": "cohort_members_user_id_users_id_fk",
+          "tableFrom": "cohort_members",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "cohort_members_cohort_track_fk": {
+          "name": "cohort_members_cohort_track_fk",
+          "tableFrom": "cohort_members",
+          "tableTo": "cohort_tracks",
+          "columnsFrom": [
+            "cohort_track_id",
+            "cohort_id"
+          ],
+          "columnsTo": [
+            "id",
+            "cohort_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "cohort_members_student_requires_track": {
+          "name": "cohort_members_student_requires_track",
+          "value": "\"cohort_members\".\"role\" is distinct from 'student' or \"cohort_members\".\"cohort_track_id\" is not null"
+        },
+        "cohort_members_student_fields": {
+          "name": "cohort_members_student_fields",
+          "value": "(\"cohort_members\".\"role\" = 'student' and \"cohort_members\".\"status\" is not null) or (\"cohort_members\".\"role\" <> 'student' and \"cohort_members\".\"status\" is null and \"cohort_members\".\"dismissal_reason\" is null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.cohort_tracks": {
       "name": "cohort_tracks",
       "schema": "",
@@ -141,9 +298,9 @@
           "name": "cohorts_code_unique",
           "columns": [
             {
-              "expression": "code",
-              "isExpression": false,
+              "expression": "upper(\"code\")",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -398,9 +555,9 @@
           "name": "tracks_code_unique",
           "columns": [
             {
-              "expression": "code",
-              "isExpression": false,
+              "expression": "upper(\"code\")",
               "asc": true,
+              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -593,6 +750,15 @@
         "upcoming",
         "active",
         "completed"
+      ]
+    },
+    "public.student_status": {
+      "name": "student_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "dismissed",
+        "graduated"
       ]
     },
     "public.invite_status": {
