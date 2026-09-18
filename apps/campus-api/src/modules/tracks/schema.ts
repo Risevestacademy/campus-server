@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  check,
   pgTable,
   text,
   timestamp,
@@ -23,7 +24,10 @@ export const tracks = pgTable(
       .defaultNow()
       .$onUpdate(() => new Date()),
   },
-  (table) => [uniqueIndex('tracks_code_unique').on(sql`upper(${table.code})`)],
+  (table) => [
+    uniqueIndex('tracks_code_unique').on(table.code),
+    check('tracks_code_uppercase', sql`${table.code} = upper(${table.code})`),
+  ],
 );
 
 export type Track = typeof tracks.$inferSelect;

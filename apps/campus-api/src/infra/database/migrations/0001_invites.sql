@@ -23,6 +23,7 @@ CREATE TABLE "cohort_tracks" (
 	"cohort_id" uuid NOT NULL,
 	"track_id" uuid NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "cohort_tracks_track_id_cohort_id_key" UNIQUE("track_id","cohort_id"),
 	CONSTRAINT "cohort_tracks_id_cohort_id_key" UNIQUE("id","cohort_id")
 );
 --> statement-breakpoint
@@ -34,7 +35,8 @@ CREATE TABLE "cohorts" (
 	"end_date" date,
 	"status" "cohort_status" DEFAULT 'upcoming' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "cohorts_code_uppercase" CHECK ("cohorts"."code" = upper("cohorts"."code"))
 );
 --> statement-breakpoint
 CREATE TABLE "invites" (
@@ -63,7 +65,8 @@ CREATE TABLE "tracks" (
 	"code" varchar NOT NULL,
 	"description" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "tracks_code_uppercase" CHECK ("tracks"."code" = upper("tracks"."code"))
 );
 --> statement-breakpoint
 ALTER TABLE "cohort_members" ADD CONSTRAINT "cohort_members_cohort_id_cohorts_id_fk" FOREIGN KEY ("cohort_id") REFERENCES "public"."cohorts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -75,7 +78,7 @@ ALTER TABLE "invites" ADD CONSTRAINT "invites_cohort_id_cohorts_id_fk" FOREIGN K
 ALTER TABLE "invites" ADD CONSTRAINT "invites_invited_by_users_id_fk" FOREIGN KEY ("invited_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "invites" ADD CONSTRAINT "invites_cohort_track_fk" FOREIGN KEY ("cohort_track_id","cohort_id") REFERENCES "public"."cohort_tracks"("id","cohort_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "cohort_members_active_unique" ON "cohort_members" USING btree ("cohort_id","user_id") WHERE "cohort_members"."left_at" is null;--> statement-breakpoint
-CREATE UNIQUE INDEX "cohorts_code_unique" ON "cohorts" USING btree (upper("code"));--> statement-breakpoint
+CREATE UNIQUE INDEX "cohorts_code_unique" ON "cohorts" USING btree ("code");--> statement-breakpoint
 CREATE UNIQUE INDEX "invites_token_hash_unique" ON "invites" USING btree ("token_hash");--> statement-breakpoint
 CREATE UNIQUE INDEX "invites_email_pending_unique" ON "invites" USING btree ("email") WHERE "invites"."status" = 'pending';--> statement-breakpoint
-CREATE UNIQUE INDEX "tracks_code_unique" ON "tracks" USING btree (upper("code"));
+CREATE UNIQUE INDEX "tracks_code_unique" ON "tracks" USING btree ("code");

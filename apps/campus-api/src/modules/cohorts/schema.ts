@@ -55,7 +55,10 @@ export const cohorts = pgTable(
       .defaultNow()
       .$onUpdate(() => new Date()),
   },
-  (table) => [uniqueIndex('cohorts_code_unique').on(sql`upper(${table.code})`)],
+  (table) => [
+    uniqueIndex('cohorts_code_unique').on(table.code),
+    check('cohorts_code_uppercase', sql`${table.code} = upper(${table.code})`),
+  ],
 );
 
 export const cohortTracks = pgTable(
@@ -73,6 +76,10 @@ export const cohortTracks = pgTable(
       .defaultNow(),
   },
   (table) => [
+    unique('cohort_tracks_track_id_cohort_id_key').on(
+      table.trackId,
+      table.cohortId,
+    ),
     unique('cohort_tracks_id_cohort_id_key').on(table.id, table.cohortId),
   ],
 );

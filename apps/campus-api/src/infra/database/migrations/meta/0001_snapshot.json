@@ -1,5 +1,5 @@
 {
-  "id": "cf1b8287-446f-4c3d-9b0d-866b53995514",
+  "id": "8ceeda26-7f78-4fc3-b980-b1c2e9d83fc6",
   "prevId": "b6a676a5-5855-4d34-aa90-7484b6b7e922",
   "version": "7",
   "dialect": "postgresql",
@@ -223,6 +223,14 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
+        "cohort_tracks_track_id_cohort_id_key": {
+          "name": "cohort_tracks_track_id_cohort_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "track_id",
+            "cohort_id"
+          ]
+        },
         "cohort_tracks_id_cohort_id_key": {
           "name": "cohort_tracks_id_cohort_id_key",
           "nullsNotDistinct": false,
@@ -298,9 +306,9 @@
           "name": "cohorts_code_unique",
           "columns": [
             {
-              "expression": "upper(\"code\")",
+              "expression": "code",
+              "isExpression": false,
               "asc": true,
-              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -314,7 +322,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "cohorts_code_uppercase": {
+          "name": "cohorts_code_uppercase",
+          "value": "\"cohorts\".\"code\" = upper(\"cohorts\".\"code\")"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.invites": {
@@ -555,9 +568,9 @@
           "name": "tracks_code_unique",
           "columns": [
             {
-              "expression": "upper(\"code\")",
+              "expression": "code",
+              "isExpression": false,
               "asc": true,
-              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -571,7 +584,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "tracks_code_uppercase": {
+          "name": "tracks_code_uppercase",
+          "value": "\"tracks\".\"code\" = upper(\"tracks\".\"code\")"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.users": {
