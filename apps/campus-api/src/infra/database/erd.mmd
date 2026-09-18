@@ -1,21 +1,21 @@
 %% =====================================================================
 %% Campus by Rise — full ERD
-%% GENERATED FROM campus_schema.dbml — do not hand-edit (TRD §10).
-%% 34 tables. Conforms to TRD v1.0 §10.1 invariants and §10.2 constraints.
+%% GENERATED — do not hand-edit.
+%% 34 tables, 27 enums.
 %% -
-%% Partial unique indexes and CHECK constraints cannot be expressed in
-%% Mermaid; they are documented in the DBML Note fields and listed at the
-%% bottom of this file.
+%% Mermaid ER cannot express nullability, defaults, column lengths,
+%% partial indexes or CHECK constraints. Those are listed at the
+%% bottom of this file and enforced in the schema and migrations.
 %% =====================================================================
 
 erDiagram
 
-    %% ---------------------------------------------------- org + identity
+    %% ------------------------------------------------------ identity
 
     USERS {
         uuid id PK
-        varchar email
-        varchar provider "google"
+        varchar email UK
+        varchar provider
         varchar provider_id
         varchar first_name
         varchar last_name
@@ -23,7 +23,7 @@ erDiagram
         varchar phone
         text bio
         varchar avatar_url "profile photo"
-        varchar sprite_key "map sprite"
+        varchar sprite_key "Which sprite walks around the map — deliberately distinct…"
         system_role_enum system_role "user | admin"
         user_status_enum status "active | suspended"
         timestamptz last_login_at
@@ -34,7 +34,7 @@ erDiagram
     TRACKS {
         uuid id PK
         varchar name
-        varchar code
+        varchar code UK
         text description
         timestamptz created_at
         timestamptz updated_at
@@ -43,7 +43,7 @@ erDiagram
     COHORTS {
         uuid id PK
         varchar name
-        varchar code
+        varchar code UK
         date start_date
         date end_date
         varchar status
@@ -62,10 +62,10 @@ erDiagram
         uuid id PK
         uuid cohort_id FK
         uuid user_id FK
-        uuid cohort_track_id FK "required for students"
-        cohort_role_enum role "student professor mentor"
-        student_status_enum status "students only"
-        text dismissal_reason "students only"
+        uuid cohort_track_id FK "Nullable at column level (mentors/professors have none),…"
+        cohort_role_enum role "student | professor | mentor"
+        student_status_enum status "active | dismissed | graduated | withdrawn | deferred"
+        text dismissal_reason
         timestamptz joined_at
         timestamptz left_at
         timestamptz created_at
@@ -75,13 +75,13 @@ erDiagram
     INVITES {
         uuid id PK
         varchar email
-        uuid cohort_id FK "null for admin invites"
-        uuid cohort_track_id FK "required for student invites"
-        uuid mentorship_group_id FK "nullable, may be deferred"
-        cohort_role_enum cohort_role
-        system_role_enum system_role
-        varchar token_hash UK "hash only"
-        invite_status_enum status
+        uuid cohort_id FK
+        uuid cohort_track_id FK
+        uuid mentorship_group_id FK "FK declared below (lazy, avoids a declaration cycle)"
+        cohort_role_enum cohort_role "student | professor | mentor"
+        system_role_enum system_role "user | admin"
+        varchar token_hash UK
+        invite_status_enum status "pending | accepted | declined | revoked | expired"
         uuid invited_by FK
         timestamptz expires_at
         timestamptz accepted_at
@@ -92,8 +92,8 @@ erDiagram
     MENTORSHIP_GROUPS {
         uuid id PK
         uuid cohort_id FK
-        uuid mentor_member_id FK "FK to COHORT_MEMBERS"
-        uuid space_id FK "the pod, nullable"
+        uuid mentor_member_id FK
+        uuid space_id FK "the pod's room; FK declared below"
         varchar name
         text description
         timestamptz created_at
@@ -107,15 +107,15 @@ erDiagram
         timestamptz joined_at
     }
 
-    %% ------------------------------------------------------------- world
+    %% --------------------------------------------------------- world
 
     MAPS {
         uuid id PK
-        varchar key
+        varchar key UK
         varchar name
-        map_kind_enum kind "main faculty admin_block resource_centre meeting_rooms"
-        uuid track_id FK "faculty maps only"
-        varchar asset_key "versioned tilemap asset"
+        map_kind_enum kind "main | faculty | admin_block | resource_centre | meeting_…"
+        uuid track_id FK
+        varchar asset_key "Versioned tilemap asset; doubles as the client's cache-bu…"
         int width_tiles
         int height_tiles
         boolean is_entry
@@ -128,16 +128,16 @@ erDiagram
         uuid map_id FK
         varchar key
         varchar name
-        space_kind_enum kind
-        audio_mode_enum audio_mode "proximity boundary broadcast"
-        space_access_enum access "open cohort invite request"
-        outsider_visibility_enum outsider_visibility
-        int capacity "null is uncapped"
-        publish_policy_enum publish_policy
-        jsonb bounds "x y w h in tiles"
-        numeric audible_radius "gain falloff, client-side"
-        numeric subscribe_radius "drives LiveKit subscription"
-        numeric hysteresis_factor "default 1.2"
+        space_kind_enum kind "open | classroom | meeting_room | mentor_pod | live_codin…"
+        audio_mode_enum audio_mode "the five independent behaviour dimensions"
+        space_access_enum access "open | cohort | invite | request"
+        outsider_visibility_enum outsider_visibility "hidden | avatars_visible | full"
+        int capacity "null = uncapped"
+        publish_policy_enum publish_policy "all | staff | grant_only"
+        jsonb bounds "geometry + radii, all in TILES relative to the parent map"
+        numeric audible_radius "Gain falls 1.0 -> 0 across this radius, applied client-si…"
+        numeric subscribe_radius "Slightly larger than audible_radius, and THE COST LEVER:…"
+        numeric hysteresis_factor
         timestamptz created_at
         timestamptz updated_at
     }
@@ -145,8 +145,8 @@ erDiagram
     SPACE_MEMBERSHIPS {
         uuid id PK
         uuid space_id FK
-        uuid cohort_track_id FK "cohort gating"
-        uuid user_id FK "invite gating"
+        uuid cohort_track_id FK
+        uuid user_id FK
         uuid granted_by FK
         timestamptz valid_from
         timestamptz valid_to
@@ -157,10 +157,10 @@ erDiagram
         uuid id PK
         uuid from_map_id FK
         uuid from_space_id FK
-        jsonb from_region "trigger region in tiles"
+        jsonb from_region
         uuid to_map_id FK
         uuid to_space_id FK
-        jsonb to_position "x y in tiles"
+        jsonb to_position
         varchar label
         timestamptz created_at
     }
@@ -169,7 +169,7 @@ erDiagram
         uuid id PK
         uuid space_id FK
         uuid user_id FK
-        access_request_status_enum status
+        access_request_status_enum status "pending | approved | denied | expired"
         uuid decided_by FK
         timestamptz decided_at
         timestamptz expires_at
@@ -178,10 +178,10 @@ erDiagram
 
     DESKS {
         uuid id PK
-        uuid space_id FK "an assigned desk IS a space"
-        varchar key
-        jsonb position "x y in tiles"
-        uuid reserved_for_user_id FK "admin reservation"
+        uuid space_id FK UK "No map_id: the desk's space knows its map. One source of…"
+        varchar key UK
+        jsonb position
+        uuid reserved_for_user_id FK
         timestamptz created_at
     }
 
@@ -191,17 +191,17 @@ erDiagram
         uuid user_id FK
         timestamptz claimed_at
         timestamptz released_at
-        desk_release_reason_enum release_reason
+        desk_release_reason_enum release_reason "user_unclaimed | admin_freed | enrollment_ended"
     }
 
-    %% -------------------------------------------------- sessions + media
+    %% ---------------------------------------------- sessions + media
 
     SESSIONS {
         uuid id PK
         uuid space_id FK
-        media_provider_enum provider "only provider-aware column"
-        varchar provider_room_id "only provider-aware column"
-        session_status_enum status
+        media_provider_enum provider "livekit"
+        varchar provider_room_id
+        session_status_enum status "open | closed"
         timestamptz opened_at
         timestamptz closed_at
     }
@@ -213,23 +213,23 @@ erDiagram
         timestamptz joined_at
         timestamptz left_at
         int published_seconds
-        boolean video_enabled "true only on explicit opt-in"
+        boolean video_enabled
     }
 
-    %% --------------------------------------------- scheduling attendance
+    %% --------------------------------------- scheduling + attendance
 
     SCHEDULES {
         uuid id PK
         uuid space_id FK
-        schedule_kind_enum kind
+        schedule_kind_enum kind "class | mentorship | event | office_hours"
         varchar title
         text description
         uuid host_user_id FK
-        uuid cohort_track_id FK "audience for classes"
-        uuid mentorship_group_id FK "audience for pods"
+        uuid cohort_track_id FK
+        uuid mentorship_group_id FK
         timestamptz starts_at
         int duration_minutes
-        varchar rrule "null is one-off"
+        varchar rrule "null = one-off. Recurrence is a candidate to defer past t…"
         varchar timezone
         timestamptz created_at
         timestamptz updated_at
@@ -238,10 +238,10 @@ erDiagram
     SCHEDULED_OCCURRENCES {
         uuid id PK
         uuid schedule_id FK
-        uuid space_id FK "overridable when moved"
+        uuid space_id FK "Copied from the schedule, overridable when a single occur…"
         timestamptz starts_at
         timestamptz ends_at
-        occurrence_status_enum status
+        occurrence_status_enum status "scheduled | cancelled | moved"
         timestamptz closed_at
         timestamptz created_at
     }
@@ -251,8 +251,8 @@ erDiagram
         uuid occurrence_id FK
         uuid user_id FK
         int present_seconds
-        attendance_status_enum status
-        attendance_source_enum source "derived or override"
+        attendance_status_enum status "present | partial | absent"
+        attendance_source_enum source "derived | override"
         timestamptz finalized_at
     }
 
@@ -261,22 +261,22 @@ erDiagram
         uuid occurrence_id FK
         uuid user_id FK
         uuid changed_by FK
-        attendance_status_enum old_status
-        attendance_status_enum new_status
+        attendance_status_enum old_status "present | partial | absent"
+        attendance_status_enum new_status "present | partial | absent"
         int old_present_seconds
         text reason
         timestamptz created_at
     }
 
-    %% ------------------------------------------------------ student work
+    %% -------------------------------------------------- student work
 
     PROJECTS {
         uuid id PK
-        uuid user_id FK "belongs to student not desk"
+        uuid user_id FK
         varchar title
         text description
         varchar currently_working_on
-        boolean is_pinned "one pinned per user"
+        boolean is_pinned
         timestamptz created_at
         timestamptz updated_at
     }
@@ -284,7 +284,7 @@ erDiagram
     PROJECT_LINKS {
         uuid id PK
         uuid project_id FK
-        project_link_kind_enum kind "repo demo design docs"
+        project_link_kind_enum kind "repo | demo | design | docs | other"
         varchar url
         varchar label
         timestamptz created_at
@@ -292,7 +292,7 @@ erDiagram
 
     COMMENTS {
         uuid id PK
-        comment_subject_enum subject_type "project notice resource"
+        comment_subject_enum subject_type "project | notice | resource"
         uuid subject_id
         uuid author_user_id FK
         text body
@@ -301,16 +301,16 @@ erDiagram
         timestamptz deleted_at
     }
 
-    %% ----------------------------------------------------------- notices
+    %% ------------------------------------------------------- notices
 
     NOTICES {
         uuid id PK
         uuid author_user_id FK
         varchar title
         text body
-        notice_kind_enum kind "announcement event deadline community"
-        notice_scope_enum scope "campus cohort cohort_track"
-        uuid scope_id "null when campus"
+        notice_kind_enum kind "announcement | event | deadline | community"
+        notice_scope_enum scope "campus | cohort | cohort_track"
+        uuid scope_id
         boolean is_pinned
         timestamptz published_at
         timestamptz expires_at
@@ -318,12 +318,12 @@ erDiagram
         timestamptz updated_at
     }
 
-    %% --------------------------------------------------------- resources
+    %% ----------------------------------------------------- resources
 
     RESOURCE_CENTERS {
         uuid id PK
         uuid cohort_id FK
-        uuid track_id FK "nullable"
+        uuid track_id FK
         varchar name
         text description
         timestamptz created_at
@@ -342,13 +342,13 @@ erDiagram
 
     RESOURCE_CENTER_RESOURCES {
         uuid id PK
-        uuid resource_center_id FK "scope comes from the center"
+        uuid resource_center_id FK "Scope comes from the center. Previously this table carrie…"
         uuid created_by FK
         varchar title
         text description
-        resource_type_enum resource_type
+        resource_type_enum resource_type "video | audio | pdf | png | doc | link | other"
         varchar url
-        varchar provider_asset_id "Cloudinary public_id"
+        varchar provider_asset_id
         boolean is_public
         timestamptz created_at
         timestamptz updated_at
@@ -360,13 +360,13 @@ erDiagram
         uuid category_id FK
     }
 
-    %% --------------------------------------------------------- messaging
+    %% ----------------------------------------------------- messaging
 
     CONVERSATIONS {
         uuid id PK
-        conversation_kind_enum kind "direct group space campus"
-        uuid space_id FK "set when kind is space"
-        group_scope_enum group_scope "set when kind is group"
+        conversation_kind_enum kind "direct | group | space | campus"
+        uuid space_id FK
+        group_scope_enum group_scope "mentorship_group | cohort | cohort_track"
         uuid group_scope_id
         timestamptz created_at
     }
@@ -392,7 +392,7 @@ erDiagram
     NOTIFICATIONS {
         uuid id PK
         uuid user_id FK
-        notification_kind_enum kind
+        notification_kind_enum kind "session_starting | invite_accepted | desk_reserved | acce…"
         varchar subject_type
         uuid subject_id
         jsonb payload
@@ -400,17 +400,17 @@ erDiagram
         timestamptz created_at
     }
 
-    %% ------------------------------------------------------------- audit
+    %% --------------------------------------------------------- audit
 
     AUDIT_LOG {
         uuid id PK
         uuid actor_user_id FK
-        varchar action "staff_bypass_entry user_suspended desk_freed"
+        varchar action
         varchar subject_type
         uuid subject_id
         uuid space_id FK
         jsonb details
-        varchar correlation_id "ties to world log lines"
+        varchar correlation_id "Ties the row to the originating request and to any downst…"
         timestamptz created_at
     }
 
@@ -418,15 +418,13 @@ erDiagram
 
     COHORTS ||--o{ COHORT_TRACKS : "runs"
     TRACKS ||--o{ COHORT_TRACKS : "instantiated_as"
-    COHORT_TRACKS ||--o{ COHORT_MEMBERS : "places"
     COHORTS ||--o{ COHORT_MEMBERS : "enrolls"
     USERS ||--o{ COHORT_MEMBERS : "member_of"
-
+    COHORT_TRACKS ||--o{ COHORT_MEMBERS : "places"
     COHORTS ||--o{ INVITES : "scopes"
     COHORT_TRACKS ||--o{ INVITES : "places"
-    MENTORSHIP_GROUPS ||--o{ INVITES : "assigns"
+    MENTORSHIP_GROUPS ||--o{ INVITES : "assigns_pod"
     USERS ||--o{ INVITES : "invited_by"
-
     COHORTS ||--o{ MENTORSHIP_GROUPS : "contains"
     COHORT_MEMBERS ||--o{ MENTORSHIP_GROUPS : "leads_as_mentor"
     SPACES ||--o{ MENTORSHIP_GROUPS : "meets_in"
@@ -437,14 +435,17 @@ erDiagram
     MAPS ||--o{ SPACES : "contains"
     SPACES ||--o{ SPACE_MEMBERSHIPS : "gated_by"
     COHORT_TRACKS ||--o{ SPACE_MEMBERSHIPS : "grants"
-    USERS ||--o{ SPACE_MEMBERSHIPS : "granted"
-
-    MAPS ||--o{ PORTALS : "origin"
-    SPACES ||--o{ PORTALS : "leads_to"
+    USERS ||--o{ SPACE_MEMBERSHIPS : "granted_to"
+    USERS ||--o{ SPACE_MEMBERSHIPS : "granted_by"
+    MAPS ||--o{ PORTALS : "exits_from"
+    SPACES ||--o{ PORTALS : "departs"
+    MAPS ||--o{ PORTALS : "arrives_at"
+    SPACES ||--o{ PORTALS : "admits_to"
     SPACES ||--o{ ACCESS_REQUESTS : "knocked_on"
     USERS ||--o{ ACCESS_REQUESTS : "requests"
-
-    SPACES ||--|| DESKS : "is_a_desk_space"
+    USERS ||--o{ ACCESS_REQUESTS : "decides"
+    SPACES ||--o| DESKS : "is_a_desk_space"
+    USERS ||--o{ DESKS : "reserved_for"
     DESKS ||--o{ DESK_CLAIMS : "claimed_by"
     USERS ||--o{ DESK_CLAIMS : "claims"
 
@@ -457,9 +458,11 @@ erDiagram
     COHORT_TRACKS ||--o{ SCHEDULES : "audience"
     MENTORSHIP_GROUPS ||--o{ SCHEDULES : "audience"
     SCHEDULES ||--o{ SCHEDULED_OCCURRENCES : "expands_to"
+    SPACES ||--o{ SCHEDULED_OCCURRENCES : "occurs_in"
     SCHEDULED_OCCURRENCES ||--o{ ATTENDANCE : "derives"
     USERS ||--o{ ATTENDANCE : "attends"
     SCHEDULED_OCCURRENCES ||--o{ ATTENDANCE_OVERRIDES : "corrected_for"
+    USERS ||--o{ ATTENDANCE_OVERRIDES : "subject_of"
     USERS ||--o{ ATTENDANCE_OVERRIDES : "corrected_by"
 
     USERS ||--o{ PROJECTS : "owns"
@@ -481,38 +484,70 @@ erDiagram
     USERS ||--o{ CONVERSATION_PARTICIPANTS : "participates"
     CONVERSATIONS ||--o{ MESSAGES : "contains"
     USERS ||--o{ MESSAGES : "sends"
-
     USERS ||--o{ NOTIFICATIONS : "receives"
 
     USERS ||--o{ AUDIT_LOG : "acts"
     SPACES ||--o{ AUDIT_LOG : "subject_of"
 
 %% =====================================================================
-%% CONSTRAINTS NOT EXPRESSIBLE ABOVE — enforce in the migration
+%% NOT EXPRESSIBLE ABOVE — enforced in schema.ts and the migrations
 %% -
 %% COMPOSITE FK
 %%   cohort_members(cohort_track_id, cohort_id) -> cohort_tracks(id, cohort_id)
-%%   invites(cohort_track_id, cohort_id)        -> cohort_tracks(id, cohort_id)
+%%   invites(cohort_track_id, cohort_id) -> cohort_tracks(id, cohort_id)
 %% -
 %% PARTIAL UNIQUE
-%%   maps((is_entry)) WHERE is_entry                  one campus entry map
-%%   maps(track_id) WHERE kind='faculty'  one faculty map per track
-%%   spaces((kind)) WHERE kind='town_hall'        exactly one Town Hall
-%%   spaces((kind)) WHERE kind='notice_board'     exactly one Notice Wall
-%%   sessions(space_id) WHERE status='open'       one live session per space
-%%   desk_claims(desk_id) WHERE released_at IS NULL   one holder per desk
-%%   desk_claims(user_id) WHERE released_at IS NULL   one desk per student
-%%   projects(user_id) WHERE is_pinned            one pinned project
-%%   invites(email) WHERE status='pending' one live invite per address
-%%   access_requests(space_id,user_id) WHERE status='pending'
-%%   conversations((kind)) WHERE kind='campus'    one campus conversation
-%%   conversations(space_id) WHERE kind='space'
+%%   invites(email)                      WHERE status = 'pending'
+%%   maps(is_entry)                      WHERE is_entry
+%%   maps(track_id)                      WHERE kind = 'faculty'
+%%   spaces(kind)                        WHERE kind = 'town_hall'
+%%   spaces(kind)                        WHERE kind = 'notice_board'
+%%   access_requests(space_id, user_id)  WHERE status = 'pending'
+%%   desk_claims(desk_id)                WHERE released_at is null
+%%   desk_claims(user_id)                WHERE released_at is null
+%%   sessions(space_id)                  WHERE status = 'open'
+%%   projects(user_id)                   WHERE is_pinned
+%%   conversations(kind)                 WHERE kind = 'campus'
+%%   conversations(space_id)             WHERE kind = 'space'
+%% -
+%% UNIQUE
+%%   users(email)
+%%   users(provider, provider_id)
+%%   tracks(code)
+%%   cohorts(code)
+%%   cohort_tracks(cohort_id, track_id)
+%%   cohort_tracks(id, cohort_id)
+%%   cohort_members(cohort_id, user_id)
+%%   invites(token_hash)
+%%   mentorship_group_students(mentorship_group_id, cohort_member_id)
+%%   maps(key)
+%%   spaces(map_id, key)
+%%   desks(key)
+%%   desks(space_id)
+%%   scheduled_occurrences(schedule_id, starts_at)
+%%   attendance(occurrence_id, user_id)
+%%   resource_categories(resource_center_id, slug)
+%%   resource_category_mappings(resource_id, category_id)
+%%   conversation_participants(conversation_id, user_id)
 %% -
 %% CHECK
-%%   portals.from_map_id <> portals.to_map_id
+%%   portals: from_map_id <> to_map_id
 %%   spaces: audio_mode <> 'broadcast' OR publish_policy <> 'all'
-%%   a guest is a USERS row with no COHORT_MEMBERS row at all
-%%   space_memberships: exactly one of cohort_track_id / user_id is set
-%%   maps: kind='faculty' => track_id IS NOT NULL
-%%   cohort_members: role='student' => cohort_track_id IS NOT NULL
+%%   space_memberships: (cohort_track_id IS NULL) <> (user_id IS NULL)
+%%   maps: kind <> 'faculty' OR track_id IS NOT NULL
+%%   cohort_members: role = 'student' OR status IS NULL
+%%   cohort_members: role <> 'student' OR cohort_track_id IS NOT NULL
+%%   invites: (cohort_id IS NULL) = (cohort_role IS NULL)
+%%   invites: cohort_id IS NOT NULL OR (cohort_track_id IS NULL AND mentorship_group_id IS NULL)
+%%   invites: cohort_role IS DISTINCT FROM 'student' OR cohort_track_id IS NOT NULL
+%%   invites: email = lower(email)
+%%   users: email = lower(email)
+%%   tracks: code = upper(code)
+%%   cohorts: code = upper(code)
+%% -
+%% NOT IN POSTGRES
+%%   player positions (world process memory) · presence (Redis)
+%%   map tile art + collision (versioned asset files)
+%%   space/campus chat audiences (resolved from presence)
+%%   classroom seat props (map asset only — see the desks note)
 %% =====================================================================

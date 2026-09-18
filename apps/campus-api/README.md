@@ -53,6 +53,8 @@ a clear error.
 | `PORT`                            | `3000`                                    | HTTP port                            |
 | `DATABASE_URL`                    | `postgresql://postgres:postgres@localhost:5432/campus` | Postgres connection string |
 | `DEFAULT_ADMIN_EMAIL`             | *(unset)*                                 | Email of the default admin user. Read only by `pnpm db:seed` — the API never reads it; seeding fails if unset |
+| `CORS_ORIGINS`                    | *(unset)*                                 | Comma-separated browser origins allowed to call the API. Unset sends no CORS headers, which blocks browser apps |
+| `TRUST_PROXY_HOPS`                | `1`                                       | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none |
 | `FF_LOG_LEVEL`                    | `info`                                    | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
 | `FF_LOG_PRETTY`                   | `false`                                   | Enable human-readable pino-pretty output (`true`) or JSON lines (`false`) |
 | `DEPLOYMENT_ENVIRONMENT`          | `development`                             | Label sent with traces (`deployment.environment`) |
@@ -117,8 +119,8 @@ Key behaviors:
   verbose local debugging without changing runtime mode.
 - **Redaction**: `authorization`, `cookie`, `password`, `token` and `secret`
   fields are redacted as `[REDACTED]`.
-- **Route noise**: health/docs endpoints (`/docs`, `/reference`) are excluded
-  from request logging.
+- **Route noise**: `/v1/health`, `/docs` and `/docs-json` are excluded from
+  request logging — uptime probes and the API reference say nothing useful.
 
 ### How trace IDs get into logs (no interceptor)
 

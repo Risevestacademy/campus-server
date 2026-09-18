@@ -1,8 +1,9 @@
 import 'reflect-metadata';
 
-import type { INestApplication } from '@nestjs/common';
+import type { HttpServer } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { readFileSync } from 'node:fs';
@@ -11,9 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module.js';
-import { loadEnv } from './infra/config/env.js';
+import { loadEnv, parseCorsOrigins } from './infra/config/env.js';
 import { initPostHog } from './infra/posthog/posthog.js';
 import { PostHogExceptionInterceptor } from './infra/posthog/posthog.interceptor.js';
+import { CORRELATION_ID_HEADER } from './infra/logger/logger.module.js';
 import { gracefulShutdown } from './infra/shutdown.js';
 import { initTelemetry } from './infra/telemetry/telemetry.js';
 import { ValidationException } from './shared/exceptions/index.js';
@@ -49,7 +51,7 @@ async function bootstrap() {
     enabled: config.FF_POSTHOG_ENABLED,
   });
 
-  let app: INestApplication | undefined;
+  let app: NestExpressApplication | undefined;
 
   process.on('SIGTERM', () => {
     gracefulShutdown(app, [
@@ -63,9 +65,25 @@ async function bootstrap() {
       });
   });
 
-  app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+  });
 
-  app.useLogger(app.get(Logger));
+  const logger = app.get(Logger);
+  app.useLogger(logger);
+
+  // Without this every request appears to come from the proxy
+
+  app.set('trust proxy', config.TRUST_PROXY_HOPS);
+
+  const corsOrigins = parseCorsOrigins(config.CORS_ORIGINS);
+  if (corsOrigins.length > 0) {
+    app.enableCors({
+      origin: corsOrigins,
+      credentials: true,
+      exposedHeaders: [CORRELATION_ID_HEADER],
+    });
+  }
 
   app.setGlobalPrefix('v1');
 
@@ -77,7 +95,7 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(
-    new GlobalExceptionFilter(),
+    new GlobalExceptionFilter(logger),
     new DomainExceptionFilter(),
     new ValidationExceptionFilter(),
   );
@@ -104,7 +122,8 @@ async function bootstrap() {
     }),
   );
 
-  app.getHttpAdapter().get('/docs-json', (_req, res) => {
+  const httpAdapter: HttpServer = app.getHttpAdapter();
+  httpAdapter.get('/docs-json', (_req, res) => {
     res.json(document);
   });
 
