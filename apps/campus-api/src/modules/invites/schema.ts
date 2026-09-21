@@ -38,7 +38,11 @@ export const invites = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     email: varchar('email', { length: 320 }).notNull(),
-    /** Null for admin invites, which are not scoped to a cohort. */
+    /**
+     * Null for a guest invite, which carries no cohort and no cohort role.
+     * system_role is independent of this, so an admin invite may still be
+     * cohort-scoped — an admin who is also a professor on a cohort.
+     */
     cohortId: uuid('cohort_id').references(() => cohorts.id),
     cohortTrackId: uuid('cohort_track_id'),
     /** No FK yet: mentorship_groups does not exist. */

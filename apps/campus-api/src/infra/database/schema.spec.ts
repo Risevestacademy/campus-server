@@ -330,7 +330,11 @@ describe('invites', () => {
     );
   });
 
-  it('refuses a mentorship group with no cohort', async () => {
+  it('refuses either scoped field with no cohort', async () => {
+    await expectViolation(
+      invite({ cohortTrackId: fixtures.cohortTrackId }),
+      'invites_scoped_fields_require_cohort',
+    );
     await expectViolation(
       invite({ mentorshipGroupId: '00000000-0000-0000-0000-000000000001' }),
       'invites_scoped_fields_require_cohort',
