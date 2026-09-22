@@ -20,6 +20,7 @@
     "db:migrate": "pnpm --filter campus-api db:migrate",
     "db:generate": "pnpm --filter campus-api db:generate",
     "db:push": "pnpm --filter campus-api db:push",
+    "db:seed": "pnpm --filter campus-api db:seed",
     "db:studio": "pnpm --filter campus-api db:studio",
     "test:api": "pnpm --filter campus-api test",
     "test:world": "pnpm --filter world test",

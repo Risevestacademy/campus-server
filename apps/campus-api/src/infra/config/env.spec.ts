@@ -1,4 +1,4 @@
-import { loadEnv } from './env.js';
+import { loadEnv, parseCorsOrigins } from './env.js';
 
 describe('loadEnv PostHog validation', () => {
   it('throws when FF_POSTHOG_ENABLED is true but POSTHOG_PROJECT_TOKEN is missing', () => {
@@ -65,5 +65,42 @@ describe('loadEnv DEFAULT_ADMIN_EMAIL validation', () => {
   it('succeeds with a valid email', () => {
     const env = loadEnv({ DEFAULT_ADMIN_EMAIL: 'admin@campus.local' });
     expect(env.DEFAULT_ADMIN_EMAIL).toBe('admin@campus.local');
+  });
+});
+
+describe('loadEnv HTTP settings', () => {
+  it('defaults TRUST_PROXY_HOPS to one, for Railway', () => {
+    expect(loadEnv({}).TRUST_PROXY_HOPS).toBe(1);
+  });
+
+  it('accepts zero hops, meaning trust no proxy', () => {
+    expect(loadEnv({ TRUST_PROXY_HOPS: '0' }).TRUST_PROXY_HOPS).toBe(0);
+  });
+
+  it('rejects a hop count that is not a whole number or is negative', () => {
+    expect(() => loadEnv({ TRUST_PROXY_HOPS: 'yes' })).toThrow(
+      /TRUST_PROXY_HOPS/,
+    );
+    expect(() => loadEnv({ TRUST_PROXY_HOPS: '-1' })).toThrow(
+      /TRUST_PROXY_HOPS/,
+    );
+  });
+
+  it('leaves CORS unset by default', () => {
+    expect(loadEnv({}).CORS_ORIGINS).toBeUndefined();
+  });
+});
+
+describe('parseCorsOrigins', () => {
+  it('splits a comma-separated list and trims each origin', () => {
+    expect(
+      parseCorsOrigins(' https://campus.example.com , http://localhost:3000 '),
+    ).toEqual(['https://campus.example.com', 'http://localhost:3000']);
+  });
+
+  it('yields nothing for unset or empty values, which disables CORS', () => {
+    expect(parseCorsOrigins(undefined)).toEqual([]);
+    expect(parseCorsOrigins('')).toEqual([]);
+    expect(parseCorsOrigins('  ,  ')).toEqual([]);
   });
 });

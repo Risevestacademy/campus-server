@@ -36,6 +36,13 @@ export function loadEnv(source: Record<string, unknown> = process.env): Env {
   return env;
 }
 
+export function parseCorsOrigins(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+}
+
 export class Env {
   @IsOptional()
   @IsString()
@@ -54,6 +61,18 @@ export class Env {
   @IsOptional()
   @IsEmail()
   DEFAULT_ADMIN_EMAIL?: string;
+
+  // Comma-separated list of browser origins allowed to call the API.
+
+  @IsOptional()
+  @IsString()
+  CORS_ORIGINS?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  TRUST_PROXY_HOPS: number = 1;
 
   @IsOptional()
   @IsIn(LOG_LEVELS)

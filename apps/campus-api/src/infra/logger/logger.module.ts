@@ -9,6 +9,15 @@ import { CONFIG, type Env } from '../config/config.module.js';
 
 export const CORRELATION_ID_HEADER = 'x-correlation-id';
 
+const UNLOGGED_PATHS = ['/v1/health', '/docs', '/docs-json'];
+
+export function isUnloggedRoute(url: string | undefined): boolean {
+  const path = (url ?? '').split('?')[0] ?? '';
+  return UNLOGGED_PATHS.some(
+    (unlogged) => path === unlogged || path.startsWith(`${unlogged}/`),
+  );
+}
+
 @Global()
 @Module({
   imports: [
@@ -19,7 +28,10 @@ export const CORRELATION_ID_HEADER = 'x-correlation-id';
           level: config.FF_LOG_LEVEL,
           genReqId: (req: IncomingMessage, res: ServerResponse) => {
             const incoming = req.headers[CORRELATION_ID_HEADER];
-            const id = typeof incoming === 'string' && incoming.length > 0 ? incoming : randomUUID();
+            const id =
+              typeof incoming === 'string' && incoming.length > 0
+                ? incoming
+                : randomUUID();
             res.setHeader(CORRELATION_ID_HEADER, id);
             return id;
           },
@@ -42,10 +54,16 @@ export const CORRELATION_ID_HEADER = 'x-correlation-id';
               }
             : undefined,
           autoLogging: {
-            ignore: (req: IncomingMessage) => req.url === '/docs' || req.url === '/reference',
+            ignore: (req: IncomingMessage) => isUnloggedRoute(req.url),
           },
           redact: {
-            paths: ['req.headers.authorization', 'req.headers.cookie', '*.password', '*.token', '*.secret'],
+            paths: [
+              'req.headers.authorization',
+              'req.headers.cookie',
+              '*.password',
+              '*.token',
+              '*.secret',
+            ],
             censor: '[REDACTED]',
           },
           serializers: {
