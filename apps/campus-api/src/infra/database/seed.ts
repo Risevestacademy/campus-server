@@ -8,6 +8,15 @@ import { loadEnv } from '../config/env.js';
 import * as schema from './schema/index.js';
 import { seedAdmin } from './seeder.js';
 
+// `node dist/...` runs outside Nest, so nothing loads `.env` for us
+// (ConfigModule does that at runtime; drizzle-kit does it for migrations).
+// Node 20.6+ can do it natively — no extra dependency needed.
+try {
+  process.loadEnvFile();
+} catch {
+  // No .env file — env vars are expected to be provided externally.
+}
+
 async function main(): Promise<void> {
   const config = loadEnv();
   const logger = pino({ level: config.FF_LOG_LEVEL, name: 'db:seed' });
