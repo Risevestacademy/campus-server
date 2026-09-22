@@ -126,4 +126,19 @@ export class Env {
   })
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
+
+  @IsOptional()
+  @IsString()
+  APP_PUBLIC_URL?: string;
+
+  /** Legacy alias for APP_PUBLIC_URL (already present in local .env files). */
+  @IsOptional()
+  @IsString()
+  INVITE_LINK_BASE_URL?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  INVITE_TTL_DAYS: number = 7;
 }
