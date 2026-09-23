@@ -127,14 +127,10 @@ export class Env {
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
 
-  @IsOptional()
-  @IsString()
-  APP_PUBLIC_URL?: string;
-
-  /** Legacy alias for APP_PUBLIC_URL (already present in local .env files). */
-  @IsOptional()
-  @IsString()
-  INVITE_LINK_BASE_URL?: string;
+  // require_tld: false keeps http://localhost:3000 valid for local dev;
+  // require_protocol: true still rejects bare words like "not-a-url".
+  @IsUrl({ require_tld: false, require_protocol: true })
+  APP_PUBLIC_URL: string;
 
   @IsOptional()
   @Type(() => Number)

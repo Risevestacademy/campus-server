@@ -13,11 +13,12 @@ import { CohortRole } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
 
 /**
- * Exactly two shapes are accepted (mirrors the INVITES CHECK constraints):
+ * Three shapes are accepted (mirrors the INVITES CHECK constraints):
  *
  * - Cohort invite: { email, cohortId, cohortRole } plus optional
  *   cohortTrackId / mentorshipGroupId / systemRole / expiresAt.
  * - Admin invite: { email, systemRole: 'admin' } with NO cohort fields.
+ * - Guest invite: { email } alone (systemRole defaults to 'user').
  *
  * An admin+cohort combination (systemRole admin together with cohort fields)
  * is also accepted: system_role is independent of cohort scoping, so an admin

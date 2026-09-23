@@ -8,8 +8,30 @@ import {
   InviteInvalidArgumentException,
   InviteNotFoundException,
 } from './invites.exceptions.js';
+import { generateInviteToken } from './invite-token.js';
 import { InviteStatus } from './schema.js';
-import { InvitesService } from './invites.service.js';
+import { InvitesService, classifyInviteWriteError } from './invites.service.js';
+
+vi.mock('./invite-token.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./invite-token.js')>();
+  // Wrap the real generator so tests can script token sequences while the
+  // hash helper stays genuine (hash assertions below still prove hash-only
+  // storage against whatever token comes out).
+  return { ...actual, generateInviteToken: vi.fn(actual.generateInviteToken) };
+});
+
+const nextToken = (value: string) =>
+  vi.mocked(generateInviteToken).mockReturnValueOnce(value);
+
+/** A real-shaped Postgres unique_violation, not a prose stub. */
+function pgUniqueViolation(constraint: string) {
+  return Object.assign(
+    new Error(
+      `duplicate key value violates unique constraint "${constraint}"`,
+    ),
+    { code: '23505' },
+  );
+}
 
 const COHORT_ID = '11111111-1111-4111-8111-111111111111';
 const TRACK_ID = '22222222-2222-4222-8222-222222222222';
@@ -36,6 +58,9 @@ interface FakeState {
   trackRow: { id: string; cohortId: string } | null;
   lastInsert?: Record<string, unknown>;
   insertError?: Error | null;
+  /** Shifted one per insert attempt — lets a test fail the first try only. */
+  insertErrorQueue?: unknown[];
+  insertCalls?: number;
   updatedToExpired: string[];
 }
 
@@ -64,9 +89,12 @@ function makeDb(state: FakeState) {
     insert: () => ({
       values: (values: Record<string, unknown>) => {
         state.lastInsert = values as Record<string, unknown>;
+        state.insertCalls = (state.insertCalls ?? 0) + 1;
         return {
           returning: () => {
-            if (state.insertError) return Promise.reject(state.insertError);
+            const queued = state.insertErrorQueue?.shift();
+            const err = queued ?? state.insertError;
+            if (err) return Promise.reject(err);
             return Promise.resolve([
               {
                 id: 'new-invite-id',
@@ -139,6 +167,16 @@ describe('InvitesService.create', () => {
     expect(res.inviteLink).toContain('token=');
   });
 
+  it('accepts a guest invite { email } with no cohort and no role', async () => {
+    const { service, state } = serviceWith({ cohortExists: false, trackRow: null });
+    const res = await service.create({ email: 'Guest@Campus.Local' }, inviter);
+    expect(res.email).toBe('guest@campus.local');
+    expect(res.systemRole).toBe(SystemRole.User);
+    expect(res.cohortId).toBeNull();
+    expect(res.cohortRole).toBeNull();
+    expect(state.lastInsert?.['systemRole']).toBe(SystemRole.User);
+  });
+
   it.each([
     ['cohortId without cohortRole', { email: 'a@x.local', cohortId: COHORT_ID }],
     ['cohortRole without cohortId', { email: 'a@x.local', cohortRole: CohortRole.Professor }],
@@ -150,8 +188,6 @@ describe('InvitesService.create', () => {
       'scoped track without cohort',
       { email: 'a@x.local', cohortTrackId: TRACK_ID },
     ],
-    ['plain user email only', { email: 'a@x.local' }],
-    ['plain user email + systemRole user', { email: 'a@x.local', systemRole: SystemRole.User }],
   ])('validates the shape: %s -> 400', async (_label, dto) => {
     const { service } = serviceWith();
     await expect(
@@ -204,13 +240,64 @@ describe('InvitesService.create', () => {
     expect(state.updatedToExpired).toContain('stale-invite');
   });
 
-  it('maps a concurrent-insert unique violation to 409', async () => {
+  it('clamps expiresAt to now + INVITE_TTL_DAYS instead of accepting forever tokens', async () => {
+    const { service, state } = serviceWith();
+    const before = Date.now();
+    await service.create(
+      {
+        email: 'a@x.local',
+        systemRole: SystemRole.Admin,
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      },
+      inviter,
+    );
+    const stored = state.lastInsert?.['expiresAt'] as Date;
+    const maxTtl = 7 * 86_400_000;
+    expect(stored.getTime()).toBeGreaterThan(before);
+    // 1s slack: the service computes "now" a few ms after `before`.
+    expect(stored.getTime() - before).toBeLessThanOrEqual(maxTtl + 1_000);
+    // And 2099 must be gone — the clamp actually bit.
+    expect(stored.getFullYear()).toBeLessThan(2099);
+  });
+
+  it('maps a concurrent-insert 23505 on the pending-email index to 409', async () => {
     const { service } = serviceWith({
-      insertError: new Error('duplicate key value violates "invites_email_pending_unique"'),
+      insertError: pgUniqueViolation('invites_email_pending_unique'),
     });
     await expect(service.create(cohortStudentDto(), inviter)).rejects.toBeInstanceOf(
       InviteConflictException,
     );
+  });
+
+  it('regenerates the token on a 23505 hash collision instead of 409ing', async () => {
+    nextToken('colliding-token');
+    nextToken('fresh-token');
+    const { service, state } = serviceWith({
+      insertErrorQueue: [pgUniqueViolation('invites_token_hash_unique')],
+    });
+    const res = await service.create(
+      { email: 'lucky@campus.local', systemRole: SystemRole.Admin },
+      inviter,
+    );
+    expect(res.token).toBe('fresh-token');
+    expect(state.insertCalls).toBe(2);
+  });
+
+  it('does not mistake other errors for conflicts — non-23505 rethrows', () => {
+    expect(
+      classifyInviteWriteError(new Error('connection reset')),
+    ).toBeNull();
+    expect(
+      classifyInviteWriteError(
+        new Error('duplicate key value violates unique constraint "x"'),
+      ),
+    ).toBeNull();
+    expect(
+      classifyInviteWriteError(pgUniqueViolation('invites_email_pending_unique')),
+    ).toBe('pending-duplicate');
+    expect(
+      classifyInviteWriteError(pgUniqueViolation('invites_token_hash_unique')),
+    ).toBe('token-collision');
   });
 
   it('returns 404 for an unknown cohort', async () => {

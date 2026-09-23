@@ -31,11 +31,13 @@ export class InvitesController {
   @ApiOperation({
     summary: 'Create an invite (admin only)',
     description:
-      'Accepts { email, cohortId, cohortRole } for cohort invites or ' +
-      '{ email, systemRole: admin } for admin invites. Stores only the ' +
-      'SHA-256 hash in INVITES.token_hash and returns a one-time shareable ' +
-      'link embedding the raw token. A second pending invite for the same ' +
-      'email is rejected with 409 (revoke the open one first).',
+      'Accepts { email, cohortId, cohortRole } for cohort invites, ' +
+      '{ email, systemRole: admin } for admin invites, or { email } alone ' +
+      'for a guest invite. Stores only the SHA-256 hash in ' +
+      'INVITES.token_hash and returns a one-time shareable link embedding ' +
+      'the raw token. A second pending invite for the same email is ' +
+      'rejected with 409 (revoke the open one first). expiresAt defaults ' +
+      'to now + INVITE_TTL_DAYS and never exceeds it.',
   })
   @ApiCreatedResponse({ type: InviteResponseDto })
   @ApiBadRequestResponse({ type: ApiErrorResponseDto })

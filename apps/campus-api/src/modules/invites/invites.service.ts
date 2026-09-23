@@ -6,6 +6,7 @@ import {
   DRIZZLE,
   type Db,
 } from '../../infra/database/database.constants.js';
+import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CohortRole, cohorts, cohortTracks } from '../cohorts/schema.js';
 import { SystemRole } from '../users/schema.js';
 import type { CreateInviteDto } from './dto/create-invite.dto.js';
@@ -21,7 +22,23 @@ import {
   InviteNotFoundException,
 } from './invites.exceptions.js';
 import { InviteStatus, invites } from './schema.js';
-import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+
+/**
+ * A row is live while it is still pending AND not yet lapsed.
+ * expires_at is the source of truth — status flips to 'expired' lazily
+ * (see below), so no reader may trust status = 'pending' on its own.
+ * The future accept and listing flows must use this helper; a sweep job
+ * can materialise the flip in bulk once listing exists.
+ */
+export function isInviteLive(
+  invite: { status: InviteStatus; expiresAt: Date },
+  now: Date = new Date(),
+): boolean {
+  return (
+    invite.status === InviteStatus.Pending &&
+    invite.expiresAt.getTime() > now.getTime()
+  );
+}
 
 /**
  * DUPLICATE POLICY — REJECT (documented choice):
@@ -33,8 +50,10 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
  * would invalidate a link the first recipient may still hold. The admin must
  * revoke/expire the open invite first, then re-invite.
  *
- * Stale pending rows whose expires_at has passed are auto-flipped to
- * 'expired' so a lapsed invite never blocks a re-invite forever.
+ * A lapsed-but-still-pending row (expires_at passed, flip not yet
+ * materialised) never blocks a re-invite: it is flipped to 'expired' on the
+ * spot. A concurrent race for the same email is decided by the partial
+ * unique index and translated from Postgres 23505 to the same 409.
  */
 @Injectable()
 export class InvitesService {
@@ -50,70 +69,71 @@ export class InvitesService {
     const email = dto.email.trim().toLowerCase();
     const systemRole = dto.systemRole ?? SystemRole.User;
 
-    this.assertValidShape(dto, systemRole);
+    this.assertValidShape(dto);
 
     await this.assertNoLiveInvite(email);
     await this.assertReferencesExist(dto);
 
     const expiresAt = this.resolveExpiresAt(dto.expiresAt);
-    const token = generateInviteToken();
-    const tokenHash = hashInviteToken(token);
 
-    let row;
-    try {
-      [row] = await this.db
-        .insert(invites)
-        .values({
-          email,
-          cohortId: dto.cohortId ?? null,
-          cohortTrackId: dto.cohortTrackId ?? null,
-          mentorshipGroupId: dto.mentorshipGroupId ?? null,
-          cohortRole: dto.cohortRole ?? null,
-          systemRole,
-          tokenHash,
-          invitedBy: inviter.id,
-          expiresAt,
-        })
-        .returning();
-    } catch (err) {
-      // Race guard: two concurrent creates for the same email — the partial
-      // unique index decides, and we translate it to the documented 409.
-      if (isPendingConflict(err)) {
-        throw new InviteConflictException(
-          `A pending invite already exists for ${email}`,
-          { email },
-        );
+    // A token collision (23505 on the hash index) means regenerating, not
+    // failing: the address slot is still free. Bounded to one retry — a
+    // second collision in 256-bit space is not worth looping over.
+    for (let attempt = 0; ; attempt++) {
+      const token = generateInviteToken();
+      const tokenHash = hashInviteToken(token);
+
+      try {
+        const [row] = await this.db
+          .insert(invites)
+          .values({
+            email,
+            cohortId: dto.cohortId ?? null,
+            cohortTrackId: dto.cohortTrackId ?? null,
+            mentorshipGroupId: dto.mentorshipGroupId ?? null,
+            cohortRole: dto.cohortRole ?? null,
+            systemRole,
+            tokenHash,
+            invitedBy: inviter.id,
+            expiresAt,
+          })
+          .returning();
+
+        if (!row) {
+          throw new InviteInvalidArgumentException(
+            'Invite could not be created',
+          );
+        }
+
+        const inviteLink = buildInviteLink(this.config.APP_PUBLIC_URL, token);
+        return {
+          id: row.id,
+          email: row.email,
+          cohortId: row.cohortId,
+          cohortRole: row.cohortRole,
+          cohortTrackId: row.cohortTrackId,
+          mentorshipGroupId: row.mentorshipGroupId,
+          systemRole: row.systemRole,
+          status: row.status,
+          expiresAt: row.expiresAt.toISOString(),
+          inviteLink,
+          token,
+          createdAt: row.createdAt.toISOString(),
+        };
+      } catch (err) {
+        const kind = classifyInviteWriteError(err);
+        if (kind === 'pending-duplicate') {
+          throw new InviteConflictException(
+            `A pending invite already exists for ${email}`,
+            { email },
+          );
+        }
+        if (kind === 'token-collision' && attempt === 0) {
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
-
-    if (!row) {
-      throw new InviteInvalidArgumentException('Invite could not be created');
-    }
-
-    const inviteLink = buildInviteLink(this.appPublicUrl, token);
-    return {
-      id: row.id,
-      email: row.email,
-      cohortId: row.cohortId,
-      cohortRole: row.cohortRole,
-      cohortTrackId: row.cohortTrackId,
-      mentorshipGroupId: row.mentorshipGroupId,
-      systemRole: row.systemRole,
-      status: row.status,
-      expiresAt: row.expiresAt.toISOString(),
-      inviteLink,
-      token,
-      createdAt: row.createdAt.toISOString(),
-    };
-  }
-
-  private get appPublicUrl(): string {
-    return (
-      this.config.APP_PUBLIC_URL ??
-      this.config.INVITE_LINK_BASE_URL ??
-      'http://localhost:3000'
-    );
   }
 
   private get inviteTtlDays(): number {
@@ -121,10 +141,13 @@ export class InvitesService {
   }
 
   /**
-   * Enforces the two accepted shapes before the DB CHECKs fire, so callers
-   * get a clean 400 INVALID_ARGUMENT instead of a raw constraint violation.
+   * Mirrors the INVITES CHECKs so callers get a clean 400 INVALID_ARGUMENT
+   * instead of a raw constraint violation. Three shapes pass through:
+   * cohort ({ email, cohortId, cohortRole }), admin
+   * ({ email, systemRole: admin }) and guest ({ email } alone) — anything
+   * the CHECKs would reject is caught here first.
    */
-  private assertValidShape(dto: CreateInviteDto, systemRole: SystemRole): void {
+  private assertValidShape(dto: CreateInviteDto): void {
     const hasCohortId = dto.cohortId != null;
     const hasCohortRole = dto.cohortRole != null;
     const hasScopedField =
@@ -149,16 +172,6 @@ export class InvitesService {
         'cohortTrackId is required when cohortRole is student',
       );
     }
-
-    const isCohortInvite = hasCohortId && hasCohortRole;
-    const isAdminInvite =
-      systemRole === SystemRole.Admin && !hasCohortId && !hasCohortRole;
-
-    if (!isCohortInvite && !isAdminInvite) {
-      throw new InviteInvalidArgumentException(
-        'Invite must be either { email, cohortId, cohortRole } or { email, systemRole: admin }',
-      );
-    }
   }
 
   private async assertNoLiveInvite(email: string): Promise<void> {
@@ -167,7 +180,7 @@ export class InvitesService {
     });
     if (!existing) return;
 
-    if (existing.expiresAt.getTime() <= Date.now()) {
+    if (!isInviteLive(existing)) {
       await this.db
         .update(invites)
         .set({ status: InviteStatus.Expired })
@@ -215,27 +228,62 @@ export class InvitesService {
   }
 
   private resolveExpiresAt(raw?: string): Date {
-    if (raw) {
-      const at = new Date(raw);
-      if (Number.isNaN(at.getTime())) {
-        throw new InviteInvalidArgumentException('expiresAt is not a valid date');
-      }
-      if (at.getTime() <= Date.now()) {
-        throw new InviteInvalidArgumentException('expiresAt must be in the future');
-      }
-      return at;
+    // No invite may outlive the configured TTL — a far-future expiresAt is
+    // clamped, not rejected, so the caller still gets a working invite.
+    const max = new Date(Date.now() + this.inviteTtlDays * 86_400_000);
+    if (!raw) return max;
+
+    const at = new Date(raw);
+    if (Number.isNaN(at.getTime())) {
+      throw new InviteInvalidArgumentException('expiresAt is not a valid date');
     }
-    return new Date(Date.now() + this.inviteTtlDays * 86_400_000);
+    if (at.getTime() <= Date.now()) {
+      throw new InviteInvalidArgumentException('expiresAt must be in the future');
+    }
+    return at.getTime() > max.getTime() ? max : at;
   }
 }
 
-function isPendingConflict(err: unknown): boolean {
-  const message =
-    err instanceof Error
-      ? `${err.message} ${String((err as { cause?: unknown }).cause ?? '')}`
-      : String(err);
-  return (
-    message.includes('invites_email_pending_unique') ||
-    message.includes('invites_token_hash_unique')
-  );
+type InviteWriteErrorKind = 'pending-duplicate' | 'token-collision' | null;
+
+/**
+ * Classifies a failed INVITES insert by Postgres SQLSTATE plus constraint
+ * name — never by driver prose alone. 23505 is unique_violation; the
+ * constraint name tells the two indexes apart so a token collision is
+ * retried while a taken address slot is a 409.
+ *
+ * Driver reality: drizzle wraps the driver error, so SQLSTATE and the
+ * constraint live on `cause`, and the outer message is just "Failed query:
+ * ...". Both levels are inspected — matching the outer message alone misses
+ * every real violation.
+ */
+export function classifyInviteWriteError(err: unknown): InviteWriteErrorKind {
+  const code =
+    (err as { code?: unknown } | null)?.code ??
+    (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+  if (code !== '23505') return null;
+
+  const parts: string[] = [];
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current; depth++) {
+    if (typeof current === 'object') {
+      const record = current as Record<string, unknown>;
+      if (typeof record['message'] === 'string') parts.push(record['message']);
+      if (typeof record['constraint'] === 'string') {
+        parts.push(record['constraint']);
+      }
+      current = record['cause'];
+    } else {
+      parts.push(String(current));
+      break;
+    }
+  }
+  const haystack = parts.join(' ');
+  if (haystack.includes('invites_email_pending_unique')) {
+    return 'pending-duplicate';
+  }
+  if (haystack.includes('invites_token_hash_unique')) {
+    return 'token-collision';
+  }
+  return null;
 }

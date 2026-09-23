@@ -26,10 +26,13 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
   [posthog.md](./posthog.md) — region must match the frontend's project),
   `DEFAULT_ADMIN_EMAIL` (address promoted to admin by the pre-deploy seed;
   set it per environment before the first deploy, or the seed step fails),
-  `CORS_ORIGINS` (the frontend origin for that environment — without it every
-  browser call is blocked), `TRUST_PROXY_HOPS=1` (Railway runs one proxy;
-  without it the rate limiter treats all traffic as a single client).
-  `PORT` is injected by Railway, not set manually.
+   `CORS_ORIGINS` (the frontend origin for that environment — without it every
+   browser call is blocked), `TRUST_PROXY_HOPS=1` (Railway runs one proxy;
+   without it the rate limiter treats all traffic as a single client),
+   `APP_PUBLIC_URL` (invite-link base, `{base}/invite?token=<raw>` — set it to
+   the frontend origin for that environment; required, boot fails without it),
+   `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7).
+   `PORT` is injected by Railway, not set manually.
 - Migrations and seeding run via a pre-deploy step:
   `pnpm --filter campus-api db:migrate && pnpm --filter campus-api db:seed`.
   Seeding is deliberately **not** part of app boot — the API must not need a

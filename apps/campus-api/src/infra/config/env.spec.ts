@@ -1,15 +1,21 @@
 import { loadEnv, parseCorsOrigins } from './env.js';
 
+// APP_PUBLIC_URL is required, so every loadEnv call in these tests carries
+// it via testEnv — the cases below exercise the other variables.
+function testEnv(overrides: Record<string, unknown> = {}) {
+  return loadEnv({ APP_PUBLIC_URL: 'https://api.campus.example.com', ...overrides });
+}
+
 describe('loadEnv PostHog validation', () => {
   it('throws when FF_POSTHOG_ENABLED is true but POSTHOG_PROJECT_TOKEN is missing', () => {
-    expect(() => loadEnv({ FF_POSTHOG_ENABLED: 'true' })).toThrow(
+    expect(() => testEnv({ FF_POSTHOG_ENABLED: 'true' })).toThrow(
       /POSTHOG_PROJECT_TOKEN/,
     );
   });
 
   it('throws when POSTHOG_PROJECT_TOKEN is not prefixed with "phc_"', () => {
     expect(() =>
-      loadEnv({
+      testEnv({
         FF_POSTHOG_ENABLED: 'true',
         POSTHOG_PROJECT_TOKEN: 'sk-not-a-project-key',
       }),
@@ -18,7 +24,7 @@ describe('loadEnv PostHog validation', () => {
 
   it('throws when POSTHOG_HOST is not a valid HTTPS URL', () => {
     expect(() =>
-      loadEnv({
+      testEnv({
         FF_POSTHOG_ENABLED: 'true',
         POSTHOG_PROJECT_TOKEN: 'phc_valid123',
         POSTHOG_HOST: 'http://insecure.example.com',
@@ -28,7 +34,7 @@ describe('loadEnv PostHog validation', () => {
 
   it('succeeds when disabled, regardless of key or host', () => {
     expect(() =>
-      loadEnv({
+      testEnv({
         FF_POSTHOG_ENABLED: 'false',
         POSTHOG_PROJECT_TOKEN: 'not-a-valid-key',
         POSTHOG_HOST: 'not-a-valid-url',
@@ -37,7 +43,7 @@ describe('loadEnv PostHog validation', () => {
   });
 
   it('succeeds when enabled with a well-formed key and HTTPS host', () => {
-    const env = loadEnv({
+    const env = testEnv({
       FF_POSTHOG_ENABLED: 'true',
       POSTHOG_PROJECT_TOKEN: 'phc_valid123',
       POSTHOG_HOST: 'https://us.i.posthog.com',
@@ -52,42 +58,65 @@ describe('loadEnv DEFAULT_ADMIN_EMAIL validation', () => {
   // Only `db:seed` needs it, so the API must still boot without it; `db:seed`
   // is what fails loudly when it is missing.
   it('does not require DEFAULT_ADMIN_EMAIL, which only db:seed reads', () => {
-    expect(() => loadEnv({})).not.toThrow();
-    expect(loadEnv({}).DEFAULT_ADMIN_EMAIL).toBeUndefined();
+    expect(() => testEnv({})).not.toThrow();
+    expect(testEnv({}).DEFAULT_ADMIN_EMAIL).toBeUndefined();
   });
 
   it('throws when DEFAULT_ADMIN_EMAIL is not an email', () => {
-    expect(() => loadEnv({ DEFAULT_ADMIN_EMAIL: 'not-an-email' })).toThrow(
+    expect(() => testEnv({ DEFAULT_ADMIN_EMAIL: 'not-an-email' })).toThrow(
       /DEFAULT_ADMIN_EMAIL/,
     );
   });
 
   it('succeeds with a valid email', () => {
-    const env = loadEnv({ DEFAULT_ADMIN_EMAIL: 'admin@campus.local' });
+    const env = testEnv({ DEFAULT_ADMIN_EMAIL: 'admin@campus.local' });
     expect(env.DEFAULT_ADMIN_EMAIL).toBe('admin@campus.local');
   });
 });
 
-describe('loadEnv HTTP settings', () => {
-  it('defaults TRUST_PROXY_HOPS to one, for Railway', () => {
-    expect(loadEnv({}).TRUST_PROXY_HOPS).toBe(1);
+describe('loadEnv HTTP settings', () => {  it('defaults TRUST_PROXY_HOPS to one, for Railway', () => {
+    expect(testEnv({}).TRUST_PROXY_HOPS).toBe(1);
   });
 
   it('accepts zero hops, meaning trust no proxy', () => {
-    expect(loadEnv({ TRUST_PROXY_HOPS: '0' }).TRUST_PROXY_HOPS).toBe(0);
+    expect(testEnv({ TRUST_PROXY_HOPS: '0' }).TRUST_PROXY_HOPS).toBe(0);
   });
 
   it('rejects a hop count that is not a whole number or is negative', () => {
-    expect(() => loadEnv({ TRUST_PROXY_HOPS: 'yes' })).toThrow(
+    expect(() => testEnv({ TRUST_PROXY_HOPS: 'yes' })).toThrow(
       /TRUST_PROXY_HOPS/,
     );
-    expect(() => loadEnv({ TRUST_PROXY_HOPS: '-1' })).toThrow(
+    expect(() => testEnv({ TRUST_PROXY_HOPS: '-1' })).toThrow(
       /TRUST_PROXY_HOPS/,
     );
   });
 
   it('leaves CORS unset by default', () => {
-    expect(loadEnv({}).CORS_ORIGINS).toBeUndefined();
+    expect(testEnv({}).CORS_ORIGINS).toBeUndefined();
+  });
+});
+
+describe('loadEnv APP_PUBLIC_URL validation', () => {
+  it('fails boot when APP_PUBLIC_URL is missing — no silent fallback', () => {
+    // Deliberately loadEnv, not testEnv: this is the one case asserting
+    // the required field rejects an empty environment.
+    expect(() => loadEnv({})).toThrow(/APP_PUBLIC_URL/);
+  });
+
+  it('rejects a malformed URL', () => {
+    expect(() => testEnv({ APP_PUBLIC_URL: 'not-a-url' })).toThrow(
+      /APP_PUBLIC_URL/,
+    );
+  });
+
+  it('accepts localhost for local dev and real origins otherwise', () => {
+    expect(
+      testEnv({ APP_PUBLIC_URL: 'http://localhost:3000' }).APP_PUBLIC_URL,
+    ).toBe('http://localhost:3000');
+    expect(
+      testEnv({ APP_PUBLIC_URL: 'https://api.campus.example.com' })
+        .APP_PUBLIC_URL,
+    ).toBe('https://api.campus.example.com');
   });
 });
 
