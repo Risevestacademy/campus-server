@@ -8,6 +8,7 @@ const config = {
   GOOGLE_CLIENT_SECRET: 'client-secret',
   GOOGLE_CALLBACK_URL: 'http://localhost:3000/v1/auth/google/callback',
   AUTH_STATE_SECRET: 'a-state-secret-of-at-least-32-characters',
+  AUTH_SESSION_SECRET: 'a-session-secret-of-at-least-32-characters',
 } as Env;
 
 const service = new OAuthStateService(config);
@@ -66,6 +67,7 @@ describe('verify', () => {
     const other = new OAuthStateService({
       ...config,
       AUTH_STATE_SECRET: 'a-completely-different-secret-value-32',
+      AUTH_SESSION_SECRET: 'a-session-secret-of-at-least-32-characters',
     } as Env);
     const [body] = state.split('.');
     const foreign = other.issue().state.split('.')[1];

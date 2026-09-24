@@ -13,6 +13,7 @@ import {
 import { ApiErrorResponseDto } from '../../shared/dto/api-error-response.dto.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
+import { SessionGuard } from '../auth/session.guard.js';
 import { AdminGuard } from './auth/admin.guard.js';
 import { CreateInviteDto } from './dto/create-invite.dto.js';
 import { InviteResponseDto } from './dto/invite-response.dto.js';
@@ -20,14 +21,15 @@ import { InvitesService } from './invites.service.js';
 
 @ApiTags('invites')
 @ApiBearerAuth()
-// Authenticated by the Google-auth layer (req.user); this guard only checks admin role.
 @Controller('invites')
 export class InvitesController {
   constructor(private readonly invites: InvitesService) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(AdminGuard)
+  // SessionGuard authenticates and puts req.user there; AdminGuard decides
+  // whether that user may invite. Order matters — guards run left to right.
+  @UseGuards(SessionGuard, AdminGuard)
   @ApiOperation({
     summary: 'Create an invite (admin only)',
     description:

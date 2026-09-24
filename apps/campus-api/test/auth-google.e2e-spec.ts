@@ -11,7 +11,11 @@ import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
-import { SessionIssuer } from './../src/modules/auth/session-issuer.js';
+import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
+import {
+  SessionScope,
+  verifySessionToken,
+} from './../src/modules/auth/session-token.js';
 import { InviteStatus, invites } from './../src/modules/invites/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
@@ -44,17 +48,15 @@ const google = {
     `https://accounts.google.com/o/oauth2/v2/auth?state=${encodeURIComponent(state)}`,
 };
 
-const sessions = {
-  issueFullAccess: (user: { id: string }) => ({
-    granted: 'full_access',
-    userId: user.id,
-  }),
-  issueProvisional: (user: { id: string }, invite: { id: string }) => ({
-    granted: 'provisional',
-    userId: user.id,
-    inviteId: invite.id,
-  }),
-};
+const SESSION_SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
+
+/** Pulls the session token back out of the Set-Cookie the callback wrote. */
+function sessionFrom(response: { headers: Record<string, unknown> }): string {
+  const cookies = (response.headers['set-cookie'] ?? []) as string[];
+  const session = cookies.find((c) => c.startsWith(`${SESSION_COOKIE}=`));
+  expect(session).toBeDefined();
+  return decodeURIComponent(session!.split(';')[0].split('=')[1]);
+}
 
 describe('Google sign-in (e2e)', () => {
   let app: INestApplication<App>;
@@ -69,8 +71,6 @@ describe('Google sign-in (e2e)', () => {
       .useValue(db)
       .overrideProvider(GoogleOAuthService)
       .useValue(google)
-      .overrideProvider(SessionIssuer)
-      .useValue(sessions)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -160,10 +160,17 @@ describe('Google sign-in (e2e)', () => {
     const { state, cookie } = await beginSignIn();
     const response = await callback(state, cookie);
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      granted: 'provisional',
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe('http://localhost:3000/onboarding');
+
+    const claims = await verifySessionToken(
+      sessionFrom(response),
+      SESSION_SECRET,
+    );
+    expect(claims).toMatchObject({
+      scope: SessionScope.Provisional,
       inviteId: invite.id,
+      email: IDENTITY.email,
     });
     expect(await db.select().from(users)).toHaveLength(2);
   });
@@ -178,8 +185,14 @@ describe('Google sign-in (e2e)', () => {
     const { state, cookie } = await beginSignIn();
     const response = await callback(state, cookie);
 
-    expect(response.status).toBe(200);
-    expect(response.body.granted).toBe('full_access');
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe('http://localhost:3000/');
+
+    const claims = await verifySessionToken(
+      sessionFrom(response),
+      SESSION_SECRET,
+    );
+    expect(claims.scope).toBe(SessionScope.FullAccess);
 
     const [row] = await db.select().from(users);
     expect(row.providerId).toBe(IDENTITY.subject);

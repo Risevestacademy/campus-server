@@ -178,7 +178,7 @@ erDiagram
 
     DESKS {
         uuid id PK
-        uuid space_id FK UK "No map_id: the desk's space knows its map. One source of…"
+        uuid space_id FK "No map_id: the desk's space knows its map. One source of…"
         varchar key UK
         jsonb position
         uuid reserved_for_user_id FK

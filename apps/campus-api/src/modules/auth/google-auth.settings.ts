@@ -6,6 +6,7 @@ export interface GoogleAuthSettings {
   clientSecret: string;
   callbackUrl: string;
   stateSecret: string;
+  sessionSecret: string;
 }
 
 
@@ -15,7 +16,8 @@ export function requireGoogleAuth(env: Env): GoogleAuthSettings {
     !env.GOOGLE_CLIENT_ID ||
     !env.GOOGLE_CLIENT_SECRET ||
     !env.GOOGLE_CALLBACK_URL ||
-    !env.AUTH_STATE_SECRET
+    !env.AUTH_STATE_SECRET ||
+    !env.AUTH_SESSION_SECRET
   ) {
     // Env already refuses to boot with the flag on and a value missing, so
     // reaching here means the flag is off — the default in .env.example.
@@ -27,5 +29,6 @@ export function requireGoogleAuth(env: Env): GoogleAuthSettings {
     clientSecret: env.GOOGLE_CLIENT_SECRET,
     callbackUrl: env.GOOGLE_CALLBACK_URL,
     stateSecret: env.AUTH_STATE_SECRET,
+    sessionSecret: env.AUTH_SESSION_SECRET,
   };
 }

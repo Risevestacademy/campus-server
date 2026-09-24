@@ -14,7 +14,8 @@ import { GoogleCallbackQueryDto } from './dto/google-callback.query.dto.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { GoogleOAuthService } from './google-oauth.service.js';
 import { OAuthStateService } from './oauth-state.service.js';
-import { SessionIssuer, type IssuedSession } from './session-issuer.js';
+import { SessionIssuer } from './session-issuer.js';
+import { SESSION_COOKIE, sessionCookieOptions } from './session-cookie.js';
 import {
   STATE_COOKIE,
   STATE_COOKIE_PATH,
@@ -58,6 +59,12 @@ export class AuthController {
       'creates the account behind the Google identity, and issues a session.',
   })
   @ApiResponse({
+    status: 302,
+    description:
+      'Sets the session cookie and redirects into the web app — to onboarding ' +
+      'when an invite is still to be accepted, otherwise to the campus.',
+  })
+  @ApiResponse({
     status: 401,
     description: 'The request could not be verified against Google.',
     type: ApiErrorResponseDto,
@@ -72,8 +79,8 @@ export class AuthController {
   async callback(
     @Query() query: GoogleCallbackQueryDto,
     @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<IssuedSession> {
+    @Res() res: Response,
+  ): Promise<void> {
     // Asked first, so a deployment without Google sign-in answers both routes
     // the same way instead of reporting a state problem it never had.
     requireGoogleAuth(this.config);
@@ -92,9 +99,21 @@ export class AuthController {
     }
 
     const outcome = await this.auth.completeGoogleSignIn(query.code);
+    const session =
+      outcome.kind === 'full_access'
+        ? await this.sessions.issueFullAccess(outcome.user)
+        : await this.sessions.issueProvisional(outcome.user, outcome.invite);
 
-    return outcome.kind === 'full_access'
-      ? this.sessions.issueFullAccess(outcome.user)
-      : this.sessions.issueProvisional(outcome.user, outcome.invite);
+    // This is a top-level browser navigation, so the answer is a redirect and
+    // a cookie, not a JSON body the user would be left staring at. The token
+    // never reaches the page itself, and never reaches browser history.
+    res.cookie(
+      SESSION_COOKIE,
+      session.token,
+      sessionCookieOptions(this.config.APP_PUBLIC_URL, session.expiresAt),
+    );
+    res.redirect(
+      `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${session.redirectPath}`,
+    );
   }
 }
