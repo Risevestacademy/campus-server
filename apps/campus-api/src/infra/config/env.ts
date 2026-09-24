@@ -11,6 +11,7 @@ import {
   IsUrl,
   Matches,
   Min,
+  MinLength,
   ValidateIf,
   validateSync,
 } from 'class-validator';
@@ -61,6 +62,57 @@ export class Env {
   @IsOptional()
   @IsEmail()
   DEFAULT_ADMIN_EMAIL?: string;
+
+  // Google sign-in ------------------------------------------------------
+  // Flag-gated the same way PostHog is, so the API still boots on an empty
+  // environment. Turn the flag on and all four values below become required:
+  // a deployment that claims to do Google sign-in and cannot is worse than
+  // one that never claimed to.
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_GOOGLE_AUTH_ENABLED: boolean = false;
+
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsNotEmpty()
+  @IsString()
+  GOOGLE_CLIENT_ID?: string;
+
+  /** Web-application client only. Android and iOS clients hold no secret. */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsNotEmpty()
+  @IsString()
+  GOOGLE_CLIENT_SECRET?: string;
+
+  /**
+   * Must point at this API, not at the web app, and must match a redirect URI
+   * registered on the same Google client byte for byte.
+   */
+  // `require_tld: false` so a localhost callback is legal; `require_protocol`
+  // because Google matches the redirect URI as a literal string, and a bare
+  // hostname can never match what is registered.
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
+  GOOGLE_CALLBACK_URL?: string;
+
+  /**
+   * Signs the OAuth `state` parameter. Rotating it invalidates sign-ins that
+   * are mid-flight, which is a few seconds of inconvenience, never a lockout.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsString()
+  @MinLength(32, {
+    message: 'AUTH_STATE_SECRET must be at least 32 characters',
+  })
+  AUTH_STATE_SECRET?: string;
 
   // Comma-separated list of browser origins allowed to call the API.
 

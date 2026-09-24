@@ -5,6 +5,8 @@ export enum ExceptionCode {
   NotFound = 'NOT_FOUND',
   Conflict = 'CONFLICT',
   SpaceAtCapacity = 'SPACE_AT_CAPACITY',
+  InviteRequired = 'INVITE_REQUIRED',
+  AccountSuspended = 'ACCOUNT_SUSPENDED',
   RateLimited = 'RATE_LIMITED',
   InternalError = 'INTERNAL_ERROR',
 }
@@ -16,6 +18,8 @@ export function mapExceptionCodeToStatus(code: ExceptionCode): number {
     case ExceptionCode.Unauthorized:
       return 401;
     case ExceptionCode.Forbidden:
+    case ExceptionCode.InviteRequired:
+    case ExceptionCode.AccountSuspended:
       return 403;
     case ExceptionCode.NotFound:
       return 404;

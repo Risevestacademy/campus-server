@@ -55,6 +55,11 @@ a clear error.
 | `DEFAULT_ADMIN_EMAIL`             | *(unset)*                                 | Email of the default admin user. Read only by `pnpm db:seed` — the API never reads it; seeding fails if unset |
 | `APP_PUBLIC_URL`                  | *(required, no default)*                  | Base URL for shareable invite links (`{base}/invite?token=<raw>`). Boot fails without it — no silent fallback |
 | `INVITE_TTL_DAYS`                 | `7`                                       | Days until a new invite expires when the request omits `expiresAt`; also the ceiling any caller-supplied `expiresAt` is clamped to |
+| `FF_GOOGLE_AUTH_ENABLED`          | `false`                                   | Master switch for Google sign-in. When `true`, the four `GOOGLE_*` / `AUTH_*` values below are all required and the app refuses to boot without them |
+| `GOOGLE_CLIENT_ID`                | *(unset)*                                 | OAuth **web-application** client ID. Android and iOS clients cannot perform the code exchange |
+| `GOOGLE_CLIENT_SECRET`            | *(unset)*                                 | Secret for that web client. Never ships to a mobile app |
+| `GOOGLE_CALLBACK_URL`             | *(unset)*                                 | Where Google returns the user. Must point at **this API**, not the web app, and match a registered redirect URI exactly |
+| `AUTH_STATE_SECRET`               | *(unset)*                                 | Signs the OAuth `state` parameter; at least 32 characters. Rotating it only interrupts sign-ins already in flight |
 | `CORS_ORIGINS`                    | *(unset)*                                 | Comma-separated browser origins allowed to call the API. Unset sends no CORS headers, which blocks browser apps |
 | `TRUST_PROXY_HOPS`                | `1`                                       | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none |
 | `FF_LOG_LEVEL`                    | `info`                                    | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
