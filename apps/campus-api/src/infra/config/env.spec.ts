@@ -74,7 +74,68 @@ describe('loadEnv DEFAULT_ADMIN_EMAIL validation', () => {
   });
 });
 
-describe('loadEnv HTTP settings', () => {  it('defaults TRUST_PROXY_HOPS to one, for Railway', () => {
+describe('loadEnv Google sign-in validation', () => {
+  const CREDENTIALS = {
+    GOOGLE_CLIENT_ID: '416818957033-example.apps.googleusercontent.com',
+    GOOGLE_CLIENT_SECRET: 'a-web-client-secret',
+    GOOGLE_CALLBACK_URL: 'http://localhost:3000/v1/auth/google/callback',
+    AUTH_STATE_SECRET: 'a-state-secret-of-at-least-32-characters',
+  };
+
+  it('leaves the API bootable with no Google configuration at all', () => {
+    expect(() => testEnv({})).not.toThrow();
+    expect(testEnv({}).FF_GOOGLE_AUTH_ENABLED).toBe(false);
+  });
+
+  it('ignores malformed credentials while the flag is off', () => {
+    expect(() =>
+      testEnv({ GOOGLE_CALLBACK_URL: 'not-a-url', AUTH_STATE_SECRET: 'short' }),
+    ).not.toThrow();
+  });
+
+  it.each(Object.keys(CREDENTIALS))(
+    'refuses to boot with the flag on and %s missing',
+    (missing) => {
+      const source: Record<string, unknown> = {
+        FF_GOOGLE_AUTH_ENABLED: 'true',
+        ...CREDENTIALS,
+      };
+      delete source[missing];
+
+      expect(() => testEnv(source)).toThrow(new RegExp(missing));
+    },
+  );
+
+  it('rejects a callback URL that is not one', () => {
+    expect(() =>
+      testEnv({
+        FF_GOOGLE_AUTH_ENABLED: 'true',
+        ...CREDENTIALS,
+        GOOGLE_CALLBACK_URL: 'campus-web-staging.up.railway.app',
+      }),
+    ).toThrow(/GOOGLE_CALLBACK_URL/);
+  });
+
+  it('rejects a state secret short enough to be guessed', () => {
+    expect(() =>
+      testEnv({
+        FF_GOOGLE_AUTH_ENABLED: 'true',
+        ...CREDENTIALS,
+        AUTH_STATE_SECRET: 'too-short',
+      }),
+    ).toThrow(/AUTH_STATE_SECRET must be at least 32 characters/);
+  });
+
+  it('accepts a complete configuration', () => {
+    const env = testEnv({ FF_GOOGLE_AUTH_ENABLED: 'true', ...CREDENTIALS });
+
+    expect(env.FF_GOOGLE_AUTH_ENABLED).toBe(true);
+    expect(env.GOOGLE_CLIENT_ID).toBe(CREDENTIALS.GOOGLE_CLIENT_ID);
+  });
+});
+
+describe('loadEnv HTTP settings', () => {
+  it('defaults TRUST_PROXY_HOPS to one, for Railway', () => {
     expect(testEnv({}).TRUST_PROXY_HOPS).toBe(1);
   });
 

@@ -34,6 +34,30 @@ Authorization: Bearer <token>
 In the Scalar UI, use the **Authorize** button to paste a token and it will be
 added to every request automatically.
 
+### Signing in
+
+Registration is invite-only and there is no password anywhere in the system.
+The API owns the whole OAuth exchange, so a client never talks to Google
+itself:
+
+1. Send the browser to `GET /v1/auth/google` as a **top-level navigation** —
+   not `fetch`, which cannot follow a cross-origin redirect and will not keep
+   the cookie the next step needs.
+2. The user picks an account at Google, which returns them to
+   `GET /v1/auth/google/callback`.
+3. The API verifies the request, resolves the account behind the Google
+   identity, and issues a session.
+
+Two outcomes are possible at step 3. Someone already on the campus roster, or
+an admin, is signed straight in. Someone holding an unaccepted invite is signed
+in provisionally and still has onboarding to finish. Anyone else is refused
+with `INVITE_REQUIRED`.
+
+> **Not finished yet.** Session issuance is a separate piece of work, so the
+> callback currently resolves the user correctly and then fails at the last
+> step. The two routes, their query parameters and every error above are
+> settled and safe to build against.
+
 ## Resources
 
 The API is organized by resource, and each resource appears as its own section
@@ -41,6 +65,7 @@ in the docs:
 
 | Resource                | Description                          |
 | ----------------------- | ------------------------------------ |
+| `auth`                  | Google sign-in (`GET /v1/auth/google`) |
 | `health`                | Service health and performance data (`GET /v1/health`) |
 | `cohorts`               | Cohort management                    |
 | `spaces`                | Physical spaces and occupancy        |
@@ -81,6 +106,8 @@ Every error response in the API shares a single envelope:
   | `NOT_FOUND`         | 404         | The resource does not exist    |
   | `CONFLICT`          | 409         | State conflict (e.g. duplicate)|
   | `SPACE_AT_CAPACITY` | 409         | The space is at capacity       |
+  | `INVITE_REQUIRED`   | 403         | No invite for this address     |
+  | `ACCOUNT_SUSPENDED` | 403         | The account exists but is closed |
   | `RATE_LIMITED`      | 429         | Too many requests, retry later |
   | `INTERNAL_ERROR`    | 500         | Unexpected server error        |
 

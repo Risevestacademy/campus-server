@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import {
@@ -134,6 +134,30 @@ export class InvitesService {
         throw err;
       }
     }
+  }
+
+  /**
+   * The invite a verified address may sign in against: still pending and not
+   * yet lapsed. expires_at is the source of truth, per isInviteLive — the
+   * status flip is lazy, so a stale 'pending' row must not let anyone in.
+   */
+  async findUsableForEmail(
+    email: string,
+    now: Date = new Date(),
+  ): Promise<typeof invites.$inferSelect | null> {
+    const [row] = await this.db
+      .select()
+      .from(invites)
+      .where(
+        and(
+          eq(invites.email, email.trim().toLowerCase()),
+          eq(invites.status, InviteStatus.Pending),
+          gt(invites.expiresAt, now),
+        ),
+      )
+      .limit(1);
+
+    return row ?? null;
   }
 
   private get inviteTtlDays(): number {

@@ -57,6 +57,13 @@ jobs:
           FF_POSTHOG_ENABLED: 'true'
           POSTHOG_PROJECT_TOKEN: phc_dummy_key_for_ci_smoke_test
           APP_PUBLIC_URL: http://localhost:3000
+          # Dummy values: nothing here reaches Google, but booting with the
+          # flag on exercises the validation that a real deployment relies on.
+          FF_GOOGLE_AUTH_ENABLED: 'true'
+          GOOGLE_CLIENT_ID: dummy-client-id.apps.googleusercontent.com
+          GOOGLE_CLIENT_SECRET: dummy-client-secret-for-ci-smoke-test
+          GOOGLE_CALLBACK_URL: http://localhost:3000/v1/auth/google/callback
+          AUTH_STATE_SECRET: dummy-state-secret-for-ci-smoke-test-32
         run: |
           node dist/main.js > boot.log 2>&1 &
           echo $! > app.pid
