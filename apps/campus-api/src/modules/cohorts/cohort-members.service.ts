@@ -1,17 +1,19 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, eq, isNull, ne, or } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
-import { StudentStatus, cohortMembers } from './schema.js';
+import { CohortRole, StudentStatus, cohortMembers } from './schema.js';
 
 @Injectable()
 export class CohortMembersService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
 
   /**
-   * A live place on the roster: not left, and not a student who has been
-   * dismissed, graduated, withdrawn or deferred. A null status belongs to
-   * professors and mentors, who carry none.
+   * A live place on the roster, and the answer to whether somebody may sign
+   * in without an invite — so it fails closed. Staff qualify on role alone,
+   * since status is the student half of the table and they never carry one.
+   * A student qualifies only while explicitly active: a row left unclassified
+   * is a half-finished enrolment, not a standing invitation.
    */
   async hasActiveMembership(userId: string): Promise<boolean> {
     const [row] = await this.db
@@ -22,7 +24,7 @@ export class CohortMembersService {
           eq(cohortMembers.userId, userId),
           isNull(cohortMembers.leftAt),
           or(
-            isNull(cohortMembers.status),
+            ne(cohortMembers.role, CohortRole.Student),
             eq(cohortMembers.status, StudentStatus.Active),
           ),
         ),

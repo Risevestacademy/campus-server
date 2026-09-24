@@ -76,10 +76,15 @@ describe('hasActiveMembership', () => {
     expect(await repository.hasActiveMembership(userId)).toBe(true);
   });
 
-  it('is true for a student nobody has classified yet', async () => {
+  /**
+   * This decides who signs in without an invite, so an enrolment nobody
+   * finished is not enough. Staff are the ones who legitimately carry no
+   * status — see the case below.
+   */
+  it('is false for a student nobody has classified yet', async () => {
     await pglite.insert(cohortMembers).values(student(null));
 
-    expect(await repository.hasActiveMembership(userId)).toBe(true);
+    expect(await repository.hasActiveMembership(userId)).toBe(false);
   });
 
   it('is true for staff, who never carry a student status', async () => {
