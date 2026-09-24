@@ -63,7 +63,13 @@ describe('seedAdmin', () => {
   });
 
   it('promotes an existing user and bumps updated_at', async () => {
-    await pglite.insert(users).values({ email: EMAIL });
+    // Timestamped in the past on purpose: both columns default to now(), and
+    // two statements in the same millisecond are indistinguishable once a JS
+    // Date has truncated them — which made this assertion flaky.
+    const earlier = new Date(Date.now() - 60_000);
+    await pglite
+      .insert(users)
+      .values({ email: EMAIL, createdAt: earlier, updatedAt: earlier });
 
     expect(await seedAdmin(db, EMAIL, makeLogger())).toBe('promoted');
 

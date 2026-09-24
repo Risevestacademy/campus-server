@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { OAuth2Client } from 'google-auth-library';
+import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { GoogleIdentity } from '../users/google-identity.js';
@@ -18,7 +19,12 @@ export interface VerifiedGoogleIdentity extends GoogleIdentity {
 export class GoogleOAuthService {
   private cached?: { client: OAuth2Client; clientId: string };
 
-  constructor(@Inject(CONFIG) private readonly config: Env) {}
+  constructor(
+    @Inject(CONFIG) private readonly config: Env,
+    private readonly logger: PinoLogger,
+  ) {
+    this.logger.setContext(GoogleOAuthService.name);
+  }
 
   private get google(): { client: OAuth2Client; clientId: string } {
     if (!this.cached) {
@@ -69,7 +75,11 @@ export class GoogleOAuthService {
         throw new Error('no id_token in token response');
       }
       return tokens.id_token;
-    } catch {
+    } catch (err) {
+      // The caller only ever sees 'exchange_failed'. A misconfigured client
+      // id or an unregistered redirect URI is indistinguishable from a stale
+      // code out there, so the cause has to be written down here.
+      this.logger.error({ err }, 'google token exchange failed');
       throw new GoogleSignInFailedError('exchange_failed');
     }
   }
@@ -86,7 +96,8 @@ export class GoogleOAuthService {
         throw new Error('empty id_token payload');
       }
       return payload;
-    } catch {
+    } catch (err) {
+      this.logger.error({ err }, 'google id_token verification failed');
       throw new GoogleSignInFailedError('exchange_failed');
     }
   }

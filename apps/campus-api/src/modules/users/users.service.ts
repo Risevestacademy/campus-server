@@ -24,6 +24,13 @@ export function hasGoogleIdentity(user: User): boolean {
   return user.provider === GOOGLE_PROVIDER && user.providerId !== null;
 }
 
+/** Raised when an address is already bound to a different Google account. */
+export class GoogleIdentityMismatchError extends Error {
+  constructor(readonly email: string) {
+    super(`${email} is already linked to a different Google account`);
+  }
+}
+
 @Injectable()
 export class UsersService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
@@ -84,7 +91,10 @@ export class UsersService {
 
   /**
    * Upserts on the address so two tabs finishing the same first sign-in
-   * resolve to one row rather than a unique violation.
+   * resolve to one row. `setWhere` keeps that from becoming a hand-over: an
+   * address already bound to another Google subject updates nothing, and the
+   * empty result is reported rather than silently returning someone else's
+   * account. Workspace addresses do get reissued to new people.
    */
   async createFromGoogleIdentity(identity: GoogleIdentity): Promise<User> {
     const email = normalize(identity.email);
@@ -105,9 +115,13 @@ export class UsersService {
       .onConflictDoUpdate({
         target: users.email,
         set: { providerId: identity.subject, updatedAt: sql`now()` },
+        setWhere: sql`${users.providerId} is null or ${users.providerId} = ${identity.subject}`,
       })
       .returning();
 
+    if (!row) {
+      throw new GoogleIdentityMismatchError(email);
+    }
     return row;
   }
 

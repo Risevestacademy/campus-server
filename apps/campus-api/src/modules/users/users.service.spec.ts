@@ -8,6 +8,7 @@ import type { Db } from '../../infra/database/database.constants.js';
 import type { GoogleIdentity } from './google-identity.js';
 import { SystemRole, UserStatus, users } from './schema.js';
 import {
+  GoogleIdentityMismatchError,
   hasGoogleIdentity,
   isAdmin,
   UsersService,
@@ -112,6 +113,38 @@ describe('resolveByGoogleIdentity', () => {
 });
 
 describe('createFromGoogleIdentity', () => {
+  it('refuses to hand an address already bound to another subject', async () => {
+    // A Workspace address reissued to a new person: the row still carries the
+    // previous holder's role and memberships, so rebinding it would hand
+    // those over rather than create an account.
+    const [incumbent] = await pglite
+      .insert(users)
+      .values({
+        email: 'ada@campus.local',
+        provider: 'google',
+        providerId: 'first-sub',
+        systemRole: SystemRole.Admin,
+      })
+      .returning();
+
+    await expect(
+      service.createFromGoogleIdentity(identity({ subject: 'second-sub' })),
+    ).rejects.toThrow(GoogleIdentityMismatchError);
+
+    const [after] = await allRows();
+    expect(after.id).toBe(incumbent.id);
+    expect(after.providerId).toBe('first-sub');
+    expect(after.systemRole).toBe(SystemRole.Admin);
+  });
+
+  it('is idempotent for the same subject, so a retry is harmless', async () => {
+    const first = await service.createFromGoogleIdentity(identity());
+    const again = await service.createFromGoogleIdentity(identity());
+
+    expect(again.id).toBe(first.id);
+    expect(await allRows()).toHaveLength(1);
+  });
+
   it('creates an active, non-admin account', async () => {
     const created = await service.createFromGoogleIdentity(identity());
 
