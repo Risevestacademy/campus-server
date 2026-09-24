@@ -126,4 +126,15 @@ export class Env {
   })
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
+
+  // require_tld: false keeps http://localhost:3000 valid for local dev;
+  // require_protocol: true still rejects bare words like "not-a-url".
+  @IsUrl({ require_tld: false, require_protocol: true })
+  APP_PUBLIC_URL: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  INVITE_TTL_DAYS: number = 7;
 }

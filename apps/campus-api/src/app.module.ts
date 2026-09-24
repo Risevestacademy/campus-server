@@ -8,6 +8,7 @@ import { HealthModule } from './health/health.module.js';
 import { AppConfigModule } from './infra/config/config.module.js';
 import { DatabaseModule } from './infra/database/database.module.js';
 import { AppLoggerModule } from './infra/logger/logger.module.js';
+import { InvitesModule } from './modules/invites/invites.module.js';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AppLoggerModule } from './infra/logger/logger.module.js';
     AppLoggerModule,
     DatabaseModule,
     HealthModule,
+    InvitesModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],
   controllers: [AppController],

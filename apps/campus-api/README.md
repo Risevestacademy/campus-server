@@ -53,6 +53,8 @@ a clear error.
 | `PORT`                            | `3000`                                    | HTTP port                            |
 | `DATABASE_URL`                    | `postgresql://postgres:postgres@localhost:5432/campus` | Postgres connection string |
 | `DEFAULT_ADMIN_EMAIL`             | *(unset)*                                 | Email of the default admin user. Read only by `pnpm db:seed` — the API never reads it; seeding fails if unset |
+| `APP_PUBLIC_URL`                  | *(required, no default)*                  | Base URL for shareable invite links (`{base}/invite?token=<raw>`). Boot fails without it — no silent fallback |
+| `INVITE_TTL_DAYS`                 | `7`                                       | Days until a new invite expires when the request omits `expiresAt`; also the ceiling any caller-supplied `expiresAt` is clamped to |
 | `CORS_ORIGINS`                    | *(unset)*                                 | Comma-separated browser origins allowed to call the API. Unset sends no CORS headers, which blocks browser apps |
 | `TRUST_PROXY_HOPS`                | `1`                                       | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none |
 | `FF_LOG_LEVEL`                    | `info`                                    | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
