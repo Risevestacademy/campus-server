@@ -110,7 +110,11 @@ export class AuthController {
     res.cookie(
       SESSION_COOKIE,
       session.token,
-      sessionCookieOptions(this.config.APP_PUBLIC_URL, session.expiresAt),
+      sessionCookieOptions(
+        requireGoogleAuth(this.config).callbackUrl,
+        this.config.APP_PUBLIC_URL,
+        session.expiresAt,
+      ),
     );
     res.redirect(
       `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${session.redirectPath}`,

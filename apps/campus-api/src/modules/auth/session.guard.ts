@@ -7,7 +7,8 @@ import {
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedRequest } from '../../shared/auth/authenticated-user.js';
-import { UsersService } from '../users/users.service.js';
+import { isSuspended, UsersService } from '../users/users.service.js';
+import { parseCorsOrigins } from '../../infra/config/env.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { readSessionCookie } from './session-cookie.js';
@@ -22,6 +23,9 @@ import {
 export type ProvisionalRequest = AuthenticatedRequest & {
   session?: SessionClaims;
 };
+
+/** Methods a cross-site form can send without a preflight to stop it. */
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function bearer(header: string | undefined): string | undefined {
   if (!header?.startsWith('Bearer ')) {
@@ -45,18 +49,34 @@ abstract class SessionGuardBase implements CanActivate {
 
     // The cookie is how a browser carries it; the header is for API clients
     // and for anyone poking at this with curl.
-    const token =
-      readSessionCookie(req.headers.cookie) ?? bearer(req.headers.authorization);
+    const cookieToken = readSessionCookie(req.headers.cookie);
+    const fromCookie = cookieToken !== undefined;
+    const token = cookieToken ?? bearer(req.headers.authorization);
     if (!token) {
+      throw new SessionUnauthorizedError('Authentication required');
+    }
+
+    // On https the session cookie has to be SameSite=None to reach this API
+    // at all, which hands the browser's own CSRF protection back. A simple
+    // cross-site form POST carries the cookie and needs no preflight, so the
+    // origin is checked here instead.
+    if (fromCookie && UNSAFE_METHODS.has(req.method ?? '')) {
+      this.assertAllowedOrigin(req.headers.origin);
+    }
+
+    let secret: string;
+    try {
+      secret = requireGoogleAuth(this.config).sessionSecret;
+    } catch {
+      // Sign-in is switched off, so no session can be valid. Unauthorized
+      // rather than "not configured": the caller asked about their own
+      // credential, not about this route's existence.
       throw new SessionUnauthorizedError('Authentication required');
     }
 
     let claims: SessionClaims;
     try {
-      claims = await verifySessionToken(
-        token,
-        requireGoogleAuth(this.config).sessionSecret,
-      );
+      claims = await verifySessionToken(token, secret);
     } catch (err) {
       if (err instanceof InvalidSessionTokenError) {
         throw new SessionUnauthorizedError('Session is not usable');
@@ -68,11 +88,15 @@ abstract class SessionGuardBase implements CanActivate {
       throw new SessionUnauthorizedError('Session is of the wrong kind');
     }
 
-    // Read the role from the row, never from the token: a suspension or a
-    // demotion has to take effect before the session expires.
+    // Read the account from the row, never from the token: a suspension or a
+    // demotion has to take effect on the next request, not whenever the
+    // session happens to run out.
     const user = await this.users.findById(claims.userId);
     if (!user) {
       throw new SessionUnauthorizedError('Session is not usable');
+    }
+    if (isSuspended(user)) {
+      throw new SessionUnauthorizedError('Account is suspended');
     }
 
     req.session = claims;
@@ -82,6 +106,21 @@ abstract class SessionGuardBase implements CanActivate {
       systemRole: user.systemRole,
     };
     return true;
+  }
+
+  /**
+   * A browser sending the session cookie must say where it is from, and it
+   * must be somewhere we serve. Requests with no Origin at all are server to
+   * server, where the cookie could not have been attached by a third party.
+   */
+  private assertAllowedOrigin(origin: string | undefined): void {
+    if (origin === undefined) {
+      return;
+    }
+    const allowed = parseCorsOrigins(this.config.CORS_ORIGINS);
+    if (!allowed.includes(origin)) {
+      throw new SessionUnauthorizedError('Origin is not allowed to use this session');
+    }
   }
 }
 

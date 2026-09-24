@@ -44,7 +44,12 @@ export async function signSessionToken(
   settings: SessionTokenSettings,
   now: Date = new Date(),
 ): Promise<{ token: string; expiresAt: Date }> {
-  const expiresAt = new Date(now.getTime() + settings.ttlMinutes * 60_000);
+  // Whole seconds, because that is all a JWT `exp` carries. Keeping the
+  // milliseconds here would hand the caller — and the cookie — an expiry up
+  // to a second later than the token's own.
+  const expiresAt = new Date(
+    Math.floor((now.getTime() + settings.ttlMinutes * 60_000) / 1000) * 1000,
+  );
 
   const token = await new SignJWT({
     email: claims.email,
@@ -79,11 +84,10 @@ export async function verifySessionToken(
       algorithms: ['HS256'],
     }));
   } catch (err) {
-    if (
-      err instanceof joseErrors.JOSEError ||
-      err instanceof TypeError ||
-      err instanceof Error
-    ) {
+    // Only token problems become a 401. Anything else — a missing secret, a
+    // programming error — is a fault, and must not be disguised as a caller
+    // presenting a bad token.
+    if (err instanceof joseErrors.JOSEError) {
       throw new InvalidSessionTokenError('session token is not usable');
     }
     throw err;

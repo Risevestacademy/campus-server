@@ -32,6 +32,7 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
    `APP_PUBLIC_URL` (invite-link base, `{base}/invite?token=<raw>` — set it to
    the frontend origin for that environment; required, boot fails without it),
    `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7).
+   `PORT` is injected by Railway, not set manually.
 - Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
   (this API, matching a registered redirect URI byte for byte) and two
@@ -41,7 +42,6 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
 - The session cookie is cross-site once both sides are on https, so
   `APP_PUBLIC_URL` and `CORS_ORIGINS` must name the frontend, and the frontend
   has to send its requests with credentials.
-   `PORT` is injected by Railway, not set manually.
 - Migrations and seeding run via a pre-deploy step:
   `pnpm --filter campus-api db:migrate && pnpm --filter campus-api db:seed`.
   Seeding is deliberately **not** part of app boot — the API must not need a

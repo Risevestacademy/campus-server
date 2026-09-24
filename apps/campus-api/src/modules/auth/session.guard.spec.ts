@@ -16,6 +16,7 @@ const config = {
   GOOGLE_CALLBACK_URL: 'http://localhost:3000/v1/auth/google/callback',
   AUTH_STATE_SECRET: 'a-state-secret-of-at-least-32-characters',
   AUTH_SESSION_SECRET: SECRET,
+  CORS_ORIGINS: 'https://campus.example.com',
 } as never;
 
 function user(overrides: Partial<User> = {}): User {
@@ -32,8 +33,8 @@ function users(found: User | null = user()): UsersService {
   return { findById: vi.fn().mockResolvedValue(found) } as unknown as UsersService;
 }
 
-function context(headers: Record<string, string>) {
-  const req: Record<string, unknown> = { headers };
+function context(headers: Record<string, string>, method = 'GET') {
+  const req: Record<string, unknown> = { headers, method };
   return {
     req,
     ctx: {
@@ -105,6 +106,69 @@ describe('SessionGuard', () => {
 
     await expect(
       new SessionGuard(config, users()).canActivate(ctx),
+    ).rejects.toThrow(SessionUnauthorizedError);
+  });
+
+  it('turns away a suspended account holding a live session', async () => {
+    const token = await tokenFor(SessionScope.FullAccess);
+    const { ctx } = context({ cookie: `${SESSION_COOKIE}=${token}` });
+
+    await expect(
+      new SessionGuard(
+        config,
+        users(user({ status: UserStatus.Suspended })),
+      ).canActivate(ctx),
+    ).rejects.toThrow(SessionUnauthorizedError);
+  });
+
+  /**
+   * The session cookie is SameSite=None across sites, so the browser sends it
+   * on a cross-site form POST too. The origin is what rules that out.
+   */
+  it('turns away a cookie-authenticated write from an unknown origin', async () => {
+    const token = await tokenFor(SessionScope.FullAccess);
+    const { ctx } = context(
+      { cookie: `${SESSION_COOKIE}=${token}`, origin: 'https://evil.example' },
+      'POST',
+    );
+
+    await expect(
+      new SessionGuard(config, users()).canActivate(ctx),
+    ).rejects.toThrow(SessionUnauthorizedError);
+  });
+
+  it('allows a cookie-authenticated write from the web app', async () => {
+    const token = await tokenFor(SessionScope.FullAccess);
+    const { ctx } = context(
+      {
+        cookie: `${SESSION_COOKIE}=${token}`,
+        origin: 'https://campus.example.com',
+      },
+      'POST',
+    );
+
+    await expect(
+      new SessionGuard(config, users()).canActivate(ctx),
+    ).resolves.toBe(true);
+  });
+
+  /** A bearer token is not attached by a browser, so no origin is needed. */
+  it('allows a bearer write with no origin at all', async () => {
+    const token = await tokenFor(SessionScope.FullAccess);
+    const { ctx } = context({ authorization: `Bearer ${token}` }, 'POST');
+
+    await expect(
+      new SessionGuard(config, users()).canActivate(ctx),
+    ).resolves.toBe(true);
+  });
+
+  it('turns everything away when sign-in is switched off', async () => {
+    const token = await tokenFor(SessionScope.FullAccess);
+    const { ctx } = context({ cookie: `${SESSION_COOKIE}=${token}` });
+    const off = { ...(config as object), FF_GOOGLE_AUTH_ENABLED: false } as never;
+
+    await expect(
+      new SessionGuard(off, users()).canActivate(ctx),
     ).rejects.toThrow(SessionUnauthorizedError);
   });
 

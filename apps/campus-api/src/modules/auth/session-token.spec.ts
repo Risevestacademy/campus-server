@@ -42,7 +42,9 @@ describe('session tokens', () => {
       email: 'ada@campus.local',
       scope: SessionScope.FullAccess,
     });
-    expect(verified.expiresAt.getTime()).toBeCloseTo(expiresAt.getTime(), -3);
+    // Exactly equal: both sides are whole seconds, so this cannot drift.
+    expect(verified.expiresAt.getTime()).toBe(expiresAt.getTime());
+    expect(expiresAt.getTime() % 1000).toBe(0);
   });
 
   it('carries the invite on a provisional session, and nothing on a full one', async () => {
