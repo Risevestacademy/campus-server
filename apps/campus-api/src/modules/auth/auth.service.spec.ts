@@ -21,7 +21,8 @@ import type {
 
 const google = { exchangeCode: vi.fn() };
 const users = {
-  resolveByGoogleIdentity: vi.fn(),
+  findForGoogleIdentity: vi.fn(),
+  linkGoogleIdentity: vi.fn(),
   createFromGoogleIdentity: vi.fn(),
   recordLogin: vi.fn(),
 };
@@ -96,7 +97,10 @@ function invite(): Invite {
 beforeEach(() => {
   vi.resetAllMocks();
   google.exchangeCode.mockResolvedValue(verifiedIdentity());
-  users.resolveByGoogleIdentity.mockResolvedValue(null);
+  users.findForGoogleIdentity.mockResolvedValue(null);
+  users.linkGoogleIdentity.mockImplementation((identity: { subject: string }) =>
+    Promise.resolve(user({ providerId: identity.subject })),
+  );
   users.recordLogin.mockResolvedValue(undefined);
   invites.findUsableForEmail.mockResolvedValue(null);
   members.hasActiveMembership.mockResolvedValue(false);
@@ -111,11 +115,11 @@ describe('completeGoogleSignIn', () => {
     await expect(service.completeGoogleSignIn('code')).rejects.toThrow(
       GoogleSignInFailedError,
     );
-    expect(users.resolveByGoogleIdentity).not.toHaveBeenCalled();
+    expect(users.findForGoogleIdentity).not.toHaveBeenCalled();
   });
 
   it('turns a suspended account away before anything else is considered', async () => {
-    users.resolveByGoogleIdentity.mockResolvedValue(
+    users.findForGoogleIdentity.mockResolvedValue(
       user({ status: UserStatus.Suspended, systemRole: SystemRole.Admin }),
     );
 
@@ -127,7 +131,7 @@ describe('completeGoogleSignIn', () => {
   });
 
   it('lets an admin straight in without consulting the roster', async () => {
-    users.resolveByGoogleIdentity.mockResolvedValue(
+    users.findForGoogleIdentity.mockResolvedValue(
       user({ systemRole: SystemRole.Admin }),
     );
 
@@ -140,7 +144,7 @@ describe('completeGoogleSignIn', () => {
   });
 
   it('lets a current member straight in', async () => {
-    users.resolveByGoogleIdentity.mockResolvedValue(user());
+    users.findForGoogleIdentity.mockResolvedValue(user());
     members.hasActiveMembership.mockResolvedValue(true);
 
     const outcome = await service.completeGoogleSignIn('code');
@@ -161,7 +165,7 @@ describe('completeGoogleSignIn', () => {
   });
 
   it('reuses the account of someone who signed in but never onboarded', async () => {
-    users.resolveByGoogleIdentity.mockResolvedValue(user());
+    users.findForGoogleIdentity.mockResolvedValue(user());
     invites.findUsableForEmail.mockResolvedValue(invite());
 
     const outcome = await service.completeGoogleSignIn('code');
@@ -179,12 +183,44 @@ describe('completeGoogleSignIn', () => {
   });
 
   /**
+   * Being turned away is not a write. Binding the subject first would leave
+   * a rejected caller's Google account attached to a seeded or invited row,
+   * and their name and picture copied onto it.
+   */
+  it('binds nothing to an existing row when the caller is turned away', async () => {
+    users.findForGoogleIdentity.mockResolvedValue(
+      user({ providerId: null, systemRole: SystemRole.User }),
+    );
+    members.hasActiveMembership.mockResolvedValue(false);
+
+    await expect(service.completeGoogleSignIn('code')).rejects.toThrow(
+      InviteRequiredError,
+    );
+
+    expect(users.linkGoogleIdentity).not.toHaveBeenCalled();
+    expect(users.recordLogin).not.toHaveBeenCalled();
+  });
+
+  it('binds nothing when the account is suspended', async () => {
+    users.findForGoogleIdentity.mockResolvedValue(
+      user({ providerId: null, status: UserStatus.Suspended }),
+    );
+
+    await expect(service.completeGoogleSignIn('code')).rejects.toThrow(
+      AccountSuspendedError,
+    );
+
+    expect(users.linkGoogleIdentity).not.toHaveBeenCalled();
+    expect(users.recordLogin).not.toHaveBeenCalled();
+  });
+
+  /**
    * A dismissed student keeps their membership row — the schema clears
    * `left_at` on return rather than writing a second one — so "has a row" is
    * not the same question as "is still here".
    */
   it('rejects a former member whose row outlived their place here', async () => {
-    users.resolveByGoogleIdentity.mockResolvedValue(user());
+    users.findForGoogleIdentity.mockResolvedValue(user());
     members.hasActiveMembership.mockResolvedValue(false);
 
     await expect(service.completeGoogleSignIn('code')).rejects.toThrow(
@@ -215,7 +251,7 @@ describe('completeGoogleSignIn', () => {
   });
 
   it('keeps addresses out of the logs', async () => {
-    users.resolveByGoogleIdentity.mockResolvedValue(
+    users.findForGoogleIdentity.mockResolvedValue(
       user({ systemRole: SystemRole.Admin }),
     );
 

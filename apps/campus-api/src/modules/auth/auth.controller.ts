@@ -74,6 +74,10 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<IssuedSession> {
+    // Asked first, so a deployment without Google sign-in answers both routes
+    // the same way instead of reporting a state problem it never had.
+    requireGoogleAuth(this.config);
+
     const nonce = readStateCookie(req.headers.cookie);
     // One sign-in per issued state, whichever way this request ends.
     res.clearCookie(STATE_COOKIE, { path: STATE_COOKIE_PATH });

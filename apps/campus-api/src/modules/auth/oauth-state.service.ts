@@ -1,5 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { GoogleSignInFailedError } from './auth.exceptions.js';
@@ -13,6 +18,7 @@ export interface IssuedState {
 }
 
 interface StatePayload {
+  /** Digest of the cookie nonce, never the nonce itself. */
   n: string;
   e: number;
 }
@@ -26,7 +32,10 @@ export class OAuthStateService {
 
   issue(now: number = Date.now()): IssuedState {
     const nonce = randomBytes(32).toString('base64url');
-    const body = encode({ n: nonce, e: now + TTL_MS });
+    // The state travels through Google and lands in this API's own request
+    // log; the cookie is httpOnly precisely so its value stays in the
+    // browser. Carrying a digest keeps both true.
+    const body = encode({ n: digest(nonce), e: now + TTL_MS });
 
     return { state: `${body}.${this.sign(body)}`, nonce };
   }
@@ -56,7 +65,7 @@ export class OAuthStateService {
     if (payload.e <= now) {
       throw new GoogleSignInFailedError('expired_state');
     }
-    if (!matches(payload.n, nonce)) {
+    if (!matches(payload.n, digest(nonce))) {
       throw new GoogleSignInFailedError('invalid_state');
     }
   }
@@ -66,6 +75,10 @@ export class OAuthStateService {
       .update(body)
       .digest('base64url');
   }
+}
+
+function digest(nonce: string): string {
+  return createHash('sha256').update(nonce, 'utf8').digest('base64url');
 }
 
 function encode(payload: StatePayload): string {

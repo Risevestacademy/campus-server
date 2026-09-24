@@ -44,18 +44,18 @@ beforeEach(async () => {
   await pglite.execute(sql`truncate users cascade`);
 });
 
-describe('resolveByGoogleIdentity', () => {
+describe('findForGoogleIdentity and linkGoogleIdentity', () => {
   it('finds an account by its Google subject', async () => {
     await service.createFromGoogleIdentity(identity());
 
-    const found = await service.resolveByGoogleIdentity(identity());
+    const found = await service.findForGoogleIdentity(identity());
 
     expect(found?.email).toBe('ada@campus.local');
     expect(found && hasGoogleIdentity(found)).toBe(true);
   });
 
   it('returns null when neither the subject nor the address is known', async () => {
-    expect(await service.resolveByGoogleIdentity(identity())).toBeNull();
+    expect(await service.findForGoogleIdentity(identity())).toBeNull();
   });
 
   // The bootstrap case: the seeder writes an address and no subject, because
@@ -66,7 +66,7 @@ describe('resolveByGoogleIdentity', () => {
       systemRole: SystemRole.Admin,
     });
 
-    const linked = await service.resolveByGoogleIdentity(
+    const linked = await service.linkGoogleIdentity(
       identity({ email: 'admin@campus.local', subject: 'sub-admin' }),
     );
 
@@ -81,7 +81,7 @@ describe('resolveByGoogleIdentity', () => {
       displayName: 'Campus Admin',
     });
 
-    const linked = await service.resolveByGoogleIdentity(
+    const linked = await service.linkGoogleIdentity(
       identity({ email: 'admin@campus.local' }),
     );
 
@@ -93,7 +93,7 @@ describe('resolveByGoogleIdentity', () => {
   it('refuses to move an address already owned by another subject', async () => {
     await service.createFromGoogleIdentity(identity({ subject: 'first-sub' }));
 
-    const hijack = await service.resolveByGoogleIdentity(
+    const hijack = await service.linkGoogleIdentity(
       identity({ subject: 'second-sub' }),
     );
 
@@ -104,7 +104,7 @@ describe('resolveByGoogleIdentity', () => {
   it('matches a differently cased address', async () => {
     await pglite.insert(users).values({ email: 'admin@campus.local' });
 
-    const linked = await service.resolveByGoogleIdentity(
+    const linked = await service.linkGoogleIdentity(
       identity({ email: 'Admin@Campus.Local' }),
     );
 

@@ -11,7 +11,10 @@ import {
   GoogleSignInFailedError,
   InviteRequiredError,
 } from './auth.exceptions.js';
-import { GoogleOAuthService } from './google-oauth.service.js';
+import {
+  GoogleOAuthService,
+  type VerifiedGoogleIdentity,
+} from './google-oauth.service.js';
 
 /**
  * Who signed in, and how far they get.
@@ -49,7 +52,9 @@ export class AuthService {
     const email = identity.email.trim().toLowerCase();
     const normalized = { ...identity, email };
 
-    const existing = await this.users.resolveByGoogleIdentity(normalized);
+    // Read-only until the outcome is decided: a caller who is turned away
+    // must not leave their Google subject bound to somebody's account.
+    const existing = await this.users.findForGoogleIdentity(normalized);
 
     if (existing && isSuspended(existing)) {
       this.logger.warn(
@@ -60,12 +65,13 @@ export class AuthService {
     }
 
     if (existing && (await this.bypassesInvite(existing))) {
-      await this.users.recordLogin(existing.id);
+      const user = await this.linkIfUnbound(existing, normalized);
+      await this.users.recordLogin(user.id);
       this.logger.info(
-        { userId: existing.id, outcome: 'full_access' },
+        { userId: user.id, outcome: 'full_access' },
         'google sign-in',
       );
-      return { kind: 'full_access', user: existing };
+      return { kind: 'full_access', user };
     }
 
     const invite = await this.invites.findUsableForEmail(email);
@@ -79,8 +85,9 @@ export class AuthService {
       throw new InviteRequiredError();
     }
 
-    const user =
-      existing ?? (await this.users.createFromGoogleIdentity(normalized));
+    const user = existing
+      ? await this.linkIfUnbound(existing, normalized)
+      : await this.users.createFromGoogleIdentity(normalized);
     await this.users.recordLogin(user.id);
     this.logger.info(
       { userId: user.id, inviteId: invite.id, outcome: 'provisional' },
@@ -88,6 +95,17 @@ export class AuthService {
     );
 
     return { kind: 'provisional', user, invite };
+  }
+
+  /** A row found by address still needs the subject written onto it. */
+  private async linkIfUnbound(
+    user: User,
+    identity: VerifiedGoogleIdentity,
+  ): Promise<User> {
+    if (user.providerId) {
+      return user;
+    }
+    return (await this.users.linkGoogleIdentity(identity)) ?? user;
   }
 
   private async bypassesInvite(user: User): Promise<boolean> {

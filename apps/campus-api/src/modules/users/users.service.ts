@@ -3,6 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { GoogleIdentity } from './google-identity.js';
+import { GoogleIdentityMismatchError } from './users.exceptions.js';
 import { SystemRole, User, UserStatus, users } from './schema.js';
 
 export const GOOGLE_PROVIDER = 'google';
@@ -24,31 +25,42 @@ export function hasGoogleIdentity(user: User): boolean {
   return user.provider === GOOGLE_PROVIDER && user.providerId !== null;
 }
 
-/** Raised when an address is already bound to a different Google account. */
-export class GoogleIdentityMismatchError extends Error {
-  constructor(readonly email: string) {
-    super(`${email} is already linked to a different Google account`);
-  }
-}
-
 @Injectable()
 export class UsersService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
 
   /**
-   * Resolves the account behind a Google identity: by subject first, since
-   * that is the stable identifier, then by address for a row that has never
-   * been linked — a seeded admin or an invitee created ahead of first login.
-   * An address already bound to another subject is never re-bound here.
+   * The account behind a Google identity, read-only: by subject first, since
+   * that is the stable identifier, then by address for a row nobody has
+   * linked yet — a seeded admin, or an invitee created ahead of first login.
+   * A row already bound to another subject is not a match.
    */
-  async resolveByGoogleIdentity(
-    identity: GoogleIdentity,
-  ): Promise<User | null> {
+  async findForGoogleIdentity(identity: GoogleIdentity): Promise<User | null> {
     const bySubject = await this.findByGoogleSubject(identity.subject);
     if (bySubject) {
       return bySubject;
     }
 
+    const [row] = await this.db
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.email, normalize(identity.email)),
+          isNull(users.providerId),
+        ),
+      )
+      .limit(1);
+
+    return row ?? null;
+  }
+
+  /**
+   * Binds a Google identity to an account that has none, back-filling the
+   * profile fields it left blank. Call it once sign-in is authorised: a
+   * rejected caller must not leave their subject on somebody's row.
+   */
+  async linkGoogleIdentity(identity: GoogleIdentity): Promise<User | null> {
     const [linked] = await this.db
       .update(users)
       .set({

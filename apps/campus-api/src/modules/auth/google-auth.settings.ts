@@ -1,4 +1,5 @@
 import type { Env } from '../../infra/config/config.module.js';
+import { GoogleAuthNotConfiguredError } from './auth.exceptions.js';
 
 export interface GoogleAuthSettings {
   clientId: string;
@@ -16,11 +17,9 @@ export function requireGoogleAuth(env: Env): GoogleAuthSettings {
     !env.GOOGLE_CALLBACK_URL ||
     !env.AUTH_STATE_SECRET
   ) {
-    throw new Error(
-      'Google sign-in is not configured on this deployment. Set ' +
-        'FF_GOOGLE_AUTH_ENABLED=true along with GOOGLE_CLIENT_ID, ' +
-        'GOOGLE_CLIENT_SECRET, GOOGLE_CALLBACK_URL and AUTH_STATE_SECRET.',
-    );
+    // Env already refuses to boot with the flag on and a value missing, so
+    // reaching here means the flag is off — the default in .env.example.
+    throw new GoogleAuthNotConfiguredError();
   }
 
   return {

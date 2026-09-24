@@ -43,3 +43,16 @@ export class AccountSuspendedError extends DomainException {
     super('This account is suspended.');
   }
 }
+
+/**
+ * Google sign-in is not configured on this deployment. NotFound rather than
+ * a 500: from the caller's side the route simply is not there, and the
+ * deployment's configuration is nobody else's business.
+ */
+export class GoogleAuthNotConfiguredError extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+
+  constructor() {
+    super('Google sign-in is not available on this deployment');
+  }
+}
