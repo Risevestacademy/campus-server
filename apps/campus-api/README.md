@@ -60,6 +60,9 @@ a clear error.
 | `GOOGLE_CLIENT_SECRET`            | *(unset)*                                 | Secret for that web client. Never ships to a mobile app |
 | `GOOGLE_CALLBACK_URL`             | *(unset)*                                 | Where Google returns the user. Must point at **this API**, not the web app, and match a registered redirect URI exactly |
 | `AUTH_STATE_SECRET`               | *(unset)*                                 | Signs the OAuth `state` parameter; at least 32 characters. Rotating it only interrupts sign-ins already in flight |
+| `AUTH_SESSION_SECRET`             | *(unset)*                                 | Signs session tokens; at least 32 characters. Separate from the state secret — rotating this one signs everybody out |
+| `AUTH_SESSION_TTL_MINUTES`        | `720`                                     | Lifetime of a full-access session |
+| `AUTH_PROVISIONAL_TTL_MINUTES`    | `30`                                      | Lifetime of the provisional session handed out before an invite is accepted |
 | `CORS_ORIGINS`                    | *(unset)*                                 | Comma-separated browser origins allowed to call the API. Unset sends no CORS headers, which blocks browser apps |
 | `TRUST_PROXY_HOPS`                | `1`                                       | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none |
 | `FF_LOG_LEVEL`                    | `info`                                    | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal` |

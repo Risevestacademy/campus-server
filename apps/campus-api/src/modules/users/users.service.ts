@@ -91,6 +91,16 @@ export class UsersService {
     return row ?? null;
   }
 
+  async findById(id: string): Promise<User | null> {
+    const [row] = await this.db
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+
+    return row ?? null;
+  }
+
   async findByEmail(email: string): Promise<User | null> {
     const [row] = await this.db
       .select()

@@ -114,6 +114,35 @@ export class Env {
   })
   AUTH_STATE_SECRET?: string;
 
+  /**
+   * Signs session tokens. Separate from AUTH_STATE_SECRET because the two
+   * protect different things for different lifetimes — rotating this one
+   * signs every session out, which is the point of being able to.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsString()
+  @MinLength(32, {
+    message: 'AUTH_SESSION_SECRET must be at least 32 characters',
+  })
+  AUTH_SESSION_SECRET?: string;
+
+  /** Lifetime of a full-access session, in minutes. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  AUTH_SESSION_TTL_MINUTES: number = 720;
+
+  /**
+   * Lifetime of a provisional session — long enough to finish onboarding,
+   * short because it is handed out before anyone has accepted anything.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  AUTH_PROVISIONAL_TTL_MINUTES: number = 30;
+
   // Comma-separated list of browser origins allowed to call the API.
 
   @IsOptional()

@@ -56,3 +56,8 @@ export class GoogleAuthNotConfiguredError extends DomainException {
     super('Google sign-in is not available on this deployment');
   }
 }
+
+/** The caller has no usable session, or the wrong kind of one. */
+export class SessionUnauthorizedError extends DomainException {
+  readonly code = ExceptionCode.Unauthorized;
+}

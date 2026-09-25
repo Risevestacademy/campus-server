@@ -7,7 +7,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { GoogleOAuthService } from './google-oauth.service.js';
 import { OAuthStateService } from './oauth-state.service.js';
-import { SessionIssuer, UnimplementedSessionIssuer } from './session-issuer.js';
+import { SessionIssuer } from './session-issuer.js';
 
 @Module({
   imports: [UsersModule, InvitesModule, CohortsModule],
@@ -16,7 +16,7 @@ import { SessionIssuer, UnimplementedSessionIssuer } from './session-issuer.js';
     AuthService,
     GoogleOAuthService,
     OAuthStateService,
-    { provide: SessionIssuer, useClass: UnimplementedSessionIssuer },
+    SessionIssuer,
   ],
 })
 export class AuthModule {}

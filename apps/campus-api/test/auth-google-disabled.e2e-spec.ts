@@ -25,6 +25,7 @@ describe('Google sign-in while switched off (e2e)', () => {
     vi.stubEnv('GOOGLE_CLIENT_ID', '');
     vi.stubEnv('GOOGLE_CLIENT_SECRET', '');
     vi.stubEnv('AUTH_STATE_SECRET', '');
+    vi.stubEnv('AUTH_SESSION_SECRET', '');
 
     const moduleFixture = await Test.createTestingModule({
       imports: [AppModule],

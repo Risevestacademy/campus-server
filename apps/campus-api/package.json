@@ -52,6 +52,7 @@
     "class-validator": "^0.15.1",
     "drizzle-orm": "^0.45.2",
     "google-auth-library": "^11.1.0",
+    "jose": "^6.2.12",
     "nestjs-pino": "^5.1.0",
     "pino": "^10.3.1",
     "postgres": "^3.4.9",

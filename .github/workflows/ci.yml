@@ -64,6 +64,7 @@ jobs:
           GOOGLE_CLIENT_SECRET: dummy-client-secret-for-ci-smoke-test
           GOOGLE_CALLBACK_URL: http://localhost:3000/v1/auth/google/callback
           AUTH_STATE_SECRET: dummy-state-secret-for-ci-smoke-test-32
+          AUTH_SESSION_SECRET: dummy-session-secret-for-ci-smoke-test-32
         run: |
           node dist/main.js > boot.log 2>&1 &
           echo $! > app.pid

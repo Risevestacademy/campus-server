@@ -80,6 +80,7 @@ describe('loadEnv Google sign-in validation', () => {
     GOOGLE_CLIENT_SECRET: 'a-web-client-secret',
     GOOGLE_CALLBACK_URL: 'http://localhost:3000/v1/auth/google/callback',
     AUTH_STATE_SECRET: 'a-state-secret-of-at-least-32-characters',
+    AUTH_SESSION_SECRET: 'a-session-secret-of-at-least-32-characters',
   };
 
   it('leaves the API bootable with no Google configuration at all', () => {
