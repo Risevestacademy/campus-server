@@ -60,13 +60,31 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
   connection string; the public/proxy one is for local admin tasks only
   (`drizzle-kit studio`, manual migrations) — never the deployed app.
 
+## LiveKit
+
+Decided: the container in `docker-compose.local.yml` for local development,
+**LiveKit Cloud** for staging and production. Railway's edge proxy does not
+expose the UDP range self-hosted LiveKit needs for real WebRTC media, so
+self-hosting there would give working signalling and broken audio.
+
+That means media configuration differs by environment, and the code must not
+assume otherwise:
+
+| | Local | Staging / production |
+| --- | --- | --- |
+| Server | `livekit/livekit-server` container | LiveKit Cloud project |
+| URL | `ws://localhost:7880` | the project's `wss://` URL |
+| Credentials | the dev key pair in `livekit.yaml` | per-environment API key and secret |
+
+A Cloud project per environment, so a staging room can never collide with a
+production one. The key and secret are server-side only: clients get a
+short-lived room token minted by the API, never the credentials themselves.
+
 ## Open items
 
 - `world` has no public domain — add one once something actually calls it.
-- Redis and LiveKit aren't provisioned (local-dev-only in
-  `docker-compose.local.yml`); if LiveKit is ever needed, prefer LiveKit
-  Cloud over self-hosting on Railway (its edge proxy doesn't expose the UDP
-  range self-hosted LiveKit needs for real WebRTC media).
+- Redis isn't provisioned (local-dev-only in `docker-compose.local.yml`);
+  `world` needs it for presence before that service is deployed.
 - Node version isn't pinned on Railway — set `NIXPACKS_NODE_VERSION=24` to
   match CI.
 - Frontend↔backend PostHog correlation isn't wired yet — see
