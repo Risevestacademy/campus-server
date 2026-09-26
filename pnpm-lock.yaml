@@ -4,6 +4,24 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@types/node':
+      specifier: ^24.0.0
+      version: 24.13.3
+    oxlint:
+      specifier: ^1.58.0
+      version: 1.81.0
+    pino-pretty:
+      specifier: ^13.1.3
+      version: 13.1.3
+    typescript:
+      specifier: ^6.0.2
+      version: 6.0.3
+    vitest:
+      specifier: ^4.1.2
+      version: 4.1.11
+
 importers:
 
   .:
@@ -98,9 +116,6 @@ importers:
       google-auth-library:
         specifier: ^11.1.0
         version: 11.1.0
-      jose:
-        specifier: ^6.2.12
-        version: 6.2.12
       nestjs-pino:
         specifier: ^5.1.0
         version: 5.1.0(@nestjs/common@12.0.1(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.0.1)(pino-http@11.0.0)(pino@10.3.1)(rxjs@7.8.2)
@@ -139,7 +154,7 @@ importers:
         specifier: ^5.0.0
         version: 5.0.6
       '@types/node':
-        specifier: ^24.0.0
+        specifier: 'catalog:'
         version: 24.13.3
       '@types/supertest':
         specifier: ^7.0.0
@@ -151,10 +166,10 @@ importers:
         specifier: ^0.31.10
         version: 0.31.10
       oxlint:
-        specifier: ^1.58.0
+        specifier: 'catalog:'
         version: 1.81.0
       pino-pretty:
-        specifier: ^13.1.3
+        specifier: 'catalog:'
         version: 13.1.3
       prettier:
         specifier: ^3.4.2
@@ -166,10 +181,10 @@ importers:
         specifier: ^7.0.0
         version: 7.2.2
       typescript:
-        specifier: ^6.0.2
+        specifier: 'catalog:'
         version: 6.0.3
       vitest:
-        specifier: ^4.1.2
+        specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.0))
 
   apps/world:
@@ -188,22 +203,22 @@ importers:
         version: 4.6.5
     devDependencies:
       '@types/node':
-        specifier: ^24.0.0
+        specifier: 'catalog:'
         version: 24.13.3
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
       oxlint:
-        specifier: ^1.58.0
+        specifier: 'catalog:'
         version: 1.81.0
       pino-pretty:
-        specifier: ^13.1.3
+        specifier: 'catalog:'
         version: 13.1.3
       typescript:
-        specifier: ^6.0.2
+        specifier: 'catalog:'
         version: 6.0.3
       vitest:
-        specifier: ^4.1.2
+        specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.0))
       ws:
         specifier: ^8.22.0
@@ -216,16 +231,16 @@ importers:
         version: 6.2.12
     devDependencies:
       '@types/node':
-        specifier: ^24.0.0
+        specifier: 'catalog:'
         version: 24.13.3
       oxlint:
-        specifier: ^1.58.0
+        specifier: 'catalog:'
         version: 1.81.0
       typescript:
-        specifier: ^6.0.2
+        specifier: 'catalog:'
         version: 6.0.3
       vitest:
-        specifier: ^4.1.2
+        specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.0))
 
 packages:
