@@ -18,7 +18,10 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
 
 ## campus-api
 
-- Build: `pnpm install --frozen-lockfile && pnpm --filter campus-api build`
+- Build: `pnpm install --frozen-lockfile && pnpm --filter campus-api... build`
+  — the trailing `...` builds the workspace packages campus-api depends on
+  (`@campus/session`), which ship compiled output. Without it the API starts
+  and then cannot resolve them.
 - Start: `pnpm --filter campus-api start:prod`
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
   `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED=false` (no collector deployed),
