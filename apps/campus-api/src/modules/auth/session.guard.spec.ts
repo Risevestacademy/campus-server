@@ -4,7 +4,7 @@ import { SystemRole, UserStatus, type User } from '../users/schema.js';
 import type { UsersService } from '../users/users.service.js';
 import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { SESSION_COOKIE } from './session-cookie.js';
-import { SessionScope, signSessionToken } from './session-token.js';
+import { SessionScope, signSessionToken } from '@campus/session';
 import { ProvisionalSessionGuard, SessionGuard } from './session.guard.js';
 
 const SECRET = 'a-session-secret-of-at-least-32-characters';

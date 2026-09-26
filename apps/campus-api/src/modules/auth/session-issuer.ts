@@ -8,7 +8,7 @@ import {
   SessionScope,
   signSessionToken,
   type SessionScope as Scope,
-} from './session-token.js';
+} from '@campus/session';
 
 export interface IssuedSession {
   token: string;

@@ -1,20 +1,33 @@
-import Fastify from "fastify";
+import { buildWorld } from './app.js';
 
-const app = Fastify({ logger: true });
+const { app, gateway, env } = await buildWorld();
 
-app.get("/", async () => {
-  return { hello: "world" };
-});
-
-const port = Number(process.env.PORT ?? 3001);
-
-async function start(): Promise<void> {
+/**
+ * Sockets first, then the HTTP server: a client that is told to go away can
+ * reconnect elsewhere, while one still holding an open socket during the
+ * close would simply be cut off.
+ */
+async function shutdown(signal: string): Promise<void> {
+  app.log.info({ signal }, 'shutting down');
   try {
-    await app.listen({ port, host: "0.0.0.0" });
+    await gateway.stop();
+    await app.close();
+    process.exit(0);
   } catch (err) {
-    app.log.error(err);
+    app.log.error({ err }, 'error during shutdown');
     process.exit(1);
   }
 }
 
-start();
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    void shutdown(signal);
+  });
+}
+
+try {
+  await app.listen({ port: env.PORT, host: '0.0.0.0' });
+} catch (err) {
+  app.log.error({ err }, 'failed to start');
+  process.exit(1);
+}
