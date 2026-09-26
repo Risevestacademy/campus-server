@@ -141,6 +141,59 @@ describe('socket upgrade', () => {
   });
 });
 
+describe('sockets that go wrong', () => {
+  /**
+   * Authentication is asynchronous, so a client can be gone before it
+   * finishes. If the registry learns about that connection afterwards,
+   * nothing ever removes it.
+   */
+  it('registers nothing for a client that dies mid-handshake', async () => {
+    const dying = Array.from({ length: 20 }, async () => {
+      const ws = new WebSocket(url, {
+        headers: { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      });
+      ws.on('error', () => undefined);
+      // Kill the TCP socket the instant the handshake completes, which is
+      // the window where authentication is still in flight.
+      ws.on('upgrade', (res) => res.socket.destroy());
+      return new Promise((resolve) => ws.on('close', resolve));
+    });
+    await Promise.all(dying);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(world.gateway.connections.size).toBe(0);
+  });
+
+  it('closes a frame larger than the limit', async () => {
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token()}`,
+    });
+    await conn.first;
+
+    conn.ws.send(JSON.stringify({ type: 'echo', text: 'x'.repeat(5_000) }));
+
+    await expect(conn.settled).resolves.toMatchObject({ closeCode: 1009 });
+  });
+
+  /** A session that has run out must not survive on an already-open socket. */
+  it('closes a socket once its session expires', async () => {
+    const almostExpired = await signSessionToken(
+      { userId: 'user-2', email: 'grace@campus.local', scope: SessionScope.FullAccess },
+      { secret: SECRET, ttlMinutes: 30 },
+      new Date(Date.now() - 29.97 * 60_000),
+    );
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${almostExpired.token}`,
+    });
+    await conn.first;
+
+    await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
+    expect(world.gateway.connections.size).toBe(0);
+  }, 15_000);
+});
+
 describe('an open socket', () => {
   async function open() {
     const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await token()}` });

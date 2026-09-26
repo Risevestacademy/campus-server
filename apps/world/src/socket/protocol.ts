@@ -23,10 +23,14 @@ export type ServerMessage =
   | { type: 'echo'; text: string }
   | { type: 'error'; code: ServerErrorCode; message: string };
 
+/**
+ * No TOO_LARGE: ws enforces maxPayload itself and closes the socket with
+ * 1009 before an oversized frame is ever delivered here, so an envelope for
+ * it would be unreachable.
+ */
 export const ServerErrorCode = {
   Unauthorized: 'UNAUTHORIZED',
   BadMessage: 'BAD_MESSAGE',
-  TooLarge: 'TOO_LARGE',
 } as const;
 
 export type ServerErrorCode =

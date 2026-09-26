@@ -5,6 +5,8 @@ export interface Connection {
   userId: string;
   email: string;
   socket: WebSocket;
+  /** When the session behind this socket runs out, from its own claims. */
+  expiresAt: Date;
   /** Set false on every heartbeat, true by the client's pong. */
   alive: boolean;
 }
