@@ -27,6 +27,7 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts"
   },
   "dependencies": {
+    "@campus/session": "workspace:*",
     "@nestjs/common": "^12.0.1",
     "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^12.0.1",
@@ -52,10 +53,9 @@
     "class-validator": "^0.15.1",
     "drizzle-orm": "^0.45.2",
     "google-auth-library": "^11.1.0",
-    "jose": "^6.2.12",
     "nestjs-pino": "^5.1.0",
     "pino": "^10.3.1",
-    "postgres": "^3.4.9",
+    "postgres": "catalog:",
     "posthog-node": "^5.51.7",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -67,16 +67,16 @@
     "@nestjs/schematics": "^12.0.0",
     "@nestjs/testing": "^12.0.1",
     "@types/express": "^5.0.0",
-    "@types/node": "^24.0.0",
+    "@types/node": "catalog:",
     "@types/supertest": "^7.0.0",
     "@vitest/coverage-v8": "^4.1.2",
     "drizzle-kit": "^0.31.10",
-    "oxlint": "^1.58.0",
-    "pino-pretty": "^13.1.3",
+    "oxlint": "catalog:",
+    "pino-pretty": "catalog:",
     "prettier": "^3.4.2",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

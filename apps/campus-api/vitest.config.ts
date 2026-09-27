@@ -1,6 +1,19 @@
+import { fileURLToPath } from 'node:url';
+
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Workspace packages ship built output, so importing one by name means
+  // tests only run after a build. Pointing at the source keeps a test run
+  // independent of build order — the built entry is what production uses,
+  // and the boot smoke test in CI exercises that.
+  resolve: {
+    alias: {
+      '@campus/session': fileURLToPath(
+        new URL('../../packages/session/src/index.ts', import.meta.url),
+      ),
+    },
+  },
   test: {
     globals: true,
     root: './',

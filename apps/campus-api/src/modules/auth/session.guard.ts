@@ -17,7 +17,7 @@ import {
   SessionScope,
   verifySessionToken,
   type SessionClaims,
-} from './session-token.js';
+} from '@campus/session';
 
 /** The provisional half of a session, for routes that finish onboarding. */
 export type ProvisionalRequest = AuthenticatedRequest & {
