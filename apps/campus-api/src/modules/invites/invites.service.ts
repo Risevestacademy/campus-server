@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, lte } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import {
@@ -8,8 +9,17 @@ import {
 } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CohortRole, cohorts, cohortTracks } from '../cohorts/schema.js';
-import { SystemRole } from '../users/schema.js';
+import { tracks } from '../tracks/schema.js';
+import { SystemRole, users } from '../users/schema.js';
 import type { CreateInviteDto } from './dto/create-invite.dto.js';
+import type {
+  InvitedByDto,
+  InviteCohortDto,
+  InviteCohortTrackDto,
+  InviteInviteeDto,
+  InviteOnboardingResponseDto,
+  InviteTrackDto,
+} from './dto/invite-onboarding-response.dto.js';
 import type { InviteResponseDto } from './dto/invite-response.dto.js';
 import {
   buildInviteLink,
@@ -18,6 +28,8 @@ import {
 } from './invite-token.js';
 import {
   InviteConflictException,
+  InviteForbiddenException,
+  InviteInternalException,
   InviteInvalidArgumentException,
   InviteNotFoundException,
 } from './invites.exceptions.js';
@@ -37,6 +49,33 @@ export function isInviteLive(
   return (
     invite.status === InviteStatus.Pending &&
     invite.expiresAt.getTime() > now.getTime()
+  );
+}
+
+/**
+ * Confirms an invite was addressed to the account presenting it.
+ *
+ * Both halves are server-derived — `inviteId` is signed into the session
+ * cookie, and `user.email` is re-read from the USERS row on every request by
+ * the guard, never taken from the token. So a disagreement is unreachable
+ * from outside; it means a session was minted against the wrong invite.
+ *
+ * The row, not the claim: a token minted before an address change carries the
+ * old one, and the codebase already decided this in session.guard.ts — "Read
+ * the account from the row, never from the token".
+ *
+ * Throws 500 (see InviteInternalException) so the filter logs both addresses
+ * and returns only its generic message to the caller.
+ */
+export function checkEmailMatch(
+  invite: { id: string; email: string },
+  user: AuthenticatedUser,
+): void {
+  if (invite.email === user.email) return;
+
+  throw new InviteInternalException(
+    'Session invite is not addressed to the signed-in account',
+    { inviteId: invite.id, inviteEmail: invite.email, accountEmail: user.email },
   );
 }
 
@@ -160,8 +199,204 @@ export class InvitesService {
     return row ?? null;
   }
 
+  /**
+   * The live invite a provisional session was minted against, with everything
+   * the onboarding screen needs to render a decision.
+   */
+  async getOnboardingInvite(
+    inviteId: string,
+    user: AuthenticatedUser,
+    now: Date = new Date(),
+  ): Promise<InviteOnboardingResponseDto> {
+    const invitee = alias(users, 'invitee');
+
+    const [row] = await this.db
+      .select({
+        invite: {
+          id: invites.id,
+          email: invites.email,
+          cohortRole: invites.cohortRole,
+          systemRole: invites.systemRole,
+          status: invites.status,
+          expiresAt: invites.expiresAt,
+          createdAt: invites.createdAt,
+        },
+        cohort: {
+          id: cohorts.id,
+          name: cohorts.name,
+          code: cohorts.code,
+          startDate: cohorts.startDate,
+          endDate: cohorts.endDate,
+          status: cohorts.status,
+          createdAt: cohorts.createdAt,
+          updatedAt: cohorts.updatedAt,
+        },
+        cohortTrack: {
+          id: cohortTracks.id,
+          cohortId: cohortTracks.cohortId,
+          trackId: cohortTracks.trackId,
+          createdAt: cohortTracks.createdAt,
+        },
+        track: {
+          id: tracks.id,
+          name: tracks.name,
+          code: tracks.code,
+          description: tracks.description,
+          createdAt: tracks.createdAt,
+          updatedAt: tracks.updatedAt,
+        },
+        inviter: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+        },
+        invitee: {
+          id: invitee.id,
+          email: invitee.email,
+          firstName: invitee.firstName,
+          lastName: invitee.lastName,
+          displayName: invitee.displayName,
+          systemRole: invitee.systemRole,
+          status: invitee.status,
+          createdAt: invitee.createdAt,
+        },
+      })
+      .from(invites)
+      .leftJoin(cohorts, eq(cohorts.id, invites.cohortId))
+      .leftJoin(cohortTracks, eq(cohortTracks.id, invites.cohortTrackId))
+      .leftJoin(tracks, eq(tracks.id, cohortTracks.trackId))
+      .innerJoin(users, eq(users.id, invites.invitedBy))
+      .leftJoin(invitee, eq(invitee.id, user.id))
+      .where(eq(invites.id, inviteId))
+      .limit(1);
+
+    if (!row) {
+      throw new InviteNotFoundException('No invite matches this session', {
+        inviteId,
+      });
+    }
+
+    checkEmailMatch(row.invite, user);
+
+    // isInviteLive is the single source of truth; the branch below only
+    // explains which of its two conditions failed.
+    if (!isInviteLive(row.invite, now)) {
+      if (row.invite.status === InviteStatus.Pending) {
+        await this.expireLazily(inviteId, now);
+        throw new InviteForbiddenException('This invite has expired', {
+          inviteId,
+          expiresAt: row.invite.expiresAt,
+        });
+      }
+      throw new InviteConflictException(
+        `This invite is already ${row.invite.status}`,
+        { inviteId, status: row.invite.status },
+      );
+    }
+
+    const cohortRow = row.cohort;
+    const cohortTrackRow = row.cohortTrack;
+    const trackRow = row.track;
+    const accountRow = row.invitee;
+
+    if (!accountRow) {
+      // The guard read this row a moment ago, so an absent one means a
+      // concurrent delete — not a client error.
+      throw new InviteInternalException(
+        'Signed-in account vanished while reading its invite',
+        { inviteId, userId: user.id },
+      );
+    }
+
+    const cohort: InviteCohortDto | null = cohortRow
+      ? {
+          id: cohortRow.id,
+          name: cohortRow.name,
+          code: cohortRow.code,
+          startDate: cohortRow.startDate,
+          endDate: cohortRow.endDate,
+          status: cohortRow.status,
+          createdAt: cohortRow.createdAt,
+          updatedAt: cohortRow.updatedAt,
+        }
+      : null;
+
+    const cohortTrack: InviteCohortTrackDto | null = cohortTrackRow
+      ? {
+          id: cohortTrackRow.id,
+          cohortId: cohortTrackRow.cohortId,
+          trackId: cohortTrackRow.trackId,
+          createdAt: cohortTrackRow.createdAt,
+        }
+      : null;
+
+    const track: InviteTrackDto | null = trackRow
+      ? {
+          id: trackRow.id,
+          name: trackRow.name,
+          code: trackRow.code,
+          description: trackRow.description,
+          createdAt: trackRow.createdAt,
+          updatedAt: trackRow.updatedAt,
+        }
+      : null;
+
+    const invitedBy: InvitedByDto = {
+      id: row.inviter.id,
+      firstName: row.inviter.firstName,
+      lastName: row.inviter.lastName,
+    };
+
+    const account: InviteInviteeDto = {
+      id: accountRow.id,
+      email: accountRow.email,
+      firstName: accountRow.firstName,
+      lastName: accountRow.lastName,
+      displayName: accountRow.displayName,
+      systemRole: accountRow.systemRole,
+      status: accountRow.status,
+      createdAt: accountRow.createdAt,
+    };
+
+    return {
+      id: row.invite.id,
+      cohort,
+      cohortTrack,
+      track,
+      cohortRole: row.invite.cohortRole,
+      systemRole: row.invite.systemRole,
+      status: row.invite.status,
+      expiresAt: row.invite.expiresAt,
+      invitedBy,
+      createdAt: row.invite.createdAt,
+      user: account,
+    };
+  }
+
   private get inviteTtlDays(): number {
     return this.config.INVITE_TTL_DAYS ?? 7;
+  }
+
+  /**
+   * Materialises the lazy flip for one invite.
+   *
+   * The WHERE guards on status *and* expires_at, so this can only ever move a
+   * still-pending, genuinely lapsed row. Guarding on status alone would let a
+   * concurrent accept that lands between the caller's read and this write be
+   * clobbered back to 'expired' — unreachable while invites are only ever
+   * created, reachable the moment accept exists.
+   */
+  private async expireLazily(id: string, now: Date = new Date()): Promise<void> {
+    await this.db
+      .update(invites)
+      .set({ status: InviteStatus.Expired })
+      .where(
+        and(
+          eq(invites.id, id),
+          eq(invites.status, InviteStatus.Pending),
+          lte(invites.expiresAt, now),
+        ),
+      );
   }
 
   /**
@@ -205,10 +440,7 @@ export class InvitesService {
     if (!existing) return;
 
     if (!isInviteLive(existing)) {
-      await this.db
-        .update(invites)
-        .set({ status: InviteStatus.Expired })
-        .where(eq(invites.id, existing.id));
+      await this.expireLazily(existing.id);
       return;
     }
 
