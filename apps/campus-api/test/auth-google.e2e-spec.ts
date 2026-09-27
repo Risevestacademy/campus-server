@@ -15,7 +15,7 @@ import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import {
   SessionScope,
   verifySessionToken,
-} from './../src/modules/auth/session-token.js';
+} from '@campus/session';
 import { InviteStatus, invites } from './../src/modules/invites/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';

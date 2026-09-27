@@ -18,7 +18,10 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
 
 ## campus-api
 
-- Build: `pnpm install --frozen-lockfile && pnpm --filter campus-api build`
+- Build: `pnpm install --frozen-lockfile && pnpm --filter campus-api... build`
+  — the trailing `...` builds the workspace packages campus-api depends on
+  (`@campus/session`), which ship compiled output. Without it the API starts
+  and then cannot resolve them.
 - Start: `pnpm --filter campus-api start:prod`
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
   `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED=false` (no collector deployed),
@@ -60,13 +63,44 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
   connection string; the public/proxy one is for local admin tasks only
   (`drizzle-kit studio`, manual migrations) — never the deployed app.
 
+## world
+
+- Build: `pnpm --filter world... build` / Start: `pnpm --filter world start:prod`
+- Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
+  no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
+  from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
+  world re-checks that the account behind a token still exists and is not
+  suspended, so a ban reaches open sockets instead of waiting out the token),
+  `WORLD_DB_POOL`, `WORLD_HEARTBEAT_SECONDS`, `WORLD_MAX_MESSAGE_BYTES`.
+- Sockets are per-process state. Running more than one instance needs the
+  presence work first, or two tabs may land on different instances and
+  disagree about who is online.
+
+## LiveKit
+
+Decided: the container in `docker-compose.local.yml` for local development,
+**LiveKit Cloud** for staging and production. Railway's edge proxy does not
+expose the UDP range self-hosted LiveKit needs for real WebRTC media, so
+self-hosting there would give working signalling and broken audio.
+
+That means media configuration differs by environment, and the code must not
+assume otherwise:
+
+| | Local | Staging / production |
+| --- | --- | --- |
+| Server | `livekit/livekit-server` container | LiveKit Cloud project |
+| URL | `ws://localhost:7880` | the project's `wss://` URL |
+| Credentials | the dev key pair in `livekit.yaml` | per-environment API key and secret |
+
+A Cloud project per environment, so a staging room can never collide with a
+production one. The key and secret are server-side only: clients get a
+short-lived room token minted by the API, never the credentials themselves.
+
 ## Open items
 
 - `world` has no public domain — add one once something actually calls it.
-- Redis and LiveKit aren't provisioned (local-dev-only in
-  `docker-compose.local.yml`); if LiveKit is ever needed, prefer LiveKit
-  Cloud over self-hosting on Railway (its edge proxy doesn't expose the UDP
-  range self-hosted LiveKit needs for real WebRTC media).
+- Redis isn't provisioned (local-dev-only in `docker-compose.local.yml`);
+  `world` needs it for presence before that service is deployed.
 - Node version isn't pinned on Railway — set `NIXPACKS_NODE_VERSION=24` to
   match CI.
 - Frontend↔backend PostHog correlation isn't wired yet — see
