@@ -5,13 +5,16 @@ import {
   type SessionClaims,
 } from '@campus/session';
 
+import type { AccountLookup } from '../infra/accounts.js';
 import { allowedOrigins, type Env } from '../infra/env.js';
 
 export type Refusal =
   | 'origin_not_allowed'
   | 'no_token'
   | 'token_not_usable'
-  | 'wrong_scope';
+  | 'wrong_scope'
+  | 'account_gone'
+  | 'account_suspended';
 
 export type UpgradeDecision =
   | { ok: true; claims: SessionClaims }
@@ -53,9 +56,14 @@ function bearer(header: string | undefined): string | undefined {
  *
  * Only full-access sessions get in. Somebody mid-onboarding has no place in
  * the world yet.
+ *
+ * The token is checked against the account it names, because a token says
+ * who somebody was when they signed in and cannot say whether they still
+ * belong here.
  */
 export async function decideUpgrade(
   env: Env,
+  accounts: AccountLookup,
   headers: { origin?: string; cookie?: string; authorization?: string },
 ): Promise<UpgradeDecision> {
   const cookieToken = readSessionCookie(headers.cookie);
@@ -85,6 +93,14 @@ export async function decideUpgrade(
 
   if (claims.scope !== SessionScope.FullAccess) {
     return { ok: false, refusal: 'wrong_scope' };
+  }
+
+  const account = await accounts.find(claims.userId);
+  if (!account) {
+    return { ok: false, refusal: 'account_gone' };
+  }
+  if (account.suspended) {
+    return { ok: false, refusal: 'account_suspended' };
   }
 
   return { ok: true, claims };

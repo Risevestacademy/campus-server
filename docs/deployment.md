@@ -63,6 +63,19 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
   connection string; the public/proxy one is for local admin tasks only
   (`drizzle-kit studio`, manual migrations) — never the deployed app.
 
+## world
+
+- Build: `pnpm --filter world... build` / Start: `pnpm --filter world start:prod`
+- Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
+  no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
+  from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
+  world re-checks that the account behind a token still exists and is not
+  suspended, so a ban reaches open sockets instead of waiting out the token),
+  `WORLD_DB_POOL`, `WORLD_HEARTBEAT_SECONDS`, `WORLD_MAX_MESSAGE_BYTES`.
+- Sockets are per-process state. Running more than one instance needs the
+  presence work first, or two tabs may land on different instances and
+  disagree about who is online.
+
 ## LiveKit
 
 Decided: the container in `docker-compose.local.yml` for local development,

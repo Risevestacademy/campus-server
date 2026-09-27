@@ -4,6 +4,7 @@ import { allowedOrigins, loadEnv } from './env.js';
 
 const minimal = {
   AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+  DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/campus',
 } as NodeJS.ProcessEnv;
 
 describe('loadEnv', () => {
@@ -13,8 +14,17 @@ describe('loadEnv', () => {
 
   it('refuses a secret short enough to be guessed', () => {
     expect(() =>
-      loadEnv({ AUTH_SESSION_SECRET: 'too-short' } as NodeJS.ProcessEnv),
+      loadEnv({ ...minimal, AUTH_SESSION_SECRET: 'too-short' } as NodeJS.ProcessEnv),
     ).toThrow(/AUTH_SESSION_SECRET/);
+  });
+
+  /** Without it, world cannot tell a suspended account from a welcome one. */
+  it('refuses to start without a database to check accounts against', () => {
+    expect(() =>
+      loadEnv({
+        AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/DATABASE_URL/);
   });
 
   it('defaults the port, log level and heartbeat', () => {
@@ -25,6 +35,7 @@ describe('loadEnv', () => {
       FF_LOG_LEVEL: 'info',
       FF_LOG_PRETTY: false,
       WORLD_HEARTBEAT_SECONDS: 30,
+      WORLD_DB_POOL: 5,
     });
   });
 

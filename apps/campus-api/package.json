@@ -55,7 +55,7 @@
     "google-auth-library": "^11.1.0",
     "nestjs-pino": "^5.1.0",
     "pino": "^10.3.1",
-    "postgres": "^3.4.9",
+    "postgres": "catalog:",
     "posthog-node": "^5.51.7",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

@@ -4,6 +4,7 @@ import Fastify, {
   type FastifyInstance,
 } from 'fastify';
 
+import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { CORRELATION_ID_HEADER, correlationId, loggerOptions } from './infra/logger.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
@@ -12,9 +13,14 @@ export interface World {
   app: FastifyInstance;
   gateway: Gateway;
   env: Env;
+  accounts: AccountLookup;
 }
 
-export async function buildWorld(env: Env = loadEnv()): Promise<World> {
+export async function buildWorld(
+  env: Env = loadEnv(),
+  // Injectable so tests can answer for the database without one.
+  accounts: AccountLookup = createAccountLookup(env),
+): Promise<World> {
   const app = Fastify({
     logger: loggerOptions(env),
     genReqId: (req) => correlationId(req.headers as Record<string, unknown>),
@@ -50,7 +56,7 @@ export async function buildWorld(env: Env = loadEnv()): Promise<World> {
     options: { maxPayload: env.WORLD_MAX_MESSAGE_BYTES },
   });
 
-  const gateway = registerGateway(app, env);
+  const gateway = registerGateway(app, env, accounts);
 
   app.get('/health', async () => ({
     status: 'ok',
@@ -59,5 +65,5 @@ export async function buildWorld(env: Env = loadEnv()): Promise<World> {
     sockets: { connections: gateway.connections.size, users: gateway.connections.users },
   }));
 
-  return { app, gateway, env };
+  return { app, gateway, env, accounts };
 }

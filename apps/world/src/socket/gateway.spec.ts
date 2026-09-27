@@ -1,6 +1,6 @@
 import { signSessionToken, SessionScope } from '@campus/session';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
@@ -9,8 +9,20 @@ import { loadEnv } from '../infra/env.js';
 const SECRET = 'a-world-session-secret-of-at-least-32-chars';
 const ORIGIN = 'https://campus.example.com';
 
+/** Answers for the database, so these tests need none. */
+const accounts = {
+  suspended: new Set<string>(),
+  gone: new Set<string>(),
+  find: async (userId: string) =>
+    accounts.gone.has(userId)
+      ? null
+      : { id: userId, suspended: accounts.suspended.has(userId) },
+  close: async () => undefined,
+};
+
 const env = loadEnv({
   AUTH_SESSION_SECRET: SECRET,
+  DATABASE_URL: 'postgres://unused',
   CORS_ORIGINS: `${ORIGIN},http://localhost:3000`,
   WORLD_HEARTBEAT_SECONDS: '1',
   WORLD_MAX_MESSAGE_BYTES: '256',
@@ -53,8 +65,13 @@ function connect(headers: Record<string, string>) {
   return { ws, messages, settled, first };
 }
 
+beforeEach(() => {
+  accounts.suspended.clear();
+  accounts.gone.clear();
+});
+
 beforeAll(async () => {
-  world = await buildWorld(env);
+  world = await buildWorld(env, accounts);
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket`;
@@ -129,6 +146,26 @@ describe('socket upgrade', () => {
     await expect(first).resolves.toMatchObject({ message: 'token_not_usable' });
   });
 
+  it('refuses a session whose account has been suspended', async () => {
+    accounts.suspended.add('user-1');
+    const { first } = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token()}`,
+    });
+
+    await expect(first).resolves.toMatchObject({ message: 'account_suspended' });
+  });
+
+  it('refuses a session whose account no longer exists', async () => {
+    accounts.gone.add('user-1');
+    const { first } = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token()}`,
+    });
+
+    await expect(first).resolves.toMatchObject({ message: 'account_gone' });
+  });
+
   /** Half-onboarded has no place in the world yet. */
   it('refuses a provisional session', async () => {
     const provisional = await token(SessionScope.Provisional);
@@ -142,6 +179,39 @@ describe('socket upgrade', () => {
 });
 
 describe('sockets that go wrong', () => {
+  /**
+   * A client that sends the moment it is open is racing authentication: the
+   * message listener goes on after the await, and an event with no listener
+   * is simply gone.
+   */
+  it('does not lose a frame sent the instant the socket opens', async () => {
+    const ws = new WebSocket(url, {
+      headers: { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+    });
+    const replies: Record<string, unknown>[] = [];
+    ws.on('message', (raw) =>
+      replies.push(JSON.parse(raw.toString()) as Record<string, unknown>),
+    );
+    ws.on('open', () => {
+      for (let i = 0; i < 5; i++) {
+        ws.send(JSON.stringify({ type: 'echo', text: `frame-${i}` }));
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    ws.close();
+
+    // Every frame answered, and in the order it was sent.
+    expect(replies.filter((r) => r.type === 'echo').map((r) => r.text)).toEqual([
+      'frame-0',
+      'frame-1',
+      'frame-2',
+      'frame-3',
+      'frame-4',
+    ]);
+  });
+
+
   /**
    * Authentication is asynchronous, so a client can be gone before it
    * finishes. If the registry learns about that connection afterwards,
@@ -177,6 +247,44 @@ describe('sockets that go wrong', () => {
   });
 
   /** A session that has run out must not survive on an already-open socket. */
+  /**
+   * The point of re-checking: a ban has to reach sockets that are already
+   * open, not just the next upgrade attempt.
+   */
+  it('closes an open socket when the account is suspended', async () => {
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token()}`,
+    });
+    await conn.first;
+    expect(world.gateway.connections.size).toBe(1);
+
+    accounts.suspended.add('user-1');
+
+    await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
+    expect(world.gateway.connections.size).toBe(0);
+  }, 15_000);
+
+  /** A database that is down must not throw the campus off. */
+  it('leaves sockets alone when the account check fails', async () => {
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token()}`,
+    });
+    await conn.first;
+
+    const working = accounts.find;
+    accounts.find = async () => {
+      throw new Error('database unavailable');
+    };
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    accounts.find = working;
+
+    expect(world.gateway.connections.size).toBe(1);
+    conn.ws.close();
+    await conn.settled;
+  }, 15_000);
+
   it('closes a socket once its session expires', async () => {
     const almostExpired = await signSessionToken(
       { userId: 'user-2', email: 'grace@campus.local', scope: SessionScope.FullAccess },

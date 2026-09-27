@@ -5,12 +5,19 @@ import { loadEnv } from './infra/env.js';
 
 const env = loadEnv({
   AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+  DATABASE_URL: 'postgres://unused',
   FF_LOG_LEVEL: 'fatal',
 } as NodeJS.ProcessEnv);
 
+/** No database needed: these tests never open a socket. */
+const accounts = {
+  find: async () => null,
+  close: async () => undefined,
+};
+
 describe('the HTTP surface', () => {
   it('reports health, including how many sockets it is holding', async () => {
-    const { app, gateway } = await buildWorld(env);
+    const { app, gateway } = await buildWorld(env, accounts);
 
     const response = await app.inject({ method: 'GET', url: '/health' });
 
@@ -24,7 +31,7 @@ describe('the HTTP surface', () => {
   });
 
   it('answers an unknown route in the shared error shape', async () => {
-    const { app, gateway } = await buildWorld(env);
+    const { app, gateway } = await buildWorld(env, accounts);
 
     const response = await app.inject({ method: 'GET', url: '/nowhere' });
 
@@ -37,7 +44,7 @@ describe('the HTTP surface', () => {
   });
 
   it('echoes the correlation id it was given', async () => {
-    const { app, gateway } = await buildWorld(env);
+    const { app, gateway } = await buildWorld(env, accounts);
 
     const response = await app.inject({
       method: 'GET',

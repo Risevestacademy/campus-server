@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
+import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import { decideUpgrade, type Refusal } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
@@ -22,10 +23,55 @@ export interface Gateway {
   stop(): Promise<void>;
 }
 
-export function registerGateway(app: FastifyInstance, env: Env): Gateway {
+export function registerGateway(
+  app: FastifyInstance,
+  env: Env,
+  accounts: AccountLookup,
+): Gateway {
   const connections = new Connections();
 
+  /**
+   * Checked once per heartbeat rather than per frame: a ban should take
+   * effect in seconds, and asking the database on every message would put a
+   * query in the path of every movement. One query per distinct user, not
+   * per socket, because two tabs are one account.
+   */
+  async function dropRevokedAccounts(): Promise<void> {
+    const byUser = new Map<string, Connection[]>();
+    for (const connection of connections.all()) {
+      const held = byUser.get(connection.userId);
+      if (held) held.push(connection);
+      else byUser.set(connection.userId, [connection]);
+    }
+
+    for (const [userId, held] of byUser) {
+      let account;
+      try {
+        account = await accounts.find(userId);
+      } catch (err) {
+        // A database that is not answering must not throw everybody off the
+        // campus; the next sweep tries again.
+        app.log.error({ err, userId }, 'could not re-check account');
+        continue;
+      }
+      if (account && !account.suspended) {
+        continue;
+      }
+
+      const reason = account ? 'account_suspended' : 'account_gone';
+      for (const connection of held) {
+        app.log.info(
+          { connectionId: connection.id, userId, reason },
+          'closing socket, account no longer welcome',
+        );
+        connections.remove(connection);
+        connection.socket.close(POLICY_VIOLATION, reason);
+      }
+    }
+  }
+
   const heartbeat = setInterval(() => {
+    void dropRevokedAccounts();
     const now = Date.now();
     for (const connection of connections.all()) {
       // A session that has run out does not get to keep a socket it already
@@ -80,6 +126,12 @@ export function registerGateway(app: FastifyInstance, env: Env): Gateway {
     // Authentication is asynchronous, and a client can be gone before it
     // finishes. Watching for that now means a socket that dies in the
     // meantime is never registered, rather than registered and never removed.
+    // Nothing is read off the socket until there is something to read it
+    // with. ws parses frames as they arrive and emits them whether or not a
+    // listener exists, so a client that sends the moment it is open would
+    // otherwise lose those frames while authentication is still in flight.
+    ws.pause();
+
     let registered: Connection | undefined;
     let closed = false;
     const onClose = (): void => {
@@ -99,9 +151,11 @@ export function registerGateway(app: FastifyInstance, env: Env): Gateway {
 
     let decision;
     try {
-      decision = await decideUpgrade(env, headers);
+      decision = await decideUpgrade(env, accounts, headers);
     } catch (err) {
       app.log.error({ err }, 'could not decide socket upgrade');
+      // Reading has to resume for the closing handshake to complete.
+      ws.resume();
       ws.close(INTERNAL_ERROR, 'internal_error');
       return;
     }
@@ -164,12 +218,18 @@ export function registerGateway(app: FastifyInstance, env: Env): Gateway {
       connectionId: connection.id,
       heartbeatSeconds: env.WORLD_HEARTBEAT_SECONDS,
     });
+
+    // Handlers are on: whatever arrived during authentication is delivered
+    // now, in the order it was sent.
+    ws.resume();
   }
 
   function refuse(ws: WebSocket, refusal: Refusal): void {
     // The upgrade has already completed by the time Fastify hands the socket
     // over, so a refusal is a close rather than an HTTP status.
     app.log.info({ refusal }, 'socket refused');
+    // Paused during authentication; the closing handshake needs it back.
+    ws.resume();
     send(ws, {
       type: 'error',
       code: ServerErrorCode.Unauthorized,

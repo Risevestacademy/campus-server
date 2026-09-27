@@ -15,6 +15,9 @@ catalogs:
     pino-pretty:
       specifier: ^13.1.3
       version: 13.1.3
+    postgres:
+      specifier: ^3.4.9
+      version: 3.4.9
     typescript:
       specifier: ^6.0.2
       version: 6.0.3
@@ -123,7 +126,7 @@ importers:
         specifier: ^10.3.1
         version: 10.3.1
       postgres:
-        specifier: ^3.4.9
+        specifier: 'catalog:'
         version: 3.4.9
       posthog-node:
         specifier: ^5.51.7
@@ -198,10 +201,16 @@ importers:
       fastify:
         specifier: ^5.12.3
         version: 5.12.3
+      postgres:
+        specifier: 'catalog:'
+        version: 3.4.9
       zod:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.8
+        version: 0.5.8
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.3

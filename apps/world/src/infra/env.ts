@@ -29,6 +29,13 @@ const schema = z.object({
   /** Shared with campus-api, which signs the tokens this service verifies. */
   AUTH_SESSION_SECRET: z.string().min(32),
 
+  /**
+   * Read-only: world checks that the account behind a token still exists and
+   * is not suspended. The same database campus-api writes.
+   */
+  DATABASE_URL: z.string().min(1),
+  WORLD_DB_POOL: z.coerce.number().int().min(1).default(5),
+
   /** A socket that misses two of these in a row is considered gone. */
   WORLD_HEARTBEAT_SECONDS: z.coerce.number().int().min(1).default(30),
 
