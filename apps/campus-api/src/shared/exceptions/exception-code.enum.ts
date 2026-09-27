@@ -4,6 +4,14 @@ export enum ExceptionCode {
   Forbidden = 'FORBIDDEN',
   NotFound = 'NOT_FOUND',
   Conflict = 'CONFLICT',
+  /**
+   * Which kind of conflict, for callers that have to act on it. All three are
+   * 409, so the status alone cannot tell a caller whether to send someone back
+   * through sign-in, close the flow, or ask an admin — only the code can.
+   */
+  InviteAlreadyAccepted = 'INVITE_ALREADY_ACCEPTED',
+  InviteAlreadyDeclined = 'INVITE_ALREADY_DECLINED',
+  InviteRevoked = 'INVITE_REVOKED',
   SpaceAtCapacity = 'SPACE_AT_CAPACITY',
   InviteRequired = 'INVITE_REQUIRED',
   AccountSuspended = 'ACCOUNT_SUSPENDED',
@@ -24,6 +32,9 @@ export function mapExceptionCodeToStatus(code: ExceptionCode): number {
     case ExceptionCode.NotFound:
       return 404;
     case ExceptionCode.Conflict:
+    case ExceptionCode.InviteAlreadyAccepted:
+    case ExceptionCode.InviteAlreadyDeclined:
+    case ExceptionCode.InviteRevoked:
     case ExceptionCode.SpaceAtCapacity:
       return 409;
     case ExceptionCode.RateLimited:

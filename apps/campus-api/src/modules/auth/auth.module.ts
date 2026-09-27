@@ -7,16 +7,12 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { GoogleOAuthService } from './google-oauth.service.js';
 import { OAuthStateService } from './oauth-state.service.js';
-import { SessionIssuer } from './session-issuer.js';
+import { SessionModule } from './session.module.js';
 
 @Module({
-  imports: [UsersModule, InvitesModule, CohortsModule],
+  // SessionModule for SessionIssuer, which owns the guards and the minter.
+  imports: [UsersModule, InvitesModule, CohortsModule, SessionModule],
   controllers: [AuthController],
-  providers: [
-    AuthService,
-    GoogleOAuthService,
-    OAuthStateService,
-    SessionIssuer,
-  ],
+  providers: [AuthService, GoogleOAuthService, OAuthStateService],
 })
 export class AuthModule {}

@@ -248,7 +248,9 @@ describe('GET /v1/invites/validate-user-invite (e2e)', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(response.body.error.code).toBe('CONFLICT');
+    // Same code the decision route reports for the same state, so a caller
+    // that validates before deciding only has to learn one vocabulary.
+    expect(response.body.error.code).toBe('INVITE_ALREADY_DECLINED');
   });
 
   it('404s a session whose invite does not exist', async () => {

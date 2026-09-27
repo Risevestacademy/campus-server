@@ -5,6 +5,28 @@ export class InviteConflictException extends DomainException {
   readonly code = ExceptionCode.Conflict;
 }
 
+/**
+ * The invite already carries an answer. One class per standing answer, all
+ * 409, so a caller can branch on `error.code` instead of parsing the message:
+ * 'accepted' is the one that sends someone back through sign-in, the other
+ * two close the flow.
+ *
+ * Shared by the decision and validation routes on purpose — the same fact
+ * about the same invite must not report a different code depending on which
+ * endpoint noticed it.
+ */
+export class InviteAlreadyAcceptedException extends DomainException {
+  readonly code = ExceptionCode.InviteAlreadyAccepted;
+}
+
+export class InviteAlreadyDeclinedException extends DomainException {
+  readonly code = ExceptionCode.InviteAlreadyDeclined;
+}
+
+export class InviteRevokedException extends DomainException {
+  readonly code = ExceptionCode.InviteRevoked;
+}
+
 export class InviteInvalidArgumentException extends DomainException {
   readonly code = ExceptionCode.InvalidArgument;
 }

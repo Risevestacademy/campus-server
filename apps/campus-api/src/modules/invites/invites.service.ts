@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt, lte } from 'drizzle-orm';
+import { and, eq, gt, lte, ne } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -8,10 +8,22 @@ import {
   type Db,
 } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
-import { CohortRole, cohorts, cohortTracks } from '../cohorts/schema.js';
+import {
+  CohortRole,
+  cohortMembers,
+  cohorts,
+  cohortTracks,
+  StudentStatus,
+  type CohortMember,
+} from '../cohorts/schema.js';
 import { tracks } from '../tracks/schema.js';
-import { SystemRole, users } from '../users/schema.js';
+import { SystemRole, users, type User } from '../users/schema.js';
 import type { CreateInviteDto } from './dto/create-invite.dto.js';
+import {
+  InviteDecision,
+  type InviteDecisionResponseDto,
+  type MembershipGrantedDto,
+} from './dto/invite-decision.dto.js';
 import type {
   InvitedByDto,
   InviteCohortDto,
@@ -27,13 +39,56 @@ import {
   hashInviteToken,
 } from './invite-token.js';
 import {
+  InviteAlreadyAcceptedException,
+  InviteAlreadyDeclinedException,
   InviteConflictException,
   InviteForbiddenException,
+  InviteRevokedException,
   InviteInternalException,
   InviteInvalidArgumentException,
   InviteNotFoundException,
 } from './invites.exceptions.js';
-import { InviteStatus, invites } from './schema.js';
+import { InviteStatus, invites, type Invite } from './schema.js';
+
+/** The transaction handle drizzle hands a `db.transaction` callback. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/**
+ * Accept carries the account so the route can mint an upgraded session from
+ * the row that was just written; decline carries nothing, because there is no
+ * session left to upgrade.
+ */
+export type DecisionOutcome =
+  | { kind: 'accepted'; response: InviteDecisionResponseDto; account: User }
+  | { kind: 'declined'; response: InviteDecisionResponseDto };
+
+/**
+ * The exception for an invite that already carries an answer, chosen by which
+ * answer it is.
+ *
+ * Deliberately shared by the decision route and the validation route: the same
+ * fact about the same invite has to report the same code whichever endpoint
+ * noticed it, or a caller that validated before deciding would see two
+ * different codes for one state.
+ */
+function terminalInviteException(
+  invite: { status: InviteStatus },
+  inviteId: string,
+) {
+  const message = `This invite is already ${invite.status}`;
+  const details = { inviteId, status: invite.status };
+
+  switch (invite.status) {
+    case InviteStatus.Accepted:
+      return new InviteAlreadyAcceptedException(message, details);
+    case InviteStatus.Declined:
+      return new InviteAlreadyDeclinedException(message, details);
+    case InviteStatus.Revoked:
+      return new InviteRevokedException(message, details);
+    default:
+      return new InviteConflictException(message, details);
+  }
+}
 
 /**
  * A row is live while it is still pending AND not yet lapsed.
@@ -288,10 +343,7 @@ export class InvitesService {
           expiresAt: row.invite.expiresAt,
         });
       }
-      throw new InviteConflictException(
-        `This invite is already ${row.invite.status}`,
-        { inviteId, status: row.invite.status },
-      );
+      throw terminalInviteException(row.invite, inviteId);
     }
 
     const cohortRow = row.cohort;
@@ -371,6 +423,278 @@ export class InvitesService {
       createdAt: row.invite.createdAt,
       user: account,
     };
+  }
+
+  /**
+   * Records the invitee's answer and, on accept, everything that follows from
+   * it.
+   *
+   * The whole of an accept is one transaction: claim the invite, enrol the
+   * user, apply the role. A partial accept would either burn the invite
+   * without a membership or grant a membership the invite no longer supports.
+   *
+   * The claim is a conditional UPDATE rather than a read-then-write. Two
+   * requests racing the same invite both pass a status check, but only one can
+   * match `status = 'pending' AND expires_at > now`, so the loser is diagnosed
+   * from the row it re-reads rather than overwriting the winner.
+   *
+   * An invite that already carries an answer is a 409 rather than a silent
+   * repeat, and error.code is what the caller branches on:
+   * INVITE_ALREADY_ACCEPTED means sign in again to pick up the membership this
+   * call would have created, while INVITE_ALREADY_DECLINED and INVITE_REVOKED
+   * both mean the offer is closed. Re-running the same decision is therefore
+   * never the recovery — and must not be, or a lost response would be
+   * indistinguishable from a fresh decision.
+   *
+   * Returns the account on accept so the caller can mint the upgraded session;
+   * a decline has nothing to hand back, because there is no longer a session
+   * worth keeping.
+   */
+  async decide(
+    inviteId: string,
+    decision: InviteDecision,
+    user: AuthenticatedUser,
+    now: Date = new Date(),
+  ): Promise<DecisionOutcome> {
+    return decision === InviteDecision.Accept
+      ? this.accept(inviteId, user, now)
+      : this.decline(inviteId, user, now);
+  }
+
+  private async accept(
+    inviteId: string,
+    user: AuthenticatedUser,
+    now: Date,
+  ): Promise<DecisionOutcome> {
+    return this.db.transaction(async (tx) => {
+      const claimed = await this.claimInvite(
+        tx,
+        inviteId,
+        InviteStatus.Accepted,
+        { acceptedAt: now },
+        now,
+      );
+
+      if (claimed.fresh) {
+        checkEmailMatch(claimed.invite, user);
+        const membership = await this.enrol(tx, claimed.invite, user.id, now);
+        const account = await this.applySystemRole(tx, claimed.invite, user.id);
+        return {
+          kind: 'accepted',
+          response: {
+            inviteId: claimed.invite.id,
+            status: InviteStatus.Accepted,
+            decidedAt: claimed.invite.acceptedAt ?? now,
+            membership,
+            systemRole: account.systemRole,
+          },
+          account,
+        };
+      }
+
+      return this.throwUnclaimable(claimed.invite, inviteId);
+    });
+  }
+
+  private async decline(
+    inviteId: string,
+    user: AuthenticatedUser,
+    now: Date,
+  ): Promise<DecisionOutcome> {
+    return this.db.transaction(async (tx) => {
+      const claimed = await this.claimInvite(
+        tx,
+        inviteId,
+        InviteStatus.Declined,
+        {},
+        now,
+      );
+
+      if (claimed.fresh) {
+        checkEmailMatch(claimed.invite, user);
+        return {
+          kind: 'declined',
+          response: {
+            inviteId: claimed.invite.id,
+            status: InviteStatus.Declined,
+            decidedAt: claimed.invite.updatedAt,
+            membership: null,
+            systemRole: null,
+          },
+        };
+      }
+
+      return this.throwUnclaimable(claimed.invite, inviteId);
+    });
+  }
+
+  /**
+   * Moves a live pending invite to a terminal state, or reports the row that
+   * stopped it. `fresh` distinguishes the request that did the moving from the
+   * one that found it already moved.
+   */
+  private async claimInvite(
+    tx: Tx,
+    inviteId: string,
+    status: InviteStatus.Accepted | InviteStatus.Declined,
+    extra: { acceptedAt?: Date },
+    now: Date,
+  ): Promise<{ fresh: boolean; invite: Invite }> {
+    const [claimed] = await tx
+      .update(invites)
+      .set({ status, ...extra })
+      .where(
+        and(
+          eq(invites.id, inviteId),
+          eq(invites.status, InviteStatus.Pending),
+          // Same comparison isInviteLive makes, so a lapsed invite is refused
+          // here exactly as it is on the read path.
+          gt(invites.expiresAt, now),
+        ),
+      )
+      .returning();
+
+    if (claimed) {
+      return { fresh: true, invite: claimed };
+    }
+
+    const [existing] = await tx
+      .select()
+      .from(invites)
+      .where(eq(invites.id, inviteId))
+      .limit(1);
+
+    if (!existing) {
+      throw new InviteNotFoundException('No invite matches this session', {
+        inviteId,
+      });
+    }
+    return { fresh: false, invite: existing };
+  }
+
+  /**
+   * Explains a failed claim, and flips the lazy expiry on the way out when the
+   * invite turned out to be lapsed rather than answered.
+   */
+  private async throwUnclaimable(
+    invite: Invite,
+    inviteId: string,
+  ): Promise<never> {
+    // Pending-but-lapsed and already-expired are the same outcome, so they get
+    // the same code. Reporting 403 for one and 409 for the other would make
+    // the response depend on whether something had read the invite first, which
+    // the caller cannot see and cannot predict.
+    if (
+      invite.status === InviteStatus.Pending ||
+      invite.status === InviteStatus.Expired
+    ) {
+      throw new InviteForbiddenException('This invite has expired', {
+        inviteId,
+        expiresAt: invite.expiresAt,
+      });
+    }
+
+    throw terminalInviteException(invite, inviteId);
+  }
+
+  /**
+   * Creates the membership an accepted cohort invite carries, or restores one
+   * for a member who left and is being re-invited.
+   *
+   * A student's status is written as active rather than left null. The column
+   * permits null, but CohortMembersService.hasActiveMembership only counts a
+   * student whose status is active — so a null would make the accept look like
+   * it worked and then fail to recognise the member on their next sign-in,
+   * sending them back to the invite wall.
+   */
+  private async enrol(
+    tx: Tx,
+    invite: Invite,
+    userId: string,
+    now: Date,
+  ): Promise<MembershipGrantedDto | null> {
+    if (invite.cohortId === null) {
+      // A guest invite: full access with nowhere to enrol. Not an error.
+      return null;
+    }
+    if (invite.cohortRole === null) {
+      // invites_cohort_pairing makes this unreachable; a row that breaks it
+      // would fail its own insert anyway.
+      throw new InviteInternalException(
+        'Cohort-scoped invite has no cohort role',
+        { inviteId: invite.id },
+      );
+    }
+
+    const status =
+      invite.cohortRole === CohortRole.Student ? StudentStatus.Active : null;
+
+    const [row] = await tx
+      .insert(cohortMembers)
+      .values({
+        cohortId: invite.cohortId,
+        userId,
+        cohortTrackId: invite.cohortTrackId,
+        role: invite.cohortRole,
+        status,
+        joinedAt: now,
+      })
+      .onConflictDoUpdate({
+        // cohort_members_unique: one row per person per cohort, ever, so
+        // rejoining revives the existing row instead of adding a second.
+        target: [cohortMembers.cohortId, cohortMembers.userId],
+        set: {
+          role: invite.cohortRole,
+          cohortTrackId: invite.cohortTrackId,
+          status,
+          leftAt: null,
+          joinedAt: now,
+          updatedAt: now,
+        },
+      })
+      .returning();
+
+    if (!row) {
+      throw new InviteInternalException('Membership could not be created', {
+        inviteId: invite.id,
+        userId,
+      });
+    }
+    return toMembershipDto(row);
+  }
+
+  /**
+   * The invite is the only channel that can grant a role above the default a
+   * provisional sign-in creates the account with, because the account already
+   * exists by the time anyone accepts. Applying it here is what makes
+   * `systemRole` on an invite mean anything.
+   */
+  private async applySystemRole(
+    tx: Tx,
+    invite: Invite,
+    userId: string,
+  ): Promise<User> {
+    const [raised] = await tx
+      .update(users)
+      .set({ systemRole: invite.systemRole })
+      .where(
+        and(eq(users.id, userId), ne(users.systemRole, invite.systemRole)),
+      )
+      .returning();
+
+    if (raised) {
+      return raised;
+    }
+    // Already carried — skip the write rather than bump updatedAt for nothing.
+    return this.findAccount(tx, userId);
+  }
+
+  private async findAccount(tx: Tx, userId: string): Promise<User> {
+    const [row] = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!row) {
+      throw new InviteInternalException('Signed-in account vanished', { userId });
+    }
+    return row;
   }
 
   private get inviteTtlDays(): number {
@@ -501,6 +825,16 @@ export class InvitesService {
 }
 
 type InviteWriteErrorKind = 'pending-duplicate' | 'token-collision' | null;
+
+function toMembershipDto(row: CohortMember): MembershipGrantedDto {
+  return {
+    cohortId: row.cohortId,
+    role: row.role,
+    cohortTrackId: row.cohortTrackId,
+    status: row.status,
+    joinedAt: row.joinedAt,
+  };
+}
 
 /**
  * Classifies a failed INVITES insert by Postgres SQLSTATE plus constraint
