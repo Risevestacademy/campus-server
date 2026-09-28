@@ -22,7 +22,10 @@ import {
   SESSION_COOKIE,
   sessionCookieOptions,
 } from '../auth/session-cookie.js';
+import { SessionUnauthorizedError } from '../auth/auth.exceptions.js';
 import { SessionIssuer } from '../auth/session-issuer.js';
+import { CohortMembersService } from '../cohorts/cohort-members.service.js';
+import { isAdmin } from '../users/users.service.js';
 import {
   ProvisionalSessionGuard,
   SessionGuard,
@@ -47,6 +50,7 @@ export class InvitesController {
   constructor(
     private readonly invites: InvitesService,
     private readonly sessions: SessionIssuer,
+    private readonly members: CohortMembersService,
     @Inject(CONFIG) private readonly config: Env,
   ) {}
 
@@ -114,7 +118,22 @@ export class InvitesController {
     };
 
     if (outcome.kind === 'accepted') {
-      const upgraded = await this.sessions.issueFullAccess(outcome.account);
+      // Resolved after the transaction rather than taken from the invite:
+      // the account may already hold other memberships, and the soonest of
+      // them is what bounds the session. An admin is admitted on their role,
+      // which nothing expires.
+      const grant = isAdmin(outcome.account)
+        ? { endsAt: null }
+        : await this.members.resolveActiveAccess(outcome.account.id);
+      if (!grant) {
+        // The accept wrote a membership, so this cannot be reached by any
+        // ordinary route — it would mean the row went away underneath us.
+        throw new SessionUnauthorizedError('Access has already ended');
+      }
+      const upgraded = await this.sessions.issueFullAccess(
+        outcome.account,
+        grant,
+      );
       res.cookie(
         SESSION_COOKIE,
         upgraded.token,

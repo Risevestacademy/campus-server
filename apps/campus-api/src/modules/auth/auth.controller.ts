@@ -1,9 +1,5 @@
 import { Controller, Get, Inject, Query, Req, Res } from '@nestjs/common';
-import {
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -101,7 +97,7 @@ export class AuthController {
     const outcome = await this.auth.completeGoogleSignIn(query.code);
     const session =
       outcome.kind === 'full_access'
-        ? await this.sessions.issueFullAccess(outcome.user)
+        ? await this.sessions.issueFullAccess(outcome.user, outcome.grant)
         : await this.sessions.issueProvisional(outcome.user, outcome.invite);
 
     // This is a top-level browser navigation, so the answer is a redirect and

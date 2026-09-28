@@ -1,6 +1,8 @@
 import { SessionScope, verifySessionToken } from '@campus/session';
 
+import type { AccessGrant } from '../cohorts/cohort-members.service.js';
 import type { User } from '../users/schema.js';
+import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { SessionIssuer } from './session-issuer.js';
 
 const SECRET = 'a'.repeat(48);
@@ -17,26 +19,22 @@ const config = {
 } as never;
 
 const user = { id: 'user-1', email: 'guest@campus.local' } as User;
-
-/** Stands in for CohortMembersService: only the one lookup is used. */
-const membersEnding = (endsAt: Date | null) =>
-  ({ soonestAccessExpiry: async () => endsAt }) as never;
+const unbounded: AccessGrant = { endsAt: null };
 
 const minutesBetween = (a: Date, b: Date) =>
   (b.getTime() - a.getTime()) / 60_000;
 
 describe('SessionIssuer', () => {
-  // Relative to the real clock, not a fixed date: one of these verifies the
-  // token it just minted, and jose checks exp against wall time — a
-  // hard-coded hour turns green or red depending on when the suite runs.
   // Whole seconds: signSessionToken floors exp to the second, so a `now`
-  // carrying milliseconds makes every lifetime a fraction short.
+  // carrying milliseconds makes every lifetime a fraction short. Relative to
+  // the real clock, because one of these verifies the token it just minted
+  // and jose checks exp against wall time.
   const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+  const issuer = new SessionIssuer(config);
+  const at = (ms: number) => new Date(now.getTime() + ms);
 
-  it('mints the configured lifetime when nothing ends sooner', async () => {
-    const issuer = new SessionIssuer(config, membersEnding(null));
-
-    const session = await issuer.issueFullAccess(user, now);
+  it('mints the configured lifetime when the grant has no deadline', async () => {
+    const session = await issuer.issueFullAccess(user, unbounded, now);
 
     expect(minutesBetween(now, session.expiresAt)).toBe(720);
   });
@@ -44,45 +42,61 @@ describe('SessionIssuer', () => {
   /**
    * The hole this closes: SessionGuard re-reads the user row on every
    * request but not their memberships, so a visit that ended at 10:00 would
-   * otherwise keep working until the token lapsed — up to
-   * AUTH_SESSION_TTL_MINUTES later. Capping at mint time also covers world,
-   * which only verifies the token and knows nothing about cohorts.
+   * otherwise keep working until the token lapsed. Capping at mint time also
+   * covers world, which only verifies the token.
    */
-  it('never outlives a guest visit that ends sooner', async () => {
-    const endsAt = new Date(now.getTime() + 60 * 60_000);
-    const issuer = new SessionIssuer(config, membersEnding(endsAt));
+  it('never outlives a grant that ends sooner', async () => {
+    const endsAt = at(60 * 60_000);
 
-    const session = await issuer.issueFullAccess(user, now);
+    const session = await issuer.issueFullAccess(user, { endsAt }, now);
 
     expect(session.expiresAt).toEqual(endsAt);
     const claims = await verifySessionToken(session.token, SECRET);
     expect(claims.expiresAt).toEqual(endsAt);
   });
 
-  it('ignores an end date beyond the configured lifetime', async () => {
-    const issuer = new SessionIssuer(
-      config,
-      membersEnding(new Date(now.getTime() + 30 * 24 * 60 * 60_000)),
+  it('ignores a deadline beyond the configured lifetime', async () => {
+    const session = await issuer.issueFullAccess(
+      user,
+      { endsAt: at(30 * 24 * 60 * 60_000) },
+      now,
     );
-
-    const session = await issuer.issueFullAccess(user, now);
 
     expect(minutesBetween(now, session.expiresAt)).toBe(720);
   });
 
-  // A zero-length token would bounce the browser straight back to sign-in,
-  // where the membership check belongs and will refuse them properly.
-  it('floors the lifetime at a minute for a visit ending now', async () => {
-    const issuer = new SessionIssuer(config, membersEnding(now));
+  /**
+   * Rounding a sub-minute remainder up to a minute hands back access past
+   * the deadline, which is the one thing this cap exists to prevent. Thirty
+   * seconds left means a thirty-second token.
+   */
+  it('gives a sub-minute remainder exactly, not a rounded-up minute', async () => {
+    const endsAt = at(30_000);
 
-    const session = await issuer.issueFullAccess(user, now);
+    const session = await issuer.issueFullAccess(user, { endsAt }, now);
 
-    expect(minutesBetween(now, session.expiresAt)).toBe(1);
+    expect(session.expiresAt).toEqual(endsAt);
+    expect(minutesBetween(now, session.expiresAt)).toBe(0.5);
+  });
+
+  /**
+   * The expiry-crossing race. The gate resolved the grant a moment ago and
+   * it was live; by the time we mint, it is not. Refusing is the only honest
+   * answer — the same request arriving now would be turned away at the gate.
+   */
+  it('refuses a grant that ended between the decision and the mint', async () => {
+    await expect(
+      issuer.issueFullAccess(user, { endsAt: at(-1) }, now),
+    ).rejects.toBeInstanceOf(SessionUnauthorizedError);
+  });
+
+  it('refuses a grant ending on the very instant it is minted', async () => {
+    await expect(
+      issuer.issueFullAccess(user, { endsAt: now }, now),
+    ).rejects.toBeInstanceOf(SessionUnauthorizedError);
   });
 
   it('leaves a provisional session at its own shorter lifetime', async () => {
-    const issuer = new SessionIssuer(config, membersEnding(null));
-
     const session = await issuer.issueProvisional(user, {
       id: 'invite-1',
     } as never);

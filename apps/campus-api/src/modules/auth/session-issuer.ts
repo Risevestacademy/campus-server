@@ -1,7 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
-import { CohortMembersService } from '../cohorts/cohort-members.service.js';
+import type { AccessGrant } from '../cohorts/cohort-members.service.js';
+import { SessionUnauthorizedError } from './auth.exceptions.js';
 import type { Invite } from '../invites/schema.js';
 import type { User } from '../users/schema.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
@@ -12,10 +13,13 @@ import {
 } from '@campus/session';
 
 /**
- * The configured lifetime, shortened when something the session depends on
- * ends sooner. Never below a minute: a token that expires as it is issued
- * would send the browser straight back to sign-in, and the sign-in gate is
- * what should be refusing them at that point.
+ * The configured lifetime, shortened when the grant behind it ends sooner.
+ *
+ * No floor. Rounding a remainder up to a minute hands back access past the
+ * deadline, which is the whole thing this is here to prevent; a token with
+ * seconds left simply sends the browser to sign-in, where the gate refuses
+ * them properly. A grant already over is rejected by the caller, so the
+ * remainder here is always positive.
  */
 function cappedTtlMinutes(
   ttlMinutes: number,
@@ -25,8 +29,7 @@ function cappedTtlMinutes(
   if (endsAt === null) {
     return ttlMinutes;
   }
-  const untilEnd = (endsAt.getTime() - now.getTime()) / 60_000;
-  return Math.max(1, Math.min(ttlMinutes, untilEnd));
+  return Math.min(ttlMinutes, (endsAt.getTime() - now.getTime()) / 60_000);
 }
 
 export interface IssuedSession {
@@ -44,26 +47,35 @@ export interface IssuedSession {
  */
 @Injectable()
 export class SessionIssuer {
-  constructor(
-    @Inject(CONFIG) private readonly config: Env,
-    private readonly members: CohortMembersService,
-  ) {}
+  constructor(@Inject(CONFIG) private readonly config: Env) {}
 
   /**
    * Someone already on the roster: nothing left to finish.
    *
-   * The token never outlives the access it stands for. A guest's membership
-   * ends on a date, and SessionGuard re-reads the user row per request but
-   * not their memberships — so without this cap a visit that ended at 09:00
-   * would keep working until the token happened to lapse, up to
-   * AUTH_SESSION_TTL_MINUTES later. Capping at mint time also covers
+   * Takes the grant that authorised them rather than looking one up, so the
+   * deadline is the one the decision was made against. Reading it again here
+   * would be a second clock: a guest crossing their deadline between the two
+   * reads looks authorised to the first and unexpiring to the second, and
+   * walks away with a full-length token for a visit that has ended.
+   *
+   * The token never outlives that grant. SessionGuard re-reads the user row
+   * per request but not their memberships, so without this cap a visit that
+   * ended at 09:00 would keep working until the token happened to lapse, up
+   * to AUTH_SESSION_TTL_MINUTES later. Capping at mint time also covers
    * `world`, which only verifies the token and knows nothing of cohorts.
+   *
+   * A grant that has already ended is refused outright. By the time we are
+   * minting, its holder is somebody the sign-in gate would now turn away.
    */
   async issueFullAccess(
     user: User,
+    grant: AccessGrant,
     now: Date = new Date(),
   ): Promise<IssuedSession> {
-    const endsAt = await this.members.soonestAccessExpiry(user.id, now);
+    const endsAt = grant.endsAt;
+    if (endsAt !== null && endsAt.getTime() <= now.getTime()) {
+      throw new SessionUnauthorizedError('Access has already ended');
+    }
     const { token, expiresAt } = await signSessionToken(
       { userId: user.id, email: user.email, scope: SessionScope.FullAccess },
       {

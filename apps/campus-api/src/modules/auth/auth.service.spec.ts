@@ -27,7 +27,7 @@ const users = {
   recordLogin: vi.fn(),
 };
 const invites = { findUsableForEmail: vi.fn() };
-const members = { hasActiveMembership: vi.fn() };
+const members = { resolveActiveAccess: vi.fn() };
 const logger = { info: vi.fn(), warn: vi.fn(), setContext: vi.fn() };
 
 const service = new AuthService(
@@ -104,7 +104,7 @@ beforeEach(() => {
   );
   users.recordLogin.mockResolvedValue(undefined);
   invites.findUsableForEmail.mockResolvedValue(null);
-  members.hasActiveMembership.mockResolvedValue(false);
+  members.resolveActiveAccess.mockResolvedValue(null);
 });
 
 describe('completeGoogleSignIn', () => {
@@ -139,14 +139,14 @@ describe('completeGoogleSignIn', () => {
     const outcome = await service.completeGoogleSignIn('code');
 
     expect(outcome.kind).toBe('full_access');
-    expect(members.hasActiveMembership).not.toHaveBeenCalled();
+    expect(members.resolveActiveAccess).not.toHaveBeenCalled();
     expect(invites.findUsableForEmail).not.toHaveBeenCalled();
     expect(users.recordLogin).toHaveBeenCalledWith('user-1');
   });
 
   it('lets a current member straight in', async () => {
     users.findForGoogleIdentity.mockResolvedValue(user());
-    members.hasActiveMembership.mockResolvedValue(true);
+    members.resolveActiveAccess.mockResolvedValue({ endsAt: null });
 
     const outcome = await service.completeGoogleSignIn('code');
 
@@ -192,7 +192,7 @@ describe('completeGoogleSignIn', () => {
     users.findForGoogleIdentity.mockResolvedValue(
       user({ providerId: null, systemRole: SystemRole.User }),
     );
-    members.hasActiveMembership.mockResolvedValue(false);
+    members.resolveActiveAccess.mockResolvedValue(null);
 
     await expect(service.completeGoogleSignIn('code')).rejects.toThrow(
       InviteRequiredError,
@@ -222,7 +222,7 @@ describe('completeGoogleSignIn', () => {
    */
   it('rejects a former member whose row outlived their place here', async () => {
     users.findForGoogleIdentity.mockResolvedValue(user());
-    members.hasActiveMembership.mockResolvedValue(false);
+    members.resolveActiveAccess.mockResolvedValue(null);
 
     await expect(service.completeGoogleSignIn('code')).rejects.toThrow(
       InviteRequiredError,

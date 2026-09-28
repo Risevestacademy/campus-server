@@ -5,6 +5,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { isNotLiveMembership } from '../cohorts/cohort-members.service.js';
 import {
   CohortRole,
   cohortMembers,
@@ -700,20 +701,19 @@ export class InvitesService {
           joinedAt: now,
           updatedAt: now,
         },
-        // Only a membership that is no longer live may be revived, which is
-        // either one somebody left or a guest visit that has run out. A live
-        // one is a standing decision — its role, track and joinedAt belong to
-        // whoever made it, and an invite sent before it must not rewrite them.
+        // Only a membership that is no longer live may be revived. A live one
+        // is a standing decision — its role, track and joinedAt belong to
+        // whoever made it, and an invite sent before it must not rewrite
+        // them.
         //
-        // The guest half matters because a lapsed visit leaves left_at NULL:
-        // without it, the row that ended on its own would block every future
-        // invite to that cohort and the guest could never be asked back.
-        // access_expires_at is NULL for every other role, so the comparison
-        // is null there and only left_at applies.
-        setWhere: or(
-          isNotNull(cohortMembers.leftAt),
-          lte(cohortMembers.accessExpiresAt, now),
-        ),
+        // This is the exact negation of what the sign-in gate calls live, and
+        // shares its definition deliberately. Spelling the rule out twice is
+        // what produced the lockouts: a row that does not let somebody in,
+        // but does block the invite meant to bring them back, leaves them
+        // with no way through at all. That covers a guest whose visit ended
+        // with left_at still NULL, and a student left dismissed, deferred or
+        // unclassified without anybody setting left_at.
+        setWhere: isNotLiveMembership(now),
       })
       .returning();
 

@@ -1300,6 +1300,125 @@ describe('decide()', () => {
   });
 
   /**
+   * The revival rule and the sign-in rule are one predicate, and these pin
+   * that down for the statuses where they used to disagree. A student who
+   * cannot sign in but also cannot be re-invited has no way through at all
+   * — the same dead end the guest model was built to remove, reached by a
+   * different route.
+   *
+   * left_at is deliberately NULL in each: the TRD says a departure sets it,
+   * but nothing enforces that, and these are exactly the rows where nobody
+   * did.
+   */
+  describe.each([
+    [StudentStatus.Dismissed, 'dismissed'],
+    [StudentStatus.Withdrawn, 'withdrawn'],
+    [StudentStatus.Deferred, 'deferred'],
+    [StudentStatus.Graduated, 'graduated'],
+    [null, 'never classified'],
+  ])('a student left %s with no left_at', (status, label) => {
+    it(`cannot sign in, and can still be re-invited (${label})`, async () => {
+      await db.insert(cohortMembers).values({
+        cohortId: fixtures.cohortId,
+        userId: invitee.id,
+        cohortTrackId: fixtures.cohortTrackId,
+        role: CohortRole.Student,
+        status,
+        leftAt: null,
+      });
+      expect(await members.hasActiveMembership(invitee.id)).toBe(false);
+
+      const invite = await makeInvite({
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Professor,
+      });
+      const outcome = await service.decide(
+        invite.id,
+        InviteDecision.Accept,
+        invitee,
+      );
+
+      expect(outcome.response.status).toBe(InviteStatus.Accepted);
+      const [row] = await membershipOf(invitee.id);
+      expect(row.role).toBe(CohortRole.Professor);
+      expect(await members.hasActiveMembership(invitee.id)).toBe(true);
+    });
+  });
+
+  /**
+   * Access lasts while any live membership does, so a guest visit ending
+   * must not shorten a session the holder's other, unexpiring membership
+   * already justifies.
+   */
+  it('reports no deadline when one live membership never expires', async () => {
+    await db.insert(cohortMembers).values({
+      cohortId: fixtures.cohortId,
+      userId: invitee.id,
+      role: CohortRole.Professor,
+    });
+    const [other] = await db
+      .insert(cohorts)
+      .values({ name: 'C2', code: 'C2', status: CohortStatus.Active })
+      .returning();
+    await db.insert(cohortMembers).values({
+      cohortId: other.id,
+      userId: invitee.id,
+      role: CohortRole.Guest,
+      accessExpiresAt: new Date(Date.now() + 3_600_000),
+    });
+
+    expect(await members.resolveActiveAccess(invitee.id)).toEqual({
+      endsAt: null,
+    });
+  });
+
+  // Two visits and nothing else: the session lasts until the later one ends.
+  it('reports the last deadline when every membership has one', async () => {
+    const soon = new Date(Date.now() + 3_600_000);
+    const later = new Date(Date.now() + 7_200_000);
+    await db.insert(cohortMembers).values({
+      cohortId: fixtures.cohortId,
+      userId: invitee.id,
+      role: CohortRole.Guest,
+      accessExpiresAt: soon,
+    });
+    const [other] = await db
+      .insert(cohorts)
+      .values({ name: 'C3', code: 'C3', status: CohortStatus.Active })
+      .returning();
+    await db.insert(cohortMembers).values({
+      cohortId: other.id,
+      userId: invitee.id,
+      role: CohortRole.Guest,
+      accessExpiresAt: later,
+    });
+
+    const grant = await members.resolveActiveAccess(invitee.id);
+    expect(grant?.endsAt?.toISOString()).toBe(later.toISOString());
+  });
+
+  // The other half: an active student is a standing decision, and an invite
+  // sent before it must not quietly rewrite their role.
+  it('still refuses to overwrite an active student', async () => {
+    await db.insert(cohortMembers).values({
+      cohortId: fixtures.cohortId,
+      userId: invitee.id,
+      cohortTrackId: fixtures.cohortTrackId,
+      role: CohortRole.Student,
+      status: StudentStatus.Active,
+      leftAt: null,
+    });
+    const invite = await makeInvite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Professor,
+    });
+
+    await expect(
+      service.decide(invite.id, InviteDecision.Accept, invitee),
+    ).rejects.toBeInstanceOf(InviteConflictException);
+  });
+
+  /**
    * Reviving a membership must not carry the last one's ending with it. The
    * schema refuses the state outright; this covers the write that would
    * otherwise produce it.
