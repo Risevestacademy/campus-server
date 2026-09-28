@@ -124,11 +124,41 @@ describe('hasActiveMembership', () => {
       .returning({ id: cohorts.id });
 
     await pglite.insert(cohortMembers).values([
-      { ...student(StudentStatus.Graduated), cohortId: otherCohort, cohortTrackId: null, role: CohortRole.Mentor, status: null, leftAt: new Date() },
+      {
+        ...student(StudentStatus.Graduated),
+        cohortId: otherCohort,
+        cohortTrackId: null,
+        role: CohortRole.Mentor,
+        status: null,
+        leftAt: new Date(),
+      },
       student(StudentStatus.Active),
     ]);
 
     expect(await repository.hasActiveMembership(userId)).toBe(true);
+  });
+
+  it('counts a guest while their visit is still running', async () => {
+    await pglite.insert(cohortMembers).values({
+      cohortId,
+      userId,
+      role: CohortRole.Guest,
+      accessExpiresAt: new Date(Date.now() + 86_400_000),
+    });
+
+    expect(await repository.hasActiveMembership(userId)).toBe(true);
+  });
+
+  /** A visit that has ended is not a way back in. */
+  it('stops counting a guest once their visit has ended', async () => {
+    await pglite.insert(cohortMembers).values({
+      cohortId,
+      userId,
+      role: CohortRole.Guest,
+      accessExpiresAt: new Date(Date.now() - 1_000),
+    });
+
+    expect(await repository.hasActiveMembership(userId)).toBe(false);
   });
 
   it('does not count somebody else’s membership', async () => {

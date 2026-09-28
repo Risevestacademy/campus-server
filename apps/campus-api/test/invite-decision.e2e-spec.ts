@@ -19,7 +19,7 @@ import {
   SessionScope,
   signSessionToken,
   verifySessionToken,
-} from './../src/modules/auth/session-token.js';
+} from '@campus/session';
 import {
   CohortRole,
   cohortMembers,
@@ -107,6 +107,9 @@ describe('POST /v1/invites/decision (e2e)', () => {
         invitedBy: inviterId,
         tokenHash: 'hash-' + Math.random().toString(36).slice(2),
         expiresAt: new Date(Date.now() + 86_400_000),
+        // An invite naming no cohort can only be an admin one.
+        systemRole:
+          overrides.cohortId == null ? SystemRole.Admin : SystemRole.User,
         ...overrides,
       })
       .returning();
@@ -327,14 +330,18 @@ describe('POST /v1/invites/decision (e2e)', () => {
   });
 
   it('refuses a lapsed invite', async () => {
-    const invite = await makeInvite({ expiresAt: new Date(Date.now() - 1_000) });
+    const invite = await makeInvite({
+      expiresAt: new Date(Date.now() - 1_000),
+    });
     const res = await decide(provisional(invite.id), InviteDecision.Accept);
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('FORBIDDEN');
   });
 
   it('answers 403 for a lapsed invite even once the status is materialised', async () => {
-    const invite = await makeInvite({ expiresAt: new Date(Date.now() - 1_000) });
+    const invite = await makeInvite({
+      expiresAt: new Date(Date.now() - 1_000),
+    });
 
     // Reading the invite first flips the lazy expiry, so the row now *says*
     // expired rather than being pending past its date. The answer must not
@@ -382,10 +389,7 @@ describe('POST /v1/invites/decision (e2e)', () => {
     expect(res.status).toBe(200);
     expect(res.body.systemRole).toBe(SystemRole.Admin);
 
-    const [row] = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, inviteeId));
+    const [row] = await db.select().from(users).where(eq(users.id, inviteeId));
     expect(row.systemRole).toBe(SystemRole.Admin);
   });
 });

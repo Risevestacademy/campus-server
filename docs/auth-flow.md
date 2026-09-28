@@ -83,10 +83,15 @@ flowchart TD
 one carrying an explicit `active` status. An unfinished enrolment is not a
 way in.
 
+A guest is an active member like any other, with one difference: their
+membership carries `access_expires_at`, and once that passes they stop
+counting here and are turned away at the next sign-in. Guests are invited to
+one cohort and see only that cohort.
+
 ## Signup, end to end
 
-Signup is the provisional branch plus onboarding. The accept step is a
-separate ticket; the shape it plugs into is fixed:
+Signup is the provisional branch plus onboarding, ending at the accept that
+turns a provisional session into a full-access one:
 
 ```mermaid
 sequenceDiagram
@@ -147,10 +152,16 @@ sequenceDiagram
   out.
 - **Scope**: a provisional session cannot reach an ordinary route, so being
   half-onboarded is not a licence to use the campus.
+- **Lifetime**: `AUTH_SESSION_TTL_MINUTES`, or the soonest `access_expires_at`
+  among the holder's memberships if that comes first. A token cannot outlive
+  the access it stands for, which is what keeps a guest's visit from running
+  on until the token happens to lapse. `world` gets this for free: it only
+  verifies the token.
 
 ## Not built yet
 
 - **Refresh tokens.** A session expires and sign-in repeats — cheap, because
   Google keeps the account selected.
-- **Accept and decline.** The provisional session and the invite id it carries
-  are what those routes will read.
+- **Immediate revocation.** The lifetime cap above bounds the *planned* end of
+  someone's access. Ending it early — removing a member, cutting a visit short
+  — still only takes effect at their next sign-in.

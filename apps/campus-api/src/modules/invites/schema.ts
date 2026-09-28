@@ -39,7 +39,7 @@ export const invites = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     email: varchar('email', { length: 320 }).notNull(),
     /**
-     * Null for a guest invite, which carries no cohort and no cohort role.
+     * Null only for an admin invite — see invites_cohortless_is_admin.
      * system_role is independent of this, so an admin invite may still be
      * cohort-scoped — an admin who is also a professor on a cohort.
      */
@@ -57,6 +57,14 @@ export const invites = pgTable(
       .notNull()
       .references(() => users.id),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    /**
+     * When the guest's access ends — not when this invite stops being
+     * redeemable, which is expires_at above. Carried here because the admin
+     * writing the invite is the one who knows the occasion.
+     */
+    guestAccessExpiresAt: timestamp('guest_access_expires_at', {
+      withTimezone: true,
+    }),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -84,12 +92,35 @@ export const invites = pgTable(
       'invites_email_lowercase',
       sql`${table.email} = lower(${table.email})`,
     ),
-    // The two shapes an invite comes in: a guest invite carries neither a
-    // cohort nor a role, a cohort invite carries both. Anything between is a
-    // row nothing downstream can act on.
+    // A cohort and a role travel together: student, professor, mentor and
+    // guest are all roles held in one cohort. Anything between is a row
+    // nothing downstream can act on.
     check(
       'invites_cohort_pairing',
       sql`(${table.cohortId} is null) = (${table.cohortRole} is null)`,
+    ),
+    /**
+     * Everybody who is not an admin is invited to a cohort — guests included,
+     * since a guest is invited to one cohort and sees only that cohort.
+     * Without this an invite could carry no cohort and no admin role, which
+     * accepts into nothing: no membership, no role, and nothing for the
+     * sign-in gate to tell its holder from a stranger by.
+     *
+     * Scoped to pending rows. The rule is about what may still be offered,
+     * and databases predating this constraint hold settled invites of the
+     * old cohort-less shape — refusing to keep a record of something that
+     * did happen would mean deleting history to satisfy a rule about the
+     * future. 0002 revokes the pending ones and leaves the rest readable.
+     */
+    check(
+      'invites_cohortless_is_admin',
+      sql`${table.status} is distinct from ${sql.raw(`'${InviteStatus.Pending}'`)} or ${table.cohortId} is not null or ${table.systemRole} = ${sql.raw(`'${SystemRole.Admin}'`)}`,
+    ),
+    // A guest invite has to say when the visit ends, because the membership
+    // it creates cannot exist without one.
+    check(
+      'invites_guest_has_expiry',
+      sql`(${table.cohortRole}::text is distinct from ${sql.raw(`'${CohortRole.Guest}'`)}) = (${table.guestAccessExpiresAt} is null)`,
     ),
     // A NULL cohort_id makes the composite FK above skip its check entirely
     // (MATCH SIMPLE), so the scoped columns need a cohort of their own accord.

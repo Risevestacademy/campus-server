@@ -12,10 +12,7 @@ import { AppModule } from './../src/app.module.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
-import {
-  SessionScope,
-  signSessionToken,
-} from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/session';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
@@ -43,10 +40,15 @@ describe('session access (e2e)', () => {
   const session = async (
     userId: string,
     email: string,
-    scope = SessionScope.FullAccess,
+    scope: SessionScope = SessionScope.FullAccess,
   ) => {
     const { token } = await signSessionToken(
-      { userId, email, scope, inviteId: scope === SessionScope.Provisional ? 'invite-1' : undefined },
+      {
+        userId,
+        email,
+        scope,
+        inviteId: scope === SessionScope.Provisional ? 'invite-1' : undefined,
+      },
       { secret: SECRET, ttlMinutes: 30 },
     );
     return `${SESSION_COOKIE}=${token}`;
@@ -55,7 +57,9 @@ describe('session access (e2e)', () => {
   const createInvite = (cookie?: string) => {
     const req = request(app.getHttpServer())
       .post('/v1/invites')
-      .send({ email: 'newcomer@campus.local' });
+      // An admin invite: the only shape that names no cohort. This spec is
+      // about who may call the route, not about what the invite says.
+      .send({ email: 'newcomer@campus.local', systemRole: SystemRole.Admin });
     return cookie ? req.set('Cookie', cookie) : req;
   };
 
@@ -151,7 +155,10 @@ describe('session access (e2e)', () => {
         email: admin.email,
         scope: SessionScope.FullAccess,
       },
-      { secret: 'a-different-secret-of-at-least-32-characters', ttlMinutes: 30 },
+      {
+        secret: 'a-different-secret-of-at-least-32-characters',
+        ttlMinutes: 30,
+      },
     );
 
     const response = await createInvite(`${SESSION_COOKIE}=${token}`);

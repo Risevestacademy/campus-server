@@ -1,11 +1,12 @@
 import type { ExecutionContext } from '@nestjs/common';
 
-import type { AuthenticatedRequest } from '../../shared/auth/authenticated-user.js';
+import { SystemRole } from '../../modules/users/schema.js';
 import {
-  InviteForbiddenException,
-  InviteUnauthorizedException,
-} from '../invites.exceptions.js';
+  AccessDeniedException,
+  NotAuthenticatedException,
+} from '../exceptions/index.js';
 import { AdminGuard } from './admin.guard.js';
+import type { AuthenticatedRequest } from './authenticated-user.js';
 
 function contextWithUser(user: AuthenticatedRequest['user']): ExecutionContext {
   const req = { user } as AuthenticatedRequest;
@@ -18,25 +19,25 @@ describe('AdminGuard', () => {
   const guard = new AdminGuard();
 
   it('rejects unauthenticated callers with no req.user (401)', () => {
-    expect(() =>
-      guard.canActivate(contextWithUser(undefined)),
-    ).toThrow(InviteUnauthorizedException);
+    expect(() => guard.canActivate(contextWithUser(undefined))).toThrow(
+      NotAuthenticatedException,
+    );
   });
 
   it('rejects callers where system_role != admin (403)', () => {
     const ctx = contextWithUser({
       id: 'u1',
       email: 'user@campus.local',
-      systemRole: 'user',
+      systemRole: SystemRole.User,
     });
-    expect(() => guard.canActivate(ctx)).toThrow(InviteForbiddenException);
+    expect(() => guard.canActivate(ctx)).toThrow(AccessDeniedException);
   });
 
   it('allows admins carrying req.user from the Google-auth layer', () => {
     const ctx = contextWithUser({
       id: 'a1',
       email: 'admin@campus.local',
-      systemRole: 'admin',
+      systemRole: SystemRole.Admin,
     });
     expect(guard.canActivate(ctx)).toBe(true);
   });

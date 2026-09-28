@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 
-import { CohortMembersService } from '../cohorts/cohort-members.service.js';
+import {
+  CohortMembersService,
+  type AccessGrant,
+} from '../cohorts/cohort-members.service.js';
 import { InvitesService } from '../invites/invites.service.js';
 import type { Invite } from '../invites/schema.js';
 import type { User } from '../users/schema.js';
@@ -24,7 +27,7 @@ import {
  * onboarding to finish before they belong anywhere.
  */
 export type SignInOutcome =
-  | { kind: 'full_access'; user: User }
+  | { kind: 'full_access'; user: User; grant: AccessGrant }
   | { kind: 'provisional'; user: User; invite: Invite };
 
 @Injectable()
@@ -38,7 +41,6 @@ export class AuthService {
   ) {
     this.logger.setContext(AuthService.name);
   }
-
 
   async completeGoogleSignIn(code: string): Promise<SignInOutcome> {
     const identity = await this.google.exchangeCode(code);
@@ -64,14 +66,15 @@ export class AuthService {
       throw new AccountSuspendedError();
     }
 
-    if (existing && (await this.bypassesInvite(existing))) {
+    const grant = existing ? await this.resolveAccess(existing) : null;
+    if (existing && grant) {
       const user = await this.linkIfUnbound(existing, normalized);
       await this.users.recordLogin(user.id);
       this.logger.info(
-        { userId: user.id, outcome: 'full_access' },
+        { userId: user.id, outcome: 'full_access', endsAt: grant.endsAt },
         'google sign-in',
       );
-      return { kind: 'full_access', user };
+      return { kind: 'full_access', user, grant };
     }
 
     const invite = await this.invites.findUsableForEmail(email);
@@ -108,7 +111,19 @@ export class AuthService {
     return (await this.users.linkGoogleIdentity(identity)) ?? user;
   }
 
-  private async bypassesInvite(user: User): Promise<boolean> {
-    return isAdmin(user) || this.members.hasActiveMembership(user.id);
+  /**
+   * What lets somebody past the invite wall, and how long it lasts — one
+   * answer rather than a boolean the caller then has to date separately.
+   *
+   * An admin is admitted on their role, which nothing expires, so their
+   * session is not bounded by a cohort membership they happen to also hold.
+   * Everyone else is admitted by a live membership, and the soonest of those
+   * deadlines is what bounds them.
+   */
+  private async resolveAccess(user: User): Promise<AccessGrant | null> {
+    if (isAdmin(user)) {
+      return { endsAt: null };
+    }
+    return this.members.resolveActiveAccess(user.id);
   }
 }

@@ -29,10 +29,18 @@ export class InviteCohortDto {
   @ApiProperty({ enum: CohortStatus, enumName: 'CohortStatus' })
   status: CohortStatus;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   createdAt: Date;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   updatedAt: Date;
 }
 
@@ -47,7 +55,11 @@ export class InviteCohortTrackDto {
   @ApiProperty({ example: '33333333-3333-4333-8333-333333333333' })
   trackId: string;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   createdAt: Date;
 }
 
@@ -61,13 +73,25 @@ export class InviteTrackDto {
   @ApiProperty({ example: 'SE' })
   code: string;
 
-  @ApiPropertyOptional({ type: String, example: 'Backend and infra', nullable: true })
+  @ApiPropertyOptional({
+    type: String,
+    example: 'Backend and infra',
+    nullable: true,
+  })
   description: string | null;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   createdAt: Date;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   updatedAt: Date;
 }
 
@@ -110,7 +134,11 @@ export class InviteInviteeDto {
   @ApiProperty({ enum: UserStatus, enumName: 'UserStatus' })
   status: UserStatus;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   createdAt: Date;
 }
 
@@ -127,7 +155,11 @@ export class InviteOnboardingResponseDto {
   @ApiProperty({ type: () => InviteTrackDto, nullable: true })
   track: InviteTrackDto | null;
 
-  @ApiPropertyOptional({ enum: CohortRole, enumName: 'CohortRole', nullable: true })
+  @ApiPropertyOptional({
+    enum: CohortRole,
+    enumName: 'CohortRole',
+    nullable: true,
+  })
   cohortRole: CohortRole | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
@@ -140,14 +172,31 @@ export class InviteOnboardingResponseDto {
     type: String,
     format: 'date-time',
     example: '2026-09-29T12:00:00.000Z',
-    description: 'When the offer lapses. Not a deadline on the user, but the boundary at which this endpoint starts answering 403.',
+    description:
+      'When the offer lapses. Not a deadline on the user, but the boundary at which this endpoint starts answering 403.',
   })
   expiresAt: Date;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: null,
+    description:
+      'Guest invites only; null otherwise. When the access being offered ' +
+      'ends — the decision screen should say so before anyone accepts, since ' +
+      'a guest is agreeing to a visit rather than a place.',
+  })
+  guestAccessExpiresAt: Date | null;
 
   @ApiProperty({ type: () => InvitedByDto })
   invitedBy: InvitedByDto;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   createdAt: Date;
 
   @ApiProperty({ type: () => InviteInviteeDto })

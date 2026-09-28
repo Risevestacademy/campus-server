@@ -26,9 +26,7 @@ const nextToken = (value: string) =>
 /** A real-shaped Postgres unique_violation, not a prose stub. */
 function pgUniqueViolation(constraint: string) {
   return Object.assign(
-    new Error(
-      `duplicate key value violates unique constraint "${constraint}"`,
-    ),
+    new Error(`duplicate key value violates unique constraint "${constraint}"`),
     { code: '23505' },
   );
 }
@@ -40,7 +38,7 @@ const ADMIN_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const inviter = {
   id: ADMIN_ID,
   email: 'admin@campus.local',
-  systemRole: 'admin',
+  systemRole: SystemRole.Admin,
 };
 const config = {
   APP_PUBLIC_URL: 'http://localhost:3000',
@@ -80,8 +78,9 @@ function makeDb(state: FakeState) {
     },
     update: () => ({
       set: () => ({
-        where: ( ) => {
-          if (state.pendingInvite) state.updatedToExpired.push(state.pendingInvite.id);
+        where: () => {
+          if (state.pendingInvite)
+            state.updatedToExpired.push(state.pendingInvite.id);
           return Promise.resolve();
         },
       }),
@@ -101,10 +100,12 @@ function makeDb(state: FakeState) {
                 email: values['email'],
                 cohortId: (values['cohortId'] as string | null) ?? null,
                 cohortRole: (values['cohortRole'] as CohortRole | null) ?? null,
-                cohortTrackId: (values['cohortTrackId'] as string | null) ?? null,
+                cohortTrackId:
+                  (values['cohortTrackId'] as string | null) ?? null,
                 mentorshipGroupId:
                   (values['mentorshipGroupId'] as string | null) ?? null,
-                systemRole: (values['systemRole'] as SystemRole) ?? SystemRole.User,
+                systemRole:
+                  (values['systemRole'] as SystemRole) ?? SystemRole.User,
                 status: InviteStatus.Pending,
                 expiresAt: values['expiresAt'] as Date,
                 createdAt: new Date('2026-09-22T12:00:00.000Z'),
@@ -146,7 +147,9 @@ describe('InvitesService.create', () => {
     expect(state.lastInsert?.['email']).toBe('new.student@campus.local');
     const stored = state.lastInsert?.['tokenHash'] as string;
     expect(stored).toHaveLength(64);
-    expect(stored).toBe(createHash('sha256').update(res.token, 'utf8').digest('hex'));
+    expect(stored).toBe(
+      createHash('sha256').update(res.token, 'utf8').digest('hex'),
+    );
     expect(stored).not.toContain(res.token);
 
     // Shareable link embeds the raw token exactly once.
@@ -167,22 +170,46 @@ describe('InvitesService.create', () => {
     expect(res.inviteLink).toContain('token=');
   });
 
-  it('accepts a guest invite { email } with no cohort and no role', async () => {
-    const { service, state } = serviceWith({ cohortExists: false, trackRow: null });
-    const res = await service.create({ email: 'Guest@Campus.Local' }, inviter);
-    expect(res.email).toBe('guest@campus.local');
-    expect(res.systemRole).toBe(SystemRole.User);
+  it('accepts an admin invite, the one shape that names no cohort', async () => {
+    const { service, state } = serviceWith({
+      cohortExists: false,
+      trackRow: null,
+    });
+    const res = await service.create(
+      { email: 'Admin@Campus.Local', systemRole: SystemRole.Admin },
+      inviter,
+    );
+    expect(res.email).toBe('admin@campus.local');
+    expect(res.systemRole).toBe(SystemRole.Admin);
     expect(res.cohortId).toBeNull();
     expect(res.cohortRole).toBeNull();
-    expect(state.lastInsert?.['systemRole']).toBe(SystemRole.User);
+    expect(state.lastInsert?.['systemRole']).toBe(SystemRole.Admin);
+  });
+
+  /** The shape that stranded people: no cohort to enrol into, no role. */
+  it('refuses an invite with no cohort and no admin role', async () => {
+    const { service } = serviceWith({ cohortExists: false, trackRow: null });
+    await expect(
+      service.create({ email: 'nowhere@campus.local' }, inviter),
+    ).rejects.toThrow(/may omit a cohort/);
   });
 
   it.each([
-    ['cohortId without cohortRole', { email: 'a@x.local', cohortId: COHORT_ID }],
-    ['cohortRole without cohortId', { email: 'a@x.local', cohortRole: CohortRole.Professor }],
+    [
+      'cohortId without cohortRole',
+      { email: 'a@x.local', cohortId: COHORT_ID },
+    ],
+    [
+      'cohortRole without cohortId',
+      { email: 'a@x.local', cohortRole: CohortRole.Professor },
+    ],
     [
       'student without track',
-      { email: 'a@x.local', cohortId: COHORT_ID, cohortRole: CohortRole.Student },
+      {
+        email: 'a@x.local',
+        cohortId: COHORT_ID,
+        cohortRole: CohortRole.Student,
+      },
     ],
     [
       'scoped track without cohort',
@@ -219,7 +246,10 @@ describe('InvitesService.create', () => {
       },
     });
     await expect(
-      service.create({ email: 'dup@campus.local', systemRole: SystemRole.Admin }, inviter),
+      service.create(
+        { email: 'dup@campus.local', systemRole: SystemRole.Admin },
+        inviter,
+      ),
     ).rejects.toBeInstanceOf(InviteConflictException);
   });
 
@@ -264,9 +294,9 @@ describe('InvitesService.create', () => {
     const { service } = serviceWith({
       insertError: pgUniqueViolation('invites_email_pending_unique'),
     });
-    await expect(service.create(cohortStudentDto(), inviter)).rejects.toBeInstanceOf(
-      InviteConflictException,
-    );
+    await expect(
+      service.create(cohortStudentDto(), inviter),
+    ).rejects.toBeInstanceOf(InviteConflictException);
   });
 
   it('regenerates the token on a 23505 hash collision instead of 409ing', async () => {
@@ -284,16 +314,16 @@ describe('InvitesService.create', () => {
   });
 
   it('does not mistake other errors for conflicts — non-23505 rethrows', () => {
-    expect(
-      classifyInviteWriteError(new Error('connection reset')),
-    ).toBeNull();
+    expect(classifyInviteWriteError(new Error('connection reset'))).toBeNull();
     expect(
       classifyInviteWriteError(
         new Error('duplicate key value violates unique constraint "x"'),
       ),
     ).toBeNull();
     expect(
-      classifyInviteWriteError(pgUniqueViolation('invites_email_pending_unique')),
+      classifyInviteWriteError(
+        pgUniqueViolation('invites_email_pending_unique'),
+      ),
     ).toBe('pending-duplicate');
     expect(
       classifyInviteWriteError(pgUniqueViolation('invites_token_hash_unique')),
@@ -302,17 +332,17 @@ describe('InvitesService.create', () => {
 
   it('returns 404 for an unknown cohort', async () => {
     const { service } = serviceWith({ cohortExists: false });
-    await expect(service.create(cohortStudentDto(), inviter)).rejects.toBeInstanceOf(
-      InviteNotFoundException,
-    );
+    await expect(
+      service.create(cohortStudentDto(), inviter),
+    ).rejects.toBeInstanceOf(InviteNotFoundException);
   });
 
   it('rejects a track that belongs to another cohort', async () => {
     const { service } = serviceWith({
       trackRow: { id: TRACK_ID, cohortId: 'other-cohort' },
     });
-    await expect(service.create(cohortStudentDto(), inviter)).rejects.toBeInstanceOf(
-      InviteInvalidArgumentException,
-    );
+    await expect(
+      service.create(cohortStudentDto(), inviter),
+    ).rejects.toBeInstanceOf(InviteInvalidArgumentException);
   });
 });
