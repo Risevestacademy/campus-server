@@ -63,6 +63,7 @@ a clear error.
 | `AUTH_SESSION_SECRET`             | *(unset)*                                 | Signs session tokens; at least 32 characters. Separate from the state secret — rotating this one signs everybody out |
 | `AUTH_SESSION_TTL_MINUTES`        | `720`                                     | Lifetime of a full-access session |
 | `AUTH_PROVISIONAL_TTL_MINUTES`    | `30`                                      | Lifetime of the provisional session handed out before an invite is accepted |
+| `AUTH_REFRESH_TTL_DAYS`           | `30`                                      | Lifetime of the revocable refresh token stored by the API |
 | `CORS_ORIGINS`                    | *(unset)*                                 | Comma-separated browser origins allowed to call the API. Unset sends no CORS headers, which blocks browser apps |
 | `TRUST_PROXY_HOPS`                | `1`                                       | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none |
 | `FF_LOG_LEVEL`                    | `info`                                    | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal` |

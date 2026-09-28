@@ -16,6 +16,9 @@ const claims = {
   userId: 'user-1',
   email: 'ada@campus.local',
   scope: SessionScope.FullAccess,
+  systemRole: 'user',
+  role: 'student',
+  cohortId: 'cohort-1',
 };
 
 async function foreign(
@@ -42,6 +45,9 @@ describe('session tokens', () => {
       userId: 'user-1',
       email: 'ada@campus.local',
       scope: SessionScope.FullAccess,
+      systemRole: 'user',
+      role: 'student',
+      cohortId: 'cohort-1',
     });
     // Exactly equal: both sides are whole seconds, so this cannot drift.
     expect(verified.expiresAt.getTime()).toBe(expiresAt.getTime());
@@ -61,6 +67,17 @@ describe('session tokens', () => {
     expect(
       (await verifySessionToken(full.token, SECRET)).inviteId,
     ).toBeUndefined();
+  });
+
+  it('rejects a token without the authoritative system role', async () => {
+    const token = await foreign({
+      email: claims.email,
+      scope: SessionScope.FullAccess,
+    });
+
+    await expect(verifySessionToken(token, SECRET)).rejects.toThrow(
+      InvalidSessionTokenError,
+    );
   });
 
   it('expires on its own schedule', async () => {

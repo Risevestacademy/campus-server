@@ -1,6 +1,7 @@
 import type { CookieOptions } from 'express';
 
 export const SESSION_COOKIE = 'campus_session';
+export const REFRESH_COOKIE = 'campus_refresh';
 
 /**
  * Sent to every route, since the session is not specific to one — unlike the
@@ -49,6 +50,19 @@ function site(url: string): string {
 export function readSessionCookie(
   header: string | undefined,
 ): string | undefined {
+  return readCookie(header, SESSION_COOKIE);
+}
+
+export function readRefreshCookie(
+  header: string | undefined,
+): string | undefined {
+  return readCookie(header, REFRESH_COOKIE);
+}
+
+function readCookie(
+  header: string | undefined,
+  name: string,
+): string | undefined {
   if (!header) {
     return undefined;
   }
@@ -58,7 +72,7 @@ export function readSessionCookie(
     if (separator === -1) {
       continue;
     }
-    if (part.slice(0, separator).trim() !== SESSION_COOKIE) {
+    if (part.slice(0, separator).trim() !== name) {
       continue;
     }
     try {

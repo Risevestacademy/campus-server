@@ -1,17 +1,35 @@
-import { Controller, Get, Inject, Query, Req, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { ApiErrorResponseDto } from '../../shared/dto/index.js';
-import { GoogleSignInFailedError } from './auth.exceptions.js';
+import {
+  GoogleSignInFailedError,
+  SessionUnauthorizedError,
+} from './auth.exceptions.js';
 import { AuthService } from './auth.service.js';
 import { GoogleCallbackQueryDto } from './dto/google-callback.query.dto.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { GoogleOAuthService } from './google-oauth.service.js';
 import { OAuthStateService } from './oauth-state.service.js';
 import { SessionIssuer } from './session-issuer.js';
-import { SESSION_COOKIE, sessionCookieOptions } from './session-cookie.js';
+import {
+  REFRESH_COOKIE,
+  readRefreshCookie,
+  SESSION_COOKIE,
+  sessionCookieOptions,
+} from './session-cookie.js';
 import {
   STATE_COOKIE,
   STATE_COOKIE_PATH,
@@ -112,8 +130,81 @@ export class AuthController {
         session.expiresAt,
       ),
     );
+    if (session.refreshToken) {
+      res.cookie(
+        REFRESH_COOKIE,
+        session.refreshToken,
+        sessionCookieOptions(
+          requireGoogleAuth(this.config).callbackUrl,
+          this.config.APP_PUBLIC_URL,
+          new Date(
+            Date.now() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000,
+          ),
+        ),
+      );
+    }
     res.redirect(
       `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${session.redirectPath}`,
     );
+  }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Refresh the access session',
+    description:
+      'Rotates the refresh cookie and issues a new full-access session.',
+  })
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    const token = readRefreshCookie(req.headers.cookie);
+    if (!token) {
+      throw new SessionUnauthorizedError('Refresh token required');
+    }
+
+    const session = await this.sessions.refreshSession(token);
+    this.setSessionCookies(res, session.token, session.expiresAt, session.refreshToken);
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Revoke the refresh session',
+    description: 'Revokes the refresh cookie and clears both session cookies.',
+  })
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    const token = readRefreshCookie(req.headers.cookie);
+    if (token) {
+      await this.sessions.revokeRefreshToken(token);
+    }
+    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    res.clearCookie(REFRESH_COOKIE, { path: '/' });
+  }
+
+  private setSessionCookies(
+    res: Response,
+    token: string,
+    expiresAt: Date,
+    refreshToken: string | undefined,
+  ): void {
+    const apiUrl = requireGoogleAuth(this.config).callbackUrl;
+    const appUrl = this.config.APP_PUBLIC_URL;
+    res.cookie(SESSION_COOKIE, token, sessionCookieOptions(apiUrl, appUrl, expiresAt));
+    if (refreshToken) {
+      res.cookie(
+        REFRESH_COOKIE,
+        refreshToken,
+        sessionCookieOptions(
+          apiUrl,
+          appUrl,
+          new Date(Date.now() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000),
+        ),
+      );
+    }
   }
 }

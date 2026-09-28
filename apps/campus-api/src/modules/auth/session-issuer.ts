@@ -1,10 +1,18 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
-import type { AccessGrant } from '../cohorts/cohort-members.service.js';
+import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import {
+  CohortMembersService,
+  type AccessGrant,
+} from '../cohorts/cohort-members.service.js';
 import { SessionUnauthorizedError } from './auth.exceptions.js';
+import { refreshTokens } from './schema.js';
 import type { Invite } from '../invites/schema.js';
 import type { User } from '../users/schema.js';
+import { UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import {
   SessionScope,
@@ -34,6 +42,7 @@ function cappedTtlMinutes(
 
 export interface IssuedSession {
   token: string;
+  refreshToken?: string;
   expiresAt: Date;
   scope: Scope;
   /** Where the browser is sent once the cookie is set. */
@@ -47,7 +56,12 @@ export interface IssuedSession {
  */
 @Injectable()
 export class SessionIssuer {
-  constructor(@Inject(CONFIG) private readonly config: Env) {}
+  constructor(
+    @Inject(CONFIG) private readonly config: Env,
+    @Inject(DRIZZLE) private readonly db: Db,
+    private readonly users: UsersService,
+    private readonly members: CohortMembersService,
+  ) {}
 
   /**
    * Someone already on the roster: nothing left to finish.
@@ -76,8 +90,21 @@ export class SessionIssuer {
     if (endsAt !== null && endsAt.getTime() <= now.getTime()) {
       throw new SessionUnauthorizedError('Access has already ended');
     }
+    const account = await this.users.findById(user.id);
+    if (!account) {
+      throw new SessionUnauthorizedError('Account is not usable');
+    }
+    const membership = await this.members.resolveActiveMembership(user.id, now);
     const { token, expiresAt } = await signSessionToken(
-      { userId: user.id, email: user.email, scope: SessionScope.FullAccess },
+      {
+        userId: account.id,
+        email: account.email,
+        scope: SessionScope.FullAccess,
+        systemRole: account.systemRole,
+        ...(membership
+          ? { role: membership.role, cohortId: membership.cohortId }
+          : {}),
+      },
       {
         secret: this.secret,
         ttlMinutes: cappedTtlMinutes(
@@ -89,8 +116,18 @@ export class SessionIssuer {
       now,
     );
 
+    const refreshToken = randomBytes(32).toString('base64url');
+    await this.db.insert(refreshTokens).values({
+      userId: account.id,
+      tokenHash: hashRefreshToken(refreshToken),
+      expiresAt: new Date(
+        now.getTime() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000,
+      ),
+    });
+
     return {
       token,
+      refreshToken,
       expiresAt,
       scope: SessionScope.FullAccess,
       redirectPath: '/',
@@ -108,6 +145,7 @@ export class SessionIssuer {
         userId: user.id,
         email: user.email,
         scope: SessionScope.Provisional,
+        systemRole: user.systemRole,
         inviteId: invite.id,
       },
       {
@@ -124,7 +162,59 @@ export class SessionIssuer {
     };
   }
 
+  async revokeRefreshToken(token: string): Promise<void> {
+    await this.db
+      .update(refreshTokens)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(refreshTokens.tokenHash, hashRefreshToken(token)),
+          isNull(refreshTokens.revokedAt),
+        ),
+      );
+  }
+
+  async refreshSession(
+    token: string,
+    now: Date = new Date(),
+  ): Promise<IssuedSession> {
+    const [claimed] = await this.db
+      .update(refreshTokens)
+      .set({ revokedAt: now })
+      .where(
+        and(
+          eq(refreshTokens.tokenHash, hashRefreshToken(token)),
+          isNull(refreshTokens.revokedAt),
+          gt(refreshTokens.expiresAt, now),
+        ),
+      )
+      .returning({ userId: refreshTokens.userId });
+
+    if (!claimed) {
+      throw new SessionUnauthorizedError('Refresh token is not usable');
+    }
+
+    const user = await this.users.findById(claimed.userId);
+    if (!user) {
+      throw new SessionUnauthorizedError('Refresh token is not usable');
+    }
+
+    const grant =
+      user.systemRole === 'admin'
+        ? { endsAt: null }
+        : await this.members.resolveActiveAccess(user.id, now);
+    if (!grant) {
+      throw new SessionUnauthorizedError('Access has already ended');
+    }
+
+    return this.issueFullAccess(user, grant, now);
+  }
+
   private get secret(): string {
     return requireGoogleAuth(this.config).sessionSecret;
   }
+}
+
+function hashRefreshToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
 }

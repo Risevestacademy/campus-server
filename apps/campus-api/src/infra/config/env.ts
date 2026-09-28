@@ -143,6 +143,13 @@ export class Env {
   @Min(1)
   AUTH_PROVISIONAL_TTL_MINUTES: number = 30;
 
+  /** Lifetime of a revocable refresh token, in days. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  AUTH_REFRESH_TTL_DAYS: number = 30;
+
   // Comma-separated list of browser origins allowed to call the API.
 
   @IsOptional()

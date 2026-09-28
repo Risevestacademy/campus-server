@@ -143,6 +143,19 @@ export class InvitesController {
           upgraded.expiresAt,
         ),
       );
+      if (upgraded.refreshToken) {
+        res.cookie(
+          'campus_refresh',
+          upgraded.refreshToken,
+          sessionCookieOptions(
+            cookieBase.apiUrl,
+            cookieBase.appUrl,
+            new Date(
+              Date.now() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000,
+            ),
+          ),
+        );
+      }
     } else {
       // A provisional session with nothing left to finish is a dead end, so
       // declining takes the cookie with it. The options are the same ones the

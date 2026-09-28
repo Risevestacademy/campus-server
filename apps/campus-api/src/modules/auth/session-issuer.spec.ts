@@ -11,6 +11,7 @@ const config = {
   FF_GOOGLE_AUTH_ENABLED: true,
   AUTH_SESSION_TTL_MINUTES: 720,
   AUTH_PROVISIONAL_TTL_MINUTES: 30,
+  AUTH_REFRESH_TTL_DAYS: 30,
   GOOGLE_CLIENT_ID: 'id',
   GOOGLE_CLIENT_SECRET: 'secret',
   GOOGLE_CALLBACK_URL: 'http://localhost:3001/v1/auth/google/callback',
@@ -19,6 +20,20 @@ const config = {
 } as never;
 
 const user = { id: 'user-1', email: 'guest@campus.local' } as User;
+const users = { findById: vi.fn(async () => ({ ...user, systemRole: 'user' })) };
+const members = {
+  resolveActiveMembership: vi.fn(async () => null),
+  resolveActiveAccess: vi.fn(async () => ({ endsAt: null })),
+};
+const refreshReturning = vi.fn(async () => [{ userId: user.id }]);
+const db = {
+  insert: () => ({ values: vi.fn(async () => undefined) }),
+  update: () => ({
+    set: () => ({
+      where: () => ({ returning: refreshReturning }),
+    }),
+  }),
+};
 const unbounded: AccessGrant = { endsAt: null };
 
 const minutesBetween = (a: Date, b: Date) =>
@@ -30,13 +45,22 @@ describe('SessionIssuer', () => {
   // the real clock, because one of these verifies the token it just minted
   // and jose checks exp against wall time.
   const now = new Date(Math.floor(Date.now() / 1000) * 1000);
-  const issuer = new SessionIssuer(config);
+  const issuer = new SessionIssuer(
+    config,
+    db as never,
+    users as never,
+    members as never,
+  );
   const at = (ms: number) => new Date(now.getTime() + ms);
 
   it('mints the configured lifetime when the grant has no deadline', async () => {
     const session = await issuer.issueFullAccess(user, unbounded, now);
 
     expect(minutesBetween(now, session.expiresAt)).toBe(720);
+    expect((await verifySessionToken(session.token, SECRET)).systemRole).toBe(
+      'user',
+    );
+    expect(session.refreshToken).toEqual(expect.any(String));
   });
 
   /**
@@ -103,5 +127,21 @@ describe('SessionIssuer', () => {
 
     expect(session.scope).toBe(SessionScope.Provisional);
     expect(session.redirectPath).toBe('/onboarding');
+  });
+
+  it('rotates a usable refresh token into a new session pair', async () => {
+    const session = await issuer.refreshSession('refresh-token', now);
+
+    expect(session.scope).toBe(SessionScope.FullAccess);
+    expect(session.refreshToken).toEqual(expect.any(String));
+    expect(refreshReturning).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a refresh token that was already consumed', async () => {
+    refreshReturning.mockResolvedValueOnce([]);
+
+    await expect(issuer.refreshSession('refresh-token', now)).rejects.toBeInstanceOf(
+      SessionUnauthorizedError,
+    );
   });
 });
