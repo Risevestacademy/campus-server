@@ -1,5 +1,7 @@
 import type { Request } from 'express';
 
+import type { SystemRole } from '../../modules/users/schema.js';
+
 /**
  * Neutral auth contract owned by the Google-auth side.
  *
@@ -8,12 +10,14 @@ import type { Request } from 'express';
  *
  *   req.user = { id, email, systemRole };
  *
- * `systemRole` mirrors USERS.system_role ('user' | 'admin').
+ * `systemRole` is USERS.system_role. Typed as the enum rather than a bare
+ * string so a guard comparing against it cannot quietly go on matching a
+ * value that no longer exists.
  */
 export interface AuthenticatedUser {
   id: string;
   email: string;
-  systemRole: string;
+  systemRole: SystemRole;
 }
 
 export type AuthenticatedRequest = Request & { user?: AuthenticatedUser };

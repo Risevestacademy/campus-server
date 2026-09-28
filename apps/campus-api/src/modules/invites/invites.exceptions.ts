@@ -39,10 +39,6 @@ export class InviteForbiddenException extends DomainException {
   readonly code = ExceptionCode.Forbidden;
 }
 
-export class InviteUnauthorizedException extends DomainException {
-  readonly code = ExceptionCode.Unauthorized;
-}
-
 /**
  * An invariant this service relies on does not hold — e.g. a provisional
  * session whose invite is addressed to a different account. Both inputs are
