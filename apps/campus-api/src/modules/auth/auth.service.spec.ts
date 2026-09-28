@@ -86,6 +86,7 @@ function invite(): Invite {
     systemRole: SystemRole.User,
     status: InviteStatus.Pending,
     expiresAt: new Date(Date.now() + 86_400_000),
+    guestAccessExpiresAt: null,
     tokenHash: 'hash-1',
     invitedBy: 'admin-1',
     acceptedAt: null,

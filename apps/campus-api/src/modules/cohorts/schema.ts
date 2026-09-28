@@ -20,6 +20,13 @@ export enum CohortRole {
   Student = 'student',
   Professor = 'professor',
   Mentor = 'mentor',
+  /**
+   * Invited to one cohort and scoped to it — a visiting speaker, an alum at
+   * a demo day. A cohort role like any other, which is what keeps a guest
+   * out of cohorts nobody invited them to, but always with an end date:
+   * access_expires_at below.
+   */
+  Guest = 'guest',
 }
 
 export enum CohortStatus {
@@ -105,6 +112,7 @@ export const cohortMembers = pgTable(
       .notNull()
       .defaultNow(),
     leftAt: timestamp('left_at', { withTimezone: true }),
+    accessExpiresAt: timestamp('access_expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -133,6 +141,22 @@ export const cohortMembers = pgTable(
     check(
       'cohort_members_student_status',
       sql`${table.role} = ${sql.raw(`'${CohortRole.Student}'`)} or ${table.status} is null`,
+    ),
+    // A reason explains a dismissal and nothing else. Reviving a membership
+    // clears it, and this is what stops the next writer forgetting: without
+    // it a student dismissed for cause and later re-invited as a professor
+    // keeps the old reason on a live row, where any roster view would read
+    // it as current.
+    check(
+      'cohort_members_dismissal_reason',
+      sql`${table.dismissalReason} is null or ${table.status} = ${sql.raw(`'${StudentStatus.Dismissed}'`)}`,
+    ),
+    // An end date is what makes a guest a guest: they always have one, and
+    // nobody else does. A visiting speaker who is never removed is a hole
+    // that stays open, so the schema refuses to record one.
+    check(
+      'cohort_members_guest_expiry',
+      sql`(${table.role}::text = ${sql.raw(`'${CohortRole.Guest}'`)}) = (${table.accessExpiresAt} is not null)`,
     ),
   ],
 );

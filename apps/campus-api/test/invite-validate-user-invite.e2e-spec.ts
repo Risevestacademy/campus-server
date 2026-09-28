@@ -12,11 +12,12 @@ import { AppModule } from './../src/app.module.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
+import { SessionScope, signSessionToken } from '@campus/session';
 import {
-  SessionScope,
-  signSessionToken,
-} from './../src/modules/auth/session-token.js';
-import { CohortRole, cohortTracks, cohorts } from './../src/modules/cohorts/schema.js';
+  CohortRole,
+  cohortTracks,
+  cohorts,
+} from './../src/modules/cohorts/schema.js';
 import { tracks } from './../src/modules/tracks/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import {
@@ -240,7 +241,7 @@ describe('GET /v1/invites/validate-user-invite (e2e)', () => {
     const invite = await seedInvite(invitee.email);
     await db
       .update(schema.invites)
-      .set({ status: 'declined' })
+      .set({ status: schema.InviteStatus.Declined })
       .where(sql`${schema.invites.id} = ${invite.id}`);
 
     const response = await call(

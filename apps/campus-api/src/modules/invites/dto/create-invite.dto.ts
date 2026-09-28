@@ -13,12 +13,15 @@ import { CohortRole } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
 
 /**
- * Three shapes are accepted (mirrors the INVITES CHECK constraints):
+ * Two shapes are accepted (mirrors the INVITES CHECK constraints):
  *
  * - Cohort invite: { email, cohortId, cohortRole } plus optional
- *   cohortTrackId / mentorshipGroupId / systemRole / expiresAt.
+ *   cohortTrackId / mentorshipGroupId / systemRole / expiresAt. A guest is
+ *   one of these, and the only one that carries guestAccessExpiresAt.
  * - Admin invite: { email, systemRole: 'admin' } with NO cohort fields.
- * - Guest invite: { email } alone (systemRole defaults to 'user').
+ *
+ * Everybody who is not an admin is invited to a cohort, so an invite naming
+ * neither is refused: it would accept into nothing.
  *
  * An admin+cohort combination (systemRole admin together with cohort fields)
  * is also accepted: system_role is independent of cohort scoping, so an admin
@@ -44,7 +47,7 @@ export class CreateInviteDto {
 
   @ApiPropertyOptional({
     example: '11111111-1111-4111-8111-111111111111',
-    description: 'Cohort invite only. Null for admin/guest invites.',
+    description: 'Required for every invite but an admin one.',
   })
   @IsOptional()
   @IsUUID()
@@ -54,7 +57,7 @@ export class CreateInviteDto {
     enum: CohortRole,
     enumName: 'CohortRole',
     example: CohortRole.Student,
-    description: 'Cohort invite only. Null for admin/guest invites.',
+    description: 'Required for every invite but an admin one.',
   })
   @IsOptional()
   @IsEnum(CohortRole)
@@ -95,4 +98,15 @@ export class CreateInviteDto {
   @IsOptional()
   @IsDateString()
   expiresAt?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-12-01T00:00:00.000Z',
+    description:
+      'When the guest stops being one — required for cohortRole guest, and ' +
+      'rejected for every other role. Not the same as expiresAt, which is ' +
+      'how long this invite stays redeemable.',
+  })
+  @IsOptional()
+  @IsDateString()
+  guestAccessExpiresAt?: string;
 }

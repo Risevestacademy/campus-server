@@ -40,11 +40,31 @@ export class MembershipGrantedDto {
   @ApiPropertyOptional({ type: String, nullable: true, example: null })
   cohortTrackId: string | null;
 
-  @ApiPropertyOptional({ enum: StudentStatus, enumName: 'StudentStatus', nullable: true })
+  @ApiPropertyOptional({
+    enum: StudentStatus,
+    enumName: 'StudentStatus',
+    nullable: true,
+  })
   status: StudentStatus | null;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   joinedAt: Date;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: null,
+    description:
+      'When this membership stops counting. Set for guests and null for ' +
+      'everyone else, so a client can tell a visitor they are here until a ' +
+      'date rather than indefinitely.',
+  })
+  accessExpiresAt: Date | null;
 }
 
 /**
@@ -57,17 +77,23 @@ export class InviteDecisionResponseDto {
   @ApiProperty({ example: '66666666-6666-4666-8666-666666666666' })
   inviteId: string;
 
-  @ApiProperty({ enum: [InviteStatus.Accepted, InviteStatus.Declined], enumName: 'InviteDecisionStatus' })
+  @ApiProperty({
+    enum: [InviteStatus.Accepted, InviteStatus.Declined],
+    enumName: 'InviteDecisionStatus',
+  })
   status: InviteStatus.Accepted | InviteStatus.Declined;
 
-  @ApiProperty({ type: String, format: 'date-time', example: '2026-09-22T12:00:00.000Z' })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-09-22T12:00:00.000Z',
+  })
   decidedAt: Date;
 
   @ApiPropertyOptional({
     type: MembershipGrantedDto,
     nullable: true,
-    description:
-      'Null for a guest invite, which carries no cohort, and for a decline.',
+    description: 'Null for a cohort-less admin invite, and for a decline.',
   })
   membership: MembershipGrantedDto | null;
 

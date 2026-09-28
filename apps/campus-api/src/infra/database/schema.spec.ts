@@ -111,6 +111,9 @@ function invite(overrides: Partial<typeof invites.$inferInsert> = {}) {
     tokenHash: `hash-${Math.random().toString(36).slice(2)}`,
     invitedBy: fixtures.adminId,
     expiresAt: new Date(Date.now() + 86_400_000),
+    // invites_cohortless_is_admin: with no cohort, an invite can only be an
+    // admin one — so that is what a bare fixture means here.
+    systemRole: overrides.cohortId == null ? SystemRole.Admin : SystemRole.User,
     ...overrides,
   });
 }
@@ -312,8 +315,37 @@ describe('invites', () => {
 
   // cohort_id and cohort_role travel together: neither for a guest, both for
   // a cohort invite.
-  it('accepts a guest invite, which carries no cohort and no role', async () => {
-    await invite({ systemRole: SystemRole.User });
+  it('refuses an invite with no cohort that grants no admin role', async () => {
+    await expectViolation(
+      invite({ systemRole: SystemRole.User }),
+      'invites_cohortless_is_admin',
+    );
+  });
+
+  it('accepts a guest invited to one cohort, with an end date', async () => {
+    await invite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Guest,
+      guestAccessExpiresAt: new Date(Date.now() + 7 * 86_400_000),
+    });
+  });
+
+  it('refuses a guest whose visit never ends', async () => {
+    await expectViolation(
+      invite({ cohortId: fixtures.cohortId, cohortRole: CohortRole.Guest }),
+      'invites_guest_has_expiry',
+    );
+  });
+
+  it('refuses an end date on a role that is not a guest', async () => {
+    await expectViolation(
+      invite({
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Professor,
+        guestAccessExpiresAt: new Date(Date.now() + 86_400_000),
+      }),
+      'invites_guest_has_expiry',
+    );
   });
 
   it('requires a cohort role on a cohort-scoped invite', async () => {

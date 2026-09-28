@@ -1,7 +1,7 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 
 import type { AuthenticatedRequest } from '../../shared/auth/authenticated-user.js';
-import type { SessionClaims } from './session-token.js';
+import type { SessionClaims } from '@campus/session';
 import type { ProvisionalRequest } from './session.guard.js';
 
 /**
@@ -12,7 +12,9 @@ import type { ProvisionalRequest } from './session.guard.js';
  */
 export const CurrentSession = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): SessionClaims => {
-    const req = ctx.switchToHttp().getRequest<ProvisionalRequest & AuthenticatedRequest>();
+    const req = ctx
+      .switchToHttp()
+      .getRequest<ProvisionalRequest & AuthenticatedRequest>();
     if (!req.session) {
       throw new Error('CurrentSession used without a session guard');
     }

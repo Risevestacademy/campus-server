@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
+import { CohortMembersService } from '../cohorts/cohort-members.service.js';
 import type { Invite } from '../invites/schema.js';
 import type { User } from '../users/schema.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
@@ -9,6 +10,24 @@ import {
   signSessionToken,
   type SessionScope as Scope,
 } from '@campus/session';
+
+/**
+ * The configured lifetime, shortened when something the session depends on
+ * ends sooner. Never below a minute: a token that expires as it is issued
+ * would send the browser straight back to sign-in, and the sign-in gate is
+ * what should be refusing them at that point.
+ */
+function cappedTtlMinutes(
+  ttlMinutes: number,
+  endsAt: Date | null,
+  now: Date,
+): number {
+  if (endsAt === null) {
+    return ttlMinutes;
+  }
+  const untilEnd = (endsAt.getTime() - now.getTime()) / 60_000;
+  return Math.max(1, Math.min(ttlMinutes, untilEnd));
+}
 
 export interface IssuedSession {
   token: string;
@@ -25,16 +44,37 @@ export interface IssuedSession {
  */
 @Injectable()
 export class SessionIssuer {
-  constructor(@Inject(CONFIG) private readonly config: Env) {}
+  constructor(
+    @Inject(CONFIG) private readonly config: Env,
+    private readonly members: CohortMembersService,
+  ) {}
 
-  /** Someone already on the roster: nothing left to finish. */
-  async issueFullAccess(user: User): Promise<IssuedSession> {
+  /**
+   * Someone already on the roster: nothing left to finish.
+   *
+   * The token never outlives the access it stands for. A guest's membership
+   * ends on a date, and SessionGuard re-reads the user row per request but
+   * not their memberships — so without this cap a visit that ended at 09:00
+   * would keep working until the token happened to lapse, up to
+   * AUTH_SESSION_TTL_MINUTES later. Capping at mint time also covers
+   * `world`, which only verifies the token and knows nothing of cohorts.
+   */
+  async issueFullAccess(
+    user: User,
+    now: Date = new Date(),
+  ): Promise<IssuedSession> {
+    const endsAt = await this.members.soonestAccessExpiry(user.id, now);
     const { token, expiresAt } = await signSessionToken(
       { userId: user.id, email: user.email, scope: SessionScope.FullAccess },
       {
         secret: this.secret,
-        ttlMinutes: this.config.AUTH_SESSION_TTL_MINUTES,
+        ttlMinutes: cappedTtlMinutes(
+          this.config.AUTH_SESSION_TTL_MINUTES,
+          endsAt,
+          now,
+        ),
       },
+      now,
     );
 
     return {

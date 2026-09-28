@@ -32,6 +32,18 @@ export class InviteResponseDto {
   @ApiProperty({ example: '2026-09-29T12:00:00.000Z' })
   expiresAt: string;
 
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: '2026-10-05T17:00:00.000Z',
+    description:
+      'Guest invites only; null otherwise. When the visit itself ends, which ' +
+      'is not expiresAt above — that is how long the link stays redeemable, ' +
+      'and it is clamped to never outlast this.',
+  })
+  guestAccessExpiresAt: string | null;
+
   @ApiProperty({
     example: 'http://localhost:3000/invite?token=abc123',
     description:

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { CohortsModule } from '../cohorts/cohorts.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { SessionIssuer } from './session-issuer.js';
 import { ProvisionalSessionGuard, SessionGuard } from './session.guard.js';
@@ -14,7 +15,7 @@ import { ProvisionalSessionGuard, SessionGuard } from './session.guard.js';
  * upgraded token without pulling in the OAuth controller that sits beside it.
  */
 @Module({
-  imports: [UsersModule],
+  imports: [CohortsModule, UsersModule],
   providers: [SessionGuard, ProvisionalSessionGuard, SessionIssuer],
   // UsersModule travels with the guards: @UseGuards builds them inside the
   // module that declares the controller, so that module has to be able to

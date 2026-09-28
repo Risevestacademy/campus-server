@@ -12,10 +12,7 @@ import { AppModule } from './../src/app.module.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
-import {
-  SessionScope,
-  verifySessionToken,
-} from '@campus/session';
+import { SessionScope, verifySessionToken } from '@campus/session';
 import { InviteStatus, invites } from './../src/modules/invites/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
@@ -113,7 +110,9 @@ describe('Google sign-in (e2e)', () => {
 
   const callback = async (state: string, cookie: string) =>
     request(app.getHttpServer())
-      .get(`/v1/auth/google/callback?code=any-code&state=${encodeURIComponent(state)}`)
+      .get(
+        `/v1/auth/google/callback?code=any-code&state=${encodeURIComponent(state)}`,
+      )
       .set('Cookie', cookie);
 
   it('sends the browser to Google and leaves an httpOnly cookie behind', async () => {
@@ -153,6 +152,8 @@ describe('Google sign-in (e2e)', () => {
         tokenHash: 'hashed-token',
         status: InviteStatus.Pending,
         invitedBy: admin.id,
+        // Cohort-less, so it has to be an admin invite.
+        systemRole: SystemRole.Admin,
         expiresAt: new Date(Date.now() + 86_400_000),
       })
       .returning({ id: invites.id });

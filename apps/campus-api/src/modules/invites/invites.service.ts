@@ -1,12 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt, lte, ne } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, lte, ne, or } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
-import {
-  DRIZZLE,
-  type Db,
-} from '../../infra/database/database.constants.js';
+import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import {
   CohortRole,
@@ -130,7 +127,11 @@ export function checkEmailMatch(
 
   throw new InviteInternalException(
     'Session invite is not addressed to the signed-in account',
-    { inviteId: invite.id, inviteEmail: invite.email, accountEmail: user.email },
+    {
+      inviteId: invite.id,
+      inviteEmail: invite.email,
+      accountEmail: user.email,
+    },
   );
 }
 
@@ -168,7 +169,16 @@ export class InvitesService {
     await this.assertNoLiveInvite(email);
     await this.assertReferencesExist(dto);
 
-    const expiresAt = this.resolveExpiresAt(dto.expiresAt);
+    const guestAccessExpiresAt = this.resolveGuestExpiry(dto);
+    // An invite must not stay redeemable past the visit it grants. Without
+    // this an admin could set a window ending tomorrow while the link lived
+    // for INVITE_TTL_DAYS: accepting on day three would mint a full-access
+    // session against a membership that was already over, and the guest
+    // would be refused at their next sign-in having just been let in.
+    const expiresAt = earliest(
+      this.resolveExpiresAt(dto.expiresAt),
+      guestAccessExpiresAt,
+    );
 
     // A token collision (23505 on the hash index) means regenerating, not
     // failing: the address slot is still free. Bounded to one retry — a
@@ -187,6 +197,7 @@ export class InvitesService {
             mentorshipGroupId: dto.mentorshipGroupId ?? null,
             cohortRole: dto.cohortRole ?? null,
             systemRole,
+            guestAccessExpiresAt,
             tokenHash,
             invitedBy: inviter.id,
             expiresAt,
@@ -210,6 +221,7 @@ export class InvitesService {
           systemRole: row.systemRole,
           status: row.status,
           expiresAt: row.expiresAt.toISOString(),
+          guestAccessExpiresAt: row.guestAccessExpiresAt?.toISOString() ?? null,
           inviteLink,
           token,
           createdAt: row.createdAt.toISOString(),
@@ -274,6 +286,7 @@ export class InvitesService {
           systemRole: invites.systemRole,
           status: invites.status,
           expiresAt: invites.expiresAt,
+          guestAccessExpiresAt: invites.guestAccessExpiresAt,
           createdAt: invites.createdAt,
         },
         cohort: {
@@ -336,8 +349,17 @@ export class InvitesService {
     // isInviteLive is the single source of truth; the branch below only
     // explains which of its two conditions failed.
     if (!isInviteLive(row.invite, now)) {
-      if (row.invite.status === InviteStatus.Pending) {
-        await this.expireLazily(inviteId, now);
+      // Lapsed-but-still-pending and already-materialised Expired are one
+      // outcome with one code. The first read is what does the materialising,
+      // so anything else would make the answer depend on how many times the
+      // invite had been looked at — which the caller cannot see.
+      if (
+        row.invite.status === InviteStatus.Pending ||
+        row.invite.status === InviteStatus.Expired
+      ) {
+        if (row.invite.status === InviteStatus.Pending) {
+          await this.expireLazily(inviteId, now);
+        }
         throw new InviteForbiddenException('This invite has expired', {
           inviteId,
           expiresAt: row.invite.expiresAt,
@@ -419,6 +441,7 @@ export class InvitesService {
       systemRole: row.invite.systemRole,
       status: row.invite.status,
       expiresAt: row.invite.expiresAt,
+      guestAccessExpiresAt: row.invite.guestAccessExpiresAt,
       invitedBy,
       createdAt: row.invite.createdAt,
       user: account,
@@ -573,8 +596,9 @@ export class InvitesService {
   }
 
   /**
-   * Explains a failed claim, and flips the lazy expiry on the way out when the
-   * invite turned out to be lapsed rather than answered.
+   * Explains a failed claim. It only reports: the row is left as it is, so a
+   * lapsed invite refused here keeps its pending status until something that
+   * reads it materialises the lapse.
    */
   private async throwUnclaimable(
     invite: Invite,
@@ -614,7 +638,8 @@ export class InvitesService {
     now: Date,
   ): Promise<MembershipGrantedDto | null> {
     if (invite.cohortId === null) {
-      // A guest invite: full access with nowhere to enrol. Not an error.
+      // An admin invite: a platform role rather than a place in a cohort.
+      // Guests do enrol — theirs is a cohort role like any other.
       return null;
     }
     if (invite.cohortRole === null) {
@@ -624,6 +649,20 @@ export class InvitesService {
         'Cohort-scoped invite has no cohort role',
         { inviteId: invite.id },
       );
+    }
+
+    // create() clamps expires_at to the window, so a live invite should imply
+    // a live window. Checked anyway: the alternative is writing a membership
+    // that is dead on arrival, which reads as a successful accept and then
+    // refuses the guest at their very next sign-in.
+    if (
+      invite.guestAccessExpiresAt !== null &&
+      invite.guestAccessExpiresAt <= now
+    ) {
+      throw new InviteForbiddenException('This guest visit has already ended', {
+        inviteId: invite.id,
+        guestAccessExpiresAt: invite.guestAccessExpiresAt,
+      });
     }
 
     const status =
@@ -637,6 +676,7 @@ export class InvitesService {
         cohortTrackId: invite.cohortTrackId,
         role: invite.cohortRole,
         status,
+        accessExpiresAt: invite.guestAccessExpiresAt,
         joinedAt: now,
       })
       .onConflictDoUpdate({
@@ -647,14 +687,46 @@ export class InvitesService {
           role: invite.cohortRole,
           cohortTrackId: invite.cohortTrackId,
           status,
+          // Whatever ended the last membership is not true of this one. The
+          // reason is discarded rather than carried forward — see
+          // cohort_members_dismissal_reason, which refuses to hold one on a
+          // row that is not dismissed. Preserving why somebody once left is
+          // audit_log's job; until that exists the reason is lost here, and
+          // personal/backlog.md records that it has to be written there
+          // first once it does.
+          dismissalReason: null,
+          accessExpiresAt: invite.guestAccessExpiresAt,
           leftAt: null,
           joinedAt: now,
           updatedAt: now,
         },
+        // Only a membership that is no longer live may be revived, which is
+        // either one somebody left or a guest visit that has run out. A live
+        // one is a standing decision — its role, track and joinedAt belong to
+        // whoever made it, and an invite sent before it must not rewrite them.
+        //
+        // The guest half matters because a lapsed visit leaves left_at NULL:
+        // without it, the row that ended on its own would block every future
+        // invite to that cohort and the guest could never be asked back.
+        // access_expires_at is NULL for every other role, so the comparison
+        // is null there and only left_at applies.
+        setWhere: or(
+          isNotNull(cohortMembers.leftAt),
+          lte(cohortMembers.accessExpiresAt, now),
+        ),
       })
       .returning();
 
     if (!row) {
+      const live = await this.findMembership(tx, invite.cohortId, userId);
+      if (live) {
+        // The transaction rolls back, so the invite stays answerable: an
+        // admin can revoke it, or the member can be removed first.
+        throw new InviteConflictException(
+          'This account is already a member of that cohort',
+          { inviteId: invite.id, cohortId: invite.cohortId, userId },
+        );
+      }
       throw new InviteInternalException('Membership could not be created', {
         inviteId: invite.id,
         userId,
@@ -668,18 +740,25 @@ export class InvitesService {
    * provisional sign-in creates the account with, because the account already
    * exists by the time anyone accepts. Applying it here is what makes
    * `systemRole` on an invite mean anything.
+   *
+   * It only ever grants. An invite is an offer made at some point in the
+   * past, and the account may have been promoted since it was sent — writing
+   * the invite's role over the current one would let a stale ordinary invite
+   * demote an admin.
    */
   private async applySystemRole(
     tx: Tx,
     invite: Invite,
     userId: string,
   ): Promise<User> {
+    if (invite.systemRole !== SystemRole.Admin) {
+      return this.findAccount(tx, userId);
+    }
+
     const [raised] = await tx
       .update(users)
-      .set({ systemRole: invite.systemRole })
-      .where(
-        and(eq(users.id, userId), ne(users.systemRole, invite.systemRole)),
-      )
+      .set({ systemRole: SystemRole.Admin })
+      .where(and(eq(users.id, userId), ne(users.systemRole, SystemRole.Admin)))
       .returning();
 
     if (raised) {
@@ -689,12 +768,55 @@ export class InvitesService {
     return this.findAccount(tx, userId);
   }
 
+  private async findMembership(
+    tx: Tx,
+    cohortId: string,
+    userId: string,
+  ): Promise<typeof cohortMembers.$inferSelect | undefined> {
+    const [row] = await tx
+      .select()
+      .from(cohortMembers)
+      .where(
+        and(
+          eq(cohortMembers.cohortId, cohortId),
+          eq(cohortMembers.userId, userId),
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
   private async findAccount(tx: Tx, userId: string): Promise<User> {
-    const [row] = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
+    const [row] = await tx
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
     if (!row) {
-      throw new InviteInternalException('Signed-in account vanished', { userId });
+      throw new InviteInternalException('Signed-in account vanished', {
+        userId,
+      });
     }
     return row;
+  }
+
+  /** A visit that ended before it began is not an invite anybody can use. */
+  private resolveGuestExpiry(dto: CreateInviteDto): Date | null {
+    if (dto.guestAccessExpiresAt == null) {
+      return null;
+    }
+    const at = new Date(dto.guestAccessExpiresAt);
+    if (Number.isNaN(at.getTime())) {
+      throw new InviteInvalidArgumentException(
+        'guestAccessExpiresAt is not a valid date',
+      );
+    }
+    if (at.getTime() <= Date.now()) {
+      throw new InviteInvalidArgumentException(
+        'guestAccessExpiresAt must be in the future',
+      );
+    }
+    return at;
   }
 
   private get inviteTtlDays(): number {
@@ -710,7 +832,10 @@ export class InvitesService {
    * clobbered back to 'expired' — unreachable while invites are only ever
    * created, reachable the moment accept exists.
    */
-  private async expireLazily(id: string, now: Date = new Date()): Promise<void> {
+  private async expireLazily(
+    id: string,
+    now: Date = new Date(),
+  ): Promise<void> {
     await this.db
       .update(invites)
       .set({ status: InviteStatus.Expired })
@@ -725,10 +850,10 @@ export class InvitesService {
 
   /**
    * Mirrors the INVITES CHECKs so callers get a clean 400 INVALID_ARGUMENT
-   * instead of a raw constraint violation. Three shapes pass through:
-   * cohort ({ email, cohortId, cohortRole }), admin
-   * ({ email, systemRole: admin }) and guest ({ email } alone) — anything
-   * the CHECKs would reject is caught here first.
+   * instead of a raw constraint violation. Two shapes pass through: cohort
+   * ({ email, cohortId, cohortRole }, plus guestAccessExpiresAt when that role
+   * is guest) and admin ({ email, systemRole: admin }) — anything the CHECKs
+   * would reject is caught here first.
    */
   private assertValidShape(dto: CreateInviteDto): void {
     const hasCohortId = dto.cohortId != null;
@@ -736,6 +861,32 @@ export class InvitesService {
     const hasScopedField =
       dto.cohortTrackId != null || dto.mentorshipGroupId != null;
 
+    // invites_cohortless_is_admin: everybody else joins a cohort, guests
+    // included — a guest is invited to one cohort and sees that cohort.
+    if (!hasCohortId && dto.systemRole !== SystemRole.Admin) {
+      throw new InviteInvalidArgumentException(
+        'Only an admin invite may omit a cohort; every other invite names one',
+        { systemRole: dto.systemRole ?? SystemRole.User },
+      );
+    }
+    // invites_guest_has_expiry: a visit has an end, and only a visit does.
+    if (
+      dto.cohortRole === CohortRole.Guest &&
+      dto.guestAccessExpiresAt == null
+    ) {
+      throw new InviteInvalidArgumentException(
+        'guestAccessExpiresAt is required when cohortRole is guest',
+      );
+    }
+    if (
+      dto.cohortRole !== CohortRole.Guest &&
+      dto.guestAccessExpiresAt != null
+    ) {
+      throw new InviteInvalidArgumentException(
+        'guestAccessExpiresAt belongs to guest invites only',
+        { cohortRole: dto.cohortRole ?? null },
+      );
+    }
     // invites_cohort_pairing: cohort and role travel together.
     if (hasCohortId !== hasCohortRole) {
       throw new InviteInvalidArgumentException(
@@ -759,7 +910,10 @@ export class InvitesService {
 
   private async assertNoLiveInvite(email: string): Promise<void> {
     const existing = await this.db.query.invites.findFirst({
-      where: and(eq(invites.email, email), eq(invites.status, InviteStatus.Pending)),
+      where: and(
+        eq(invites.email, email),
+        eq(invites.status, InviteStatus.Pending),
+      ),
     });
     if (!existing) return;
 
@@ -818,13 +972,20 @@ export class InvitesService {
       throw new InviteInvalidArgumentException('expiresAt is not a valid date');
     }
     if (at.getTime() <= Date.now()) {
-      throw new InviteInvalidArgumentException('expiresAt must be in the future');
+      throw new InviteInvalidArgumentException(
+        'expiresAt must be in the future',
+      );
     }
     return at.getTime() > max.getTime() ? max : at;
   }
 }
 
 type InviteWriteErrorKind = 'pending-duplicate' | 'token-collision' | null;
+
+/** The earlier of two moments, ignoring a null second one. */
+function earliest(a: Date, b: Date | null): Date {
+  return b !== null && b < a ? b : a;
+}
 
 function toMembershipDto(row: CohortMember): MembershipGrantedDto {
   return {
@@ -833,6 +994,7 @@ function toMembershipDto(row: CohortMember): MembershipGrantedDto {
     cohortTrackId: row.cohortTrackId,
     status: row.status,
     joinedAt: row.joinedAt,
+    accessExpiresAt: row.accessExpiresAt,
   };
 }
 
