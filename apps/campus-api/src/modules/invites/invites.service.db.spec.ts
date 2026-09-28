@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { PGlite } from '@electric-sql/pglite';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
@@ -9,15 +9,24 @@ import { fileURLToPath } from 'node:url';
 import {
   CohortRole,
   CohortStatus,
+  cohortMembers,
   cohortTracks,
   cohorts,
+  StudentStatus,
 } from '../cohorts/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
+import { InviteDecision } from './dto/invite-decision.dto.js';
 import { generateInviteToken, hashInviteToken } from './invite-token.js';
 import {
+  InviteAlreadyAcceptedException,
+  InviteAlreadyDeclinedException,
   InviteConflictException,
+  InviteForbiddenException,
+  InviteInternalException,
   InviteInvalidArgumentException,
+  InviteNotFoundException,
+  InviteRevokedException,
 } from './invites.exceptions.js';
 import {
   InvitesService,
@@ -43,7 +52,7 @@ const MIGRATIONS = fileURLToPath(
 );
 
 const db = drizzle(new PGlite(), {
-  schema: { users, tracks, cohorts, cohortTracks, invites },
+  schema: { users, tracks, cohorts, cohortTracks, cohortMembers, invites },
 });
 
 const config = {
@@ -226,5 +235,618 @@ describe('InvitesService against real Postgres', () => {
     await expect(
       service.create({ email: 'x@campus.local', cohortId: fixtures.cohortId }, inviter),
     ).rejects.toBeInstanceOf(InviteInvalidArgumentException);
+  });
+});
+
+/**
+ * getOnboardingInvite is the only read path that crosses from a session to
+ * invite rows, so it is exercised against real Postgres rather than a mock:
+ * the join shape, the nullable cohort columns for guest invites, and the
+ * lazy status flip are all things a mocked db can only agree with.
+ */
+describe('getOnboardingInvite', () => {
+  const seedInvitee = async (
+    email = 'invitee@campus.local',
+  ): Promise<{ id: string; email: string; systemRole: string }> => {
+    const [user] = await db
+      .insert(users)
+      .values({ email, systemRole: SystemRole.User })
+      .returning();
+    return { id: user.id, email: user.email, systemRole: user.systemRole };
+  };
+
+  /**
+   * Dates are Date, not string. The db spec calls the service directly, so
+   * this is the only place the real in-memory types are observable — the e2e
+   * can only see the ISO text JSON.stringify produced on the way out.
+   */
+  it('returns timestamps as Date and DATE columns as plain text', async () => {
+    const invitee = await seedInvitee();
+    await db
+      .update(cohorts)
+      .set({ startDate: '2026-09-01', endDate: '2027-06-30' })
+      .where(sql`${cohorts.id} = ${fixtures.cohortId}`);
+    const created = await service.create(
+      {
+        email: invitee.email,
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Student,
+        cohortTrackId: fixtures.cohortTrackId,
+      },
+      inviter,
+    );
+
+    const res = await service.getOnboardingInvite(created.id, invitee);
+
+    expect(res.expiresAt).toBeInstanceOf(Date);
+    expect(res.createdAt).toBeInstanceOf(Date);
+    expect(res.cohort?.createdAt).toBeInstanceOf(Date);
+    expect(res.cohort?.updatedAt).toBeInstanceOf(Date);
+    expect(res.cohortTrack?.createdAt).toBeInstanceOf(Date);
+    expect(res.track?.createdAt).toBeInstanceOf(Date);
+    expect(res.user.createdAt).toBeInstanceOf(Date);
+
+    // The driver hands back DATE columns as 'YYYY-MM-DD' text, and widening
+    // that to Date would assert an instant the value does not carry.
+    expect(res.cohort?.startDate).toBe('2026-09-01');
+    expect(res.cohort?.endDate).toBe('2027-06-30');
+    expect(res.cohort?.startDate).not.toBeInstanceOf(Date);
+  });
+
+  it('returns cohort, track and both roles for a live cohort invite', async () => {
+    const invitee = await seedInvitee();
+    const created = await service.create(
+      {
+        email: invitee.email,
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Student,
+        cohortTrackId: fixtures.cohortTrackId,
+      },
+      inviter,
+    );
+
+    const res = await service.getOnboardingInvite(created.id, invitee);
+
+    expect(res.id).toBe(created.id);
+    expect(res.cohort?.id).toBe(fixtures.cohortId);
+    expect(res.cohort?.name).toBe('Cohort 1');
+    expect(res.cohort?.code).toBe('C1');
+    expect(res.cohortTrack?.id).toBe(fixtures.cohortTrackId);
+    expect(res.track?.name).toBe('Software Engineering');
+    expect(res.track?.code).toBe('SE');
+    expect(res.cohortRole).toBe(CohortRole.Student);
+    expect(res.systemRole).toBe(SystemRole.User);
+    expect(res.status).toBe(InviteStatus.Pending);
+    expect(res.invitedBy.id).toBe(inviter.id);
+    // The shared admin fixture has no name parts, so both stay null rather
+    // than being invented from the address.
+    expect(res.invitedBy).toEqual({
+      id: inviter.id,
+      firstName: null,
+      lastName: null,
+    });
+    expect(res.user.id).toBe(invitee.id);
+    expect(res.user.email).toBe(invitee.email);
+    // created.expiresAt is the create receipt's ISO text; this is the same
+    // instant, still a Date here.
+    expect(res.expiresAt.getTime()).toBe(new Date(created.expiresAt).getTime());
+  });
+
+  /**
+   * Why the DTO promises Date rather than string: a value whose toJSON threw
+   * would serialise as null and silently drop out of the payload, which is how
+   * a field declared "string, always" turns into a consumer reading undefined.
+   * The ISO shape below is what the wire actually carries.
+   */
+  it('serialises the Date fields to ISO text on the wire', async () => {
+    const invitee = await seedInvitee();
+    const created = await service.create(
+      {
+        email: invitee.email,
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Student,
+        cohortTrackId: fixtures.cohortTrackId,
+      },
+      inviter,
+    );
+
+    const res = await service.getOnboardingInvite(created.id, invitee);
+    const wire = JSON.parse(JSON.stringify(res));
+    const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+    expect(wire.expiresAt).toBe(new Date(created.expiresAt).toISOString());
+    expect(wire.createdAt).toMatch(iso);
+    expect(wire.cohort.createdAt).toMatch(iso);
+    expect(wire.cohort.updatedAt).toMatch(iso);
+    expect(wire.cohortTrack.createdAt).toMatch(iso);
+    expect(wire.track.createdAt).toMatch(iso);
+    expect(wire.user.createdAt).toMatch(iso);
+  });
+
+  /** The populated case, since the shared fixture has no name parts. */
+  it('returns the inviter name parts when they are set', async () => {
+    const [named] = await db
+      .insert(users)
+      .values({
+        email: 'ada@campus.local',
+        systemRole: SystemRole.Admin,
+        firstName: 'Ada',
+        lastName: 'Lovelace',
+      })
+      .returning();
+    const invitee = await seedInvitee('named-invitee@campus.local');
+    const created = await service.create({ email: invitee.email }, named);
+
+    const res = await service.getOnboardingInvite(created.id, invitee);
+
+    expect(res.invitedBy).toEqual({
+      id: named.id,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+    });
+  });
+
+  it('never leaks the token, the link or the invited address', async () => {
+    const invitee = await seedInvitee();
+    const created = await service.create(
+      { email: invitee.email, cohortId: fixtures.cohortId, cohortRole: CohortRole.Student, cohortTrackId: fixtures.cohortTrackId },
+      inviter,
+    );
+
+    const wire = JSON.stringify(
+      await service.getOnboardingInvite(created.id, invitee),
+    );
+
+    expect(wire).not.toContain(created.token);
+    expect(wire).not.toContain('inviteLink');
+    expect(wire).not.toContain('tokenHash');
+  });
+
+  it('returns nulls for the cohort shape of a guest invite', async () => {
+    const invitee = await seedInvitee('guest-invitee@campus.local');
+    const created = await service.create({ email: invitee.email }, inviter);
+
+    const res = await service.getOnboardingInvite(created.id, invitee);
+
+    expect(res.cohort).toBeNull();
+    expect(res.cohortTrack).toBeNull();
+    expect(res.track).toBeNull();
+    expect(res.cohortRole).toBeNull();
+    expect(res.systemRole).toBe(SystemRole.User);
+  });
+
+  it('404s on an id that matches nothing', async () => {
+    const invitee = await seedInvitee();
+    await expect(
+      service.getOnboardingInvite('00000000-0000-4000-8000-000000000000', invitee),
+    ).rejects.toBeInstanceOf(InviteNotFoundException);
+  });
+
+  /**
+   * The second identifier. A session can only be signed with an invite the
+   * app minted, so a mismatch is unreachable by a caller — it is a bug, and
+   * it must not be laundered into a 404 that blames the user.
+   */
+  it('500s when the invite is addressed to a different account', async () => {
+    const owner = await seedInvitee('owner@campus.local');
+    const impostor = await seedInvitee('impostor@campus.local');
+    const created = await service.create({ email: owner.email }, inviter);
+
+    await expect(
+      service.getOnboardingInvite(created.id, impostor),
+    ).rejects.toBeInstanceOf(InviteInternalException);
+  });
+
+  it('403s a lapsed invite and materialises the status flip', async () => {
+    const invitee = await seedInvitee();
+    const created = await service.create({ email: invitee.email }, inviter);
+    await db
+      .update(invites)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(sql`${invites.id} = ${created.id}`);
+
+    await expect(
+      service.getOnboardingInvite(created.id, invitee),
+    ).rejects.toBeInstanceOf(InviteForbiddenException);
+
+    const [row] = await db
+      .select({ status: invites.status })
+      .from(invites)
+      .where(sql`${invites.id} = ${created.id}`);
+    expect(row.status).toBe(InviteStatus.Expired);
+  });
+
+  it('409s a resolved invite with its own code and leaves its status alone', async () => {
+    const invitee = await seedInvitee();
+    const created = await service.create({ email: invitee.email }, inviter);
+    await db
+      .update(invites)
+      .set({ status: InviteStatus.Declined })
+      .where(sql`${invites.id} = ${created.id}`);
+
+    await expect(
+      service.getOnboardingInvite(created.id, invitee),
+    ).rejects.toBeInstanceOf(InviteAlreadyDeclinedException);
+
+    const [row] = await db
+      .select({ status: invites.status })
+      .from(invites)
+      .where(sql`${invites.id} = ${created.id}`);
+    expect(row.status).toBe(InviteStatus.Declined);
+  });
+
+  /**
+   * The conditional part of expireLazily's UPDATE, called directly.
+   *
+   * Reaching it through getOnboardingInvite cannot cover it: a row whose
+   * status already moved on short-circuits into the 409 branch and never
+   * issues the write. The race being defended against is the update landing
+   * after a concurrent accept, so the assertion has to be about the UPDATE's
+   * own WHERE clause — which is why this is the one test reaching past the
+   * public surface. Verified by deleting either guard: both fail.
+   */
+  describe('expireLazily guards', () => {
+    const expireLazily = (id: string, now = new Date()) =>
+      (service as unknown as {
+        expireLazily(id: string, now?: Date): Promise<void>;
+      }).expireLazily(id, now);
+
+    const statusOf = async (id: string) => {
+      const [row] = await db
+        .select({ status: invites.status })
+        .from(invites)
+        .where(sql`${invites.id} = ${id}`);
+      return row.status;
+    };
+
+    it('flips a still-pending lapsed invite', async () => {
+      const invitee = await seedInvitee('flip@campus.local');
+      const created = await service.create({ email: invitee.email }, inviter);
+      const past = new Date(Date.now() - 1_000);
+      await db
+        .update(invites)
+        .set({ expiresAt: past })
+        .where(sql`${invites.id} = ${created.id}`);
+
+      await expireLazily(created.id);
+
+      expect(await statusOf(created.id)).toBe(InviteStatus.Expired);
+    });
+
+    /** The accept-wins half: a status that moved on must survive untouched. */
+    it('leaves an accepted invite alone', async () => {
+      const invitee = await seedInvitee('accepted@campus.local');
+      const created = await service.create({ email: invitee.email }, inviter);
+      await db
+        .update(invites)
+        .set({ status: InviteStatus.Accepted, expiresAt: new Date(Date.now() - 1_000) })
+        .where(sql`${invites.id} = ${created.id}`);
+
+      await expireLazily(created.id);
+
+      expect(await statusOf(created.id)).toBe(InviteStatus.Accepted);
+    });
+
+    /** And the lapsed-not-yet-expired half, so a live offer is never buried. */
+    it('leaves a still-live invite alone', async () => {
+      const invitee = await seedInvitee('live@campus.local');
+      const created = await service.create({ email: invitee.email }, inviter);
+
+      await expireLazily(created.id);
+
+      expect(await statusOf(created.id)).toBe(InviteStatus.Pending);
+    });
+  });
+});
+
+describe('decide()', () => {
+  const eqId = (id: string) => eq(invites.id, id);
+  const eqUser = (id: string) => eq(users.id, id);
+
+  let invitee: { id: string; email: string; systemRole: string };
+
+  beforeEach(async () => {
+    const [row] = await db
+      .insert(users)
+      .values({ email: 'invitee@campus.local' })
+      .returning();
+    invitee = {
+      id: row.id,
+      email: row.email,
+      systemRole: row.systemRole,
+    };
+  });
+
+  const makeInvite = async (
+    overrides: Partial<typeof invites.$inferInsert> = {},
+  ) => {
+    const [row] = await db
+      .insert(invites)
+      .values({
+        email: invitee.email,
+        invitedBy: inviter.id,
+        tokenHash: hashInviteToken(generateInviteToken()),
+        expiresAt: new Date(Date.now() + 86_400_000),
+        ...overrides,
+      })
+      .returning();
+    return row;
+  };
+
+  const membershipOf = async (userId: string) => {
+    const rows = await db.select().from(cohortMembers);
+    return rows.filter((r) => r.userId === userId);
+  };
+
+  it('accepts a student invite, enrolling them with an active status', async () => {
+    const invite = await makeInvite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Student,
+      cohortTrackId: fixtures.cohortTrackId,
+    });
+
+    const outcome = await service.decide(
+      invite.id,
+      InviteDecision.Accept,
+      invitee as never,
+    );
+
+    expect(outcome.kind).toBe('accepted');
+    expect(outcome.response.status).toBe(InviteStatus.Accepted);
+
+    const [row] = await db.select().from(invites).where(eqId(invite.id));
+    expect(row.status).toBe(InviteStatus.Accepted);
+    expect(row.acceptedAt).toBeInstanceOf(Date);
+
+    const [member] = await membershipOf(invitee.id);
+    expect(member.cohortId).toBe(fixtures.cohortId);
+    expect(member.role).toBe(CohortRole.Student);
+    expect(member.cohortTrackId).toBe(fixtures.cohortTrackId);
+    // The trap: hasActiveMembership only counts a student whose status is
+    // active, so a null here would strand them at the invite wall.
+    expect(member.status).toBe(StudentStatus.Active);
+    expect(member.leftAt).toBeNull();
+  });
+
+  it('applies the invite systemRole to the account on accept', async () => {
+    const invite = await makeInvite({ systemRole: SystemRole.Admin });
+
+    const outcome = await service.decide(
+      invite.id,
+      InviteDecision.Accept,
+      invitee as never,
+    );
+
+    expect(outcome.kind).toBe('accepted');
+    expect(outcome.response.systemRole).toBe(SystemRole.Admin);
+
+    const [row] = await db.select().from(users).where(eqUser(invitee.id));
+    expect(row.systemRole).toBe(SystemRole.Admin);
+  });
+
+  it('accepts a guest invite with no membership', async () => {
+    const invite = await makeInvite();
+
+    const outcome = await service.decide(
+      invite.id,
+      InviteDecision.Accept,
+      invitee as never,
+    );
+
+    expect(outcome.response.membership).toBeNull();
+    expect(await membershipOf(invitee.id)).toHaveLength(0);
+    expect(outcome.response.systemRole).toBe(SystemRole.User);
+  });
+
+  it('leaves status null for a non-student role', async () => {
+    const invite = await makeInvite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Professor,
+    });
+
+    await service.decide(invite.id, InviteDecision.Accept, invitee as never);
+
+    const [member] = await membershipOf(invitee.id);
+    expect(member.role).toBe(CohortRole.Professor);
+    expect(member.status).toBeNull();
+  });
+
+  it('refuses to decide an invite that already carries an answer', async () => {
+    const invite = await makeInvite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Student,
+      cohortTrackId: fixtures.cohortTrackId,
+    });
+
+    const first = await service.decide(
+      invite.id,
+      InviteDecision.Accept,
+      invitee as never,
+    );
+    expect(first.kind).toBe('accepted');
+
+    // The retry is a conflict, not a repeat: the caller is told which answer
+    // already stands so it can route them, rather than being handed a second
+    // session for a decision it already made.
+    await expect(
+      service.decide(invite.id, InviteDecision.Accept, invitee as never),
+    ).rejects.toBeInstanceOf(InviteAlreadyAcceptedException);
+
+    // ...and the replay did not enrol them twice.
+    expect(await membershipOf(invitee.id)).toHaveLength(1);
+  });
+
+  it('names the standing answer in a code the caller can branch on', async () => {
+    const accepted = await makeInvite();
+    await service.decide(accepted.id, InviteDecision.Accept, invitee as never);
+    await expect(
+      service.decide(accepted.id, InviteDecision.Accept, invitee as never),
+    ).rejects.toMatchObject({
+      code: 'INVITE_ALREADY_ACCEPTED',
+      details: { inviteId: accepted.id, status: InviteStatus.Accepted },
+    });
+
+    const declined = await makeInvite({ email: invitee.email });
+    await service.decide(declined.id, InviteDecision.Decline, invitee as never);
+    await expect(
+      service.decide(declined.id, InviteDecision.Decline, invitee as never),
+    ).rejects.toMatchObject({
+      code: 'INVITE_ALREADY_DECLINED',
+      details: { inviteId: declined.id, status: InviteStatus.Declined },
+    });
+
+    const revoked = await makeInvite({ email: invitee.email });
+    await db
+      .update(invites)
+      .set({ status: InviteStatus.Revoked })
+      .where(sql`${invites.id} = ${revoked.id}`);
+    await expect(
+      service.decide(revoked.id, InviteDecision.Accept, invitee as never),
+    ).rejects.toMatchObject({
+      code: 'INVITE_REVOKED',
+      details: { inviteId: revoked.id, status: InviteStatus.Revoked },
+    });
+  });
+
+  it('revives a membership a former member had left', async () => {
+    const [stale] = await db
+      .insert(cohortMembers)
+      .values({
+        cohortId: fixtures.cohortId,
+        userId: invitee.id,
+        role: CohortRole.Student,
+        cohortTrackId: fixtures.cohortTrackId,
+        status: StudentStatus.Withdrawn,
+        leftAt: new Date(),
+      })
+      .returning();
+    expect(stale.leftAt).toBeInstanceOf(Date);
+
+    const invite = await makeInvite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Student,
+      cohortTrackId: fixtures.cohortTrackId,
+    });
+    await service.decide(invite.id, InviteDecision.Accept, invitee as never);
+
+    // One row per person per cohort, ever — revived, not duplicated.
+    const rows = await membershipOf(invitee.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].leftAt).toBeNull();
+    expect(rows[0].status).toBe(StudentStatus.Active);
+  });
+
+  it('declines without enrolling', async () => {
+    const invite = await makeInvite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Student,
+      cohortTrackId: fixtures.cohortTrackId,
+    });
+
+    const first = await service.decide(
+      invite.id,
+      InviteDecision.Decline,
+      invitee as never,
+    );
+    expect(first.kind).toBe('declined');
+    expect(first.response.membership).toBeNull();
+    expect(first.response.systemRole).toBeNull();
+    expect(await membershipOf(invitee.id)).toHaveLength(0);
+
+    const [row] = await db.select().from(invites).where(eqId(invite.id));
+    expect(row.status).toBe(InviteStatus.Declined);
+  });
+
+  it('leaves the account row in place after a decline', async () => {
+    const invite = await makeInvite();
+    await service.decide(invite.id, InviteDecision.Decline, invitee as never);
+
+    const [row] = await db.select().from(users).where(eqUser(invitee.id));
+    expect(row).toBeDefined();
+  });
+
+  it('refuses a decision on an invite already accepted', async () => {
+    const invite = await makeInvite();
+    await service.decide(invite.id, InviteDecision.Accept, invitee as never);
+
+    await expect(
+      service.decide(invite.id, InviteDecision.Decline, invitee as never),
+    ).rejects.toBeInstanceOf(InviteAlreadyAcceptedException);
+  });
+
+  it('refuses a decision on an invite already declined', async () => {
+    const invite = await makeInvite();
+    await service.decide(invite.id, InviteDecision.Decline, invitee as never);
+
+    await expect(
+      service.decide(invite.id, InviteDecision.Accept, invitee as never),
+    ).rejects.toBeInstanceOf(InviteAlreadyDeclinedException);
+  });
+
+  it('refuses a lapsed invite and leaves it pending for the read path', async () => {
+    const invite = await makeInvite({ expiresAt: new Date(Date.now() - 1_000) });
+
+    await expect(
+      service.decide(invite.id, InviteDecision.Accept, invitee as never),
+    ).rejects.toBeInstanceOf(InviteForbiddenException);
+
+    // The claim's throw rolls the transaction back, so the lazy flip is left
+    // to getOnboardingInvite rather than half-applied here.
+    const [row] = await db.select().from(invites).where(eqId(invite.id));
+    expect(row.status).toBe(InviteStatus.Pending);
+    expect(await membershipOf(invitee.id)).toHaveLength(0);
+  });
+
+  it('refuses a revoked invite', async () => {
+    const invite = await makeInvite({ status: InviteStatus.Revoked });
+
+    await expect(
+      service.decide(invite.id, InviteDecision.Accept, invitee as never),
+    ).rejects.toBeInstanceOf(InviteRevokedException);
+  });
+
+  it('refuses an unknown invite', async () => {
+    await expect(
+      service.decide(
+        '00000000-0000-4000-8000-000000000000',
+        InviteDecision.Accept,
+        invitee as never,
+      ),
+    ).rejects.toBeInstanceOf(InviteNotFoundException);
+  });
+
+  it('refuses a session pointed at someone else invite as a server fault', async () => {
+    const invite = await makeInvite();
+
+    await expect(
+      service.decide(invite.id, InviteDecision.Accept, {
+        id: invitee.id,
+        email: 'someone-else@campus.local',
+        systemRole: SystemRole.User,
+      } as never),
+    ).rejects.toBeInstanceOf(InviteInternalException);
+  });
+
+  it('rolls the whole accept back when enrolment cannot complete', async () => {
+    const invite = await makeInvite({
+      cohortId: fixtures.cohortId,
+      cohortRole: CohortRole.Student,
+      cohortTrackId: fixtures.cohortTrackId,
+    });
+
+    // Email matches so the claim proceeds, but the account id does not exist,
+    // so the membership insert trips cohort_members_user_id FK. A partial
+    // accept here would burn the invite without enrolling anyone.
+    await expect(
+      service.decide(invite.id, InviteDecision.Accept, {
+        id: '00000000-0000-4000-8000-000000000000',
+        email: invitee.email,
+        systemRole: SystemRole.User,
+      } as never),
+    ).rejects.toThrow();
+
+    const [row] = await db.select().from(invites).where(eqId(invite.id));
+    expect(row.status).toBe(InviteStatus.Pending);
+    expect(row.acceptedAt).toBeNull();
   });
 });

@@ -96,7 +96,7 @@ async function bootstrap() {
   );
   app.useGlobalFilters(
     new GlobalExceptionFilter(logger),
-    new DomainExceptionFilter(),
+    new DomainExceptionFilter(logger),
     new ValidationExceptionFilter(),
   );
 
