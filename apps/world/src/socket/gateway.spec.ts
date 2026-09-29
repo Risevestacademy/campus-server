@@ -653,6 +653,35 @@ describe('movement', () => {
       await leave(tabTwo);
     });
 
+    /**
+     * Tab one's last answer is its own step; tab two's step came after it.
+     * If the tick leaves out every tab that moved, tab one never learns
+     * where the avatar ended up.
+     */
+    it('brings both tabs to the final position when both step inside one tick', async () => {
+      const ada = person();
+      const tabOne = await arrive(ada);
+      const tabTwo = await arrive(ada);
+
+      move(tabOne, 'right', 1);
+      move(tabTwo, 'down', 1);
+      await waitFor(tabTwo, (m) => m.type === 'moveResult');
+
+      await expect(
+        waitFor(
+          tabOne,
+          (m) =>
+            m.type === 'moved' &&
+            (m.players as { userId: string; x: number; y: number }[]).some(
+              (p) => p.userId === ada && p.x === 1 && p.y === 1,
+            ),
+        ),
+      ).resolves.toBeDefined();
+
+      await leave(tabOne);
+      await leave(tabTwo);
+    });
+
     it('stays while either tab is open, and leaves with the last', async () => {
       const ada = person();
       const watcher = await arrive(person());

@@ -41,11 +41,17 @@ export function registerGateway(
   );
 
   /**
-   * Who moved since the last tick, and which sockets asked for those moves.
-   * Holds names, not positions: the tick reads where each person stands when
-   * it runs, so several steps in one tick collapse into the last.
+   * Who moved since the last tick, and the socket that made their latest
+   * change. Holds names, not positions: the tick reads where each person
+   * stands when it runs, so several steps in one tick collapse into the last.
+   *
+   * Only the latest, not every socket that moved them: that socket's
+   * `moveResult` already carries the final position, but an earlier one's
+   * does not. With two tabs stepping inside one tick, the first tab's last
+   * answer is an intermediate position, and leaving it out of the tick too
+   * would strand it there until it happened to move again.
    */
-  const pendingMoves = new Map<string, Set<Connection>>();
+  const pendingMoves = new Map<string, Connection>();
 
   /**
    * Sends once per tick rather than once per step. Per step, every move is a
@@ -58,25 +64,24 @@ export function registerGateway(
     }
     const moved: Player[] = [];
     const origins = new Map<Connection, Set<string>>();
-    for (const [userId, askedBy] of pendingMoves) {
+    for (const [userId, latestBy] of pendingMoves) {
       const player = players.get(userId);
       // Left since the step: `left` has already gone out, and an entry now
       // would put back an avatar the client has just taken away.
       if (!player) continue;
       moved.push(player);
-      for (const connection of askedBy) {
-        const own = origins.get(connection);
-        if (own) own.add(userId);
-        else origins.set(connection, new Set([userId]));
-      }
+      const own = origins.get(latestBy);
+      if (own) own.add(userId);
+      else origins.set(latestBy, new Set([userId]));
     }
     pendingMoves.clear();
     if (moved.length === 0) {
       return;
     }
 
-    // One frame for nearly everybody. Only a socket that made a step this
-    // tick needs its own, without the entry it already has an answer for.
+    // One frame for nearly everybody. Only a socket that made somebody's
+    // latest change needs its own, without the entry it already has an
+    // answer for.
     const shared = encode({ type: 'moved', players: moved });
     for (const connection of connections.all()) {
       const own = origins.get(connection);
@@ -318,9 +323,7 @@ export function registerGateway(
           const moved = players.move(connection.userId, direction, Date.now());
           send(ws, { type: 'moveResult', seq, outcome: moved.outcome, player: moved.player });
           if (moved.changed) {
-            const askedBy = pendingMoves.get(connection.userId);
-            if (askedBy) askedBy.add(connection);
-            else pendingMoves.set(connection.userId, new Set([connection]));
+            pendingMoves.set(connection.userId, connection);
           }
           return;
         }

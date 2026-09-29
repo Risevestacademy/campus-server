@@ -130,10 +130,12 @@ About `moved`:
   you last drew them. Walk the gap one tile at a time rather than sliding
   diagonally — a diagonal slide cuts corners that will be walls once real
   maps exist.
-- **You are not in it for your own steps** — you have the `moveResult`.
-- **You can be in it for your own avatar** if you have another tab open and
-  moved from there. Treat that entry like a `moveResult`: take the position,
-  then replay any moves of your own still pending.
+- **You are left out of your own entry when you made the latest change** —
+  your `moveResult` already says where you ended up.
+- **You are in it for your own avatar when another tab moved it after you
+  did**, including when both of your tabs stepped inside the same tick. Treat
+  that entry like a `moveResult`: take the position, then replay any moves of
+  your own still pending.
 
 ## Two tabs
 

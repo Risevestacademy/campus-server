@@ -140,9 +140,9 @@ export const ServerMessage = z
         'Everybody who moved or turned since the last tick, once each, as they stand ' +
         'now: two steps inside one tick arrive as the second, so an entry can be more ' +
         'than one tile from where they were. Sent once per tick, and not at all when ' +
-        'nobody moved. A tab is left out of its own entry when it made the step ' +
-        "itself, since it already has the `moveResult`; the same person's other tabs " +
-        'still get it, so they follow along.',
+        'nobody moved. A tab is left out of its own entry when it made the latest ' +
+        'change, since its `moveResult` already says where it ended up; every other ' +
+        "tab of the same person gets it, so they follow along.",
     }),
     z
       .object({
