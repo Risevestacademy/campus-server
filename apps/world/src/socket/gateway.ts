@@ -305,13 +305,10 @@ export function registerGateway(
       if (!connections.has(connection)) {
         return;
       }
-      // Before parsing, so a flood costs a counter rather than a JSON parse,
-      // a validation and a reply per frame. Dropped frames get no answer:
-      // answering is the work being refused.
+      // Before parsing, so an excess frame costs only a counter. Closing
+      // makes the client reconnect to an authoritative snapshot instead of
+      // silently losing a predicted move.
       const admission = budget.admit(Date.now());
-      if (admission === 'drop') {
-        return;
-      }
       if (admission === 'close') {
         app.log.warn(
           { connectionId: connection.id, userId: connection.userId },
@@ -406,4 +403,3 @@ export function registerGateway(
     },
   };
 }
-

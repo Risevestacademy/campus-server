@@ -591,9 +591,9 @@ describe('movement', () => {
   /**
    * Walking speed limits what a flood of moves can do, not how many arrive:
    * each would still be parsed and answered. Past the message budget they
-   * are dropped unanswered, and a client that keeps it up is closed.
+   * close the connection before parsing.
    */
-  it('stops answering a flood, and closes the socket that keeps it up', async () => {
+  it('closes a socket that exceeds its message budget', async () => {
     const flooder = await arrive(person());
 
     for (let i = 0; i < 200; i++) flooder.ws.send(JSON.stringify({ type: 'ping' }));
@@ -602,7 +602,7 @@ describe('movement', () => {
       closeCode: 1008,
       closeReason: 'rate_limited',
     });
-    // One second's budget was answered; the rest never cost a reply.
+    // At most one second's budget was answered before the close.
     const pongs = flooder.messages.filter((m) => m.type === 'pong').length;
     expect(pongs).toBeGreaterThan(0);
     expect(pongs).toBeLessThanOrEqual(20);

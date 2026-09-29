@@ -154,7 +154,7 @@ export const ServerMessage = z
       .meta({
         id: 'MoveResultMessage',
         description:
-          'The answer to one `move`, always sent. `player` is where the server has ' +
+          'The answer to one admitted `move`. `player` is where the server has ' +
           'them; on anything but `moved`, the client snaps back to it.',
       }),
     z

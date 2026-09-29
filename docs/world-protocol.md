@@ -87,8 +87,8 @@ The client says which way, never where to. The server decides every position.
    than that and the server answers `too_fast`. It allows a short burst — a
    few steps delayed by the network and delivered together — but not a
    sustained run.
-3. **Every move is answered with a `moveResult`**, in the order sent, carrying
-   your `seq` and where the server has you:
+3. **Every admitted move is answered with a `moveResult`**, in the order sent,
+   carrying your `seq` and where the server has you:
 
    | `outcome` | Meaning | What to draw |
    | --- | --- | --- |
@@ -147,11 +147,9 @@ one does not remove the avatar — only closing the last does.
 
 - **Messages:** about `WORLD_MAX_MESSAGES_PER_SECOND` (20 by default) per
   socket, with a second's worth allowed at once. Walking at full speed while
-  pinging uses about half. Past the budget, frames are **dropped unanswered**.
-  A dropped `move` never gets a `moveResult`; the correction above still
-  recovers, since the next answer clears every older pending move, but the
-  avatar snaps back. Keep it up and the socket is closed with
-  `rate_limited`.
+  pinging uses about half. The first frame past the budget closes the socket
+  with `rate_limited` before parsing. Reconnect and rebuild state from the
+  fresh snapshot.
 - **Frame size:** 16 KB by default. Larger closes the socket with 1009.
 - **Reading:** a client that stops reading what it is sent — a frozen tab, a
   debugger paused on a breakpoint — is disconnected once about 1 MB is waiting

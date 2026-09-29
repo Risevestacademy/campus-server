@@ -44,9 +44,8 @@ const schema = z.object({
 
   /**
    * Frames one socket may send per second, whatever they are. A second's
-   * worth may arrive at once; beyond that they are dropped unread, and a
-   * socket that keeps it up is closed. Walking at full speed while pinging
-   * uses about half the default.
+   * worth may arrive at once; the first excess frame closes the socket before
+   * parsing. Walking at full speed while pinging uses about half the default.
    */
   WORLD_MAX_MESSAGES_PER_SECOND: z.coerce.number().int().min(1).default(20),
 

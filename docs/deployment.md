@@ -9,7 +9,7 @@ across environments.
 | Service                          | Public domain?                       |
 | -------------------------------- | ------------------------------------ |
 | `campus-api` (`apps/campus-api`) | Yes                                  |
-| `world` (`apps/world`)           | Yes                                  |
+| `world` (`apps/world`)           | Not yet                              |
 | `frontend` (separate repo)       | Yes                                  |
 | `postgres` (Railway plugin)      | No — internal + admin proxy URL only |
 
