@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import { Direction } from '../movement/grid.js';
+import type { MoveOutcome, Player } from '../movement/players.js';
+
 /**
  * Every frame is one JSON envelope: a type, and a payload the type decides.
  * Parsed at the edge, so nothing past this file handles a shape it did not
@@ -9,9 +12,14 @@ import { z } from 'zod';
 export const ClientMessage = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ping') }),
   z.object({
-    type: z.literal('echo'),
-    /** Placeholder until movement lands: proves the round trip end to end. */
-    text: z.string().max(280),
+    type: z.literal('move'),
+    /** Which way, never where to: the server works out the tile. */
+    direction: z.enum(Direction),
+    /**
+     * The client's own counter, echoed on the `moveResult` so it can match
+     * the answer to the step it already drew and correct only that one.
+     */
+    seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   }),
 ]);
 
@@ -20,7 +28,23 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 export type ServerMessage =
   | { type: 'welcome'; userId: string; connectionId: string; heartbeatSeconds: number }
   | { type: 'pong' }
-  | { type: 'echo'; text: string }
+  /** Sent once, right after `welcome`: the map, and everybody on it, you included. */
+  | { type: 'snapshot'; map: { width: number; height: number }; players: Player[] }
+  /** Somebody arrived. Not sent for a second tab of somebody already here. */
+  | { type: 'joined'; player: Player }
+  /** Somebody's last socket closed. */
+  | { type: 'left'; userId: string }
+  /**
+   * Somebody moved or turned. Sent to every socket but the one that asked,
+   * which gets a `moveResult` instead — including the mover's other tabs, so
+   * they follow along.
+   */
+  | { type: 'moved'; player: Player }
+  /**
+   * The answer to one `move`, always sent. `player` is where the server has
+   * them: on anything but `moved`, the client snaps back to it.
+   */
+  | { type: 'moveResult'; seq: number; outcome: MoveOutcome; player: Player }
   | { type: 'error'; code: ServerErrorCode; message: string };
 
 /**

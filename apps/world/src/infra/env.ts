@@ -41,6 +41,39 @@ const schema = z.object({
 
   /** Largest frame accepted from a client, in bytes. */
   WORLD_MAX_MESSAGE_BYTES: z.coerce.number().int().min(1).default(16_384),
+
+  /**
+   * The placeholder map, in tiles, until real maps load (W6). Tiles, not
+   * pixels: the tile's pixel size is the client's business.
+   */
+  WORLD_MAP_WIDTH: z.coerce.number().int().min(1).default(40),
+  WORLD_MAP_HEIGHT: z.coerce.number().int().min(1).default(30),
+  WORLD_SPAWN_X: z.coerce.number().int().min(0).default(20),
+  WORLD_SPAWN_Y: z.coerce.number().int().min(0).default(15),
+
+  /**
+   * Fastest a player may walk: one tile per this many milliseconds. The
+   * client should animate a step over about this long, or a held key will
+   * outrun the server and be refused.
+   */
+  WORLD_STEP_MS: z.coerce.number().int().min(1).default(100),
+}).superRefine((env, ctx) => {
+  // A spawn off the map would place every arrival somewhere they could not
+  // move from; better to refuse to boot.
+  if (env.WORLD_SPAWN_X >= env.WORLD_MAP_WIDTH) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['WORLD_SPAWN_X'],
+      message: 'must be inside WORLD_MAP_WIDTH',
+    });
+  }
+  if (env.WORLD_SPAWN_Y >= env.WORLD_MAP_HEIGHT) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['WORLD_SPAWN_Y'],
+      message: 'must be inside WORLD_MAP_HEIGHT',
+    });
+  }
 });
 
 export type Env = z.infer<typeof schema>;

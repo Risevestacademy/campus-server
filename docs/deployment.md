@@ -71,7 +71,12 @@ subfolder — required so Nixpacks sees the shared pnpm workspace lockfile.
   from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
   world re-checks that the account behind a token still exists and is not
   suspended, so a ban reaches open sockets instead of waiting out the token),
-  `WORLD_DB_POOL`, `WORLD_HEARTBEAT_SECONDS`, `WORLD_MAX_MESSAGE_BYTES`.
+  `WORLD_DB_POOL`, `WORLD_HEARTBEAT_SECONDS`, `WORLD_MAX_MESSAGE_BYTES`,
+  and the placeholder map until real maps load: `WORLD_MAP_WIDTH`,
+  `WORLD_MAP_HEIGHT`, `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`, `WORLD_STEP_MS` (all
+  defaulted).
+- Positions are per-process state too, and are lost on a restart or redeploy:
+  everyone reconnects at the spawn tile.
 - Sockets are per-process state. Running more than one instance needs the
   presence work first, or two tabs may land on different instances and
   disagree about who is online.

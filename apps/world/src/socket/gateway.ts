@@ -4,6 +4,7 @@ import type { WebSocket } from 'ws';
 
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
+import { Players } from '../movement/players.js';
 import { decideUpgrade, type Refusal } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
 import {
@@ -20,6 +21,7 @@ const GOING_AWAY = 1001;
 
 export interface Gateway {
   connections: Connections;
+  players: Players;
   stop(): Promise<void>;
 }
 
@@ -29,6 +31,44 @@ export function registerGateway(
   accounts: AccountLookup,
 ): Gateway {
   const connections = new Connections();
+  const players = new Players(
+    {
+      width: env.WORLD_MAP_WIDTH,
+      height: env.WORLD_MAP_HEIGHT,
+      spawn: { x: env.WORLD_SPAWN_X, y: env.WORLD_SPAWN_Y },
+    },
+    env.WORLD_STEP_MS,
+  );
+
+  /**
+   * Every way a socket stops counting goes through here, so a player can
+   * never outlive the last socket standing for them. The avatar stays while
+   * any tab is open, and leaves with the last one. Idempotent: a socket
+   * dropped by the heartbeat comes back through here from its close event.
+   */
+  function drop(connection: Connection): void {
+    connections.remove(connection);
+    if (connections.forUser(connection.userId).length > 0) {
+      return;
+    }
+    if (players.leave(connection.userId)) {
+      broadcast({ type: 'left', userId: connection.userId });
+    }
+  }
+
+  /**
+   * Everybody in this process is on the one placeholder map, so everybody
+   * hears everything. Scoped to a map once maps exist (W6), and batched per
+   * tick rather than sent per step once the tick loop lands (W2).
+   */
+  function broadcast(message: ServerMessage, except?: Connection): void {
+    const frame = encode(message);
+    for (const connection of connections.all()) {
+      if (connection !== except && connection.socket.readyState === connection.socket.OPEN) {
+        connection.socket.send(frame);
+      }
+    }
+  }
 
   /**
    * Checked once per heartbeat rather than per frame: a ban should take
@@ -64,7 +104,7 @@ export function registerGateway(
           { connectionId: connection.id, userId, reason },
           'closing socket, account no longer welcome',
         );
-        connections.remove(connection);
+        drop(connection);
         connection.socket.close(POLICY_VIOLATION, reason);
       }
     }
@@ -85,7 +125,7 @@ export function registerGateway(
         // Dropped from the registry here rather than when the close event
         // comes back, so nothing is counted as present once we have decided
         // it is not. Removal is idempotent, so the close handler is fine.
-        connections.remove(connection);
+        drop(connection);
         connection.socket.close(POLICY_VIOLATION, 'session_expired');
         continue;
       }
@@ -97,7 +137,7 @@ export function registerGateway(
           { connectionId: connection.id, userId: connection.userId },
           'socket failed heartbeat, closing',
         );
-        connections.remove(connection);
+        drop(connection);
         connection.socket.terminate();
         continue;
       }
@@ -137,7 +177,7 @@ export function registerGateway(
     const onClose = (): void => {
       closed = true;
       if (registered) {
-        connections.remove(registered);
+        drop(registered);
         app.log.info(
           { connectionId: registered.id, userId: registered.userId },
           'socket closed',
@@ -178,6 +218,15 @@ export function registerGateway(
       alive: true,
     };
     registered = connection;
+    // Joined before anybody is told, and before any frame is read, so a move
+    // can never arrive for a player who is not standing anywhere yet.
+    const arriving = !players.has(connection.userId);
+    const player = players.join(connection.userId, Date.now());
+    if (arriving) {
+      // Told to everyone already here; the arrival learns of itself from the
+      // snapshot. A second tab is not an arrival.
+      broadcast({ type: 'joined', player });
+    }
     connections.add(connection);
     app.log.info(
       { connectionId: connection.id, userId: connection.userId },
@@ -189,6 +238,12 @@ export function registerGateway(
     });
 
     ws.on('message', (raw: Buffer) => {
+      // A socket we have dropped can still deliver frames while its close
+      // handshake finishes. It no longer speaks for anybody — and its player
+      // may be gone, which a move would trip over.
+      if (!connections.has(connection)) {
+        return;
+      }
       // Frames over WORLD_MAX_MESSAGE_BYTES never arrive: ws enforces
       // maxPayload itself and closes with 1009 before this fires.
       const result = decode(raw.toString('utf8'));
@@ -206,9 +261,15 @@ export function registerGateway(
           connection.alive = true;
           send(ws, { type: 'pong' });
           return;
-        case 'echo':
-          send(ws, { type: 'echo', text: result.message.text });
+        case 'move': {
+          const { direction, seq } = result.message;
+          const moved = players.move(connection.userId, direction, Date.now());
+          send(ws, { type: 'moveResult', seq, outcome: moved.outcome, player: moved.player });
+          if (moved.changed) {
+            broadcast({ type: 'moved', player: moved.player }, connection);
+          }
           return;
+        }
       }
     });
 
@@ -217,6 +278,11 @@ export function registerGateway(
       userId: connection.userId,
       connectionId: connection.id,
       heartbeatSeconds: env.WORLD_HEARTBEAT_SECONDS,
+    });
+    send(ws, {
+      type: 'snapshot',
+      map: { width: env.WORLD_MAP_WIDTH, height: env.WORLD_MAP_HEIGHT },
+      players: players.all(),
     });
 
     // Handlers are on: whatever arrived during authentication is delivered
@@ -240,6 +306,7 @@ export function registerGateway(
 
   return {
     connections,
+    players,
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       for (const connection of connections.all()) {

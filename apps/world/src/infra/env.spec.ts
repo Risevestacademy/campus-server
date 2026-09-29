@@ -39,6 +39,26 @@ describe('loadEnv', () => {
     });
   });
 
+  it('defaults a placeholder map with its spawn inside it', () => {
+    expect(loadEnv(minimal)).toMatchObject({
+      WORLD_MAP_WIDTH: 40,
+      WORLD_MAP_HEIGHT: 30,
+      WORLD_SPAWN_X: 20,
+      WORLD_SPAWN_Y: 15,
+      WORLD_STEP_MS: 100,
+    });
+  });
+
+  /** A spawn off the map would drop every arrival where they cannot move. */
+  it('refuses a spawn outside the map', () => {
+    expect(() =>
+      loadEnv({ ...minimal, WORLD_MAP_WIDTH: '10', WORLD_SPAWN_X: '10' } as NodeJS.ProcessEnv),
+    ).toThrow(/WORLD_SPAWN_X/);
+    expect(() =>
+      loadEnv({ ...minimal, WORLD_MAP_HEIGHT: '10', WORLD_SPAWN_Y: '12' } as NodeJS.ProcessEnv),
+    ).toThrow(/WORLD_SPAWN_Y/);
+  });
+
   it('rejects a log level pino would not understand', () => {
     expect(() =>
       loadEnv({ ...minimal, FF_LOG_LEVEL: 'chatty' } as NodeJS.ProcessEnv),
