@@ -332,6 +332,8 @@ export function registerGateway(
       userId: connection.userId,
       connectionId: connection.id,
       heartbeatSeconds: env.WORLD_HEARTBEAT_SECONDS,
+      stepMs: env.WORLD_STEP_MS,
+      tickMs: env.WORLD_TICK_MS,
     });
     send(ws, {
       type: 'snapshot',

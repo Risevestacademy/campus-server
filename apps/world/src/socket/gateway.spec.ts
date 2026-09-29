@@ -132,6 +132,8 @@ describe('socket upgrade', () => {
       type: 'welcome',
       userId: 'user-1',
       heartbeatSeconds: 1,
+      stepMs: 100,
+      tickMs: 200,
     });
     ws.close();
   });
