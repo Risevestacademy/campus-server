@@ -83,6 +83,11 @@ export class Players {
     return this.byUser.delete(userId);
   }
 
+  get(userId: string): Player | undefined {
+    const held = this.byUser.get(userId);
+    return held ? { ...held.player } : undefined;
+  }
+
   has(userId: string): boolean {
     return this.byUser.has(userId);
   }

@@ -31,6 +31,8 @@ const env = loadEnv({
   WORLD_MAP_HEIGHT: '5',
   WORLD_SPAWN_X: '0',
   WORLD_SPAWN_Y: '0',
+  // Long enough that steps sent together reliably land in one tick.
+  WORLD_TICK_MS: '200',
   FF_LOG_LEVEL: 'fatal',
 } as NodeJS.ProcessEnv);
 
@@ -482,7 +484,7 @@ describe('movement', () => {
     });
     await expect(waitFor(watcher, (m) => m.type === 'moved')).resolves.toEqual({
       type: 'moved',
-      player: { userId: ada, x: 1, y: 0, facing: 'right' },
+      players: [{ userId: ada, x: 1, y: 0, facing: 'right' }],
     });
     // The mover has its answer; a moved as well would draw the step twice.
     await quiet();
@@ -520,6 +522,66 @@ describe('movement', () => {
     expect(last.player.y).toBeLessThan(6);
 
     await leave(walker);
+  });
+
+  /**
+   * The point of the tick: steps are told to everybody once per tick, not
+   * once per step, and only where the walker ended up.
+   */
+  it('tells others about several quick steps in fewer frames, ending where the walker did', async () => {
+    const ada = person();
+    const walker = await arrive(ada);
+    const watcher = await arrive(person());
+
+    for (let seq = 0; seq < 3; seq++) move(walker, 'right', seq);
+    await waitFor(walker, (m) => m.type === 'moveResult' && m.seq === 2);
+    await waitFor(watcher, (m) => m.type === 'moved');
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    const frames = watcher.messages.filter((m) => m.type === 'moved') as {
+      players: { userId: string; x: number }[];
+    }[];
+    // Usually one; two if a tick happened to fall between the steps.
+    expect(frames.length).toBeLessThan(3);
+    const entries = frames.flatMap((frame) => frame.players);
+    expect(entries.every((entry) => entry.userId === ada)).toBe(true);
+    expect(entries.at(-1)).toMatchObject({ x: 3 });
+
+    await leave(walker);
+    await leave(watcher);
+  });
+
+  it('sends nothing on a tick when nobody moved', async () => {
+    const watcher = await arrive(person());
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(watcher.messages.some((m) => m.type === 'moved')).toBe(false);
+    await leave(watcher);
+  });
+
+  /**
+   * An update still waiting for the tick must not bring back somebody who
+   * left. Can only catch that when no tick falls in the few milliseconds
+   * between the step and the leave — nearly always, never guaranteed — but
+   * never fails on correct code.
+   */
+  it('never reports a step after the walker has left', async () => {
+    const ada = person();
+    const walker = await arrive(ada);
+    const watcher = await arrive(person());
+
+    move(walker, 'right', 1);
+    await waitFor(walker, (m) => m.type === 'moveResult');
+    await leave(walker);
+    await waitFor(watcher, (m) => m.type === 'left');
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    const leftAt = watcher.messages.findIndex((m) => m.type === 'left');
+    const afterLeft = watcher.messages.slice(leftAt + 1);
+    expect(afterLeft.some((m) => m.type === 'moved')).toBe(false);
+
+    await leave(watcher);
   });
 
   it('rejects a direction that is not one of the four', async () => {
@@ -577,7 +639,7 @@ describe('movement', () => {
       move(tabOne, 'right', 1);
 
       await expect(waitFor(tabTwo, (m) => m.type === 'moved')).resolves.toMatchObject({
-        player: { userId: ada, x: 1, y: 0 },
+        players: [{ userId: ada, x: 1, y: 0 }],
       });
 
       move(tabTwo, 'down', 1);

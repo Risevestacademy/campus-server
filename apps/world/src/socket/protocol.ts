@@ -35,11 +35,15 @@ export type ServerMessage =
   /** Somebody's last socket closed. */
   | { type: 'left'; userId: string }
   /**
-   * Somebody moved or turned. Sent to every socket but the one that asked,
-   * which gets a `moveResult` instead — including the mover's other tabs, so
-   * they follow along.
+   * Everybody who moved or turned since the last tick, once each, as they
+   * stand now — two steps inside one tick arrive as the second. Sent once
+   * per tick, and not at all when nobody moved.
+   *
+   * A tab is left out of its own person's entry when it made the step
+   * itself: it already has the `moveResult`. The same person's other tabs
+   * still get it, so they follow along.
    */
-  | { type: 'moved'; player: Player }
+  | { type: 'moved'; players: Player[] }
   /**
    * The answer to one `move`, always sent. `player` is where the server has
    * them: on anything but `moved`, the client snaps back to it.

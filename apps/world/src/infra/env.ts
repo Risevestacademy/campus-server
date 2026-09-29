@@ -57,6 +57,12 @@ const schema = z.object({
    * outrun the server and be refused.
    */
   WORLD_STEP_MS: z.coerce.number().int().min(1).default(100),
+
+  /**
+   * How often everybody is told who moved. Shorter looks smoother and costs
+   * more frames. Below 10ms the loop would be spinning, not batching.
+   */
+  WORLD_TICK_MS: z.coerce.number().int().min(10).default(50),
 }).superRefine((env, ctx) => {
   // A spawn off the map would place every arrival somewhere they could not
   // move from; better to refuse to boot.

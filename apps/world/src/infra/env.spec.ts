@@ -46,6 +46,7 @@ describe('loadEnv', () => {
       WORLD_SPAWN_X: 20,
       WORLD_SPAWN_Y: 15,
       WORLD_STEP_MS: 100,
+      WORLD_TICK_MS: 50,
     });
   });
 

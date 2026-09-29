@@ -4,7 +4,7 @@ import type { WebSocket } from 'ws';
 
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
-import { Players } from '../movement/players.js';
+import { Players, type Player } from '../movement/players.js';
 import { decideUpgrade, type Refusal } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
 import {
@@ -41,6 +41,60 @@ export function registerGateway(
   );
 
   /**
+   * Who moved since the last tick, and which sockets asked for those moves.
+   * Holds names, not positions: the tick reads where each person stands when
+   * it runs, so several steps in one tick collapse into the last.
+   */
+  const pendingMoves = new Map<string, Set<Connection>>();
+
+  /**
+   * Sends once per tick rather than once per step. Per step, every move is a
+   * frame to every socket, so a room of n people walking costs n² frames a
+   * step; per tick it is one frame per socket, however many moved.
+   */
+  function flushMoves(): void {
+    if (pendingMoves.size === 0) {
+      return;
+    }
+    const moved: Player[] = [];
+    const origins = new Map<Connection, Set<string>>();
+    for (const [userId, askedBy] of pendingMoves) {
+      const player = players.get(userId);
+      // Left since the step: `left` has already gone out, and an entry now
+      // would put back an avatar the client has just taken away.
+      if (!player) continue;
+      moved.push(player);
+      for (const connection of askedBy) {
+        const own = origins.get(connection);
+        if (own) own.add(userId);
+        else origins.set(connection, new Set([userId]));
+      }
+    }
+    pendingMoves.clear();
+    if (moved.length === 0) {
+      return;
+    }
+
+    // One frame for nearly everybody. Only a socket that made a step this
+    // tick needs its own, without the entry it already has an answer for.
+    const shared = encode({ type: 'moved', players: moved });
+    for (const connection of connections.all()) {
+      const own = origins.get(connection);
+      if (!own) {
+        sendFrame(connection.socket, shared);
+        continue;
+      }
+      const others = moved.filter((player) => !own.has(player.userId));
+      if (others.length > 0) {
+        sendFrame(connection.socket, encode({ type: 'moved', players: others }));
+      }
+    }
+  }
+
+  const tick = setInterval(flushMoves, env.WORLD_TICK_MS);
+  tick.unref();
+
+  /**
    * Every way a socket stops counting goes through here, so a player can
    * never outlive the last socket standing for them. The avatar stays while
    * any tab is open, and leaves with the last one. Idempotent: a socket
@@ -57,16 +111,14 @@ export function registerGateway(
   }
 
   /**
+   * For arrivals and departures, which are rare enough to send at once.
    * Everybody in this process is on the one placeholder map, so everybody
-   * hears everything. Scoped to a map once maps exist (W6), and batched per
-   * tick rather than sent per step once the tick loop lands (W2).
+   * hears everything; scoped to a map once maps exist (W6).
    */
-  function broadcast(message: ServerMessage, except?: Connection): void {
+  function broadcast(message: ServerMessage): void {
     const frame = encode(message);
     for (const connection of connections.all()) {
-      if (connection !== except && connection.socket.readyState === connection.socket.OPEN) {
-        connection.socket.send(frame);
-      }
+      sendFrame(connection.socket, frame);
     }
   }
 
@@ -266,7 +318,9 @@ export function registerGateway(
           const moved = players.move(connection.userId, direction, Date.now());
           send(ws, { type: 'moveResult', seq, outcome: moved.outcome, player: moved.player });
           if (moved.changed) {
-            broadcast({ type: 'moved', player: moved.player }, connection);
+            const askedBy = pendingMoves.get(connection.userId);
+            if (askedBy) askedBy.add(connection);
+            else pendingMoves.set(connection.userId, new Set([connection]));
           }
           return;
         }
@@ -309,6 +363,7 @@ export function registerGateway(
     players,
     async stop(): Promise<void> {
       clearInterval(heartbeat);
+      clearInterval(tick);
       for (const connection of connections.all()) {
         connection.socket.close(GOING_AWAY, 'server shutting down');
       }
@@ -317,7 +372,11 @@ export function registerGateway(
 }
 
 function send(ws: WebSocket, message: ServerMessage): void {
+  sendFrame(ws, encode(message));
+}
+
+function sendFrame(ws: WebSocket, frame: string): void {
   if (ws.readyState === ws.OPEN) {
-    ws.send(encode(message));
+    ws.send(frame);
   }
 }
