@@ -1,0 +1,358 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WorldProtocol",
+  "description": "Messages on the world socket. Generated from apps/world/src/socket/protocol.ts; do not edit by hand. How to use them — moving, correcting, closing — is in docs/world-protocol.md.",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/ClientMessage"
+    },
+    {
+      "$ref": "#/definitions/ServerMessage"
+    }
+  ],
+  "definitions": {
+    "Direction": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right"
+      ],
+      "description": "One tile in screen terms: up is y - 1, right is x + 1."
+    },
+    "Player": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Tile column, from 0 at the left edge."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Tile row, from 0 at the top edge."
+        },
+        "facing": {
+          "$ref": "#/definitions/Direction"
+        }
+      },
+      "required": [
+        "userId",
+        "x",
+        "y",
+        "facing"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody on the map, as the server has them. Positions are tiles, never pixels."
+    },
+    "MoveOutcome": {
+      "type": "string",
+      "enum": [
+        "moved",
+        "blocked",
+        "too_fast"
+      ],
+      "description": "moved: one tile in the direction asked. blocked: the tile is not walkable; they turn to face it without moving. too_fast: over walking speed; nothing happens, not even the turn."
+    },
+    "PingMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "ping"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "Answered with `pong`."
+    },
+    "MoveMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "move"
+        },
+        "direction": {
+          "description": "Which way, never where to: the server works out the tile.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Direction"
+            }
+          ]
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The client's own counter, echoed on the `moveResult` so it can match the answer to the step it already drew."
+        }
+      },
+      "required": [
+        "type",
+        "direction",
+        "seq"
+      ],
+      "additionalProperties": false,
+      "description": "One step. Always answered with a `moveResult`."
+    },
+    "ClientMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/PingMessage"
+        },
+        {
+          "$ref": "#/definitions/MoveMessage"
+        }
+      ],
+      "description": "Every frame a client may send."
+    },
+    "WelcomeMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "welcome"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "connectionId": {
+          "type": "string"
+        },
+        "heartbeatSeconds": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "stepMs": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "description": "Walking speed: one tile per this many milliseconds. Animate a step over this long, and send no faster, or moves come back `too_fast`."
+        },
+        "tickMs": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "description": "How often `moved` arrives while anybody is moving."
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "connectionId",
+        "heartbeatSeconds",
+        "stepMs",
+        "tickMs"
+      ],
+      "additionalProperties": false,
+      "description": "First frame on a socket that was let in."
+    },
+    "PongMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "pong"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "The answer to a `ping`."
+    },
+    "SnapshotMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "snapshot"
+        },
+        "map": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "height": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        },
+        "players": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Player"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "map",
+        "players"
+      ],
+      "additionalProperties": false,
+      "description": "Sent once, right after `welcome`: the map, and everybody on it, you included."
+    },
+    "JoinedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "joined"
+        },
+        "player": {
+          "$ref": "#/definitions/Player"
+        }
+      },
+      "required": [
+        "type",
+        "player"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody arrived. Not sent for a second tab of somebody already here."
+    },
+    "LeftMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "left"
+        },
+        "userId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "userId"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody's last socket closed."
+    },
+    "MovedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "moved"
+        },
+        "players": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Player"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "players"
+      ],
+      "additionalProperties": false,
+      "description": "Everybody who moved or turned since the last tick, once each, as they stand now: two steps inside one tick arrive as the second, so an entry can be more than one tile from where they were. Sent once per tick, and not at all when nobody moved. A tab is left out of its own entry when it made the latest change, since its `moveResult` already says where it ended up; every other tab of the same person gets it, so they follow along."
+    },
+    "MoveResultMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "moveResult"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "outcome": {
+          "$ref": "#/definitions/MoveOutcome"
+        },
+        "player": {
+          "$ref": "#/definitions/Player"
+        }
+      },
+      "required": [
+        "type",
+        "seq",
+        "outcome",
+        "player"
+      ],
+      "additionalProperties": false,
+      "description": "The answer to one admitted `move`. `player` is where the server has them; on anything but `moved`, the client snaps back to it."
+    },
+    "ErrorMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "error"
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "UNAUTHORIZED",
+            "BAD_MESSAGE"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false,
+      "description": "UNAUTHORIZED comes just before the socket closes with 1008, `message` being the reason. BAD_MESSAGE leaves the socket open."
+    },
+    "ServerMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/WelcomeMessage"
+        },
+        {
+          "$ref": "#/definitions/PongMessage"
+        },
+        {
+          "$ref": "#/definitions/SnapshotMessage"
+        },
+        {
+          "$ref": "#/definitions/JoinedMessage"
+        },
+        {
+          "$ref": "#/definitions/LeftMessage"
+        },
+        {
+          "$ref": "#/definitions/MovedMessage"
+        },
+        {
+          "$ref": "#/definitions/MoveResultMessage"
+        },
+        {
+          "$ref": "#/definitions/ErrorMessage"
+        }
+      ],
+      "description": "Every frame the server may send."
+    }
+  }
+}

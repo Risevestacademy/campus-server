@@ -1,0 +1,169 @@
+import { describe, expect, it } from 'vitest';
+
+import { Players, STEP_BURST } from './players.js';
+
+const STEP_MS = 100;
+
+/** 5 × 4, spawning in the top-left corner so two edges are one step away. */
+function players() {
+  return new Players({ width: 5, height: 4, spawn: { x: 0, y: 0 } }, STEP_MS);
+}
+
+describe('Players', () => {
+  it('places an arrival on the spawn tile, facing down', () => {
+    expect(players().join('ada', 0)).toEqual({ userId: 'ada', x: 0, y: 0, facing: 'down' });
+  });
+
+  /** Two tabs are one person: the second must not reset where the first walked to. */
+  it('leaves somebody where they are when they join again', () => {
+    const world = players();
+    world.join('ada', 0);
+    world.move('ada', 'right', 0);
+
+    expect(world.join('ada', 0)).toMatchObject({ x: 1, y: 0 });
+  });
+
+  it('moves one tile in the direction asked', () => {
+    const world = players();
+    world.join('ada', 0);
+
+    expect(world.move('ada', 'right', 0)).toEqual({
+      outcome: 'moved',
+      player: { userId: 'ada', x: 1, y: 0, facing: 'right' },
+      changed: true,
+    });
+    expect(world.move('ada', 'down', 0).player).toMatchObject({ x: 1, y: 1 });
+  });
+
+  it('will not walk off the map', () => {
+    const world = players();
+    world.join('ada', 0);
+
+    const result = world.move('ada', 'up', 0);
+
+    expect(result.outcome).toBe('blocked');
+    expect(result.player).toMatchObject({ x: 0, y: 0 });
+  });
+
+  /** Walking into a wall still turns you to face it, and others should see that. */
+  it('turns toward a blocked tile, and reports the turn as a change', () => {
+    const world = players();
+    world.join('ada', 0);
+
+    expect(world.move('ada', 'left', 0)).toMatchObject({
+      outcome: 'blocked',
+      player: { facing: 'left' },
+      changed: true,
+    });
+    // Already facing it: nothing for anybody else to redraw.
+    expect(world.move('ada', 'left', 1_000)).toMatchObject({
+      outcome: 'blocked',
+      changed: false,
+    });
+  });
+
+  it('stops at the far edges too', () => {
+    const world = players();
+    world.join('ada', 0);
+    let now = 0;
+    for (let i = 0; i < 10; i++) {
+      world.move('ada', 'right', (now += STEP_MS));
+      world.move('ada', 'down', (now += STEP_MS));
+    }
+
+    expect(world.all()[0]).toMatchObject({ x: 4, y: 3 });
+  });
+
+  it('allows a short burst of steps sent together', () => {
+    const world = players();
+    world.join('ada', 0);
+
+    const outcomes = Array.from({ length: STEP_BURST }, () => world.move('ada', 'right', 0).outcome);
+
+    expect(outcomes).toEqual(Array(STEP_BURST).fill('moved'));
+  });
+
+  /** Otherwise a modified client walks the whole map in one frame. */
+  it('refuses steps past the burst until time has passed', () => {
+    const world = players();
+    world.join('ada', 0);
+    for (let i = 0; i < STEP_BURST; i++) world.move('ada', 'down', 0);
+
+    const refused = world.move('ada', 'right', 0);
+    expect(refused).toEqual({
+      outcome: 'too_fast',
+      // Not even turned: a refused step does nothing at all.
+      player: { userId: 'ada', x: 0, y: 3, facing: 'down' },
+      changed: false,
+    });
+
+    expect(world.move('ada', 'right', STEP_MS).outcome).toBe('moved');
+  });
+
+  it('walks indefinitely at exactly the step rate', () => {
+    const world = new Players({ width: 1_000, height: 1, spawn: { x: 0, y: 0 } }, STEP_MS);
+    world.join('ada', 0);
+
+    const outcomes = new Set<string>();
+    for (let i = 1; i <= 500; i++) {
+      outcomes.add(world.move('ada', 'right', i * STEP_MS).outcome);
+    }
+
+    expect([...outcomes]).toEqual(['moved']);
+    expect(world.all()[0]?.x).toBe(500);
+  });
+
+  /** A long pause must not bank a run of instant steps beyond the burst. */
+  it('does not save up steps beyond the burst', () => {
+    const world = new Players({ width: 100, height: 1, spawn: { x: 0, y: 0 } }, STEP_MS);
+    world.join('ada', 0);
+
+    const later = 60_000;
+    const outcomes = Array.from({ length: STEP_BURST + 1 }, () =>
+      world.move('ada', 'right', later).outcome,
+    );
+
+    expect(outcomes.at(-1)).toBe('too_fast');
+  });
+
+  /** A blocked step takes a step's time, or spinning in place would be free. */
+  it('spends a step on a blocked move', () => {
+    const world = players();
+    world.join('ada', 0);
+    for (let i = 0; i < STEP_BURST; i++) world.move('ada', 'up', 0);
+
+    expect(world.move('ada', 'right', 0).outcome).toBe('too_fast');
+  });
+
+  it('does not take steps away when the clock goes backwards', () => {
+    const world = players();
+    world.join('ada', 10_000);
+
+    expect(world.move('ada', 'right', 5_000).outcome).toBe('moved');
+    expect(world.move('ada', 'right', 5_000).outcome).toBe('moved');
+  });
+
+  it('forgets somebody who leaves, and places them at spawn when they return', () => {
+    const world = players();
+    world.join('ada', 0);
+    world.move('ada', 'right', 0);
+
+    expect(world.leave('ada')).toBe(true);
+    expect(world.leave('ada')).toBe(false);
+    expect(world.has('ada')).toBe(false);
+    expect(world.join('ada', 0)).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it('hands out copies, so a caller cannot move anybody by editing one', () => {
+    const world = players();
+    const joined = world.join('ada', 0);
+    joined.x = 3;
+    world.all()[0]!.y = 3;
+
+    expect(world.all()[0]).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it('refuses to move somebody who never joined', () => {
+    expect(() => players().move('nobody', 'up', 0)).toThrow(/not joined/);
+  });
+});

@@ -10,7 +10,8 @@
     "lint": "oxlint src/",
     "test": "vitest run --passWithNoTests",
     "start:dev": "node --watch dist/index.js",
-    "start:prod": "node dist/index.js"
+    "start:prod": "node dist/index.js",
+    "protocol:schema": "vitest run src/socket/protocol.schema.spec.ts -u"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",

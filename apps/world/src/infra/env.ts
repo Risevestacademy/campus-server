@@ -41,6 +41,59 @@ const schema = z.object({
 
   /** Largest frame accepted from a client, in bytes. */
   WORLD_MAX_MESSAGE_BYTES: z.coerce.number().int().min(1).default(16_384),
+
+  /**
+   * Frames one socket may send per second, whatever they are. A second's
+   * worth may arrive at once; the first excess frame closes the socket before
+   * parsing. Walking at full speed while pinging uses about half the default.
+   */
+  WORLD_MAX_MESSAGES_PER_SECOND: z.coerce.number().int().min(1).default(20),
+
+  /**
+   * How much may wait unsent to one socket before its client counts as not
+   * reading, and is disconnected. The default holds many seconds of a busy
+   * room, so only a stalled client reaches it.
+   */
+  WORLD_MAX_BUFFERED_BYTES: z.coerce.number().int().min(1).default(1_048_576),
+
+  /**
+   * The placeholder map, in tiles, until real maps load (W6). Tiles, not
+   * pixels: the tile's pixel size is the client's business.
+   */
+  WORLD_MAP_WIDTH: z.coerce.number().int().min(1).default(40),
+  WORLD_MAP_HEIGHT: z.coerce.number().int().min(1).default(30),
+  WORLD_SPAWN_X: z.coerce.number().int().min(0).default(20),
+  WORLD_SPAWN_Y: z.coerce.number().int().min(0).default(15),
+
+  /**
+   * Fastest a player may walk: one tile per this many milliseconds. The
+   * client should animate a step over about this long, or a held key will
+   * outrun the server and be refused.
+   */
+  WORLD_STEP_MS: z.coerce.number().int().min(1).default(100),
+
+  /**
+   * How often everybody is told who moved. Shorter looks smoother and costs
+   * more frames. Below 10ms the loop would be spinning, not batching.
+   */
+  WORLD_TICK_MS: z.coerce.number().int().min(10).default(50),
+}).superRefine((env, ctx) => {
+  // A spawn off the map would place every arrival somewhere they could not
+  // move from; better to refuse to boot.
+  if (env.WORLD_SPAWN_X >= env.WORLD_MAP_WIDTH) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['WORLD_SPAWN_X'],
+      message: 'must be inside WORLD_MAP_WIDTH',
+    });
+  }
+  if (env.WORLD_SPAWN_Y >= env.WORLD_MAP_HEIGHT) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['WORLD_SPAWN_Y'],
+      message: 'must be inside WORLD_MAP_HEIGHT',
+    });
+  }
 });
 
 export type Env = z.infer<typeof schema>;

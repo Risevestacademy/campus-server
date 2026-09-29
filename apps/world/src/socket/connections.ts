@@ -42,6 +42,10 @@ export class Connections {
     }
   }
 
+  has(connection: Connection): boolean {
+    return this.byUser.get(connection.userId)?.has(connection) ?? false;
+  }
+
   forUser(userId: string): Connection[] {
     return [...(this.byUser.get(userId) ?? [])];
   }
