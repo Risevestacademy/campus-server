@@ -8,7 +8,10 @@ Monorepo for the campus platform. TypeScript throughout, managed with
 ```
 apps/
   campus-api/   NestJS HTTP API (primary service)
-  world/        Minimal Node + TypeScript + Fastify service
+  world/        Realtime WebSocket service: presence and movement
+packages/
+  session/      Session tokens, shared by campus-api (signs) and world (verifies)
+docs/           Cross-service docs: auth flow, deployment, world protocol
 docker-compose.local.yml   Local dev dependencies (Postgres, Redis, LiveKit, OTel Collector)
 livekit.yaml               LiveKit server config
 otel-collector.yaml        Local OpenTelemetry Collector config
@@ -20,6 +23,11 @@ otel-collector.yaml        Local OpenTelemetry Collector config
 | ------------- | -------------- | ------------ | ----------------------------------------- |
 | `campus-api`  | NestJS 12      | `3000`       | [apps/campus-api/README.md](apps/campus-api/README.md) |
 | `world`       | Fastify 5      | `3001`       | [apps/world/README.md](apps/world/README.md) |
+| `@campus/session` | TypeScript library | — | — |
+
+`@campus/session` ships compiled output, so an app that depends on it needs it
+built first. The root scripts below do that for you; a bare
+`pnpm --filter <app> build` does not.
 
 ## Prerequisites
 
@@ -36,24 +44,30 @@ pnpm install
 # start local infrastructure (Postgres, Redis, LiveKit, OTel Collector)
 docker compose -f docker-compose.local.yml up -d
 
-# run every app in dev/watch mode
+# run both apps in dev/watch mode (builds @campus/session first)
 pnpm dev
 
 # run one app
-pnpm --filter campus-api start:dev
-pnpm --filter world start:dev
+pnpm dev:api
+pnpm dev:world
 ```
+
+Each app reads its config from the environment; see its `.env.example`.
 
 ## Common commands
 
 From the repo root, scoped to a single package:
 
 ```bash
-pnpm --filter campus-api build
+pnpm build:api       # builds @campus/session, then campus-api
+pnpm build:world     # builds @campus/session, then world
 pnpm --filter campus-api lint
 pnpm --filter campus-api test
 pnpm --filter campus-api db:migrate   # Drizzle migrations
 ```
+
+To build one app by hand, add `...` so its workspace dependencies build first:
+`pnpm --filter "world..." build`. Railway's build commands use the same form.
 
 Or across all packages at once:
 
@@ -98,7 +112,18 @@ Each app documents itself in its own README:
 
 - **campus-api** — setup, environment variables, feature flags, logging,
   OpenTelemetry tracing/metrics, database migrations, and integration docs.
-- **world** — a minimal Fastify service; see its README for details.
+- **world** — the realtime service: running it, its layout, and the protocol
+  schema.
 
 Integration and OpenAPI guidance for the API lives in
 [apps/campus-api/docs/intro.md](apps/campus-api/docs/intro.md).
+
+Docs that span services live in [docs/](docs/):
+
+- [auth-flow.md](docs/auth-flow.md) — sign-in, sessions and onboarding.
+- [deployment.md](docs/deployment.md) — Railway services, build commands, env
+  vars and open items.
+- [world-protocol.md](docs/world-protocol.md) — for client authors: connecting
+  to world, moving, and handling closes. The message types themselves are in
+  [apps/world/protocol.schema.json](apps/world/protocol.schema.json).
+- [posthog.md](docs/posthog.md) — product analytics.
