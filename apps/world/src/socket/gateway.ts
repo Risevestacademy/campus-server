@@ -7,6 +7,8 @@ import type { Env } from '../infra/env.js';
 import { Players, type Player } from '../movement/players.js';
 import { decideUpgrade, type Refusal } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
+import { FrameBudget } from './frame-budget.js';
+import { deliver } from './outbound.js';
 import {
   ServerErrorCode,
   decode,
@@ -294,11 +296,29 @@ export function registerGateway(
       connection.alive = true;
     });
 
+    const budget = new FrameBudget(env.WORLD_MAX_MESSAGES_PER_SECOND, Date.now());
+
     ws.on('message', (raw: Buffer) => {
       // A socket we have dropped can still deliver frames while its close
       // handshake finishes. It no longer speaks for anybody — and its player
       // may be gone, which a move would trip over.
       if (!connections.has(connection)) {
+        return;
+      }
+      // Before parsing, so a flood costs a counter rather than a JSON parse,
+      // a validation and a reply per frame. Dropped frames get no answer:
+      // answering is the work being refused.
+      const admission = budget.admit(Date.now());
+      if (admission === 'drop') {
+        return;
+      }
+      if (admission === 'close') {
+        app.log.warn(
+          { connectionId: connection.id, userId: connection.userId },
+          'socket sending too fast, closing',
+        );
+        drop(connection);
+        connection.socket.close(POLICY_VIOLATION, 'rate_limited');
         return;
       }
       // Frames over WORLD_MAX_MESSAGE_BYTES never arrive: ws enforces
@@ -363,6 +383,17 @@ export function registerGateway(
     ws.close(POLICY_VIOLATION, refusal);
   }
 
+  function send(ws: WebSocket, message: ServerMessage): void {
+    sendFrame(ws, encode(message));
+  }
+
+  function sendFrame(ws: WebSocket, frame: string): void {
+    const bufferedBytes = ws.bufferedAmount;
+    if (deliver(ws, frame, env.WORLD_MAX_BUFFERED_BYTES) === 'lagging') {
+      app.log.warn({ bufferedBytes }, 'socket not reading, terminating');
+    }
+  }
+
   return {
     connections,
     players,
@@ -376,12 +407,3 @@ export function registerGateway(
   };
 }
 
-function send(ws: WebSocket, message: ServerMessage): void {
-  sendFrame(ws, encode(message));
-}
-
-function sendFrame(ws: WebSocket, frame: string): void {
-  if (ws.readyState === ws.OPEN) {
-    ws.send(frame);
-  }
-}

@@ -56,11 +56,13 @@ function connect(headers: Record<string, string>) {
   const ws = new WebSocket(url, { headers });
   const messages: Record<string, unknown>[] = [];
 
-  const settled = new Promise<{ closeCode?: number }>((resolve) => {
+  const settled = new Promise<{ closeCode?: number; closeReason?: string }>((resolve) => {
     ws.on('message', (raw) => {
       messages.push(JSON.parse(raw.toString()) as Record<string, unknown>);
     });
-    ws.on('close', (code) => resolve({ closeCode: code }));
+    ws.on('close', (code, reason) =>
+      resolve({ closeCode: code, closeReason: reason.toString() }),
+    );
     ws.on('error', () => undefined);
   });
 
@@ -584,6 +586,26 @@ describe('movement', () => {
     expect(afterLeft.some((m) => m.type === 'moved')).toBe(false);
 
     await leave(watcher);
+  });
+
+  /**
+   * Walking speed limits what a flood of moves can do, not how many arrive:
+   * each would still be parsed and answered. Past the message budget they
+   * are dropped unanswered, and a client that keeps it up is closed.
+   */
+  it('stops answering a flood, and closes the socket that keeps it up', async () => {
+    const flooder = await arrive(person());
+
+    for (let i = 0; i < 200; i++) flooder.ws.send(JSON.stringify({ type: 'ping' }));
+
+    await expect(flooder.settled).resolves.toMatchObject({
+      closeCode: 1008,
+      closeReason: 'rate_limited',
+    });
+    // One second's budget was answered; the rest never cost a reply.
+    const pongs = flooder.messages.filter((m) => m.type === 'pong').length;
+    expect(pongs).toBeGreaterThan(0);
+    expect(pongs).toBeLessThanOrEqual(20);
   });
 
   it('rejects a direction that is not one of the four', async () => {

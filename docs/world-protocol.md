@@ -143,6 +143,22 @@ One person is one avatar however many tabs they have open. Both tabs see it
 and either can walk it. A second tab does not announce an arrival, and closing
 one does not remove the avatar — only closing the last does.
 
+## Limits
+
+- **Messages:** about `WORLD_MAX_MESSAGES_PER_SECOND` (20 by default) per
+  socket, with a second's worth allowed at once. Walking at full speed while
+  pinging uses about half. Past the budget, frames are **dropped unanswered**.
+  A dropped `move` never gets a `moveResult`; the correction above still
+  recovers, since the next answer clears every older pending move, but the
+  avatar snaps back. Keep it up and the socket is closed with
+  `rate_limited`.
+- **Frame size:** 16 KB by default. Larger closes the socket with 1009.
+- **Reading:** a client that stops reading what it is sent — a frozen tab, a
+  debugger paused on a breakpoint — is disconnected once about 1 MB is waiting
+  for it, rather than skipped: skipped frames would leave it believing people
+  stand where they no longer do. It sees a 1006 and reconnects to a fresh
+  snapshot.
+
 ## Staying connected
 
 The server pings every `heartbeatSeconds` and drops a socket that has not
@@ -164,10 +180,11 @@ When the socket closes:
 | 1008 | `wrong_scope` | Still in onboarding | Send them to onboarding |
 | 1008 | `account_suspended`, `account_gone` | Not welcome any more | Sign them out; do not reconnect |
 | 1008 | `origin_not_allowed` | This page's origin is not on world's list | Configuration — do not retry |
+| 1008 | `rate_limited` | Sustained sending over the message budget | Client bug; reconnect with backoff |
 | 1001 | `server shutting down` | A deploy or restart | Reconnect |
 | 1009 | — | A frame over the size limit (16 KB by default) | Client bug; reconnect |
 | 1011 | `internal_error` | The server could not check the session | Reconnect with backoff |
-| 1006 | — | Connection lost, or a missed heartbeat | Reconnect with backoff |
+| 1006 | — | Connection lost, a missed heartbeat, or not reading fast enough | Reconnect with backoff |
 
 When the connection is refused at the start, an `error` frame with the same
 reason as its `message` arrives just before the close. A socket closed later

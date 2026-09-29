@@ -43,6 +43,21 @@ const schema = z.object({
   WORLD_MAX_MESSAGE_BYTES: z.coerce.number().int().min(1).default(16_384),
 
   /**
+   * Frames one socket may send per second, whatever they are. A second's
+   * worth may arrive at once; beyond that they are dropped unread, and a
+   * socket that keeps it up is closed. Walking at full speed while pinging
+   * uses about half the default.
+   */
+  WORLD_MAX_MESSAGES_PER_SECOND: z.coerce.number().int().min(1).default(20),
+
+  /**
+   * How much may wait unsent to one socket before its client counts as not
+   * reading, and is disconnected. The default holds many seconds of a busy
+   * room, so only a stalled client reaches it.
+   */
+  WORLD_MAX_BUFFERED_BYTES: z.coerce.number().int().min(1).default(1_048_576),
+
+  /**
    * The placeholder map, in tiles, until real maps load (W6). Tiles, not
    * pixels: the tile's pixel size is the client's business.
    */

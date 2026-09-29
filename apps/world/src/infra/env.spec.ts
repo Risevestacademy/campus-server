@@ -47,6 +47,8 @@ describe('loadEnv', () => {
       WORLD_SPAWN_Y: 15,
       WORLD_STEP_MS: 100,
       WORLD_TICK_MS: 50,
+      WORLD_MAX_MESSAGES_PER_SECOND: 20,
+      WORLD_MAX_BUFFERED_BYTES: 1_048_576,
     });
   });
 
