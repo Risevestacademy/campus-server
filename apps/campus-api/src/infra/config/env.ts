@@ -131,7 +131,7 @@ export class Env {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  AUTH_SESSION_TTL_MINUTES: number = 720;
+  AUTH_SESSION_TTL_MINUTES: number = 15;
 
   /**
    * Lifetime of a provisional session — long enough to finish onboarding,

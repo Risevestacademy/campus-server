@@ -25,11 +25,11 @@ import { GoogleOAuthService } from './google-oauth.service.js';
 import { OAuthStateService } from './oauth-state.service.js';
 import { SessionIssuer } from './session-issuer.js';
 import {
-  REFRESH_COOKIE,
+  clearSessionCookies,
   readRefreshCookie,
-  SESSION_COOKIE,
-  sessionCookieOptions,
+  setSessionCookies,
 } from './session-cookie.js';
+import { assertAllowedOrigin } from './session-origin.js';
 import {
   STATE_COOKIE,
   STATE_COOKIE_PATH,
@@ -121,28 +121,12 @@ export class AuthController {
     // This is a top-level browser navigation, so the answer is a redirect and
     // a cookie, not a JSON body the user would be left staring at. The token
     // never reaches the page itself, and never reaches browser history.
-    res.cookie(
-      SESSION_COOKIE,
-      session.token,
-      sessionCookieOptions(
-        requireGoogleAuth(this.config).callbackUrl,
-        this.config.APP_PUBLIC_URL,
-        session.expiresAt,
-      ),
+    setSessionCookies(
+      res,
+      requireGoogleAuth(this.config).callbackUrl,
+      this.config.APP_PUBLIC_URL,
+      session,
     );
-    if (session.refreshToken) {
-      res.cookie(
-        REFRESH_COOKIE,
-        session.refreshToken,
-        sessionCookieOptions(
-          requireGoogleAuth(this.config).callbackUrl,
-          this.config.APP_PUBLIC_URL,
-          new Date(
-            Date.now() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000,
-          ),
-        ),
-      );
-    }
     res.redirect(
       `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${session.redirectPath}`,
     );
@@ -164,8 +148,14 @@ export class AuthController {
       throw new SessionUnauthorizedError('Refresh token required');
     }
 
+    assertAllowedOrigin(this.config, req.headers.origin);
     const session = await this.sessions.refreshSession(token);
-    this.setSessionCookies(res, session.token, session.expiresAt, session.refreshToken);
+    setSessionCookies(
+      res,
+      requireGoogleAuth(this.config).callbackUrl,
+      this.config.APP_PUBLIC_URL,
+      session,
+    );
   }
 
   @Post('logout')
@@ -178,33 +168,15 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
+    assertAllowedOrigin(this.config, req.headers.origin);
     const token = readRefreshCookie(req.headers.cookie);
     if (token) {
       await this.sessions.revokeRefreshToken(token);
     }
-    res.clearCookie(SESSION_COOKIE, { path: '/' });
-    res.clearCookie(REFRESH_COOKIE, { path: '/' });
-  }
-
-  private setSessionCookies(
-    res: Response,
-    token: string,
-    expiresAt: Date,
-    refreshToken: string | undefined,
-  ): void {
-    const apiUrl = requireGoogleAuth(this.config).callbackUrl;
-    const appUrl = this.config.APP_PUBLIC_URL;
-    res.cookie(SESSION_COOKIE, token, sessionCookieOptions(apiUrl, appUrl, expiresAt));
-    if (refreshToken) {
-      res.cookie(
-        REFRESH_COOKIE,
-        refreshToken,
-        sessionCookieOptions(
-          apiUrl,
-          appUrl,
-          new Date(Date.now() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000),
-        ),
-      );
-    }
+    clearSessionCookies(
+      res,
+      requireGoogleAuth(this.config).callbackUrl,
+      this.config.APP_PUBLIC_URL,
+    );
   }
 }

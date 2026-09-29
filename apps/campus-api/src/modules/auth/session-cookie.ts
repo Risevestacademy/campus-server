@@ -1,4 +1,7 @@
 import type { CookieOptions } from 'express';
+import type { Response } from 'express';
+
+import type { IssuedSession } from './session-issuer.js';
 
 export const SESSION_COOKIE = 'campus_session';
 export const REFRESH_COOKIE = 'campus_refresh';
@@ -8,6 +11,7 @@ export const REFRESH_COOKIE = 'campus_refresh';
  * OAuth state cookie, which stays on /v1/auth.
  */
 export const SESSION_COOKIE_PATH = '/';
+export const REFRESH_COOKIE_PATH = '/v1/auth';
 
 /**
  * httpOnly so script cannot read it, which is the point of putting the token
@@ -24,6 +28,7 @@ export function sessionCookieOptions(
   apiUrl: string,
   appUrl: string,
   expiresAt: Date,
+  path: string = SESSION_COOKIE_PATH,
 ): CookieOptions {
   const secure = apiUrl.startsWith('https://');
   const crossSite = secure && site(apiUrl) !== site(appUrl);
@@ -32,9 +37,54 @@ export function sessionCookieOptions(
     httpOnly: true,
     secure,
     sameSite: crossSite ? 'none' : 'lax',
-    path: SESSION_COOKIE_PATH,
+    path,
     expires: expiresAt,
   };
+}
+
+export function setSessionCookies(
+  res: Response,
+  apiUrl: string,
+  appUrl: string,
+  session: IssuedSession,
+): void {
+  res.cookie(
+    SESSION_COOKIE,
+    session.token,
+    sessionCookieOptions(apiUrl, appUrl, session.expiresAt),
+  );
+  if (session.scope === 'full_access') {
+    res.cookie(
+      REFRESH_COOKIE,
+      session.refreshToken,
+      sessionCookieOptions(
+        apiUrl,
+        appUrl,
+        session.refreshExpiresAt,
+        REFRESH_COOKIE_PATH,
+      ),
+    );
+  }
+}
+
+export function clearSessionCookies(
+  res: Response,
+  apiUrl: string,
+  appUrl: string,
+): void {
+  res.clearCookie(
+    SESSION_COOKIE,
+    sessionCookieOptions(apiUrl, appUrl, new Date(0)),
+  );
+  res.clearCookie(
+    REFRESH_COOKIE,
+    sessionCookieOptions(
+      apiUrl,
+      appUrl,
+      new Date(0),
+      REFRESH_COOKIE_PATH,
+    ),
+  );
 }
 
 /** Host without its leading label, which is close enough to a site here. */

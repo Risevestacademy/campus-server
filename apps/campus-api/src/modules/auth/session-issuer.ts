@@ -1,6 +1,6 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, isNull, isNotNull, lt, or } from 'drizzle-orm';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
@@ -12,12 +12,11 @@ import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { refreshTokens } from './schema.js';
 import type { Invite } from '../invites/schema.js';
 import type { User } from '../users/schema.js';
-import { UsersService } from '../users/users.service.js';
+import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import {
   SessionScope,
   signSessionToken,
-  type SessionScope as Scope,
 } from '@campus/session';
 
 /**
@@ -40,14 +39,28 @@ function cappedTtlMinutes(
   return Math.min(ttlMinutes, (endsAt.getTime() - now.getTime()) / 60_000);
 }
 
-export interface IssuedSession {
+const REFRESH_GRACE_MS = 60_000;
+const REFRESH_CLEANUP_USED_MS = 30 * 60_000;
+const REFRESH_CLEANUP_EXPIRED_MS = 3 * 86_400_000;
+
+interface IssuedSessionBase {
   token: string;
-  refreshToken?: string;
   expiresAt: Date;
-  scope: Scope;
   /** Where the browser is sent once the cookie is set. */
   redirectPath: string;
 }
+
+export type IssuedSession =
+  | (IssuedSessionBase & {
+  scope: typeof SessionScope.FullAccess;
+      refreshToken: string;
+      refreshExpiresAt: Date;
+    })
+  | (IssuedSessionBase & {
+      scope: typeof SessionScope.Provisional;
+      refreshToken?: never;
+      refreshExpiresAt?: never;
+    });
 
 /**
  * Mints the session a completed Google sign-in earns. Refresh tokens are a
@@ -85,6 +98,7 @@ export class SessionIssuer {
     user: User,
     grant: AccessGrant,
     now: Date = new Date(),
+    familyId: string = randomUUID(),
   ): Promise<IssuedSession> {
     const endsAt = grant.endsAt;
     if (endsAt !== null && endsAt.getTime() <= now.getTime()) {
@@ -117,17 +131,20 @@ export class SessionIssuer {
     );
 
     const refreshToken = randomBytes(32).toString('base64url');
+    const refreshExpiresAt = new Date(
+      now.getTime() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000,
+    );
     await this.db.insert(refreshTokens).values({
       userId: account.id,
+      familyId,
       tokenHash: hashRefreshToken(refreshToken),
-      expiresAt: new Date(
-        now.getTime() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000,
-      ),
+      expiresAt: refreshExpiresAt,
     });
 
     return {
       token,
       refreshToken,
+      refreshExpiresAt,
       expiresAt,
       scope: SessionScope.FullAccess,
       redirectPath: '/',
@@ -163,51 +180,111 @@ export class SessionIssuer {
   }
 
   async revokeRefreshToken(token: string): Promise<void> {
-    await this.db
-      .update(refreshTokens)
-      .set({ revokedAt: new Date() })
-      .where(
-        and(
-          eq(refreshTokens.tokenHash, hashRefreshToken(token)),
-          isNull(refreshTokens.revokedAt),
-        ),
-      );
+    const [stored] = await this.db
+      .select({ familyId: refreshTokens.familyId })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, hashRefreshToken(token)))
+      .limit(1);
+    if (stored) {
+      await this.revokeFamily(stored.familyId, new Date());
+    }
   }
 
   async refreshSession(
     token: string,
     now: Date = new Date(),
   ): Promise<IssuedSession> {
-    const [claimed] = await this.db
-      .update(refreshTokens)
-      .set({ revokedAt: now })
-      .where(
-        and(
-          eq(refreshTokens.tokenHash, hashRefreshToken(token)),
-          isNull(refreshTokens.revokedAt),
-          gt(refreshTokens.expiresAt, now),
-        ),
-      )
-      .returning({ userId: refreshTokens.userId });
+    await this.cleanupRefreshTokens(now);
 
-    if (!claimed) {
+    const [stored] = await this.db
+      .select()
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, hashRefreshToken(token)))
+      .limit(1);
+
+    if (
+      !stored ||
+      stored.revokedAt !== null ||
+      stored.expiresAt.getTime() <= now.getTime()
+    ) {
       throw new SessionUnauthorizedError('Refresh token is not usable');
     }
 
-    const user = await this.users.findById(claimed.userId);
+    let familyId = stored.familyId;
+    if (stored.usedAt === null) {
+      const [claimed] = await this.db
+        .update(refreshTokens)
+        .set({ usedAt: now })
+        .where(
+          and(eq(refreshTokens.id, stored.id), isNull(refreshTokens.usedAt)),
+        )
+        .returning({ familyId: refreshTokens.familyId });
+
+      if (!claimed) {
+        const [raced] = await this.db
+          .select()
+          .from(refreshTokens)
+          .where(eq(refreshTokens.id, stored.id))
+          .limit(1);
+        if (!raced?.usedAt || raced.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()) {
+          await this.revokeFamily(stored.familyId, now);
+          throw new SessionUnauthorizedError('Refresh token reuse detected');
+        }
+      } else {
+        familyId = claimed.familyId;
+      }
+    } else if (stored.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()) {
+      await this.revokeFamily(stored.familyId, now);
+      throw new SessionUnauthorizedError('Refresh token reuse detected');
+    }
+
+    const user = await this.users.findById(stored.userId);
     if (!user) {
+      await this.revokeFamily(familyId, now);
       throw new SessionUnauthorizedError('Refresh token is not usable');
+    }
+    if (isSuspended(user)) {
+      await this.revokeFamily(familyId, now);
+      throw new SessionUnauthorizedError('Account is suspended');
     }
 
     const grant =
-      user.systemRole === 'admin'
+      isAdmin(user)
         ? { endsAt: null }
         : await this.members.resolveActiveAccess(user.id, now);
     if (!grant) {
+      await this.revokeFamily(familyId, now);
       throw new SessionUnauthorizedError('Access has already ended');
     }
 
-    return this.issueFullAccess(user, grant, now);
+    return this.issueFullAccess(user, grant, now, familyId);
+  }
+
+  private async revokeFamily(familyId: string, now: Date): Promise<void> {
+    await this.db
+      .update(refreshTokens)
+      .set({ revokedAt: now })
+      .where(
+        and(eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)),
+      );
+  }
+
+  private async cleanupRefreshTokens(now: Date): Promise<void> {
+    await this.db.delete(refreshTokens).where(
+      or(
+        and(
+          isNotNull(refreshTokens.usedAt),
+          lt(
+            refreshTokens.usedAt,
+            new Date(now.getTime() - REFRESH_CLEANUP_USED_MS),
+          ),
+        ),
+        lt(
+          refreshTokens.expiresAt,
+          new Date(now.getTime() - REFRESH_CLEANUP_EXPIRED_MS),
+        ),
+      ),
+    );
   }
 
   private get secret(): string {

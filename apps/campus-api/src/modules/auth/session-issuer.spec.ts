@@ -25,12 +25,33 @@ const members = {
   resolveActiveMembership: vi.fn(async () => null),
   resolveActiveAccess: vi.fn(async () => ({ endsAt: null })),
 };
-const refreshReturning = vi.fn(async () => [{ userId: user.id }]);
+const storedRefresh = {
+  id: 'refresh-row',
+  userId: user.id,
+  familyId: 'family-1',
+  tokenHash: 'hash',
+  expiresAt: new Date(Date.now() + 86_400_000),
+  usedAt: null as Date | null,
+  revokedAt: null as Date | null,
+  createdAt: new Date(),
+};
 const db = {
   insert: () => ({ values: vi.fn(async () => undefined) }),
+  select: () => ({
+    from: () => ({
+      where: () => ({ limit: vi.fn(async () => [storedRefresh]) }),
+    }),
+  }),
+  delete: () => ({ where: vi.fn(async () => undefined) }),
   update: () => ({
-    set: () => ({
-      where: () => ({ returning: refreshReturning }),
+    set: (values: { usedAt?: Date; revokedAt?: Date }) => ({
+      where: () => ({
+        returning: vi.fn(async () => {
+          if (values.usedAt) storedRefresh.usedAt = values.usedAt;
+          if (values.revokedAt) storedRefresh.revokedAt = values.revokedAt;
+          return values.usedAt ? [{ familyId: storedRefresh.familyId }] : [];
+        }),
+      }),
     }),
   }),
 };
@@ -134,11 +155,11 @@ describe('SessionIssuer', () => {
 
     expect(session.scope).toBe(SessionScope.FullAccess);
     expect(session.refreshToken).toEqual(expect.any(String));
-    expect(refreshReturning).toHaveBeenCalledOnce();
+    expect(storedRefresh.usedAt).toEqual(now);
   });
 
   it('rejects a refresh token that was already consumed', async () => {
-    refreshReturning.mockResolvedValueOnce([]);
+    storedRefresh.usedAt = new Date(now.getTime() - 2 * 60_000);
 
     await expect(issuer.refreshSession('refresh-token', now)).rejects.toBeInstanceOf(
       SessionUnauthorizedError,
