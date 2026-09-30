@@ -59,6 +59,11 @@ export type IssuedSession =
       refreshExpiresAt?: never;
     });
 
+export type FullAccessSession = Extract<
+  IssuedSession,
+  { scope: typeof SessionScope.FullAccess }
+>;
+
 /**
  * Mints the session a completed Google sign-in earns, and rotates it: a
  * full-access session is a short access token plus a refresh token, one
@@ -98,7 +103,7 @@ export class SessionIssuer {
     grant: AccessGrant,
     now: Date = new Date(),
     familyId: string = randomUUID(),
-  ): Promise<IssuedSession> {
+  ): Promise<FullAccessSession> {
     const endsAt = grant.endsAt;
     if (endsAt !== null && endsAt.getTime() <= now.getTime()) {
       throw new SessionUnauthorizedError('Access has already ended');
@@ -178,7 +183,7 @@ export class SessionIssuer {
       token,
       expiresAt,
       scope: SessionScope.Provisional,
-      redirectPath: '/onboarding',
+      redirectPath: '/invitation',
     };
   }
 
@@ -196,7 +201,7 @@ export class SessionIssuer {
   async refreshSession(
     token: string,
     now: Date = new Date(),
-  ): Promise<IssuedSession> {
+  ): Promise<FullAccessSession> {
     await this.cleanupRefreshTokens(now);
 
     const [stored] = await this.db

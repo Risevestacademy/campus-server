@@ -135,6 +135,43 @@ describe('loadEnv Google sign-in validation', () => {
   });
 });
 
+describe('loadEnv AUTH_COOKIE_DOMAIN', () => {
+  const ON_DOMAIN = {
+    APP_PUBLIC_URL: 'https://campus.example.com',
+    GOOGLE_CALLBACK_URL:
+      'https://campus.example.com/api/v1/auth/google/callback',
+  };
+
+  it('is unset by default, leaving the session cookie host-only', () => {
+    expect(testEnv({}).AUTH_COOKIE_DOMAIN).toBeUndefined();
+  });
+
+  it('accepts a parent domain covering both the app and the callback', () => {
+    expect(
+      testEnv({ ...ON_DOMAIN, AUTH_COOKIE_DOMAIN: 'campus.example.com' })
+        .AUTH_COOKIE_DOMAIN,
+    ).toBe('campus.example.com');
+    expect(() =>
+      testEnv({ ...ON_DOMAIN, AUTH_COOKIE_DOMAIN: 'example.com' }),
+    ).not.toThrow();
+  });
+
+  // The browser would drop the cookie without a word, so boot says it instead.
+  it('refuses a domain that does not cover the hosts setting the cookie', () => {
+    expect(() =>
+      testEnv({ ...ON_DOMAIN, AUTH_COOKIE_DOMAIN: 'other.example.com' }),
+    ).toThrow(/does not cover campus\.example\.com/);
+  });
+
+  it('refuses anything that is not a bare domain', () => {
+    for (const value of ['https://campus.example.com', 'campus', '.campus.example.com']) {
+      expect(() => testEnv({ ...ON_DOMAIN, AUTH_COOKIE_DOMAIN: value })).toThrow(
+        /AUTH_COOKIE_DOMAIN/,
+      );
+    }
+  });
+});
+
 describe('loadEnv HTTP settings', () => {
   it('defaults TRUST_PROXY_HOPS to one, for Railway', () => {
     expect(testEnv({}).TRUST_PROXY_HOPS).toBe(1);

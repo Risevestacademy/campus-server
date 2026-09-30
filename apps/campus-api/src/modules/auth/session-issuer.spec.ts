@@ -147,7 +147,7 @@ describe('SessionIssuer', () => {
     } as never);
 
     expect(session.scope).toBe(SessionScope.Provisional);
-    expect(session.redirectPath).toBe('/onboarding');
+    expect(session.redirectPath).toBe('/invitation');
   });
 
   it('rotates a usable refresh token into a new session pair', async () => {

@@ -106,6 +106,35 @@ describe('refresh and logout sessions (e2e)', () => {
     expect(rows[0].usedAt).not.toBeNull();
   });
 
+  // The web app schedules its next refresh from this, rather than guessing
+  // at a lifetime a guest's visit may have cut short.
+  it('says in the body when the new tokens lapse, and nothing more', async () => {
+    const issued = await issuedSession();
+    const before = Date.now();
+
+    const response = await request(app.getHttpServer())
+      .post('/v1/auth/refresh')
+      .set('Cookie', `${REFRESH_COOKIE}=${issued.refreshToken}`)
+      .set('Origin', ORIGIN)
+      .expect(200);
+
+    expect(Object.keys(response.body).sort()).toEqual([
+      'expiresAt',
+      'refreshExpiresAt',
+    ]);
+    const expiresAt = new Date(response.body.expiresAt).getTime();
+    const refreshExpiresAt = new Date(response.body.refreshExpiresAt).getTime();
+    expect(expiresAt).toBeGreaterThan(before);
+    expect(refreshExpiresAt).toBeGreaterThan(expiresAt);
+
+    const session = (response.headers['set-cookie'] as unknown as string[]).find(
+      (c) => c.startsWith(`${SESSION_COOKIE}=`),
+    );
+    expect(new Date(/Expires=([^;]+)/.exec(session!)![1]).getTime()).toBe(
+      expiresAt,
+    );
+  });
+
   it('rejects a cookie request from an untrusted origin', async () => {
     const issued = await issuedSession();
 

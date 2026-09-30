@@ -14,7 +14,7 @@ import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.j
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import { SessionScope, verifySessionToken } from '@campus/session';
 import { InviteStatus, invites } from './../src/modules/invites/schema.js';
-import { SystemRole, users } from './../src/modules/users/schema.js';
+import { SystemRole, UserStatus, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
   DomainExceptionFilter,
@@ -129,13 +129,13 @@ describe('Google sign-in (e2e)', () => {
 
     const response = await callback(state, cookie);
 
-    expect(response.status).toBe(403);
-    expect(response.body).toEqual({
-      error: {
-        code: 'INVITE_REQUIRED',
-        message: 'No invite found for this email',
-      },
-    });
+    // A top-level navigation: the browser goes back to the app, not to JSON.
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(
+      'http://localhost:3000/sign-in?error=invite_required',
+    );
+    const cookies = (response.headers['set-cookie'] ?? []) as string[];
+    expect(cookies.some((c) => c.startsWith(`${SESSION_COOKIE}=`))).toBe(false);
     expect(await db.select().from(users)).toHaveLength(0);
   });
 
@@ -162,7 +162,7 @@ describe('Google sign-in (e2e)', () => {
     const response = await callback(state, cookie);
 
     expect(response.status).toBe(302);
-    expect(response.headers.location).toBe('http://localhost:3000/onboarding');
+    expect(response.headers.location).toBe('http://localhost:3000/invitation');
 
     const claims = await verifySessionToken(
       sessionFrom(response),
@@ -206,8 +206,10 @@ describe('Google sign-in (e2e)', () => {
 
     const response = await callback(state, cookie);
 
-    expect(response.status).toBe(401);
-    expect(response.body.error.details.reason).toBe('invalid_state');
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(
+      'http://localhost:3000/sign-in?error=invalid_state',
+    );
   });
 
   it('rejects a callback carrying no state at all', async () => {
@@ -215,7 +217,41 @@ describe('Google sign-in (e2e)', () => {
       '/v1/auth/google/callback?code=any-code',
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(
+      'http://localhost:3000/sign-in?error=invalid_state',
+    );
     expect(google.exchangeCode).not.toHaveBeenCalled();
+  });
+  it('sends a cancel at Google back to sign-in and spends the state', async () => {
+    const { state, cookie } = await beginSignIn();
+
+    const response = await request(app.getHttpServer())
+      .get(
+        `/v1/auth/google/callback?error=access_denied&state=${encodeURIComponent(state)}`,
+      )
+      .set('Cookie', cookie);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(
+      'http://localhost:3000/sign-in?error=denied',
+    );
+    const cookies = (response.headers['set-cookie'] ?? []) as string[];
+    expect(cookies.some((c) => c.startsWith('campus_oauth_state=;'))).toBe(true);
+  });
+
+  it('sends a suspended account back to sign-in', async () => {
+    await db.insert(users).values({
+      email: IDENTITY.email,
+      systemRole: SystemRole.Admin,
+      status: UserStatus.Suspended,
+    });
+
+    const { state, cookie } = await beginSignIn();
+    const response = await callback(state, cookie);
+
+    expect(response.headers.location).toBe(
+      'http://localhost:3000/sign-in?error=account_suspended',
+    );
   });
 });
