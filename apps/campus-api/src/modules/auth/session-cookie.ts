@@ -78,6 +78,9 @@ export function setSessionCookies(
   site: CookieSite,
   session: IssuedSession,
 ): void {
+  if (site.sessionDomain) {
+    clearHostOnlySession(res, site);
+  }
   res.cookie(SESSION_COOKIE, session.token, sessionOptions(site, session.expiresAt));
   if (session.scope === 'full_access') {
     res.cookie(
@@ -97,17 +100,27 @@ export function clearSessionCookies(res: Response, site: CookieSite): void {
   const expired = new Date(0);
   res.clearCookie(SESSION_COOKIE, sessionOptions(site, expired));
   if (site.sessionDomain) {
-    // A cookie is only cleared by one naming the same Domain. Set before
-    // AUTH_COOKIE_DOMAIN was, a host-only copy would outlive sign-out and keep
-    // the browser looking signed in, so both are cleared.
-    res.clearCookie(
-      SESSION_COOKIE,
-      sessionCookieOptions(site.apiUrl, site.appUrl, expired),
-    );
+    clearHostOnlySession(res, site);
   }
   res.clearCookie(
     REFRESH_COOKIE,
     sessionCookieOptions(site.apiUrl, site.appUrl, expired, REFRESH_COOKIE_PATH),
+  );
+}
+
+/**
+ * Removes a `campus_session` set before AUTH_COOKIE_DOMAIN was — the two
+ * coexist, because a cookie is only replaced or cleared by one naming the same
+ * Domain. Browsers send the older of two same-named cookies first and
+ * readCookie takes the first, so a leftover would shadow every new session:
+ * a provisional one from before the rollout would hide the full-access one an
+ * accept just issued, for the rest of its thirty minutes. Cleared on every
+ * issue, not only sign-out, so the leftover never gets a request to win.
+ */
+function clearHostOnlySession(res: Response, site: CookieSite): void {
+  res.clearCookie(
+    SESSION_COOKIE,
+    sessionCookieOptions(site.apiUrl, site.appUrl, new Date(0)),
   );
 }
 

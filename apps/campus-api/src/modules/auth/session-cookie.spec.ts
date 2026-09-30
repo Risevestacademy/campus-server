@@ -119,10 +119,35 @@ describe('the shared session domain', () => {
 
     setSessionCookies(res, site, session);
 
-    expect(calls).toEqual([
+    expect(calls.filter((c) => c.kind === 'set')).toEqual([
       { kind: 'set', name: SESSION_COOKIE, domain: 'campus.example.com' },
       { kind: 'set', name: REFRESH_COOKIE, domain: undefined },
     ]);
+  });
+
+  /**
+   * The rollout case. A campus_session set before the domain existed is
+   * host-only, survives alongside the new one, and — being older — is the one
+   * the browser sends first. Issuing a session has to remove it, or a
+   * pre-rollout provisional cookie hides the full-access one an accept issues.
+   */
+  it('clears a leftover host-only access cookie before setting the shared one', () => {
+    const { res, calls } = recorder();
+
+    setSessionCookies(res, site, session);
+
+    expect(calls.slice(0, 2)).toEqual([
+      { kind: 'clear', name: SESSION_COOKIE, domain: undefined },
+      { kind: 'set', name: SESSION_COOKIE, domain: 'campus.example.com' },
+    ]);
+  });
+
+  it('clears nothing when issuing without a domain', () => {
+    const { res, calls } = recorder();
+
+    setSessionCookies(res, { ...site, sessionDomain: undefined }, session);
+
+    expect(calls.some((c) => c.kind === 'clear')).toBe(false);
   });
 
   it('is left off entirely when unset', () => {
