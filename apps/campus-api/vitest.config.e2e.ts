@@ -29,6 +29,7 @@ export default defineConfig({
       GOOGLE_CALLBACK_URL: 'http://localhost:3000/v1/auth/google/callback',
       AUTH_STATE_SECRET: 'an-e2e-state-secret-of-at-least-32-chars',
       AUTH_SESSION_SECRET: 'an-e2e-session-secret-of-at-least-32-chars',
+      CORS_ORIGINS: 'http://localhost:3000',
     },
   },
 });

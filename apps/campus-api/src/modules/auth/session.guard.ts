@@ -8,10 +8,10 @@ import {
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedRequest } from '../../shared/auth/authenticated-user.js';
 import { isSuspended, UsersService } from '../users/users.service.js';
-import { parseCorsOrigins } from '../../infra/config/env.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { readSessionCookie } from './session-cookie.js';
+import { assertAllowedOrigin } from './session-origin.js';
 import {
   InvalidSessionTokenError,
   SessionScope,
@@ -61,7 +61,7 @@ abstract class SessionGuardBase implements CanActivate {
     // cross-site form POST carries the cookie and needs no preflight, so the
     // origin is checked here instead.
     if (fromCookie && UNSAFE_METHODS.has(req.method ?? '')) {
-      this.assertAllowedOrigin(req.headers.origin);
+      assertAllowedOrigin(this.config, req.headers.origin);
     }
 
     let secret: string;
@@ -108,20 +108,6 @@ abstract class SessionGuardBase implements CanActivate {
     return true;
   }
 
-  /**
-   * A browser sending the session cookie must say where it is from, and it
-   * must be somewhere we serve. Requests with no Origin at all are server to
-   * server, where the cookie could not have been attached by a third party.
-   */
-  private assertAllowedOrigin(origin: string | undefined): void {
-    if (origin === undefined) {
-      return;
-    }
-    const allowed = parseCorsOrigins(this.config.CORS_ORIGINS);
-    if (!allowed.includes(origin)) {
-      throw new SessionUnauthorizedError('Origin is not allowed to use this session');
-    }
-  }
 }
 
 /** Requires a full-access session: someone already on the roster. */

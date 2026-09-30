@@ -131,7 +131,7 @@ export class Env {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  AUTH_SESSION_TTL_MINUTES: number = 720;
+  AUTH_SESSION_TTL_MINUTES: number = 15;
 
   /**
    * Lifetime of a provisional session — long enough to finish onboarding,
@@ -142,6 +142,13 @@ export class Env {
   @IsInt()
   @Min(1)
   AUTH_PROVISIONAL_TTL_MINUTES: number = 30;
+
+  /** Lifetime of a revocable refresh token, in days. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  AUTH_REFRESH_TTL_DAYS: number = 30;
 
   // Comma-separated list of browser origins allowed to call the API.
 

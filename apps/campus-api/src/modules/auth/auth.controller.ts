@@ -1,17 +1,35 @@
-import { Controller, Get, Inject, Query, Req, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { ApiErrorResponseDto } from '../../shared/dto/index.js';
-import { GoogleSignInFailedError } from './auth.exceptions.js';
+import {
+  GoogleSignInFailedError,
+  SessionUnauthorizedError,
+} from './auth.exceptions.js';
 import { AuthService } from './auth.service.js';
 import { GoogleCallbackQueryDto } from './dto/google-callback.query.dto.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { GoogleOAuthService } from './google-oauth.service.js';
 import { OAuthStateService } from './oauth-state.service.js';
 import { SessionIssuer } from './session-issuer.js';
-import { SESSION_COOKIE, sessionCookieOptions } from './session-cookie.js';
+import {
+  clearSessionCookies,
+  readRefreshCookie,
+  setSessionCookies,
+} from './session-cookie.js';
+import { assertAllowedOrigin } from './session-origin.js';
 import {
   STATE_COOKIE,
   STATE_COOKIE_PATH,
@@ -103,17 +121,62 @@ export class AuthController {
     // This is a top-level browser navigation, so the answer is a redirect and
     // a cookie, not a JSON body the user would be left staring at. The token
     // never reaches the page itself, and never reaches browser history.
-    res.cookie(
-      SESSION_COOKIE,
-      session.token,
-      sessionCookieOptions(
-        requireGoogleAuth(this.config).callbackUrl,
-        this.config.APP_PUBLIC_URL,
-        session.expiresAt,
-      ),
+    setSessionCookies(
+      res,
+      requireGoogleAuth(this.config).callbackUrl,
+      this.config.APP_PUBLIC_URL,
+      session,
     );
     res.redirect(
       `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${session.redirectPath}`,
+    );
+  }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Refresh the access session',
+    description:
+      'Rotates the refresh cookie and issues a new full-access session.',
+  })
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    const token = readRefreshCookie(req.headers.cookie);
+    if (!token) {
+      throw new SessionUnauthorizedError('Refresh token required');
+    }
+
+    assertAllowedOrigin(this.config, req.headers.origin);
+    const session = await this.sessions.refreshSession(token);
+    setSessionCookies(
+      res,
+      requireGoogleAuth(this.config).callbackUrl,
+      this.config.APP_PUBLIC_URL,
+      session,
+    );
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Revoke the refresh session',
+    description: 'Revokes the refresh cookie and clears both session cookies.',
+  })
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    assertAllowedOrigin(this.config, req.headers.origin);
+    const token = readRefreshCookie(req.headers.cookie);
+    if (token) {
+      await this.sessions.revokeRefreshToken(token);
+    }
+    clearSessionCookies(
+      res,
+      requireGoogleAuth(this.config).callbackUrl,
+      this.config.APP_PUBLIC_URL,
     );
   }
 }

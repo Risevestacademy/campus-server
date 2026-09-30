@@ -19,8 +19,8 @@ import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { CurrentSession } from '../auth/current-session.decorator.js';
 import { requireGoogleAuth } from '../auth/google-auth.settings.js';
 import {
-  SESSION_COOKIE,
-  sessionCookieOptions,
+  clearSessionCookies,
+  setSessionCookies,
 } from '../auth/session-cookie.js';
 import { SessionUnauthorizedError } from '../auth/auth.exceptions.js';
 import { SessionIssuer } from '../auth/session-issuer.js';
@@ -134,24 +134,13 @@ export class InvitesController {
         outcome.account,
         grant,
       );
-      res.cookie(
-        SESSION_COOKIE,
-        upgraded.token,
-        sessionCookieOptions(
-          cookieBase.apiUrl,
-          cookieBase.appUrl,
-          upgraded.expiresAt,
-        ),
-      );
+      setSessionCookies(res, cookieBase.apiUrl, cookieBase.appUrl, upgraded);
     } else {
       // A provisional session with nothing left to finish is a dead end, so
       // declining takes the cookie with it. The options are the same ones the
       // cookie was set with — a mismatched path or SameSite would leave it in
       // place.
-      res.clearCookie(
-        SESSION_COOKIE,
-        sessionCookieOptions(cookieBase.apiUrl, cookieBase.appUrl, new Date(0)),
-      );
+      clearSessionCookies(res, cookieBase.apiUrl, cookieBase.appUrl);
     }
 
     return outcome.response;

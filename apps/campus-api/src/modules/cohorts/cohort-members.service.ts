@@ -51,6 +51,11 @@ export interface AccessGrant {
   endsAt: Date | null;
 }
 
+export interface SessionMembership {
+  role: CohortRole;
+  cohortId: string;
+}
+
 @Injectable()
 export class CohortMembersService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
@@ -91,5 +96,19 @@ export class CohortMembersService {
     now: Date = new Date(),
   ): Promise<boolean> {
     return (await this.resolveActiveAccess(userId, now)) !== null;
+  }
+
+  async resolveActiveMembership(
+    userId: string,
+    now: Date = new Date(),
+  ): Promise<SessionMembership | null> {
+    const [row] = await this.db
+      .select({ role: cohortMembers.role, cohortId: cohortMembers.cohortId })
+      .from(cohortMembers)
+      .where(and(eq(cohortMembers.userId, userId), isLiveMembership(now)))
+      .orderBy(sql`${cohortMembers.joinedAt} desc`)
+      .limit(1);
+
+    return row ?? null;
   }
 }
