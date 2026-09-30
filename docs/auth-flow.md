@@ -15,6 +15,10 @@ A completed Google sign-in ends in one of two sessions:
 
 Everyone else is turned away, and no account is created for them.
 
+Every ending of a sign-in, refusals included, is a redirect back into the web
+app (`APP_PUBLIC_URL`). The callback is a top-level navigation, so a JSON
+error would leave the user looking at raw JSON on the API's own domain.
+
 ## Sign-in
 
 ```mermaid
@@ -45,17 +49,17 @@ sequenceDiagram
     end
 
     alt account suspended
-        A-->>B: 403 ACCOUNT_SUSPENDED
+        A-->>B: 302 to APP_PUBLIC_URL/sign-in?error=account_suspended
     else admin, or an active member
         A->>DB: bind the subject if the row had none, stamp last_login_at
-        A->>A: mint full_access session
-        A-->>B: 302 to APP_PUBLIC_URL/ + httpOnly session cookie
+        A->>A: mint full_access session + refresh token
+        A-->>B: 302 to APP_PUBLIC_URL/ + httpOnly session and refresh cookies
     else holds a live invite
         A->>DB: create or link the account, stamp last_login_at
         A->>A: mint provisional session carrying the invite id
-        A-->>B: 302 to APP_PUBLIC_URL/onboarding + session cookie
+        A-->>B: 302 to APP_PUBLIC_URL/invitation + session cookie
     else nobody invited them
-        A-->>B: 403 INVITE_REQUIRED
+        A-->>B: 302 to APP_PUBLIC_URL/sign-in?error=invite_required
         Note over A,DB: nothing is written — a refusal leaves no trace
     end
 ```
@@ -65,19 +69,25 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     start([callback verified]) --> verified{email_verified?}
-    verified -- no --> refuse401[401 unverified_email]
+    verified -- no --> refuse401[sign-in?error=unverified_email]
     verified -- yes --> known{row for this<br/>subject or address?}
 
     known -- yes --> suspended{suspended?}
-    suspended -- yes --> refuse403a[403 ACCOUNT_SUSPENDED]
+    suspended -- yes --> refuse403a[sign-in?error=account_suspended]
     suspended -- no --> roster{admin, or an<br/>active member?}
     roster -- yes --> full[[full_access session]]
     roster -- no --> invite
 
     known -- no --> invite{live invite<br/>for this address?}
     invite -- yes --> prov[[provisional session]]
-    invite -- no --> refuse403b[403 INVITE_REQUIRED]
+    invite -- no --> refuse403b[sign-in?error=invite_required]
 ```
+
+A failure earlier than that — a cancel at Google, a state that does not match
+the browser's cookie, an expired sign-in — ends the same way, with its own
+code. The full list of codes is in the API guide
+(`apps/campus-api/docs/intro.md`). A deployment with Google sign-in switched
+off is the one exception: both routes answer 404, as though absent.
 
 "Active member" means a membership that has not ended, and — for students —
 one carrying an explicit `active` status. An unfinished enrolment is not a
@@ -106,6 +116,8 @@ sequenceDiagram
     A-->>Admin: invite link carrying the raw token
 
     Admin-->>B: sends the link out of band
+    B->>A: POST /v1/invites/preview { token } — no session
+    A-->>B: the offer: cohort, track, role, invited by, address
     B->>A: Google sign-in (as above)
     A-->>B: provisional session, redirect to onboarding
 
@@ -114,7 +126,7 @@ sequenceDiagram
         A->>DB: invite status = declined
     else accepted
         A->>DB: fill the profile, create the membership, invite status = accepted
-        A-->>B: full_access session
+        A-->>B: full_access session + refresh cookie
     end
 ```
 
@@ -136,6 +148,15 @@ sequenceDiagram
     R->>H: admin routes only
 ```
 
+## Who is signed in
+
+The cookies are httpOnly, so the web app cannot look at them. It asks
+instead: `GET /v1/auth/me` accepts either kind of session and answers with its
+`scope`, its expiry, the account, and — for full access — the cohort place
+that admits it. A provisional answer carries the `inviteId` still to be
+answered. The account and membership are read from the database, like
+everything else behind the guard.
+
 ## What protects what
 
 - **State**: signed with `AUTH_STATE_SECRET` and matched against an httpOnly
@@ -148,16 +169,21 @@ sequenceDiagram
 - **`email_verified`**: required, because an invite was sent to a mailbox and
   an unverified address only proves control of a Google account.
 - **Session**: signed with `AUTH_SESSION_SECRET`, in an httpOnly cookie, so
-  script on the page can never read it. Rotating that secret signs everybody
-  out.
+  script on the page can never read it. Rotating that secret invalidates every
+  access token; refresh tokens survive it, so browsers recover on their next
+  refresh.
+- **Refresh token**: random, stored only as a SHA-256 hash, in an httpOnly
+  cookie scoped to `/v1/auth`. Refresh and logout refuse an `Origin` outside
+  `CORS_ORIGINS`, and so does any cookie-authenticated unsafe method elsewhere,
+  because a cross-site cookie has to be `SameSite=None`.
 - **Scope**: a provisional session cannot reach an ordinary route, so being
   half-onboarded is not a licence to use the campus.
 - **Lifetime**: an access token lasts `AUTH_SESSION_TTL_MINUTES` (15, and
   never more: `@campus/session`'s session policy caps it, because `world`
-  depends on it), or
-  until the soonest `access_expires_at` among the holder's memberships if that
-  comes first. A token cannot outlive the access it stands for, which is what
-  keeps a guest's visit from running on until the token happens to lapse.
+  depends on it), or sooner when every live membership has an
+  `access_expires_at` — then the last of those to end. A token cannot
+  outlive the access it stands for, which is what keeps a guest's visit from
+  running on until the token happens to lapse.
 - **Refresh**: see below. Every refresh re-checks the account and its access,
   so fifteen minutes is also how long a removed or suspended person can keep
   using a token they already hold.
@@ -193,7 +219,7 @@ sequenceDiagram
         A-->>B: 401, sign in again
     else usable
         A->>DB: mark it used, insert its replacement in the same family
-        A-->>B: new campus_session + campus_refresh
+        A-->>B: 200 { expiresAt, refreshExpiresAt } + new campus_session + campus_refresh
     end
 
     B->>A: POST /v1/auth/logout
@@ -207,11 +233,18 @@ sequenceDiagram
 - **Rotation, with a grace window.** Each refresh token works once. A second
   use within 60 seconds is accepted — two tabs refreshing at the same moment
   is not theft — and a use after that revokes the family.
-- **Refresh before the access token runs out**, on a timer, not only after a
-  401. `world` depends on it: see below.
+- **Refresh before the access token runs out**, not only after a 401. The
+  refresh answers `{ expiresAt, refreshExpiresAt }` and `GET /v1/auth/me`
+  carries `expiresAt`, so schedule each refresh from the real deadline — a
+  guest's visit can bring it forward — rather than assuming fifteen minutes.
+  `world` depends on it: see below.
 - **Retention.** A used token is deleted 30 minutes after use and an expired
   one 3 days after expiry, during refreshes.
 - **Every access token names its family** (the `sid` claim).
+- **Shared with `world`, and only the access cookie.** With
+  `AUTH_COOKIE_DOMAIN` set, `campus_session` is also sent to sibling
+  subdomains, which is how `world` on its own host receives it.
+  `campus_refresh` stays on campus-api's host and path alone.
 
 ### How `world` follows a sign-in
 
