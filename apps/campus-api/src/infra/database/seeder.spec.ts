@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
+import { AuditAction, auditLog } from '../../modules/audit/schema.js';
 import { SystemRole, UserStatus, users } from '../../modules/users/schema.js';
 import type { Db } from './database.constants.js';
 import { seedAdmin, seedAdmins } from './seeder.js';
@@ -16,7 +17,7 @@ import { seedAdmin, seedAdmins } from './seeder.js';
 const MIGRATIONS = fileURLToPath(new URL('./migrations', import.meta.url));
 const EMAIL = 'admin@campus.local';
 
-const pglite = drizzle(new PGlite(), { schema: { users } });
+const pglite = drizzle(new PGlite(), { schema: { users, auditLog } });
 const db = pglite as unknown as Db;
 
 function makeLogger() {
@@ -39,7 +40,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await pglite.execute(sql`truncate users cascade`);
+  await pglite.execute(sql`truncate audit_log, users cascade`);
 });
 
 describe('seedAdmin', () => {
@@ -133,5 +134,54 @@ describe('seedAdmins', () => {
       SystemRole.Admin,
       SystemRole.Admin,
     ]);
+  });
+});
+
+describe('seedAdmin audit log', () => {
+  const entries = () =>
+    pglite
+      .select({
+        actorUserId: auditLog.actorUserId,
+        action: auditLog.action,
+        details: auditLog.details,
+      })
+      .from(auditLog);
+
+  it('records a new admin as a grant nobody signed in to make', async () => {
+    await seedAdmin(db, EMAIL, makeLogger());
+
+    expect(await entries()).toEqual([
+      {
+        actorUserId: null,
+        action: AuditAction.SystemRoleChanged,
+        details: { from: null, to: SystemRole.Admin, source: 'seed' },
+      },
+    ]);
+  });
+
+  it('records a promotion from user', async () => {
+    const earlier = new Date(Date.now() - 60_000);
+    await pglite
+      .insert(users)
+      .values({ email: EMAIL, createdAt: earlier, updatedAt: earlier });
+
+    await seedAdmin(db, EMAIL, makeLogger());
+
+    expect(await entries()).toEqual([
+      expect.objectContaining({
+        details: {
+          from: SystemRole.User,
+          to: SystemRole.Admin,
+          source: 'seed',
+        },
+      }),
+    ]);
+  });
+
+  it('records nothing on a re-run', async () => {
+    await seedAdmin(db, EMAIL, makeLogger());
+    await seedAdmin(db, EMAIL, makeLogger());
+
+    expect(await entries()).toHaveLength(1);
   });
 });

@@ -3,8 +3,14 @@ import { and, eq, gt, isNotNull, lte, ne, or } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
-import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import {
+  DRIZZLE,
+  type Db,
+  type Tx,
+} from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
+import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import {
   isLiveMembership,
   isNotLiveMembership,
@@ -51,9 +57,6 @@ import {
   InviteNotFoundException,
 } from './invites.exceptions.js';
 import { InviteStatus, invites, type Invite } from './schema.js';
-
-/** The transaction handle drizzle hands a `db.transaction` callback. */
-type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
  * Accept carries the account so the route can mint an upgraded session from
@@ -579,15 +582,22 @@ export class InvitesService {
    * Returns the account on accept so the caller can mint the upgraded session;
    * a decline has nothing to hand back, because there is no longer a session
    * worth keeping.
+   *
+   * `correlationId` is the request's, carried onto any audit entry the accept
+   * writes.
    */
   async decide(
     inviteId: string,
     decision: InviteDecision,
     user: AuthenticatedUser,
     now: Date = new Date(),
+    correlationId?: string,
   ): Promise<DecisionOutcome> {
     return decision === InviteDecision.Accept
-      ? this.accept(inviteId, user, now)
+      ? this.accept(inviteId, user, now, {
+          actorUserId: user.id,
+          correlationId,
+        })
       : this.decline(inviteId, user, now);
   }
 
@@ -595,6 +605,7 @@ export class InvitesService {
     inviteId: string,
     user: AuthenticatedUser,
     now: Date,
+    audit: AuditContext,
   ): Promise<DecisionOutcome> {
     return this.db.transaction(async (tx) => {
       const claimed = await this.claimInvite(
@@ -607,8 +618,19 @@ export class InvitesService {
 
       if (claimed.fresh) {
         checkEmailMatch(claimed.invite, user);
-        const membership = await this.enrol(tx, claimed.invite, user.id, now);
-        const account = await this.applySystemRole(tx, claimed.invite, user.id);
+        const membership = await this.enrol(
+          tx,
+          claimed.invite,
+          user.id,
+          now,
+          audit,
+        );
+        const account = await this.applySystemRole(
+          tx,
+          claimed.invite,
+          user.id,
+          audit,
+        );
         return {
           kind: 'accepted',
           response: {
@@ -743,6 +765,7 @@ export class InvitesService {
     invite: Invite,
     userId: string,
     now: Date,
+    audit: AuditContext,
   ): Promise<MembershipGrantedDto | null> {
     if (invite.cohortId === null) {
       // An admin invite: a platform role rather than a place in a cohort.
@@ -775,6 +798,14 @@ export class InvitesService {
     const status =
       invite.cohortRole === CohortRole.Student ? StudentStatus.Active : null;
 
+    // The row as it stands, read before the upsert overwrites it, so a
+    // revive can record what it replaced. Locked, so the state logged is the
+    // state replaced: nothing can change the row between this read and the
+    // write below.
+    const previous = await this.findMembership(tx, invite.cohortId, userId, {
+      lock: true,
+    });
+
     const [row] = await tx
       .insert(cohortMembers)
       .values({
@@ -794,13 +825,11 @@ export class InvitesService {
           role: invite.cohortRole,
           cohortTrackId: invite.cohortTrackId,
           status,
-          // Whatever ended the last membership is not true of this one. The
-          // reason is discarded rather than carried forward — see
+          // Whatever ended the last membership is not true of this one, so
+          // the reason is cleared rather than carried forward — see
           // cohort_members_dismissal_reason, which refuses to hold one on a
-          // row that is not dismissed. Preserving why somebody once left is
-          // audit_log's job; until that exists the reason is lost here, and
-          // personal/backlog.md records that it has to be written there
-          // first once it does.
+          // row that is not dismissed. It is not lost: the audit entry below
+          // keeps the row as it was, reason included.
           dismissalReason: null,
           accessExpiresAt: invite.guestAccessExpiresAt,
           leftAt: null,
@@ -838,6 +867,27 @@ export class InvitesService {
         userId,
       });
     }
+
+    if (previous) {
+      await writeAuditEntry(tx, {
+        ...audit,
+        action: AuditAction.MembershipRevived,
+        subject: { type: AuditSubjectType.CohortMember, id: row.id },
+        details: {
+          inviteId: invite.id,
+          invitedBy: invite.invitedBy,
+          previous: {
+            role: previous.role,
+            cohortTrackId: previous.cohortTrackId,
+            status: previous.status,
+            dismissalReason: previous.dismissalReason,
+            joinedAt: previous.joinedAt,
+            leftAt: previous.leftAt,
+            accessExpiresAt: previous.accessExpiresAt,
+          },
+        },
+      });
+    }
     return toMembershipDto(row);
   }
 
@@ -856,6 +906,7 @@ export class InvitesService {
     tx: Tx,
     invite: Invite,
     userId: string,
+    audit: AuditContext,
   ): Promise<User> {
     if (invite.systemRole !== SystemRole.Admin) {
       return this.findAccount(tx, userId);
@@ -868,6 +919,18 @@ export class InvitesService {
       .returning();
 
     if (raised) {
+      await writeAuditEntry(tx, {
+        ...audit,
+        action: AuditAction.SystemRoleChanged,
+        subject: { type: AuditSubjectType.User, id: userId },
+        details: {
+          // The WHERE only matches a non-admin, and user is the one other role.
+          from: SystemRole.User,
+          to: SystemRole.Admin,
+          inviteId: invite.id,
+          invitedBy: invite.invitedBy,
+        },
+      });
       return raised;
     }
     // Already carried — skip the write rather than bump updatedAt for nothing.
@@ -878,8 +941,9 @@ export class InvitesService {
     tx: Tx,
     cohortId: string,
     userId: string,
+    options: { lock?: boolean } = {},
   ): Promise<typeof cohortMembers.$inferSelect | undefined> {
-    const [row] = await tx
+    const query = tx
       .select()
       .from(cohortMembers)
       .where(
@@ -889,6 +953,7 @@ export class InvitesService {
         ),
       )
       .limit(1);
+    const [row] = options.lock ? await query.for('update') : await query;
     return row;
   }
 

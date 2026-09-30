@@ -27,6 +27,7 @@ import {
   cohorts,
   StudentStatus,
 } from './../src/modules/cohorts/schema.js';
+import { AuditAction, auditLog } from './../src/modules/audit/schema.js';
 import { InviteDecision } from './../src/modules/invites/dto/invite-decision.dto.js';
 import { InviteStatus, invites } from './../src/modules/invites/schema.js';
 import { tracks } from './../src/modules/tracks/schema.js';
@@ -150,7 +151,7 @@ describe('POST /v1/invites/decision (e2e)', () => {
 
   beforeEach(async () => {
     await db.execute(
-      sql`truncate invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+      sql`truncate audit_log, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
     );
 
     const [admin] = await db
@@ -540,5 +541,27 @@ describe('POST /v1/invites/decision (e2e)', () => {
 
     const [row] = await db.select().from(users).where(eq(users.id, inviteeId));
     expect(row.systemRole).toBe(SystemRole.Admin);
+  });
+
+  // The correlation id is what leads from an audit entry to the request's
+  // log lines, so it has to survive the trip from the header to the row.
+  it("audits an admin grant under the request's correlation id", async () => {
+    const invite = await makeInvite({ systemRole: SystemRole.Admin });
+
+    await request(app.getHttpServer())
+      .post(URL_UNDER_TEST)
+      .set('Cookie', await provisional(invite.id))
+      .set('x-correlation-id', 'e2e-corr-1')
+      .send({ decision: InviteDecision.Accept })
+      .expect(200);
+
+    const entries = await db.select().from(auditLog);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        action: AuditAction.SystemRoleChanged,
+        actorUserId: inviteeId,
+        correlationId: 'e2e-corr-1',
+      }),
+    ]);
   });
 });
