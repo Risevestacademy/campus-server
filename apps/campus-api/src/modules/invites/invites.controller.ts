@@ -45,6 +45,7 @@ import {
   InvitePreviewResponseDto,
 } from './dto/invite-preview.dto.js';
 import { InviteResponseDto } from './dto/invite-response.dto.js';
+import { InviteMailer } from './invite-mailer.js';
 import { InvitesService } from './invites.service.js';
 import { InviteNotFoundException } from './invites.exceptions.js';
 
@@ -53,6 +54,7 @@ import { InviteNotFoundException } from './invites.exceptions.js';
 export class InvitesController {
   constructor(
     private readonly invites: InvitesService,
+    private readonly mailer: InviteMailer,
     private readonly sessions: SessionIssuer,
     private readonly members: CohortMembersService,
     @Inject(CONFIG) private readonly config: Env,
@@ -65,11 +67,14 @@ export class InvitesController {
   @UseGuards(SessionGuard, AdminGuard)
   @ApiBearerAuth()
   @ApiCreateInvite()
-  create(
+  async create(
     @Body() dto: CreateInviteDto,
     @CurrentUser() inviter: AuthenticatedUser,
   ): Promise<InviteResponseDto> {
-    return this.invites.create(dto, inviter);
+    const receipt = await this.invites.create(dto, inviter);
+    // After the write, not inside it: a failed send must not undo an invite
+    // the admin can still share by hand.
+    return { ...receipt, emailStatus: await this.mailer.send(receipt) };
   }
 
   // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The
@@ -78,7 +83,9 @@ export class InvitesController {
   @Post('preview')
   @HttpCode(HttpStatus.OK)
   @ApiPreviewInvite()
-  preview(@Body() dto: InvitePreviewRequestDto): Promise<InvitePreviewResponseDto> {
+  preview(
+    @Body() dto: InvitePreviewRequestDto,
+  ): Promise<InvitePreviewResponseDto> {
     return this.invites.previewByToken(dto.token);
   }
 

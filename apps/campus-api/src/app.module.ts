@@ -7,6 +7,7 @@ import { AppService } from './app.service.js';
 import { HealthModule } from './health/health.module.js';
 import { AppConfigModule } from './infra/config/config.module.js';
 import { DatabaseModule } from './infra/database/database.module.js';
+import { EmailModule } from './infra/email/email.module.js';
 import { AppLoggerModule } from './infra/logger/logger.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { InvitesModule } from './modules/invites/invites.module.js';
@@ -16,6 +17,7 @@ import { InvitesModule } from './modules/invites/invites.module.js';
     AppConfigModule,
     AppLoggerModule,
     DatabaseModule,
+    EmailModule,
     HealthModule,
     AuthModule,
     InvitesModule,

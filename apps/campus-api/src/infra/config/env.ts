@@ -192,7 +192,12 @@ export class Env {
    * The refresh and state cookies stay host-only either way.
    */
   @IsOptional()
-  @IsFQDN({}, { message: 'AUTH_COOKIE_DOMAIN must be a bare domain, like campus.example' })
+  @IsFQDN(
+    {},
+    {
+      message: 'AUTH_COOKIE_DOMAIN must be a bare domain, like campus.example',
+    },
+  )
   AUTH_COOKIE_DOMAIN?: string;
 
   // Comma-separated list of browser origins allowed to call the API.
@@ -259,6 +264,38 @@ export class Env {
   })
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
+
+  // Email (Resend) ------------------------------------------------------
+  // Off by default, like PostHog: local development and CI never send mail.
+  // With the flag off, invites are still created and the admin shares the
+  // link by hand, which is how it worked before email existed.
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_EMAIL_ENABLED: boolean = false;
+
+  @ValidateIf((o: Env) => o.FF_EMAIL_ENABLED)
+  @IsNotEmpty()
+  @Matches(/^re_/, { message: 'RESEND_API_KEY must start with "re_"' })
+  RESEND_API_KEY?: string;
+
+  /**
+   * Must be on a domain verified in Resend, or every send is refused.
+   * Either a bare address or `Name <address>`.
+   */
+  @ValidateIf((o: Env) => o.FF_EMAIL_ENABLED)
+  @Matches(
+    /^(?:[^<>]*<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)$/,
+    {
+      message:
+        'EMAIL_FROM must be an address, or "Name <address>", on a domain verified in Resend',
+    },
+  )
+  EMAIL_FROM?: string;
 
   // require_tld: false keeps http://localhost:3000 valid for local dev;
   // require_protocol: true still rejects bare words like "not-a-url".

@@ -4,6 +4,13 @@ import { CohortRole } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
 import { InviteStatus } from '../schema.js';
 
+/** Whether the invite email went out. */
+export enum InviteEmailStatus {
+  Sent = 'sent',
+  Failed = 'failed',
+  Disabled = 'disabled',
+}
+
 export class InviteResponseDto {
   @ApiProperty({ example: '44444444-4444-4444-8444-444444444444' })
   id: string;
@@ -64,4 +71,15 @@ export class InviteResponseDto {
 
   @ApiProperty({ example: '2026-09-22T12:00:00.000Z' })
   createdAt: string;
+
+  @ApiProperty({
+    enum: InviteEmailStatus,
+    enumName: 'InviteEmailStatus',
+    example: InviteEmailStatus.Sent,
+    description:
+      '`sent`: Resend accepted the email. `failed`: it was not confirmed ' +
+      'sent — share inviteLink by hand; the invite exists either way. ' +
+      '`disabled`: this deployment sends no email (FF_EMAIL_ENABLED off).',
+  })
+  emailStatus: InviteEmailStatus;
 }
