@@ -14,7 +14,7 @@ The mechanics behind each step (state, sessions, refresh) are in
 | #   | Where                     | What the invitee sees                                                                    | Call                                                                                 |
 | --- | ------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 1   | Admin                     | —                                                                                        | `POST /v1/invites` returns `inviteLink`                                              |
-| 2   | Inbox                     | An email with the link (sent by the admin for now — see [Not built yet](#not-built-yet)) | —                                                                                    |
+| 2   | Inbox                     | An email from campus-api with the link (Resend, when `FF_EMAIL_ENABLED` is on)           | —                                                                                    |
 | 3   | `/invitation?token=…`     | The invite: cohort, track, role, who invited them, Continue with Google                  | `GET /api/v1/auth/me` → 401, then `POST /api/v1/invites/preview`                     |
 | 4   | Google                    | Account picker                                                                           | top-level navigation to `/api/v1/auth/google`                                        |
 | 5   | `/invitation`             | Back from Google, signed in                                                              | `GET /api/v1/auth/me` → provisional, then `GET /api/v1/invites/validate-user-invite` |
@@ -35,7 +35,7 @@ sequenceDiagram
 
     Admin->>A: POST /v1/invites { email, cohortId, cohortRole, cohortTrackId }
     A-->>Admin: inviteLink = APP_PUBLIC_URL/invitation?token=…
-    Admin-->>I: email with the link
+    A-->>I: email with the link (Resend)
 
     I->>W: open /invitation?token=…
     W->>A: GET /v1/auth/me
@@ -76,7 +76,18 @@ An admin creates the invite with `POST /v1/invites`. The response carries
 its hash is stored. The invite stays open for `INVITE_TTL_DAYS` (7) unless
 the admin sets `expiresAt`.
 
-Nothing sends that link today. The admin copies it into an email themselves.
+campus-api then emails the link to the invitee through Resend: who invited
+them, to which cohort and role, the address to sign in with, and when the
+invite expires (and, for a guest, when the visit ends). The response's
+`emailStatus` says how it went:
+
+| `emailStatus` | Meaning | The admin should |
+| --- | --- | --- |
+| `sent` | Resend accepted the email | Nothing |
+| `failed` | Not confirmed sent — refused, or no answer in 10 s | Share `inviteLink` by hand |
+| `disabled` | This deployment sends no email (`FF_EMAIL_ENABLED` off) | Share `inviteLink` by hand |
+
+Either way the invite exists: a failed email never undoes it.
 
 ### 3. `/invitation`, signed out
 
@@ -179,8 +190,8 @@ Every `?error=` code is listed in the API guide
 
 ## Not built yet
 
-- **Sending the email.** campus-api returns the link to the admin and sends
-  nothing. Until it does, the admin pastes the link into an email by hand.
+- **Resending the email.** A failed send is reported once, in the create
+  response; there is no route to send it again.
 - **Decline and "Flag an Issue".** campus-api supports declining; the
   designs have no button for it. "Flag an Issue" on `/preview` has no
   backend yet.

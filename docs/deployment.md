@@ -53,7 +53,11 @@ change to either reaches both apps:
   without it the rate limiter treats all traffic as a single client),
   `APP_PUBLIC_URL` (invite-link base, `{base}/invitation?token=<raw>` — set it to
   the frontend origin for that environment; required, boot fails without it),
-  `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7).
+  `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7),
+  `FF_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM` (the invite
+  email; the sender must be on a domain verified in Resend — for staging
+  and production, `campusbyrise.com`'s DNS records — or every send is
+  refused and the create response reports `emailStatus: failed`).
   `PORT` is injected by Railway, not set manually.
 - Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
