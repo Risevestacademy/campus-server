@@ -54,6 +54,23 @@ describe('loadEnv', () => {
     });
   });
 
+  /**
+   * Shorter than one access token's life plus slack, and world would end
+   * sessions that are being refreshed exactly on schedule.
+   */
+  it('refuses a session refresh window the shared session policy cannot meet', () => {
+    expect(() =>
+      loadEnv({ ...minimal, WORLD_SESSION_REFRESH_WINDOW_SECONDS: '60' } as NodeJS.ProcessEnv),
+    ).toThrow(/WORLD_SESSION_REFRESH_WINDOW_SECONDS.*at least 1020/);
+    expect(() =>
+      loadEnv({ ...minimal, WORLD_SESSION_REFRESH_WINDOW_SECONDS: '900' } as NodeJS.ProcessEnv),
+    ).toThrow(/WORLD_SESSION_REFRESH_WINDOW_SECONDS/);
+    expect(
+      loadEnv({ ...minimal, WORLD_SESSION_REFRESH_WINDOW_SECONDS: '1020' } as NodeJS.ProcessEnv)
+        .WORLD_SESSION_REFRESH_WINDOW_SECONDS,
+    ).toBe(1020);
+  });
+
   /** A spawn off the map would drop every arrival where they cannot move. */
   it('refuses a spawn outside the map', () => {
     expect(() =>

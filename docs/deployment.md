@@ -62,7 +62,10 @@ change to either reaches both apps:
   `AUTH_SESSION_SECRET`. Lifetimes: access tokens `AUTH_SESSION_TTL_MINUTES`
   (15), refresh tokens `AUTH_REFRESH_TTL_DAYS` (30), provisional sessions
   `AUTH_PROVISIONAL_TTL_MINUTES` (30). See [auth-flow.md](./auth-flow.md) for
-  refresh and sign-out.
+  refresh and sign-out. The access-token lifetime is capped at 15 minutes by
+  the shared session policy in `@campus/session`: campus-api refuses to boot
+  above it, and world refuses a refresh window shorter than it plus two
+  minutes, since world relies on sign-ins being refreshed that often.
 - The session cookie is cross-site once both sides are on https, so
   `APP_PUBLIC_URL` and `CORS_ORIGINS` must name the frontend, and the frontend
   has to send its requests with credentials.
@@ -96,8 +99,8 @@ change to either reaches both apps:
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
   the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, the session refresh
-  window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (keep it above campus-api's
-  `AUTH_SESSION_TTL_MINUTES`), and the placeholder
+  window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
+  and the placeholder
   map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
   `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
 - Positions are per-process state. A reconnect within the grace resumes where

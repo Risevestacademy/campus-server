@@ -158,6 +158,20 @@ describe('loadEnv HTTP settings', () => {
   });
 });
 
+describe('loadEnv session lifetimes', () => {
+  it('defaults access tokens to the shared policy cap of fifteen minutes', () => {
+    expect(testEnv({}).AUTH_SESSION_TTL_MINUTES).toBe(15);
+  });
+
+  /** Longer, and world would end sessions that are being refreshed on time. */
+  it('refuses an access-token lifetime above the shared cap', () => {
+    expect(() => testEnv({ AUTH_SESSION_TTL_MINUTES: '16' })).toThrow(
+      /AUTH_SESSION_TTL_MINUTES must be at most 15/,
+    );
+    expect(testEnv({ AUTH_SESSION_TTL_MINUTES: '5' }).AUTH_SESSION_TTL_MINUTES).toBe(5);
+  });
+});
+
 describe('loadEnv APP_PUBLIC_URL validation', () => {
   it('fails boot when APP_PUBLIC_URL is missing — no silent fallback', () => {
     // Deliberately loadEnv, not testEnv: this is the one case asserting

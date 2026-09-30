@@ -1,3 +1,4 @@
+import { MAX_ACCESS_TOKEN_TTL_MINUTES } from '@campus/session';
 import { plainToInstance } from 'class-transformer';
 import { Type, Transform } from 'class-transformer';
 import {
@@ -10,6 +11,7 @@ import {
   IsString,
   IsUrl,
   Matches,
+  Max,
   Min,
   MinLength,
   ValidateIf,
@@ -126,12 +128,20 @@ export class Env {
   })
   AUTH_SESSION_SECRET?: string;
 
-  /** Lifetime of a full-access session, in minutes. */
+  /**
+   * Lifetime of a full-access session's access token, in minutes. Capped by
+   * the shared session policy: world keeps a socket open while the sign-in
+   * behind it keeps being refreshed, and it can only tell how often that
+   * should be because no token here lives longer than the cap.
+   */
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  AUTH_SESSION_TTL_MINUTES: number = 15;
+  @Max(MAX_ACCESS_TOKEN_TTL_MINUTES, {
+    message: `AUTH_SESSION_TTL_MINUTES must be at most ${MAX_ACCESS_TOKEN_TTL_MINUTES}, the shared session policy's cap`,
+  })
+  AUTH_SESSION_TTL_MINUTES: number = MAX_ACCESS_TOKEN_TTL_MINUTES;
 
   /**
    * Lifetime of a provisional session — long enough to finish onboarding,

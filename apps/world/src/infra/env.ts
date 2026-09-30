@@ -1,3 +1,4 @@
+import { MIN_SESSION_REFRESH_WINDOW_SECONDS } from '@campus/session';
 import { z } from 'zod';
 
 /**
@@ -86,12 +87,19 @@ const schema = z.object({
 
   /**
    * How recently a login must have been refreshed for its socket to stay
-   * open. Must be comfortably longer than campus-api's
-   * AUTH_SESSION_TTL_MINUTES (15), since a client refreshes at most once per
-   * access token: the default gives it five minutes of slack. Also the
-   * furthest a socket can outlive access being taken away.
+   * open. A client refreshes at least once per access token, and the shared
+   * session policy caps those at fifteen minutes, so the window must cover
+   * that plus slack — the policy's minimum. Shorter would end sessions that
+   * are being refreshed on schedule. Also the furthest a socket can outlive
+   * access being taken away.
    */
-  WORLD_SESSION_REFRESH_WINDOW_SECONDS: z.coerce.number().int().min(60).default(1200),
+  WORLD_SESSION_REFRESH_WINDOW_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(MIN_SESSION_REFRESH_WINDOW_SECONDS, {
+      message: `must be at least ${MIN_SESSION_REFRESH_WINDOW_SECONDS}: the shared session policy's longest access token plus slack`,
+    })
+    .default(1200),
 }).superRefine((env, ctx) => {
   // A spawn off the map would place every arrival somewhere they could not
   // move from; better to refuse to boot.

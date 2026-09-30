@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
+import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 
 const SECRET = 'a-world-session-secret-of-at-least-32-chars';
@@ -415,6 +416,99 @@ describe('a socket following its login', () => {
     accounts.liveSessions = working;
 
     expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    conn.ws.close();
+    await conn.settled;
+  }, 15_000);
+});
+
+/** A promise and the hands to settle it, for calls that must stay in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('oneAtATime', () => {
+  it('does not start a task again while the last run is still going', async () => {
+    const runs: ReturnType<typeof deferred<void>>[] = [];
+    const run = oneAtATime(() => {
+      const next = deferred<void>();
+      runs.push(next);
+      return next.promise;
+    }, () => undefined);
+
+    run();
+    run();
+    run();
+    expect(runs).toHaveLength(1);
+
+    runs[0]!.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    run();
+    expect(runs).toHaveLength(2);
+  });
+
+  /** An unhandled rejection would take the process down. */
+  it('hands a failure to onError and runs again afterwards', async () => {
+    const errors: unknown[] = [];
+    let calls = 0;
+    const run = oneAtATime(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('database unavailable');
+    }, (err) => errors.push(err));
+
+    run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+});
+
+/**
+ * A session check slower than the heartbeat must not be joined by another:
+ * two in flight could resolve out of order, and a check that started earlier
+ * would have the last word.
+ */
+describe('a slow session check', () => {
+  it('stays the only one in flight until it answers', async () => {
+    const SESSION = 'aaaaaaaa-0000-4000-8000-00000000beef';
+    const { token } = await signSessionToken(
+      { userId: 'user-4', email: 'kay@campus.local', scope: SessionScope.FullAccess, sessionId: SESSION },
+      { secret: SECRET, ttlMinutes: 30 },
+    );
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${token}` });
+    await conn.first;
+
+    const pending: ReturnType<typeof deferred<Set<string>>>[] = [];
+    const working = accounts.liveSessions;
+    accounts.liveSessions = () => {
+      const next = deferred<Set<string>>();
+      pending.push(next);
+      return next.promise;
+    };
+    try {
+      // At least three heartbeats at one second each.
+      await new Promise((resolve) => setTimeout(resolve, 3_500));
+      expect(pending).toHaveLength(1);
+
+      // The check answers, late: the session is live. The socket stays, and
+      // the next heartbeat starts a fresh check.
+      pending[0]!.resolve(new Set([SESSION]));
+      await expect.poll(() => pending.length, { timeout: 3_000 }).toBe(2);
+      expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+      pending[1]!.resolve(new Set([SESSION]));
+    } finally {
+      accounts.liveSessions = working;
+      for (const call of pending) call.resolve(new Set([SESSION]));
+    }
+
     conn.ws.close();
     await conn.settled;
   }, 15_000);

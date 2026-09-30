@@ -152,7 +152,9 @@ sequenceDiagram
   out.
 - **Scope**: a provisional session cannot reach an ordinary route, so being
   half-onboarded is not a licence to use the campus.
-- **Lifetime**: an access token lasts `AUTH_SESSION_TTL_MINUTES` (15), or
+- **Lifetime**: an access token lasts `AUTH_SESSION_TTL_MINUTES` (15, and
+  never more: `@campus/session`'s session policy caps it, because `world`
+  depends on it), or
   until the soonest `access_expires_at` among the holder's memberships if that
   comes first. A token cannot outlive the access it stands for, which is what
   keeps a guest's visit from running on until the token happens to lapse.

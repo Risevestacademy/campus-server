@@ -218,9 +218,22 @@ export function registerGateway(
     }
   }
 
+  /**
+   * One of each sweep at a time. The heartbeat does not wait for them, so a
+   * database slower than the interval would otherwise stack queries on the
+   * pool, and let an older check land after a newer one. A heartbeat that
+   * finds its sweep still running skips it; the next one runs with fresh
+   * state.
+   */
+  const sweepFailed = (err: unknown): void => {
+    app.log.error({ err }, 'heartbeat sweep failed');
+  };
+  const sweepAccounts = oneAtATime(dropRevokedAccounts, sweepFailed);
+  const sweepSessions = oneAtATime(dropEndedSessions, sweepFailed);
+
   const heartbeat = setInterval(() => {
-    void dropRevokedAccounts();
-    void dropEndedSessions();
+    sweepAccounts();
+    sweepSessions();
     const now = Date.now();
     players.forgetExpired(now);
     for (const connection of connections.all()) {
@@ -462,5 +475,29 @@ export function registerGateway(
         connection.socket.close(GOING_AWAY, 'server shutting down');
       }
     },
+  };
+}
+
+/**
+ * Wraps an async task so that calling it while a previous call is still
+ * running does nothing. A failure goes to `onError` rather than becoming an
+ * unhandled rejection, which would take the process down; the guard is
+ * released either way, so one bad run does not stop the next.
+ */
+export function oneAtATime(
+  task: () => Promise<void>,
+  onError: (err: unknown) => void,
+): () => void {
+  let running = false;
+  return () => {
+    if (running) {
+      return;
+    }
+    running = true;
+    task()
+      .catch(onError)
+      .finally(() => {
+        running = false;
+      });
   };
 }
