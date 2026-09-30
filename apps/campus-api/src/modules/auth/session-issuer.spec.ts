@@ -87,8 +87,8 @@ describe('SessionIssuer', () => {
   /**
    * The hole this closes: SessionGuard re-reads the user row on every
    * request but not their memberships, so a visit that ended at 10:00 would
-   * otherwise keep working until the token lapsed. Capping at mint time also
-   * covers world, which only verifies the token.
+   * otherwise keep working until the token lapsed. It reaches world too: once
+   * this token lapses, the refresh fails and world's socket closes with it.
    */
   it('never outlives a grant that ends sooner', async () => {
     const endsAt = at(60 * 60_000);

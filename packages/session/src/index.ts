@@ -5,3 +5,4 @@
  * change — and the drift shows up as a security hole, not a type error.
  */
 export * from './session-token.js';
+export * from './session-policy.js';

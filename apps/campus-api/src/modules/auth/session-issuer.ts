@@ -14,10 +14,7 @@ import type { Invite } from '../invites/schema.js';
 import type { User } from '../users/schema.js';
 import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
-import {
-  SessionScope,
-  signSessionToken,
-} from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/session';
 
 /**
  * The configured lifetime, shortened when the grant behind it ends sooner.
@@ -52,7 +49,7 @@ interface IssuedSessionBase {
 
 export type IssuedSession =
   | (IssuedSessionBase & {
-  scope: typeof SessionScope.FullAccess;
+      scope: typeof SessionScope.FullAccess;
       refreshToken: string;
       refreshExpiresAt: Date;
     })
@@ -63,9 +60,9 @@ export type IssuedSession =
     });
 
 /**
- * Mints the session a completed Google sign-in earns. Refresh tokens are a
- * separate ticket; until then a session simply expires and sign-in is
- * repeated, which is cheap because Google keeps the account selected.
+ * Mints the session a completed Google sign-in earns, and rotates it: a
+ * full-access session is a short access token plus a refresh token, one
+ * family per sign-in. docs/auth-flow.md has the whole cycle.
  */
 @Injectable()
 export class SessionIssuer {
@@ -88,8 +85,10 @@ export class SessionIssuer {
    * The token never outlives that grant. SessionGuard re-reads the user row
    * per request but not their memberships, so without this cap a visit that
    * ended at 09:00 would keep working until the token happened to lapse, up
-   * to AUTH_SESSION_TTL_MINUTES later. Capping at mint time also covers
-   * `world`, which only verifies the token and knows nothing of cohorts.
+   * to AUTH_SESSION_TTL_MINUTES later. `world` knows nothing of cohorts and
+   * follows the sign-in rather than the token, so the cap reaches it the next
+   * way round: once this token lapses the refresh fails, the family is
+   * revoked, and world closes the socket.
    *
    * A grant that has already ended is refused outright. By the time we are
    * minting, its holder is somebody the sign-in gate would now turn away.
@@ -118,6 +117,10 @@ export class SessionIssuer {
         ...(membership
           ? { role: membership.role, cohortId: membership.cohortId }
           : {}),
+        // The refresh family, so world can hold a socket for as long as this
+        // login is alive and being refreshed, rather than for one access
+        // token's fifteen minutes.
+        sessionId: familyId,
       },
       {
         secret: this.secret,
@@ -226,7 +229,10 @@ export class SessionIssuer {
           .from(refreshTokens)
           .where(eq(refreshTokens.id, stored.id))
           .limit(1);
-        if (!raced?.usedAt || raced.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()) {
+        if (
+          !raced?.usedAt ||
+          raced.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()
+        ) {
           await this.revokeFamily(stored.familyId, now);
           throw new SessionUnauthorizedError('Refresh token reuse detected');
         }
@@ -248,10 +254,9 @@ export class SessionIssuer {
       throw new SessionUnauthorizedError('Account is suspended');
     }
 
-    const grant =
-      isAdmin(user)
-        ? { endsAt: null }
-        : await this.members.resolveActiveAccess(user.id, now);
+    const grant = isAdmin(user)
+      ? { endsAt: null }
+      : await this.members.resolveActiveAccess(user.id, now);
     if (!grant) {
       await this.revokeFamily(familyId, now);
       throw new SessionUnauthorizedError('Access has already ended');
@@ -265,26 +270,31 @@ export class SessionIssuer {
       .update(refreshTokens)
       .set({ revokedAt: now })
       .where(
-        and(eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)),
+        and(
+          eq(refreshTokens.familyId, familyId),
+          isNull(refreshTokens.revokedAt),
+        ),
       );
   }
 
   private async cleanupRefreshTokens(now: Date): Promise<void> {
-    await this.db.delete(refreshTokens).where(
-      or(
-        and(
-          isNotNull(refreshTokens.usedAt),
+    await this.db
+      .delete(refreshTokens)
+      .where(
+        or(
+          and(
+            isNotNull(refreshTokens.usedAt),
+            lt(
+              refreshTokens.usedAt,
+              new Date(now.getTime() - REFRESH_CLEANUP_USED_MS),
+            ),
+          ),
           lt(
-            refreshTokens.usedAt,
-            new Date(now.getTime() - REFRESH_CLEANUP_USED_MS),
+            refreshTokens.expiresAt,
+            new Date(now.getTime() - REFRESH_CLEANUP_EXPIRED_MS),
           ),
         ),
-        lt(
-          refreshTokens.expiresAt,
-          new Date(now.getTime() - REFRESH_CLEANUP_EXPIRED_MS),
-        ),
-      ),
-    );
+      );
   }
 
   private get secret(): string {

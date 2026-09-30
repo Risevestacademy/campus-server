@@ -1,3 +1,4 @@
+import { MIN_SESSION_REFRESH_WINDOW_SECONDS } from '@campus/session';
 import { z } from 'zod';
 
 /**
@@ -77,6 +78,28 @@ const schema = z.object({
    * more frames. Below 10ms the loop would be spinning, not batching.
    */
   WORLD_TICK_MS: z.coerce.number().int().min(10).default(50),
+
+  /**
+   * How long somebody who dropped out is remembered: reconnect within it and
+   * you are back where you stood, not at the spawn. 0 turns it off.
+   */
+  WORLD_RECONNECT_GRACE_SECONDS: z.coerce.number().int().min(0).default(30),
+
+  /**
+   * How recently a login must have been refreshed for its socket to stay
+   * open. A client refreshes at least once per access token, and the shared
+   * session policy caps those at fifteen minutes, so the window must cover
+   * that plus slack — the policy's minimum. Shorter would end sessions that
+   * are being refreshed on schedule. Also the furthest a socket can outlive
+   * access being taken away.
+   */
+  WORLD_SESSION_REFRESH_WINDOW_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(MIN_SESSION_REFRESH_WINDOW_SECONDS, {
+      message: `must be at least ${MIN_SESSION_REFRESH_WINDOW_SECONDS}: the shared session policy's longest access token plus slack`,
+    })
+    .default(1200),
 }).superRefine((env, ctx) => {
   // A spawn off the map would place every arrival somewhere they could not
   // move from; better to refuse to boot.

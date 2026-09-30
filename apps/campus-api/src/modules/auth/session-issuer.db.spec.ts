@@ -66,6 +66,22 @@ describe('SessionIssuer refresh persistence', () => {
     expect(second.refreshExpiresAt.getTime()).toBeGreaterThan(now.getTime());
   });
 
+  /**
+   * world holds a socket for as long as the login behind it lives, so every
+   * access token has to name that login — the first one and each rotation.
+   */
+  it('names the refresh family in every access token it issues', async () => {
+    const first = await issuer.issueFullAccess(user, { endsAt: null }, now);
+    if (first.scope !== 'full_access') throw new Error('expected a full session');
+    const second = await issuer.refreshSession(first.refreshToken, now);
+
+    const [row] = await db.select().from(refreshTokens).limit(1);
+    // Decoded rather than verified: `now` is pinned, so by the real clock
+    // these tokens have already expired.
+    expect(sessionIdOf(first.token)).toBe(row.familyId);
+    expect(sessionIdOf(second.token)).toBe(row.familyId);
+  });
+
   it('accepts the old token during the grace window', async () => {
     const first = await issuer.issueFullAccess(user, { endsAt: null }, now);
     await issuer.refreshSession(first.refreshToken, now);
@@ -131,3 +147,9 @@ describe('SessionIssuer refresh persistence', () => {
     expect(rows.some((row) => row.tokenHash.startsWith('expired-token'))).toBe(false);
   });
 });
+
+function sessionIdOf(token: string): unknown {
+  const payload = token.split('.')[1] ?? '';
+  return (JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { sid?: unknown })
+    .sid;
+}

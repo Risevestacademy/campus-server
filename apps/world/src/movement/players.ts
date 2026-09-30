@@ -52,22 +52,44 @@ interface Held {
  * The server decides every position. A client says which way it wants to go,
  * never where it is, so there is no destination to validate and no way to
  * name a tile that is not next to you.
+ *
+ * Somebody who drops out is remembered for a grace period, invisibly: a
+ * connection that blips, or that the server cut for sending too fast or
+ * reading too slowly, comes back where it was rather than at the spawn.
  */
 export class Players {
   private readonly byUser = new Map<string, Held>();
+  /** Left recently, and may come back to where they stood until `until`. */
+  private readonly departed = new Map<string, { held: Held; until: number }>();
 
   constructor(
     private readonly grid: Grid,
     /** Fastest a player may walk: one tile per this many milliseconds. */
     private readonly stepMs: number,
+    /** How long somebody who left is remembered. 0 forgets them at once. */
+    private readonly graceMs: number = 0,
   ) {}
 
-  /** Places somebody at the spawn tile. Returns the existing player if they are already here. */
+  /**
+   * Places somebody on the map: where they stood if they left within the
+   * grace period, otherwise at the spawn. Returns the existing player if
+   * they are already here.
+   */
   join(userId: string, now: number): Player {
     const existing = this.byUser.get(userId);
     if (existing) {
       return { ...existing.player };
     }
+
+    const remembered = this.departed.get(userId);
+    this.departed.delete(userId);
+    if (remembered && remembered.until > now) {
+      // The step allowance comes back as it was: leaving and rejoining must
+      // not be a way to refill it.
+      this.byUser.set(userId, remembered.held);
+      return { ...remembered.held.player };
+    }
+
     const player: Player = {
       userId,
       x: this.grid.spawn.x,
@@ -78,9 +100,56 @@ export class Players {
     return { ...player };
   }
 
-  /** True if they were here to remove. */
-  leave(userId: string): boolean {
-    return this.byUser.delete(userId);
+  /**
+   * Takes somebody off the map. True if they were on it.
+   *
+   * With `remember`, where they stood is kept for the grace period so a
+   * reconnect resumes there. Without it they are forgotten entirely — for
+   * access being taken away, where there is nothing to come back to.
+   */
+  leave(userId: string, now: number, remember: boolean): boolean {
+    const held = this.byUser.get(userId);
+    if (!remember) {
+      this.departed.delete(userId);
+    }
+    if (!held) {
+      return false;
+    }
+    this.byUser.delete(userId);
+    if (remember && this.graceMs > 0) {
+      this.departed.set(userId, { held, until: now + this.graceMs });
+    }
+    return true;
+  }
+
+  /**
+   * Drops remembered positions whose grace has run out. `join` ignores an
+   * expired one anyway; this only stops people who never come back from
+   * being held in memory for good.
+   */
+  forgetExpired(now: number): void {
+    for (const [userId, remembered] of this.departed) {
+      if (remembered.until <= now) {
+        this.departed.delete(userId);
+      }
+    }
+  }
+
+  /**
+   * Whether a position is still held for somebody who left. May be true for
+   * a moment after their grace has run out, until the next `forgetExpired`;
+   * `join` checks the time itself, so that never resumes anybody late.
+   */
+  isRemembered(userId: string): boolean {
+    return this.departed.has(userId);
+  }
+
+  /**
+   * How many positions are held for people who left, including any whose
+   * grace has run out since the last `forgetExpired`.
+   */
+  get remembered(): number {
+    return this.departed.size;
   }
 
   get(userId: string): Player | undefined {

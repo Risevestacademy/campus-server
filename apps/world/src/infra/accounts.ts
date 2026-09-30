@@ -10,6 +10,16 @@ import type { Env } from './env.js';
 export interface AccountLookup {
   /** Null when no such account exists — a token outliving its user. */
   find(userId: string): Promise<Account | null>;
+  /**
+   * Which of these sessions (refresh-token families) are still live: not
+   * revoked, not expired, and refreshed at or after `refreshedSince`. One
+   * query for every open socket, however many there are.
+   */
+  liveSessions(
+    sessionIds: readonly string[],
+    refreshedSince: Date,
+    now: Date,
+  ): Promise<Set<string>>;
   close(): Promise<void>;
 }
 
@@ -26,6 +36,29 @@ export interface Account {
  */
 export const ACCOUNT_QUERY =
   'select id, status from users where id = $1 limit 1';
+
+/**
+ * A login is live while its refresh family holds a token that is neither
+ * revoked nor expired and was minted recently. Rotation mints a new row on
+ * every refresh, and every refresh re-checks suspension and access first, so
+ * "minted recently" is campus-api vouching for the session again. Signing out
+ * revokes the family outright.
+ *
+ * $1 uuid[] of families, $2 refreshed-since, $3 now. Same reason to export it
+ * as ACCOUNT_QUERY: refresh_tokens belongs to campus-api.
+ */
+export const LIVE_SESSIONS_QUERY = `select distinct family_id from refresh_tokens
+  where family_id = any($1::uuid[])
+    and revoked_at is null
+    and expires_at > $3
+    and created_at >= $2`;
+
+/**
+ * Family ids come from tokens campus-api signed, so they are UUIDs. Anything
+ * else is dropped before it reaches the query, where one malformed value
+ * would fail the cast and the check for every socket with it.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * A session token says who someone was when they signed in; it cannot say
@@ -54,6 +87,18 @@ export function createAccountLookup(env: Env): AccountLookup {
       );
       const row = rows[0];
       return row ? { id: row.id, suspended: row.status === 'suspended' } : null;
+    },
+    async liveSessions(sessionIds, refreshedSince, now): Promise<Set<string>> {
+      const ids = [...new Set(sessionIds)].filter((id) => UUID.test(id));
+      if (ids.length === 0) {
+        return new Set();
+      }
+      const rows = await sql.unsafe<{ family_id: string }[]>(LIVE_SESSIONS_QUERY, [
+        ids,
+        refreshedSince,
+        now,
+      ]);
+      return new Set(rows.map((row) => row.family_id));
     },
     async close(): Promise<void> {
       await sql.end();

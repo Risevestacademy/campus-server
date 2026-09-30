@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
+import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 
 const SECRET = 'a-world-session-secret-of-at-least-32-chars';
@@ -13,10 +14,14 @@ const ORIGIN = 'https://campus.example.com';
 const accounts = {
   suspended: new Set<string>(),
   gone: new Set<string>(),
+  /** Logins signed out, revoked or no longer refreshed. Every other one is live. */
+  endedSessions: new Set<string>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
       ? null
       : { id: userId, suspended: accounts.suspended.has(userId) },
+  liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
+    new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
   close: async () => undefined,
 };
 
@@ -92,6 +97,7 @@ async function waitFor(
 beforeEach(() => {
   accounts.suspended.clear();
   accounts.gone.clear();
+  accounts.endedSessions.clear();
 });
 
 /**
@@ -339,6 +345,172 @@ describe('sockets that go wrong', () => {
 
     await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
     expect(world.gateway.connections.size).toBe(0);
+  }, 15_000);
+});
+
+/**
+ * An access token lasts fifteen minutes and is swapped for a new one through
+ * campus-api, which an open socket never sees. A socket whose token names its
+ * login follows that login instead of the token.
+ */
+describe('a socket following its login', () => {
+  const SESSION = 'aaaaaaaa-0000-4000-8000-00000000abcd';
+
+  async function signed(minutesAgo: number, sessionId = SESSION) {
+    const { token } = await signSessionToken(
+      {
+        userId: 'user-3',
+        email: 'lin@campus.local',
+        scope: SessionScope.FullAccess,
+        sessionId,
+      },
+      { secret: SECRET, ttlMinutes: 30 },
+      new Date(Date.now() - minutesAgo * 60_000),
+    );
+    return token;
+  }
+
+  it('outlives the access token it opened with while the login is live', async () => {
+    // Expires a couple of seconds in, then the heartbeat runs twice more.
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(29.97)}` });
+    await conn.first;
+
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    conn.ws.close();
+    await conn.settled;
+  }, 15_000);
+
+  /** Signing out revokes the login; the socket must not wait out a token. */
+  it('closes once the login ends, and keeps the position for signing back in', async () => {
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+    await conn.first;
+
+    accounts.endedSessions.add(SESSION);
+
+    await expect(conn.settled).resolves.toMatchObject({
+      closeCode: 1008,
+      closeReason: 'session_ended',
+    });
+    await expect.poll(() => world.gateway.players.isRemembered('user-3')).toBe(true);
+  }, 15_000);
+
+  /** A token lifted from a browser that has since signed out. */
+  it('refuses an upgrade whose login has ended', async () => {
+    accounts.endedSessions.add(SESSION);
+    const { first } = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+
+    await expect(first).resolves.toMatchObject({ message: 'session_ended' });
+  });
+
+  it('leaves sockets alone when the session check fails', async () => {
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+    await conn.first;
+
+    const working = accounts.liveSessions;
+    accounts.liveSessions = async () => {
+      throw new Error('database unavailable');
+    };
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    accounts.liveSessions = working;
+
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    conn.ws.close();
+    await conn.settled;
+  }, 15_000);
+});
+
+/** A promise and the hands to settle it, for calls that must stay in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('oneAtATime', () => {
+  it('does not start a task again while the last run is still going', async () => {
+    const runs: ReturnType<typeof deferred<void>>[] = [];
+    const run = oneAtATime(() => {
+      const next = deferred<void>();
+      runs.push(next);
+      return next.promise;
+    }, () => undefined);
+
+    run();
+    run();
+    run();
+    expect(runs).toHaveLength(1);
+
+    runs[0]!.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    run();
+    expect(runs).toHaveLength(2);
+  });
+
+  /** An unhandled rejection would take the process down. */
+  it('hands a failure to onError and runs again afterwards', async () => {
+    const errors: unknown[] = [];
+    let calls = 0;
+    const run = oneAtATime(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('database unavailable');
+    }, (err) => errors.push(err));
+
+    run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+});
+
+/**
+ * A session check slower than the heartbeat must not be joined by another:
+ * two in flight could resolve out of order, and a check that started earlier
+ * would have the last word.
+ */
+describe('a slow session check', () => {
+  it('stays the only one in flight until it answers', async () => {
+    const SESSION = 'aaaaaaaa-0000-4000-8000-00000000beef';
+    const { token } = await signSessionToken(
+      { userId: 'user-4', email: 'kay@campus.local', scope: SessionScope.FullAccess, sessionId: SESSION },
+      { secret: SECRET, ttlMinutes: 30 },
+    );
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${token}` });
+    await conn.first;
+
+    const pending: ReturnType<typeof deferred<Set<string>>>[] = [];
+    const working = accounts.liveSessions;
+    accounts.liveSessions = () => {
+      const next = deferred<Set<string>>();
+      pending.push(next);
+      return next.promise;
+    };
+    try {
+      // At least three heartbeats at one second each.
+      await new Promise((resolve) => setTimeout(resolve, 3_500));
+      expect(pending).toHaveLength(1);
+
+      // The check answers, late: the session is live. The socket stays, and
+      // the next heartbeat starts a fresh check.
+      pending[0]!.resolve(new Set([SESSION]));
+      await expect.poll(() => pending.length, { timeout: 3_000 }).toBe(2);
+      expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+      pending[1]!.resolve(new Set([SESSION]));
+    } finally {
+      accounts.liveSessions = working;
+      for (const call of pending) call.resolve(new Set([SESSION]));
+    }
+
+    conn.ws.close();
+    await conn.settled;
   }, 15_000);
 });
 
@@ -725,6 +897,80 @@ describe('movement', () => {
     });
   });
 
+  /**
+   * A dropped connection — a blip, or the server cutting it for sending too
+   * fast or reading too slowly — comes back where it was, not at the spawn.
+   */
+  describe('reconnecting', () => {
+    it('comes back where it stood, not at the spawn', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      move(first, 'down', 2);
+      await waitFor(first, (m) => m.type === 'moveResult' && m.seq === 2);
+      await leave(first);
+
+      const again = await arrive(ada);
+
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({ userId: ada, x: 1, y: 1, facing: 'down' });
+      await leave(again);
+    });
+
+    /**
+     * The heartbeat sweep only sees accounts that are still connected. One
+     * suspended after its socket had already dropped is caught when it next
+     * tries to come back.
+     */
+    it('forgets a kept position once a reconnect is refused for suspension', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      // The client sees its close before the server has handled it.
+      await expect.poll(() => world.gateway.players.isRemembered(ada)).toBe(true);
+
+      accounts.suspended.add(ada);
+      const refused = connect({
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
+      });
+      await expect(refused.first).resolves.toMatchObject({ message: 'account_suspended' });
+      await refused.settled;
+      expect(world.gateway.players.isRemembered(ada)).toBe(false);
+
+      // Suspension lifted: welcome back, but at the spawn.
+      accounts.suspended.delete(ada);
+      const again = await arrive(ada);
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({ userId: ada, x: 0, y: 0, facing: 'down' });
+      await leave(again);
+    });
+
+    /** Gone from everybody's screen at once, and back in the same place. */
+    it('shows others a departure, then an arrival where it left', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      await waitFor(watcher, (m) => m.type === 'left' && m.userId === ada);
+
+      const again = await arrive(ada);
+
+      await expect(
+        waitFor(
+          watcher,
+          (m) => m.type === 'joined' && (m.player as { x: number }).x === 1,
+        ),
+      ).resolves.toMatchObject({ player: { userId: ada, x: 1, y: 0 } });
+      await leave(again);
+      await leave(watcher);
+    });
+  });
+
   /** Whichever way a socket is dropped, its player must not be left standing. */
   it('removes the player when a suspension closes their socket', async () => {
     const ada = person();
@@ -738,6 +984,8 @@ describe('movement', () => {
       userId: ada,
     });
     expect(world.gateway.players.has(ada)).toBe(false);
+    // Access taken away: nothing kept to come back to.
+    expect(world.gateway.players.isRemembered(ada)).toBe(false);
 
     await leave(watcher);
   }, 15_000);

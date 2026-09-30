@@ -5,7 +5,7 @@ import type { WebSocket } from 'ws';
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import { Players, type Player } from '../movement/players.js';
-import { decideUpgrade, type Refusal } from './authenticate.js';
+import { decideUpgrade, sessionRefreshedSince, type Refusal } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
 import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
@@ -40,6 +40,7 @@ export function registerGateway(
       spawn: { x: env.WORLD_SPAWN_X, y: env.WORLD_SPAWN_Y },
     },
     env.WORLD_STEP_MS,
+    env.WORLD_RECONNECT_GRACE_SECONDS * 1000,
   );
 
   /**
@@ -106,13 +107,19 @@ export function registerGateway(
    * never outlive the last socket standing for them. The avatar stays while
    * any tab is open, and leaves with the last one. Idempotent: a socket
    * dropped by the heartbeat comes back through here from its close event.
+   *
+   * Where the last tab stood is remembered for the reconnect grace, unless
+   * `remember` is false — for access taken away, where a reconnect would be
+   * refused anyway and there is nothing to come back to. The avatar leaves
+   * everybody else's screen either way: a frozen stand-in for somebody who
+   * may never return is worse than a flicker for somebody who does.
    */
-  function drop(connection: Connection): void {
+  function drop(connection: Connection, remember = true): void {
     connections.remove(connection);
     if (connections.forUser(connection.userId).length > 0) {
       return;
     }
-    if (players.leave(connection.userId)) {
+    if (players.leave(connection.userId, Date.now(), remember)) {
       broadcast({ type: 'left', userId: connection.userId });
     }
   }
@@ -163,20 +170,78 @@ export function registerGateway(
           { connectionId: connection.id, userId, reason },
           'closing socket, account no longer welcome',
         );
-        drop(connection);
+        drop(connection, false);
         connection.socket.close(POLICY_VIOLATION, reason);
       }
     }
   }
 
+  /**
+   * An access token lasts fifteen minutes and the browser swaps it for a new
+   * one through campus-api, which an open socket never sees. So a socket
+   * follows the login instead: it stays while that login is live — not
+   * signed out, and refreshed recently, which means campus-api has re-checked
+   * suspension and access within the window. One query for every socket.
+   */
+  async function dropEndedSessions(): Promise<void> {
+    const following = connections.all().filter((c) => c.sessionId !== undefined);
+    if (following.length === 0) {
+      return;
+    }
+    const now = new Date();
+    let live: Set<string>;
+    try {
+      live = await accounts.liveSessions(
+        following.map((c) => c.sessionId as string),
+        sessionRefreshedSince(env, now),
+        now,
+      );
+    } catch (err) {
+      // As with accounts: a database that is not answering must not throw
+      // everybody off the campus. The next sweep tries again.
+      app.log.error({ err }, 'could not re-check sessions');
+      return;
+    }
+
+    for (const connection of following) {
+      if (live.has(connection.sessionId as string)) {
+        continue;
+      }
+      app.log.info(
+        { connectionId: connection.id, userId: connection.userId },
+        'session ended, closing socket',
+      );
+      // Remembered: signing out is not access being taken away, and signing
+      // straight back in may resume where they stood.
+      drop(connection);
+      connection.socket.close(POLICY_VIOLATION, 'session_ended');
+    }
+  }
+
+  /**
+   * One of each sweep at a time. The heartbeat does not wait for them, so a
+   * database slower than the interval would otherwise stack queries on the
+   * pool, and let an older check land after a newer one. A heartbeat that
+   * finds its sweep still running skips it; the next one runs with fresh
+   * state.
+   */
+  const sweepFailed = (err: unknown): void => {
+    app.log.error({ err }, 'heartbeat sweep failed');
+  };
+  const sweepAccounts = oneAtATime(dropRevokedAccounts, sweepFailed);
+  const sweepSessions = oneAtATime(dropEndedSessions, sweepFailed);
+
   const heartbeat = setInterval(() => {
-    void dropRevokedAccounts();
+    sweepAccounts();
+    sweepSessions();
     const now = Date.now();
+    players.forgetExpired(now);
     for (const connection of connections.all()) {
-      // A session that has run out does not get to keep a socket it already
-      // holds: otherwise signing out, or simply waiting, leaves the campus
-      // open for the rest of the token's twelve hours.
-      if (connection.expiresAt.getTime() <= now) {
+      // A socket that names no login has only its access token to go on, so
+      // it lasts exactly as long as that token does — otherwise signing out,
+      // or simply waiting, would leave the campus open with nothing to end
+      // it. A socket that names one follows the login (dropEndedSessions).
+      if (connection.sessionId === undefined && connection.expiresAt.getTime() <= now) {
         app.log.info(
           { connectionId: connection.id, userId: connection.userId },
           'session expired, closing socket',
@@ -259,6 +324,14 @@ export function registerGateway(
       return;
     }
 
+    // A position kept from an earlier drop must not survive access being
+    // taken away. The sweep forgets it only for somebody still connected; a
+    // suspended account whose socket had already gone is caught here, at its
+    // next attempt — whether or not this socket is still around to be told.
+    if (!decision.ok && decision.userId) {
+      players.leave(decision.userId, Date.now(), false);
+    }
+
     if (closed || ws.readyState !== ws.OPEN) {
       return;
     }
@@ -273,6 +346,7 @@ export function registerGateway(
       userId: decision.claims.userId,
       email: decision.claims.email,
       expiresAt: decision.claims.expiresAt,
+      sessionId: decision.claims.sessionId,
       socket: ws,
       alive: true,
     };
@@ -401,5 +475,29 @@ export function registerGateway(
         connection.socket.close(GOING_AWAY, 'server shutting down');
       }
     },
+  };
+}
+
+/**
+ * Wraps an async task so that calling it while a previous call is still
+ * running does nothing. A failure goes to `onError` rather than becoming an
+ * unhandled rejection, which would take the process down; the guard is
+ * released either way, so one bad run does not stop the next.
+ */
+export function oneAtATime(
+  task: () => Promise<void>,
+  onError: (err: unknown) => void,
+): () => void {
+  let running = false;
+  return () => {
+    if (running) {
+      return;
+    }
+    running = true;
+    task()
+      .catch(onError)
+      .finally(() => {
+        running = false;
+      });
   };
 }

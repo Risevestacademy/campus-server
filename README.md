@@ -11,6 +11,7 @@ apps/
   world/        Realtime WebSocket service: presence and movement
 packages/
   session/      Session tokens, shared by campus-api (signs) and world (verifies)
+  media/        LiveKit room tokens, for whichever service ends up minting them
 docs/           Cross-service docs: auth flow, deployment, world protocol
 docker-compose.local.yml   Local dev dependencies (Postgres, Redis, LiveKit, OTel Collector)
 livekit.yaml               LiveKit server config
@@ -24,6 +25,7 @@ otel-collector.yaml        Local OpenTelemetry Collector config
 | `campus-api`  | NestJS 12      | `3000`       | [apps/campus-api/README.md](apps/campus-api/README.md) |
 | `world`       | Fastify 5      | `3001`       | [apps/world/README.md](apps/world/README.md) |
 | `@campus/session` | TypeScript library | — | — |
+| `@campus/media` | TypeScript library | — | — |
 
 `@campus/session` ships compiled output, so an app that depends on it needs it
 built first. The root scripts below do that for you; a bare

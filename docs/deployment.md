@@ -59,8 +59,13 @@ change to either reaches both apps:
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
   (this API, matching a registered redirect URI byte for byte) and two
   different 32-character secrets: `AUTH_STATE_SECRET` and
-  `AUTH_SESSION_SECRET`. Session lifetimes are `AUTH_SESSION_TTL_MINUTES`
-  (720) and `AUTH_PROVISIONAL_TTL_MINUTES` (30).
+  `AUTH_SESSION_SECRET`. Lifetimes: access tokens `AUTH_SESSION_TTL_MINUTES`
+  (15), refresh tokens `AUTH_REFRESH_TTL_DAYS` (30), provisional sessions
+  `AUTH_PROVISIONAL_TTL_MINUTES` (30). See [auth-flow.md](./auth-flow.md) for
+  refresh and sign-out. The access-token lifetime is capped at 15 minutes by
+  the shared session policy in `@campus/session`: campus-api refuses to boot
+  above it, and world refuses a refresh window shorter than it plus two
+  minutes, since world relies on sign-ins being refreshed that often.
 - The session cookie is cross-site once both sides are on https, so
   `APP_PUBLIC_URL` and `CORS_ORIGINS` must name the frontend, and the frontend
   has to send its requests with credentials.
@@ -93,10 +98,14 @@ change to either reaches both apps:
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
-  and the placeholder map until real maps load: `WORLD_MAP_WIDTH`,
-  `WORLD_MAP_HEIGHT`, `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
-- Positions are per-process state, lost on a restart or redeploy: everyone
-  reconnects at the spawn tile.
+  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, the session refresh
+  window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
+  and the placeholder
+  map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
+  `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
+- Positions are per-process state. A reconnect within the grace resumes where
+  somebody stood, but a restart or redeploy forgets everyone: they all
+  reconnect at the spawn tile.
 - Sockets are per-process state too. Running more than one instance needs the
   presence work first, or two tabs may land on different instances and
   disagree about who is online.
@@ -122,7 +131,22 @@ assume otherwise:
 A Cloud project per environment, so a staging room can never collide with a
 production one. The key and secret are server-side only: clients get a
 short-lived room token minted by the server, never the credentials
-themselves. Which service mints it — campus-api or world — is still open.
+themselves. Which service mints it — campus-api or world — is still open;
+the minting itself lives in `packages/media` (`@campus/media`) so either can
+use it. Its secret must be at least 32 characters, and it refuses anything
+shorter.
+
+To try the media server by hand, mint a token and join from any LiveKit
+client, such as LiveKit's hosted Meet page:
+
+```bash
+pnpm --filter @campus/media build
+pnpm --filter @campus/media room-token --identity ada --room spike
+```
+
+It defaults to the local server and the dev key in `livekit.yaml`; point it
+at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET` — all three, or none.
 
 ## Open items
 

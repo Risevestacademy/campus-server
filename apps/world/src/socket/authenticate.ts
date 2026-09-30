@@ -14,11 +14,20 @@ export type Refusal =
   | 'token_not_usable'
   | 'wrong_scope'
   | 'account_gone'
-  | 'account_suspended';
+  | 'account_suspended'
+  | 'session_ended';
 
 export type UpgradeDecision =
   | { ok: true; claims: SessionClaims }
-  | { ok: false; refusal: Refusal };
+  | {
+      ok: false;
+      refusal: Refusal;
+      /**
+       * Set only when the account itself was refused — suspended or gone —
+       * so the caller can forget anything it kept for them.
+       */
+      userId?: string;
+    };
 
 const SESSION_COOKIE = 'campus_session';
 
@@ -59,7 +68,8 @@ function bearer(header: string | undefined): string | undefined {
  *
  * The token is checked against the account it names, because a token says
  * who somebody was when they signed in and cannot say whether they still
- * belong here.
+ * belong here — and, when it names one, against the login it came from,
+ * which may have been signed out since.
  */
 export async function decideUpgrade(
   env: Env,
@@ -97,11 +107,31 @@ export async function decideUpgrade(
 
   const account = await accounts.find(claims.userId);
   if (!account) {
-    return { ok: false, refusal: 'account_gone' };
+    return { ok: false, refusal: 'account_gone', userId: claims.userId };
   }
   if (account.suspended) {
-    return { ok: false, refusal: 'account_suspended' };
+    return { ok: false, refusal: 'account_suspended', userId: claims.userId };
+  }
+
+  // An access token outlives a sign-out by up to its fifteen minutes. The
+  // login behind it has to be live too, or a token lifted from a browser
+  // that has since signed out would still open the campus.
+  if (claims.sessionId !== undefined) {
+    const now = new Date();
+    const live = await accounts.liveSessions(
+      [claims.sessionId],
+      sessionRefreshedSince(env, now),
+      now,
+    );
+    if (!live.has(claims.sessionId)) {
+      return { ok: false, refusal: 'session_ended' };
+    }
   }
 
   return { ok: true, claims };
+}
+
+/** The oldest refresh that still counts as campus-api vouching for a login. */
+export function sessionRefreshedSince(env: Env, now: Date): Date {
+  return new Date(now.getTime() - env.WORLD_SESSION_REFRESH_WINDOW_SECONDS * 1000);
 }

@@ -164,6 +164,15 @@ answered by the next ping. Browsers answer these pings themselves; there is
 nothing to write. The `ping` message exists for clients that want to measure
 round-trip time, and gets a `pong`.
 
+**Keep the sign-in refreshed.** The socket does not end when the access token
+it opened with expires; it stays while the sign-in behind it is live — not
+signed out, and refreshed through `POST /v1/auth/refresh` within the last 20
+minutes. So refresh on a timer, before each access token runs out, even
+while the user is only standing in the world and making no other calls.
+Refreshing only after an API call fails would let the socket close with
+`session_ended` during a quiet stretch. See
+[auth-flow.md](./auth-flow.md#how-world-follows-a-sign-in).
+
 ## Errors and closing
 
 An `error` with code `BAD_MESSAGE` means the frame was not valid JSON or not a
@@ -175,6 +184,7 @@ When the socket closes:
 | Code | Reason | Meaning | What to do |
 | --- | --- | --- | --- |
 | 1008 | `no_token`, `token_not_usable`, `session_expired` | No usable session | Send them to sign in |
+| 1008 | `session_ended` | Signed out, or the sign-in stopped being refreshed | Try a refresh; if that fails, send them to sign in |
 | 1008 | `wrong_scope` | Still in onboarding | Send them to onboarding |
 | 1008 | `account_suspended`, `account_gone` | Not welcome any more | Sign them out; do not reconnect |
 | 1008 | `origin_not_allowed` | This page's origin is not on world's list | Configuration — do not retry |
@@ -186,12 +196,30 @@ When the socket closes:
 
 When the connection is refused at the start, an `error` frame with the same
 reason as its `message` arrives just before the close. A socket closed later
-— `session_expired`, or a suspension that reaches an open socket — gets the
+— `session_ended`, `session_expired`, or a suspension that reaches an open
+socket — gets the
 close alone, so read the reason from the close event, not from an `error`.
 
-**A reconnect starts from spawn.** Positions are not kept for a dropped
-socket yet, and a server restart forgets everybody's. Treat every
-`snapshot` as a fresh start.
+**A reconnect resumes where you stood** if it comes within
+`WORLD_RECONNECT_GRACE_SECONDS` (30 by default) of your last tab closing.
+That covers a network blip, the server's own cut-offs — `rate_limited`, a
+missed heartbeat, not reading fast enough — and `session_ended` or
+`session_expired`: signing straight back in resumes too, since a sign-in
+ending is routine rather than access being taken away. Past the grace, or after a
+server restart (positions live in memory), you start at the spawn.
+
+A suspension or a removed account forgets the position as soon as world
+notices: at its next check of open sockets, or when a reconnect is refused
+for it. If a suspension is lifted before either happens, the person was never
+refused and resumes as normal.
+
+Either way, take your position from the new `snapshot`, never from what you
+drew before the drop, and throw away any moves still pending: they were
+answered, or not, on the old socket.
+
+Others see you leave straight away and arrive again when you return. There
+is no frozen stand-in while you are gone — somebody who closed the tab should
+not linger on everybody's screen for the length of the grace.
 
 ## Changing the protocol
 

@@ -148,10 +148,100 @@ describe('Players', () => {
     world.join('ada', 0);
     world.move('ada', 'right', 0);
 
-    expect(world.leave('ada')).toBe(true);
-    expect(world.leave('ada')).toBe(false);
+    expect(world.leave('ada', 0, true)).toBe(true);
+    expect(world.leave('ada', 0, true)).toBe(false);
     expect(world.has('ada')).toBe(false);
+    // No grace configured: nothing to come back to.
     expect(world.join('ada', 0)).toMatchObject({ x: 0, y: 0 });
+  });
+
+  describe('reconnecting', () => {
+    const GRACE_MS = 30_000;
+    const withGrace = () =>
+      new Players({ width: 5, height: 4, spawn: { x: 0, y: 0 } }, STEP_MS, GRACE_MS);
+
+    it('puts somebody back where they stood if they return within the grace', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.move('ada', 'down', 0);
+      world.leave('ada', 1_000, true);
+
+      expect(world.has('ada')).toBe(false);
+      expect(world.join('ada', 1_000 + GRACE_MS - 1)).toEqual({
+        userId: 'ada',
+        x: 1,
+        y: 1,
+        facing: 'down',
+      });
+    });
+
+    it('puts them at the spawn once the grace has run out', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 1_000, true);
+
+      expect(world.join('ada', 1_000 + GRACE_MS)).toMatchObject({ x: 0, y: 0 });
+    });
+
+    /** Otherwise dropping and rejoining is a way to walk faster. */
+    it('does not refill the step allowance on the way back', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      for (let i = 0; i < STEP_BURST; i++) world.move('ada', 'down', 0);
+      world.leave('ada', 0, true);
+      world.join('ada', 0);
+
+      expect(world.move('ada', 'right', 0).outcome).toBe('too_fast');
+    });
+
+    /** Access taken away leaves nothing to come back to. */
+    it('forgets entirely when told not to remember', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 0, false);
+
+      expect(world.remembered).toBe(0);
+      expect(world.join('ada', 1)).toMatchObject({ x: 0, y: 0 });
+    });
+
+    it('forgets a remembered position when later told not to remember', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 0, true);
+
+      // Already off the map; the second leave still clears what was kept.
+      expect(world.leave('ada', 1, false)).toBe(false);
+      expect(world.join('ada', 2)).toMatchObject({ x: 0, y: 0 });
+    });
+
+    it('uses a remembered position once', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 0, true);
+      world.join('ada', 1);
+
+      expect(world.remembered).toBe(0);
+    });
+
+    it('lets go of positions nobody came back for', () => {
+      const world = withGrace();
+      for (const id of ['ada', 'grace', 'lin']) world.join(id, 0);
+      world.move('lin', 'right', 0);
+      world.leave('ada', 0, true);
+      world.leave('grace', 10_000, true);
+      world.leave('lin', 20_000, true);
+
+      world.forgetExpired(GRACE_MS + 10_000);
+
+      // ada's and grace's grace ran out; lin's has not.
+      expect(world.remembered).toBe(1);
+      expect(world.join('lin', GRACE_MS + 10_000)).toMatchObject({ x: 1, y: 0 });
+    });
   });
 
   it('hands out copies, so a caller cannot move anybody by editing one', () => {
