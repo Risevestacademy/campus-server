@@ -211,8 +211,13 @@ describe('POST /v1/invites/preview (e2e)', () => {
     expect(res.body.error.code).toBe(code);
   });
 
-  it('refuses a request with no token as a bad request', async () => {
-    expect((await preview(undefined)).status).toBe(400);
-    expect((await preview('')).status).toBe(400);
+  it('refuses a request with no token, and says that is why', async () => {
+    for (const token of [undefined, '']) {
+      const res = await preview(token);
+      expect(res.status).toBe(400);
+      expect(res.body.error.details.fields.token).toBe(
+        'token should not be empty',
+      );
+    }
   });
 });

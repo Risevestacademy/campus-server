@@ -13,9 +13,11 @@ export class InvitePreviewRequestDto {
     example: 'hFiA6EvJBOTvjt53b6SuvRAOCUiWl7umU4OWZl08WnU',
     description: 'The `token` from the invite link, exactly as it arrived.',
   })
+  // Checked bottom-up, and only the first failure is reported: emptiness
+  // first, or a missing token is described as too long.
+  @MaxLength(256)
   @IsString()
   @IsNotEmpty()
-  @MaxLength(256)
   token: string;
 }
 
