@@ -6,7 +6,7 @@ import postgres from 'postgres';
 
 import { loadEnv } from '../config/env.js';
 import * as schema from './schema/index.js';
-import { seedAdmin } from './seeder.js';
+import { seedAdmins } from './seeder.js';
 
 // `node dist/...` runs outside Nest, so nothing loads `.env` for us
 // (ConfigModule does that at runtime; drizzle-kit does it for migrations).
@@ -23,14 +23,14 @@ async function main(): Promise<void> {
 
   if (!config.DEFAULT_ADMIN_EMAIL) {
     throw new Error(
-      'DEFAULT_ADMIN_EMAIL is not set — it is required to seed the default admin user.',
+      'DEFAULT_ADMIN_EMAIL is not set — it is required to seed the admin users.',
     );
   }
 
   const sql = postgres(config.DATABASE_URL, { max: 1 });
   try {
     const db = drizzle(sql, { schema });
-    await seedAdmin(db, config.DEFAULT_ADMIN_EMAIL, logger);
+    await seedAdmins(db, config.DEFAULT_ADMIN_EMAIL, logger);
   } finally {
     await sql.end();
   }

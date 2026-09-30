@@ -9,6 +9,23 @@ export interface SeedLogger {
 
 export type SeedOutcome = 'created' | 'promoted' | 'unchanged';
 
+/**
+ * Seeds each admin in turn. One at a time rather than in one statement, so
+ * the log says what happened to each address — which of two admins was new
+ * and which was already there.
+ */
+export async function seedAdmins(
+  db: Db,
+  emails: readonly string[],
+  logger: SeedLogger,
+): Promise<Record<string, SeedOutcome>> {
+  const outcomes: Record<string, SeedOutcome> = {};
+  for (const email of emails) {
+    outcomes[email.trim().toLowerCase()] = await seedAdmin(db, email, logger);
+  }
+  return outcomes;
+}
+
 export async function seedAdmin(
   db: Db,
   email: string,

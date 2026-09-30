@@ -70,7 +70,30 @@ describe('loadEnv DEFAULT_ADMIN_EMAIL validation', () => {
 
   it('succeeds with a valid email', () => {
     const env = testEnv({ DEFAULT_ADMIN_EMAIL: 'admin@campus.local' });
-    expect(env.DEFAULT_ADMIN_EMAIL).toBe('admin@campus.local');
+    expect(env.DEFAULT_ADMIN_EMAIL).toEqual(['admin@campus.local']);
+  });
+
+  it('takes several, comma-separated, tidied the way USERS stores them', () => {
+    const env = testEnv({
+      DEFAULT_ADMIN_EMAIL:
+        ' Ada@Campus.local , grace@campus.local,ada@campus.local ,',
+    });
+    expect(env.DEFAULT_ADMIN_EMAIL).toEqual([
+      'ada@campus.local',
+      'grace@campus.local',
+    ]);
+  });
+
+  it('refuses the whole list when any address is not one', () => {
+    expect(() =>
+      testEnv({ DEFAULT_ADMIN_EMAIL: 'ada@campus.local, grace' }),
+    ).toThrow(/DEFAULT_ADMIN_EMAIL must be one or more email addresses/);
+  });
+
+  it('reads an empty value as unset', () => {
+    expect(
+      testEnv({ DEFAULT_ADMIN_EMAIL: ' , ' }).DEFAULT_ADMIN_EMAIL,
+    ).toBeUndefined();
   });
 });
 
@@ -205,7 +228,9 @@ describe('loadEnv session lifetimes', () => {
     expect(() => testEnv({ AUTH_SESSION_TTL_MINUTES: '16' })).toThrow(
       /AUTH_SESSION_TTL_MINUTES must be at most 15/,
     );
-    expect(testEnv({ AUTH_SESSION_TTL_MINUTES: '5' }).AUTH_SESSION_TTL_MINUTES).toBe(5);
+    expect(
+      testEnv({ AUTH_SESSION_TTL_MINUTES: '5' }).AUTH_SESSION_TTL_MINUTES,
+    ).toBe(5);
   });
 });
 
