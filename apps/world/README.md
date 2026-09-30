@@ -12,10 +12,12 @@ server decides every position.
 
 - **Authenticates the upgrade:** the origin allowlist, then the session
   token (full-access sessions only), then the account, which must exist and
-  not be suspended.
+  not be suspended, then the sign-in it came from, which must still be live.
 - **Keeps sockets honest:**
   - a heartbeat drops sockets that stopped answering
-  - closes a socket when its session expires
+  - follows the sign-in behind each socket rather than its fifteen-minute
+    access token: signing out closes it within a heartbeat, and so does a
+    sign-in that stops being refreshed
   - re-checks the accounts behind open sockets, so a suspension reaches them
     within one heartbeat
 - **Movement on a tile grid:**

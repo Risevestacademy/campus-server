@@ -12,6 +12,7 @@ const env = loadEnv({
 /** No database needed: these tests never open a socket. */
 const accounts = {
   find: async () => null,
+  liveSessions: async () => new Set<string>(),
   close: async () => undefined,
 };
 

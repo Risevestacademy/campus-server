@@ -59,8 +59,10 @@ change to either reaches both apps:
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
   (this API, matching a registered redirect URI byte for byte) and two
   different 32-character secrets: `AUTH_STATE_SECRET` and
-  `AUTH_SESSION_SECRET`. Session lifetimes are `AUTH_SESSION_TTL_MINUTES`
-  (720) and `AUTH_PROVISIONAL_TTL_MINUTES` (30).
+  `AUTH_SESSION_SECRET`. Lifetimes: access tokens `AUTH_SESSION_TTL_MINUTES`
+  (15), refresh tokens `AUTH_REFRESH_TTL_DAYS` (30), provisional sessions
+  `AUTH_PROVISIONAL_TTL_MINUTES` (30). See [auth-flow.md](./auth-flow.md) for
+  refresh and sign-out.
 - The session cookie is cross-site once both sides are on https, so
   `APP_PUBLIC_URL` and `CORS_ORIGINS` must name the frontend, and the frontend
   has to send its requests with credentials.
@@ -93,7 +95,9 @@ change to either reaches both apps:
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
-  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, and the placeholder
+  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, the session refresh
+  window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (keep it above campus-api's
+  `AUTH_SESSION_TTL_MINUTES`), and the placeholder
   map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
   `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
 - Positions are per-process state. A reconnect within the grace resumes where

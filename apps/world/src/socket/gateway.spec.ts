@@ -13,10 +13,14 @@ const ORIGIN = 'https://campus.example.com';
 const accounts = {
   suspended: new Set<string>(),
   gone: new Set<string>(),
+  /** Logins signed out, revoked or no longer refreshed. Every other one is live. */
+  endedSessions: new Set<string>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
       ? null
       : { id: userId, suspended: accounts.suspended.has(userId) },
+  liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
+    new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
   close: async () => undefined,
 };
 
@@ -92,6 +96,7 @@ async function waitFor(
 beforeEach(() => {
   accounts.suspended.clear();
   accounts.gone.clear();
+  accounts.endedSessions.clear();
 });
 
 /**
@@ -339,6 +344,79 @@ describe('sockets that go wrong', () => {
 
     await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
     expect(world.gateway.connections.size).toBe(0);
+  }, 15_000);
+});
+
+/**
+ * An access token lasts fifteen minutes and is swapped for a new one through
+ * campus-api, which an open socket never sees. A socket whose token names its
+ * login follows that login instead of the token.
+ */
+describe('a socket following its login', () => {
+  const SESSION = 'aaaaaaaa-0000-4000-8000-00000000abcd';
+
+  async function signed(minutesAgo: number, sessionId = SESSION) {
+    const { token } = await signSessionToken(
+      {
+        userId: 'user-3',
+        email: 'lin@campus.local',
+        scope: SessionScope.FullAccess,
+        sessionId,
+      },
+      { secret: SECRET, ttlMinutes: 30 },
+      new Date(Date.now() - minutesAgo * 60_000),
+    );
+    return token;
+  }
+
+  it('outlives the access token it opened with while the login is live', async () => {
+    // Expires a couple of seconds in, then the heartbeat runs twice more.
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(29.97)}` });
+    await conn.first;
+
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    conn.ws.close();
+    await conn.settled;
+  }, 15_000);
+
+  /** Signing out revokes the login; the socket must not wait out a token. */
+  it('closes once the login ends, and keeps the position for signing back in', async () => {
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+    await conn.first;
+
+    accounts.endedSessions.add(SESSION);
+
+    await expect(conn.settled).resolves.toMatchObject({
+      closeCode: 1008,
+      closeReason: 'session_ended',
+    });
+    await expect.poll(() => world.gateway.players.isRemembered('user-3')).toBe(true);
+  }, 15_000);
+
+  /** A token lifted from a browser that has since signed out. */
+  it('refuses an upgrade whose login has ended', async () => {
+    accounts.endedSessions.add(SESSION);
+    const { first } = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+
+    await expect(first).resolves.toMatchObject({ message: 'session_ended' });
+  });
+
+  it('leaves sockets alone when the session check fails', async () => {
+    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+    await conn.first;
+
+    const working = accounts.liveSessions;
+    accounts.liveSessions = async () => {
+      throw new Error('database unavailable');
+    };
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    accounts.liveSessions = working;
+
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    conn.ws.close();
+    await conn.settled;
   }, 15_000);
 });
 

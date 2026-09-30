@@ -5,8 +5,17 @@ export interface Connection {
   userId: string;
   email: string;
   socket: WebSocket;
-  /** When the session behind this socket runs out, from its own claims. */
+  /**
+   * When the access token this socket opened with runs out. Enforced only
+   * when there is no `sessionId` to follow instead.
+   */
   expiresAt: Date;
+  /**
+   * The login (refresh-token family) behind this socket, when the token
+   * names one. The socket lives as long as that login is live, however many
+   * access tokens the browser goes through meanwhile.
+   */
+  sessionId?: string;
   /** Set false on every heartbeat, true by the client's pong. */
   alive: boolean;
 }

@@ -83,6 +83,15 @@ const schema = z.object({
    * you are back where you stood, not at the spawn. 0 turns it off.
    */
   WORLD_RECONNECT_GRACE_SECONDS: z.coerce.number().int().min(0).default(30),
+
+  /**
+   * How recently a login must have been refreshed for its socket to stay
+   * open. Must be comfortably longer than campus-api's
+   * AUTH_SESSION_TTL_MINUTES (15), since a client refreshes at most once per
+   * access token: the default gives it five minutes of slack. Also the
+   * furthest a socket can outlive access being taken away.
+   */
+  WORLD_SESSION_REFRESH_WINDOW_SECONDS: z.coerce.number().int().min(60).default(1200),
 }).superRefine((env, ctx) => {
   // A spawn off the map would place every arrival somewhere they could not
   // move from; better to refuse to boot.

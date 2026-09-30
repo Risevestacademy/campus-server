@@ -25,6 +25,13 @@ export interface SessionClaims {
   cohortId?: string;
   /** Present on provisional sessions: the invite still to be accepted. */
   inviteId?: string;
+  /**
+   * Present on full-access sessions: the refresh-token family this access
+   * token belongs to, so something holding a connection longer than one
+   * access token (world's socket) can ask whether the login behind it is
+   * still alive — signed out, revoked, or no longer being refreshed.
+   */
+  sessionId?: string;
   expiresAt: Date;
 }
 
@@ -63,6 +70,7 @@ export async function signSessionToken(
     ...(claims.role ? { role: claims.role } : {}),
     ...(claims.cohortId ? { cohort_id: claims.cohortId } : {}),
     ...(claims.inviteId ? { inviteId: claims.inviteId } : {}),
+    ...(claims.sessionId ? { sid: claims.sessionId } : {}),
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(claims.userId)
@@ -107,6 +115,7 @@ export async function verifySessionToken(
   const role = payload['role'];
   const cohortId = payload['cohort_id'];
   const inviteId = payload['inviteId'];
+  const sessionId = payload['sid'];
 
   if (
     !payload.sub ||
@@ -116,6 +125,7 @@ export async function verifySessionToken(
     (role !== undefined && typeof role !== 'string') ||
     (cohortId !== undefined && typeof cohortId !== 'string') ||
     (inviteId !== undefined && typeof inviteId !== 'string') ||
+    (sessionId !== undefined && typeof sessionId !== 'string') ||
     payload.exp === undefined
   ) {
     throw new InvalidSessionTokenError('session token is missing claims');
@@ -129,6 +139,7 @@ export async function verifySessionToken(
     role,
     cohortId,
     inviteId,
+    sessionId,
     expiresAt: new Date(payload.exp * 1000),
   };
 }

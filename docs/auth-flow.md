@@ -152,16 +152,89 @@ sequenceDiagram
   out.
 - **Scope**: a provisional session cannot reach an ordinary route, so being
   half-onboarded is not a licence to use the campus.
-- **Lifetime**: `AUTH_SESSION_TTL_MINUTES`, or the soonest `access_expires_at`
-  among the holder's memberships if that comes first. A token cannot outlive
-  the access it stands for, which is what keeps a guest's visit from running
-  on until the token happens to lapse. `world` gets this for free: it only
-  verifies the token.
+- **Lifetime**: an access token lasts `AUTH_SESSION_TTL_MINUTES` (15), or
+  until the soonest `access_expires_at` among the holder's memberships if that
+  comes first. A token cannot outlive the access it stands for, which is what
+  keeps a guest's visit from running on until the token happens to lapse.
+- **Refresh**: see below. Every refresh re-checks the account and its access,
+  so fifteen minutes is also how long a removed or suspended person can keep
+  using a token they already hold.
+
+## Refreshing and signing out
+
+A full-access sign-in sets two cookies:
+
+| Cookie | Holds | Sent to | Lives |
+| --- | --- | --- | --- |
+| `campus_session` | the access token | every route | 15 minutes (`AUTH_SESSION_TTL_MINUTES`) |
+| `campus_refresh` | a refresh token | `/v1/auth` only | 30 days (`AUTH_REFRESH_TTL_DAYS`) |
+
+A provisional session gets the first only: onboarding is short, and repeating
+sign-in is cheap.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant A as campus-api
+    participant DB as Postgres
+
+    B->>A: POST /v1/auth/refresh (campus_refresh cookie, allowed Origin)
+    A->>DB: find the refresh token by hash
+    alt unknown, revoked or expired
+        A-->>B: 401, sign in again
+    else reused after the grace window
+        A->>DB: revoke the whole family
+        A-->>B: 401, sign in again
+    else account suspended or gone, or access ended
+        A->>DB: revoke the whole family
+        A-->>B: 401, sign in again
+    else usable
+        A->>DB: mark it used, insert its replacement in the same family
+        A-->>B: new campus_session + campus_refresh
+    end
+
+    B->>A: POST /v1/auth/logout
+    A->>DB: revoke the family
+    A-->>B: both cookies cleared
+```
+
+- **A family** is one sign-in and every token rotated from it. Revoking one
+  token revokes the family, so a stolen refresh token dies with its owner's
+  sign-out.
+- **Rotation, with a grace window.** Each refresh token works once. A second
+  use within 60 seconds is accepted — two tabs refreshing at the same moment
+  is not theft — and a use after that revokes the family.
+- **Refresh before the access token runs out**, on a timer, not only after a
+  401. `world` depends on it: see below.
+- **Retention.** A used token is deleted 30 minutes after use and an expired
+  one 3 days after expiry, during refreshes.
+- **Every access token names its family** (the `sid` claim).
+
+### How `world` follows a sign-in
+
+A socket lasts for hours; an access token for fifteen minutes, and the
+browser swaps it through campus-api, which an open socket never sees. So
+`world` does not close a socket when its access token expires. It follows the
+sign-in named by `sid`: the socket stays while that family has a token that is
+not revoked, not expired, and was minted within
+`WORLD_SESSION_REFRESH_WINDOW_SECONDS` (20 minutes). Every refresh re-checks
+the account and its access before minting, so a recent token is campus-api
+vouching for the session again.
+
+| What happened | When the socket closes |
+| --- | --- |
+| Signed out | Within a heartbeat (30 s) |
+| Suspended | Within a heartbeat — `world` checks the account itself |
+| Access ended, or removed from the cohort | When a refresh fails, or at most the window after the last good one |
+| Browser stopped refreshing | The window after the last refresh |
+
+A token with no `sid` — minted before this existed — is followed the old way,
+by its own expiry.
 
 ## Not built yet
 
-- **Refresh tokens.** A session expires and sign-in repeats — cheap, because
-  Google keeps the account selected.
-- **Immediate revocation.** The lifetime cap above bounds the *planned* end of
-  someone's access. Ending it early — removing a member, cutting a visit short
-  — still only takes effect at their next sign-in.
+- **Immediate revocation.** Access taken away early — removing a member,
+  cutting a visit short — takes effect when the next refresh fails, so within
+  fifteen minutes for campus-api and within the refresh window for `world`.
+  Nothing yet revokes a family the moment access is taken away.

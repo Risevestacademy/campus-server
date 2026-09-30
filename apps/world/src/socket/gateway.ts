@@ -5,7 +5,7 @@ import type { WebSocket } from 'ws';
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import { Players, type Player } from '../movement/players.js';
-import { decideUpgrade, type Refusal } from './authenticate.js';
+import { decideUpgrade, sessionRefreshedSince, type Refusal } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
 import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
@@ -176,15 +176,59 @@ export function registerGateway(
     }
   }
 
+  /**
+   * An access token lasts fifteen minutes and the browser swaps it for a new
+   * one through campus-api, which an open socket never sees. So a socket
+   * follows the login instead: it stays while that login is live — not
+   * signed out, and refreshed recently, which means campus-api has re-checked
+   * suspension and access within the window. One query for every socket.
+   */
+  async function dropEndedSessions(): Promise<void> {
+    const following = connections.all().filter((c) => c.sessionId !== undefined);
+    if (following.length === 0) {
+      return;
+    }
+    const now = new Date();
+    let live: Set<string>;
+    try {
+      live = await accounts.liveSessions(
+        following.map((c) => c.sessionId as string),
+        sessionRefreshedSince(env, now),
+        now,
+      );
+    } catch (err) {
+      // As with accounts: a database that is not answering must not throw
+      // everybody off the campus. The next sweep tries again.
+      app.log.error({ err }, 'could not re-check sessions');
+      return;
+    }
+
+    for (const connection of following) {
+      if (live.has(connection.sessionId as string)) {
+        continue;
+      }
+      app.log.info(
+        { connectionId: connection.id, userId: connection.userId },
+        'session ended, closing socket',
+      );
+      // Remembered: signing out is not access being taken away, and signing
+      // straight back in may resume where they stood.
+      drop(connection);
+      connection.socket.close(POLICY_VIOLATION, 'session_ended');
+    }
+  }
+
   const heartbeat = setInterval(() => {
     void dropRevokedAccounts();
+    void dropEndedSessions();
     const now = Date.now();
     players.forgetExpired(now);
     for (const connection of connections.all()) {
-      // A session that has run out does not get to keep a socket it already
-      // holds: otherwise signing out, or simply waiting, leaves the campus
-      // open for the rest of the token's twelve hours.
-      if (connection.expiresAt.getTime() <= now) {
+      // A socket that names no login has only its access token to go on, so
+      // it lasts exactly as long as that token does — otherwise signing out,
+      // or simply waiting, would leave the campus open with nothing to end
+      // it. A socket that names one follows the login (dropEndedSessions).
+      if (connection.sessionId === undefined && connection.expiresAt.getTime() <= now) {
         app.log.info(
           { connectionId: connection.id, userId: connection.userId },
           'session expired, closing socket',
@@ -289,6 +333,7 @@ export function registerGateway(
       userId: decision.claims.userId,
       email: decision.claims.email,
       expiresAt: decision.claims.expiresAt,
+      sessionId: decision.claims.sessionId,
       socket: ws,
       alive: true,
     };
