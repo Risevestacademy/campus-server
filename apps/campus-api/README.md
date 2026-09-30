@@ -57,7 +57,7 @@ a clear error.
 | `INVITE_TTL_DAYS`                 | `7`                                       | Days until a new invite expires when the request omits `expiresAt`; also the ceiling any caller-supplied `expiresAt` is clamped to |
 | `FF_EMAIL_ENABLED`                | `false`                                   | Emails each new invite's link through Resend. When `true`, `RESEND_API_KEY` and `EMAIL_FROM` are required and the app refuses to boot without them. Off, invites still work and the create response says `emailStatus: disabled` |
 | `RESEND_API_KEY`                  | *(unset)*                                 | Resend API key (`re_…`), one per environment |
-| `EMAIL_FROM`                      | *(unset)*                                 | Sender, as an address or `Name <address>`, on a domain verified in Resend |
+| `EMAIL_FROM`                      | *(unset)*                                 | Sender, as an address or `Name <address>` |
 | `FF_GOOGLE_AUTH_ENABLED`          | `false`                                   | Master switch for Google sign-in. When `true`, the four `GOOGLE_*` / `AUTH_*` values below are all required and the app refuses to boot without them |
 | `GOOGLE_CLIENT_ID`                | *(unset)*                                 | OAuth **web-application** client ID. Android and iOS clients cannot perform the code exchange |
 | `GOOGLE_CLIENT_SECRET`            | *(unset)*                                 | Secret for that web client. Never ships to a mobile app |

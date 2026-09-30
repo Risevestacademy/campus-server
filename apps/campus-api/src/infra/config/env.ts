@@ -283,16 +283,12 @@ export class Env {
   @Matches(/^re_/, { message: 'RESEND_API_KEY must start with "re_"' })
   RESEND_API_KEY?: string;
 
-  /**
-   * Must be on a domain verified in Resend, or every send is refused.
-   * Either a bare address or `Name <address>`.
-   */
+  /** The sender: a bare address or `Name <address>`. */
   @ValidateIf((o: Env) => o.FF_EMAIL_ENABLED)
   @Matches(
     /^(?:[^<>]*<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)$/,
     {
-      message:
-        'EMAIL_FROM must be an address, or "Name <address>", on a domain verified in Resend',
+      message: 'EMAIL_FROM must be an address, or "Name <address>"',
     },
   )
   EMAIL_FROM?: string;
