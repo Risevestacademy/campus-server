@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { SystemRole, UserStatus, users } from '../../modules/users/schema.js';
 import type { Db } from './database.constants.js';
-import { seedAdmin } from './seeder.js';
+import { seedAdmin, seedAdmins } from './seeder.js';
 
 /**
  * Against a real PostgreSQL engine rather than a mocked query builder: the
@@ -112,5 +112,26 @@ describe('seedAdmin', () => {
 
     expect(await seedAdmin(db, EMAIL, makeLogger())).toBe('unchanged');
     expect((await rows())[0].status).toBe(UserStatus.Suspended);
+  });
+});
+
+describe('seedAdmins', () => {
+  it('seeds every address, and says what happened to each', async () => {
+    await seedAdmin(db, 'ada@campus.local', makeLogger());
+
+    const outcomes = await seedAdmins(
+      db,
+      ['ada@campus.local', 'grace@campus.local'],
+      makeLogger(),
+    );
+
+    expect(outcomes).toEqual({
+      'ada@campus.local': 'unchanged',
+      'grace@campus.local': 'created',
+    });
+    expect((await rows()).map((row) => row.systemRole)).toEqual([
+      SystemRole.Admin,
+      SystemRole.Admin,
+    ]);
   });
 });
