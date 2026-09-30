@@ -123,6 +123,7 @@ Integration and OpenAPI guidance for the API lives in
 Docs that span services live in [docs/](docs/):
 
 - [auth-flow.md](docs/auth-flow.md) — sign-in, sessions and onboarding.
+- [invite-to-campus.md](docs/invite-to-campus.md) — an invitee's journey, screen by screen.
 - [deployment.md](docs/deployment.md) — Railway services, build commands, env
   vars and open items.
 - [world-protocol.md](docs/world-protocol.md) — for client authors: connecting

@@ -53,7 +53,7 @@ a clear error.
 | `PORT`                            | `3000`                                    | HTTP port                            |
 | `DATABASE_URL`                    | `postgresql://postgres:postgres@localhost:5432/campus` | Postgres connection string |
 | `DEFAULT_ADMIN_EMAIL`             | *(unset)*                                 | Email of the default admin user. Read only by `pnpm db:seed` — the API never reads it; seeding fails if unset |
-| `APP_PUBLIC_URL`                  | *(required, no default)*                  | Base URL for shareable invite links (`{base}/invite?token=<raw>`). Boot fails without it — no silent fallback |
+| `APP_PUBLIC_URL`                  | *(required, no default)*                  | Base URL for shareable invite links (`{base}/invitation?token=<raw>`). Boot fails without it — no silent fallback |
 | `INVITE_TTL_DAYS`                 | `7`                                       | Days until a new invite expires when the request omits `expiresAt`; also the ceiling any caller-supplied `expiresAt` is clamped to |
 | `FF_GOOGLE_AUTH_ENABLED`          | `false`                                   | Master switch for Google sign-in. When `true`, the four `GOOGLE_*` / `AUTH_*` values below are all required and the app refuses to boot without them |
 | `GOOGLE_CLIENT_ID`                | *(unset)*                                 | OAuth **web-application** client ID. Android and iOS clients cannot perform the code exchange |

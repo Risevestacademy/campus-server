@@ -42,7 +42,7 @@ abstract class SessionGuardBase implements CanActivate {
     protected readonly users: UsersService,
   ) {}
 
-  protected abstract readonly scope: SessionScope;
+  protected abstract readonly scopes: readonly SessionScope[];
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<ProvisionalRequest>();
@@ -84,7 +84,7 @@ abstract class SessionGuardBase implements CanActivate {
       throw err;
     }
 
-    if (claims.scope !== this.scope) {
+    if (!this.scopes.includes(claims.scope)) {
       throw new SessionUnauthorizedError('Session is of the wrong kind');
     }
 
@@ -113,11 +113,23 @@ abstract class SessionGuardBase implements CanActivate {
 /** Requires a full-access session: someone already on the roster. */
 @Injectable()
 export class SessionGuard extends SessionGuardBase {
-  protected readonly scope = SessionScope.FullAccess;
+  protected readonly scopes = [SessionScope.FullAccess];
 }
 
 /** Requires a provisional session: an invite holder mid-onboarding. */
 @Injectable()
 export class ProvisionalSessionGuard extends SessionGuardBase {
-  protected readonly scope = SessionScope.Provisional;
+  protected readonly scopes = [SessionScope.Provisional];
+}
+
+/**
+ * Either kind. Only for routes that tell the caller which kind they hold, so
+ * the web app can pick between onboarding and the campus.
+ */
+@Injectable()
+export class AnySessionGuard extends SessionGuardBase {
+  protected readonly scopes = [
+    SessionScope.FullAccess,
+    SessionScope.Provisional,
+  ];
 }

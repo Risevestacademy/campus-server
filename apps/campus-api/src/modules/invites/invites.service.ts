@@ -30,6 +30,7 @@ import type {
   InviteOnboardingResponseDto,
   InviteTrackDto,
 } from './dto/invite-onboarding-response.dto.js';
+import type { InvitePreviewResponseDto } from './dto/invite-preview.dto.js';
 import type { InviteResponseDto } from './dto/invite-response.dto.js';
 import {
   buildInviteLink,
@@ -71,10 +72,10 @@ export type DecisionOutcome =
  */
 function terminalInviteException(
   invite: { status: InviteStatus },
-  inviteId: string,
+  ref: InviteRef,
 ) {
   const message = `This invite is already ${invite.status}`;
-  const details = { inviteId, status: invite.status };
+  const details = { ...ref, status: invite.status };
 
   switch (invite.status) {
     case InviteStatus.Accepted:
@@ -87,6 +88,13 @@ function terminalInviteException(
       return new InviteConflictException(message, details);
   }
 }
+
+/**
+ * How an error names the invite it is about. Routes behind a session name it
+ * by id; the public preview names nothing, since its callers hold only a
+ * link and its contract carries no ids.
+ */
+type InviteRef = { inviteId: string } | Record<string, never>;
 
 /**
  * A row is live while it is still pending AND not yet lapsed.
@@ -346,28 +354,7 @@ export class InvitesService {
     }
 
     checkEmailMatch(row.invite, user);
-
-    // isInviteLive is the single source of truth; the branch below only
-    // explains which of its two conditions failed.
-    if (!isInviteLive(row.invite, now)) {
-      // Lapsed-but-still-pending and already-materialised Expired are one
-      // outcome with one code. The first read is what does the materialising,
-      // so anything else would make the answer depend on how many times the
-      // invite had been looked at — which the caller cannot see.
-      if (
-        row.invite.status === InviteStatus.Pending ||
-        row.invite.status === InviteStatus.Expired
-      ) {
-        if (row.invite.status === InviteStatus.Pending) {
-          await this.expireLazily(inviteId, now);
-        }
-        throw new InviteForbiddenException('This invite has expired', {
-          inviteId,
-          expiresAt: row.invite.expiresAt,
-        });
-      }
-      throw terminalInviteException(row.invite, inviteId);
-    }
+    await this.assertLive(row.invite, inviteId, { inviteId }, now);
 
     const cohortRow = row.cohort;
     const cohortTrackRow = row.cohortTrack;
@@ -447,6 +434,101 @@ export class InvitesService {
       createdAt: row.invite.createdAt,
       user: account,
     };
+  }
+
+  /**
+   * What the invitation screen shows before anyone has signed in, looked up
+   * by the raw token from the link — the one thing that proves the caller was
+   * sent it. Answers only for a live invite, with the same codes the
+   * signed-in read uses, so the screen can say "expired" or "already
+   * accepted" before sending anyone to Google.
+   *
+   * Public, so it carries no ids: nothing here is a handle to act on, only
+   * what the invitee needs to recognise the offer and pick the right account.
+   */
+  async previewByToken(
+    rawToken: string,
+    now: Date = new Date(),
+  ): Promise<InvitePreviewResponseDto> {
+    const [row] = await this.db
+      .select({
+        invite: {
+          id: invites.id,
+          email: invites.email,
+          cohortRole: invites.cohortRole,
+          systemRole: invites.systemRole,
+          status: invites.status,
+          expiresAt: invites.expiresAt,
+          guestAccessExpiresAt: invites.guestAccessExpiresAt,
+        },
+        cohort: {
+          name: cohorts.name,
+          code: cohorts.code,
+          startDate: cohorts.startDate,
+          endDate: cohorts.endDate,
+        },
+        track: { name: tracks.name, code: tracks.code },
+        inviter: { firstName: users.firstName, lastName: users.lastName },
+      })
+      .from(invites)
+      .leftJoin(cohorts, eq(cohorts.id, invites.cohortId))
+      .leftJoin(cohortTracks, eq(cohortTracks.id, invites.cohortTrackId))
+      .leftJoin(tracks, eq(tracks.id, cohortTracks.trackId))
+      .innerJoin(users, eq(users.id, invites.invitedBy))
+      .where(eq(invites.tokenHash, hashInviteToken(rawToken)))
+      .limit(1);
+
+    if (!row) {
+      // Never the token itself in details: they are returned to the caller
+      // and land in the error log.
+      throw new InviteNotFoundException('No invite matches this link');
+    }
+
+    await this.assertLive(row.invite, row.invite.id, {}, now);
+
+    return {
+      email: row.invite.email,
+      cohort: row.cohort,
+      track: row.track,
+      cohortRole: row.invite.cohortRole,
+      systemRole: row.invite.systemRole,
+      invitedBy: row.inviter,
+      expiresAt: row.invite.expiresAt,
+      guestAccessExpiresAt: row.invite.guestAccessExpiresAt,
+    };
+  }
+
+  /**
+   * Throws unless the invite can still be answered. isInviteLive is the
+   * single source of truth; the branches only explain which of its two
+   * conditions failed.
+   */
+  private async assertLive(
+    invite: { status: InviteStatus; expiresAt: Date },
+    inviteId: string,
+    ref: InviteRef,
+    now: Date,
+  ): Promise<void> {
+    if (isInviteLive(invite, now)) {
+      return;
+    }
+    // Lapsed-but-still-pending and already-materialised Expired are one
+    // outcome with one code. The first read is what does the materialising,
+    // so anything else would make the answer depend on how many times the
+    // invite had been looked at — which the caller cannot see.
+    if (
+      invite.status === InviteStatus.Pending ||
+      invite.status === InviteStatus.Expired
+    ) {
+      if (invite.status === InviteStatus.Pending) {
+        await this.expireLazily(inviteId, now);
+      }
+      throw new InviteForbiddenException('This invite has expired', {
+        ...ref,
+        expiresAt: invite.expiresAt,
+      });
+    }
+    throw terminalInviteException(invite, ref);
   }
 
   /**
@@ -619,7 +701,7 @@ export class InvitesService {
       });
     }
 
-    throw terminalInviteException(invite, inviteId);
+    throw terminalInviteException(invite, { inviteId });
   }
 
   /**

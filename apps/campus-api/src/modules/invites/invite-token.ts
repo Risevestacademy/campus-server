@@ -16,5 +16,5 @@ export function hashInviteToken(rawToken: string): string {
 /** Shareable link embedding the raw token. The hash alone can never be redeemed. */
 export function buildInviteLink(baseUrl: string, rawToken: string): string {
   const base = baseUrl.replace(/\/+$/, '');
-  return `${base}/invite?token=${encodeURIComponent(rawToken)}`;
+  return `${base}/invitation?token=${encodeURIComponent(rawToken)}`;
 }

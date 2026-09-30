@@ -45,7 +45,7 @@ export class InviteResponseDto {
   guestAccessExpiresAt: string | null;
 
   @ApiProperty({
-    example: 'http://localhost:3000/invite?token=abc123',
+    example: 'http://localhost:3000/invitation?token=abc123',
     description:
       'Shareable link embedding the RAW unhashed token. Shown exactly once — ' +
       'only the SHA-256 hash is stored in INVITES.token_hash.',

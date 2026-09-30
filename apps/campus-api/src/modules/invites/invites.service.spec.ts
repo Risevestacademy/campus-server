@@ -154,7 +154,7 @@ describe('InvitesService.create', () => {
 
     // Shareable link embeds the raw token exactly once.
     expect(res.inviteLink).toBe(
-      `http://localhost:3000/invite?token=${encodeURIComponent(res.token)}`,
+      `http://localhost:3000/invitation?token=${encodeURIComponent(res.token)}`,
     );
     expect(res.status).toBe(InviteStatus.Pending);
   });

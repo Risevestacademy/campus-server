@@ -25,7 +25,19 @@ back off rather than retrying immediately.
 
 ## Authentication
 
-Endpoints that require a caller identity expect a JSON Web Token (JWT) sent as:
+A browser never holds a token. The API sets the session in **httpOnly
+cookies** and reads them back itself, so the web app's only job is to send
+every request with credentials:
+
+```ts
+fetch(`${API}/v1/auth/me`, { credentials: 'include' });
+```
+
+In campus-web, `API` is `/api`: its own proxy forwards `/api/*` here, so the
+browser only ever talks to the frontend's host. The whole invitee journey,
+screen by screen, is in `docs/invite-to-campus.md`.
+
+API clients and the Scalar UI can send the same token as a header instead:
 
 ```
 Authorization: Bearer <token>
@@ -46,17 +58,97 @@ itself:
 2. The user picks an account at Google, which returns them to
    `GET /v1/auth/google/callback`.
 3. The API verifies the request, resolves the account behind the Google
-   identity, and issues a session.
+   identity, sets the session cookies, and redirects back into the web app.
 
-Two outcomes are possible at step 3. Someone already on the campus roster, or
-an admin, is signed straight in. Someone holding an unaccepted invite is signed
-in provisionally and still has onboarding to finish. Anyone else is refused
-with `INVITE_REQUIRED`.
+Every outcome of step 3 is a redirect to the web app (`APP_PUBLIC_URL`):
 
-> **Not finished yet.** Session issuance is a separate piece of work, so the
-> callback currently resolves the user correctly and then fails at the last
-> step. The two routes, their query parameters and every error above are
-> settled and safe to build against.
+| Redirect | Meaning |
+| --- | --- |
+| `/` | On the roster (an admin, or an active cohort member). Full access. |
+| `/invitation` | Holds an invite they have not answered. Provisional session. |
+| `/sign-in?error=<code>` | Refused. Nothing was signed in. |
+
+The web app needs a `/sign-in` page that reads `error` and explains it:
+
+| `error` | What happened |
+| --- | --- |
+| `invite_required` | Nobody invited this Google account's address. The usual cause is signing in with a different account from the one the invite went to. |
+| `account_suspended` | The account exists but has been closed. |
+| `denied` | The user cancelled at Google. |
+| `expired_state` | The sign-in took longer than 10 minutes. Start again. |
+| `invalid_state` | The callback could not be matched to a sign-in this browser started, for example because it was opened in another browser. Start again. |
+| `unverified_email` | The Google account has no verified address. |
+| `missing_code`, `exchange_failed`, `incomplete_profile` | Google did not complete the exchange. Start again. |
+| `invalid_request` | The callback URL was malformed. |
+| `rate_limited` | Too many attempts. Wait a minute. |
+| `server_error` | Something failed on our side. |
+
+The invite link (`/invitation?token=…`) opens the web app's invitation
+screen. Before anyone signs in, `POST /v1/invites/preview` with `{ "token" }`
+returns what to show — cohort, track, role, who sent it, and the address it
+went to — or says the invite is expired, taken or revoked. Sign-in itself
+matches the invite by email address, so the token plays no part in step 1:
+show the address, then send the user through it.
+
+### Who is signed in
+
+`GET /v1/auth/me` answers for either kind of session, so call it when the web
+app loads:
+
+```json
+{
+  "scope": "full_access",
+  "expiresAt": "2026-09-30T12:15:00.000Z",
+  "inviteId": null,
+  "user": { "id": "…", "email": "ada@campus.local", "displayName": "Ada Lovelace", "systemRole": "user", "…": "…" },
+  "membership": { "cohortId": "…", "role": "student" }
+}
+```
+
+- `scope: "full_access"` → the campus.
+- `scope: "provisional"` → onboarding. Load the invite with
+  `GET /v1/invites/validate-user-invite`, then answer it with
+  `POST /v1/invites/decision`. Accepting upgrades the cookies to full access
+  in the same response; declining clears them.
+- `401` → nobody is signed in (after trying a refresh, below).
+
+### Staying signed in
+
+A full-access session is two cookies: a short access token (15 minutes by
+default) and a refresh token (30 days).
+
+**Refresh ahead of time.** `POST /v1/auth/refresh`, with credentials, rotates
+both cookies and says when the new ones lapse:
+
+```json
+{ "expiresAt": "2026-09-30T12:15:00.000Z", "refreshExpiresAt": "2026-10-30T12:00:00.000Z" }
+```
+
+Schedule the next refresh a minute before `expiresAt`. Take the first
+deadline from `GET /v1/auth/me`, which carries `expiresAt` too — sign-in and
+accepting an invite are redirects and cookie changes, with no body to read it
+from. Don't assume 15 minutes: a guest's token ends with their visit, which
+can be sooner. Refreshing ahead matters most in the world, which closes a
+socket whose sign-in has stopped being refreshed even while the user is
+making no other calls.
+
+**And on a 401 anyway** (a laptop waking from sleep, say):
+
+1. Call `POST /v1/auth/refresh` once.
+2. If it succeeds, retry the original call. If it answers `401` too, send the
+   user to sign in.
+
+Share one in-flight refresh across the scheduled one and any 401s rather
+than starting one per caller. The API tolerates a brief overlap between tabs,
+but a refresh token replayed after that window ends the whole session.
+
+A provisional session has no refresh token. Someone who takes longer than 30
+minutes over onboarding signs in again, and lands back on `/invitation`.
+
+### Signing out
+
+`POST /v1/auth/logout`, with credentials. It revokes the refresh token and
+clears both cookies. It answers `204` even when nobody was signed in.
 
 ## Resources
 

@@ -4,6 +4,7 @@ import { Type, Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
+  IsFQDN,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -36,7 +37,31 @@ export function loadEnv(source: Record<string, unknown> = process.env): Env {
       .join('; ');
     throw new Error(`Invalid environment variables: ${message}`);
   }
+  assertCookieDomainCovers(env);
   return env;
+}
+
+/**
+ * A browser silently drops a cookie whose Domain does not cover the host that
+ * set it, so a mistyped AUTH_COOKIE_DOMAIN would sign nobody in and say
+ * nothing. Both hosts are checked: the callback sets the cookie, and the app
+ * is where it has to be sent from.
+ */
+function assertCookieDomainCovers(env: Env): void {
+  const domain = env.AUTH_COOKIE_DOMAIN;
+  if (!domain) {
+    return;
+  }
+  const hosts = [env.APP_PUBLIC_URL, env.GOOGLE_CALLBACK_URL]
+    .filter((url): url is string => Boolean(url))
+    .map((url) => new URL(url).hostname);
+  for (const host of hosts) {
+    if (host !== domain && !host.endsWith(`.${domain}`)) {
+      throw new Error(
+        `Invalid environment variables: AUTH_COOKIE_DOMAIN ${domain} does not cover ${host}`,
+      );
+    }
+  }
 }
 
 export function parseCorsOrigins(value: string | undefined): string[] {
@@ -159,6 +184,16 @@ export class Env {
   @IsInt()
   @Min(1)
   AUTH_REFRESH_TTL_DAYS: number = 30;
+
+  /**
+   * Parent domain for the session cookie, so `world` on a sibling subdomain
+   * receives it (`campus.example` covers `world.campus.example`). Unset keeps
+   * the cookie host-only, which is right until world has its own hostname.
+   * The refresh and state cookies stay host-only either way.
+   */
+  @IsOptional()
+  @IsFQDN({}, { message: 'AUTH_COOKIE_DOMAIN must be a bare domain, like campus.example' })
+  AUTH_COOKIE_DOMAIN?: string;
 
   // Comma-separated list of browser origins allowed to call the API.
 

@@ -51,7 +51,7 @@ change to either reaches both apps:
   `CORS_ORIGINS` (the frontend origin for that environment — without it every
   browser call is blocked), `TRUST_PROXY_HOPS=1` (Railway runs one proxy;
   without it the rate limiter treats all traffic as a single client),
-  `APP_PUBLIC_URL` (invite-link base, `{base}/invite?token=<raw>` — set it to
+  `APP_PUBLIC_URL` (invite-link base, `{base}/invitation?token=<raw>` — set it to
   the frontend origin for that environment; required, boot fails without it),
   `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7).
   `PORT` is injected by Railway, not set manually.
@@ -66,15 +66,104 @@ change to either reaches both apps:
   the shared session policy in `@campus/session`: campus-api refuses to boot
   above it, and world refuses a refresh window shorter than it plus two
   minutes, since world relies on sign-ins being refreshed that often.
-- The session cookie is cross-site once both sides are on https, so
-  `APP_PUBLIC_URL` and `CORS_ORIGINS` must name the frontend, and the frontend
-  has to send its requests with credentials.
+- `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
+  shared under, so world on its own subdomain receives it — for example
+  `campus.example`. Only `campus_session` gets it; the refresh and state
+  cookies stay host-only. Boot fails if it does not cover both
+  `APP_PUBLIC_URL` and `GOOGLE_CALLBACK_URL`, because a browser would drop the
+  cookie without saying so. campus-web's proxy must pass the `Domain`
+  attribute through rather than strip it.
+- `APP_PUBLIC_URL` is also where sign-in lands: `/`, `/invitation` or
+  `/sign-in?error=<code>`. The frontend needs all three routes.
+- Where the frontend and the API live decides whether the session cookie
+  works at all — see [Domains and cookies](#domains-and-cookies) before
+  choosing hostnames.
 - Migrations and seeding run via a pre-deploy step:
   `pnpm --filter campus-api db:migrate && pnpm --filter campus-api db:seed`.
   Seeding is deliberately **not** part of app boot — the API must not need a
   writable database to report healthy, and two replicas starting at once must
   not race each other.
 - `/docs` and `/docs-json` are unauthenticated by decision.
+
+## Domains and cookies
+
+The session lives in httpOnly cookies set by campus-api. They only reach the
+API from the frontend's `fetch` calls if the browser considers the two the
+same site, or is willing to send third-party cookies — and Safari and
+Firefox are not.
+
+**Railway's own domains are separate sites.** `up.railway.app` is on the
+public-suffix list, exactly like `github.io`, so `campus-web.up.railway.app`
+and `campus-api.up.railway.app` are as unrelated to a browser as two
+different companies. campus-api detects this and marks the cookie
+`SameSite=None`, which gives:
+
+| Browser | Cookie on the frontend's calls | Result |
+| --- | --- | --- |
+| Chrome | Sent (third-party cookies still allowed) | Works |
+| Safari | Blocked outright | Every call 401s after a "successful" sign-in |
+| Firefox | Partitioned away, never sent | Same as Safari |
+| Any, private window | Usually blocked | Same as Safari |
+
+So the browser must never call campus-api on its own Railway domain. It
+doesn't: campus-web proxies every call through its own host.
+
+### How campus-web reaches the API: its own proxy
+
+campus-web never calls campus-api from the browser. Its route handler at
+`app/api/[...path]/route.ts` forwards `/api/*` on the frontend's host to
+`API_BASE_URL` (campus-api's Railway private URL), so `/api/v1/auth/me` in the
+browser is `/v1/auth/me` here. The browser only ever talks to one host, the
+cookies are first-party, and it works on Railway's domains today.
+
+campus-api's settings for this:
+
+| Variable | Value |
+| --- | --- |
+| `APP_PUBLIC_URL` | `https://<web>.up.railway.app` |
+| `GOOGLE_CALLBACK_URL` | `https://<web>.up.railway.app/api/v1/auth/google/callback` — through the proxy, not campus-api's own host. Register the same URI on the Google client. Because this host matches `APP_PUBLIC_URL`, campus-api picks `SameSite=Lax` on its own. |
+| `CORS_ORIGINS` | `https://<web>.up.railway.app` |
+| `TRUST_PROXY_HOPS` | `1`, provided the proxy forwards `X-Forwarded-For` — see below. |
+
+campus-api's public domain is then only needed for `/docs`.
+
+The proxy has to carry the auth flow through, not just JSON. It must:
+
+- **Forward the three auth cookies** upstream — `campus_session`,
+  `campus_refresh`, `campus_oauth_state` — and pass each one's `Set-Cookie`
+  back to the browser, not only one named cookie.
+- **Re-scope cookie paths under `/api`.** campus-api scopes the refresh and
+  state cookies to `Path=/v1/auth`, but the browser sees `/api/v1/auth`, so the
+  proxy must rewrite them to `Path=/api/v1/auth` (and a clearing
+  `Set-Cookie` the same way, or logout leaves them behind). `campus_session`
+  is `Path=/` and needs nothing.
+- **Pass `Location` through on redirects.** `GET /v1/auth/google` answers 302
+  to `accounts.google.com`, and the callback answers 302 to `APP_PUBLIC_URL`.
+  Without `Location` the browser has nowhere to go. Allowing those two
+  destinations keeps the existing guard against open redirects.
+- **Forward `X-Forwarded-For`** as it arrived from Railway's edge. Otherwise
+  every request reaches campus-api from the proxy's own address, and the rate
+  limiter (100 requests a minute per client) treats all users as one.
+
+The proxy already refuses cross-origin writes itself and does not forward
+`Origin`, so campus-api's own Origin checks see no `Origin` and stand aside.
+That is safe only as long as campus-api is not reachable from browsers
+directly; keep `CORS_ORIGINS` set for when it is.
+
+### Once the domain exists
+
+Put the API **under** the frontend's host: `campus.example` for the web app,
+`api.campus.example` for campus-api, both as Railway custom domains.
+campus-api recognises one host nested under the other as the same site and
+uses `SameSite=Lax`. Sibling hosts (`app.campus.example` with
+`api.campus.example`) also work, since they are the same site, but campus-api
+cannot prove that without a public-suffix list, so it falls back to
+`SameSite=None` and loses the Lax protection.
+
+With campus-web's proxy in place nothing about that split matters: the
+browser still only sees the frontend's host. Moving to the domain means
+updating `APP_PUBLIC_URL`, `GOOGLE_CALLBACK_URL` (and the Google client's
+redirect URIs) and `CORS_ORIGINS` to the new host together.
 
 ## postgres
 
@@ -109,8 +198,9 @@ change to either reaches both apps:
 - Sockets are per-process state too. Running more than one instance needs the
   presence work first, or two tabs may land on different instances and
   disagree about who is online.
-- Browsers cannot authenticate to world on its own hostname yet — see Open
-  items.
+- Browsers reach world on its own hostname with the access cookie, once
+  campus-api's `AUTH_COOKIE_DOMAIN` covers that hostname. World's
+  `CORS_ORIGINS` must name the web app's origin.
 
 ## LiveKit
 
@@ -156,10 +246,8 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 - Node version isn't pinned on Railway. Railpack takes it from `engines.node`
   in the root `package.json`, which says `>=20`, so it builds on Node 20
   while CI runs 24. Pin it (for example `"node": "24.x"`) to match.
-- The session cookie is host-only to campus-api, so a browser never sends it
-  to world's own hostname and cannot open a socket there. Local development
-  hides this — both are `localhost`. Needs deciding before the frontend
-  connects to world in staging: a shared parent `Domain` on the cookie, or a
-  short-lived connection ticket.
+- World on Railway's own domain cannot get the cookie: `up.railway.app` is a
+  public suffix, so no `Domain` can span two services there. It works once
+  both sit under the custom domain with `AUTH_COOKIE_DOMAIN` set.
 - Frontend↔backend PostHog correlation isn't wired yet — see
   [posthog.md](./posthog.md).

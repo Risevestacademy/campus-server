@@ -30,12 +30,13 @@ one JSON object with a `type`.
   its list.
 - **Not a browser?** Send `Authorization: Bearer <token>` and no cookie.
 
-> **Open issue — production.** The session cookie is set by campus-api with
-> no `Domain`, so browsers only send it back to campus-api's own host. Locally
-> that is fine: cookies ignore ports, and both services are `localhost`. Once
-> world has its own hostname it will not receive the cookie, and browsers
-> cannot put an `Authorization` header on a WebSocket. Until that is solved,
-> browser connections work in local development only.
+> **World on its own hostname.** Browsers cannot put an `Authorization`
+> header on a WebSocket, so the cookie is the only way in, and by default it
+> only goes back to the host that set it. Locally that is fine: cookies ignore
+> ports, and both services are `localhost`. Deployed, set campus-api's
+> `AUTH_COOKIE_DOMAIN` to the parent domain (`campus.example` for a web app on
+> `campus.example` and world on `world.campus.example`); the access cookie is
+> then sent to world too. The refresh cookie never is.
 
 ### What arrives first
 
@@ -167,8 +168,9 @@ round-trip time, and gets a `pong`.
 **Keep the sign-in refreshed.** The socket does not end when the access token
 it opened with expires; it stays while the sign-in behind it is live — not
 signed out, and refreshed through `POST /v1/auth/refresh` within the last 20
-minutes. So refresh on a timer, before each access token runs out, even
-while the user is only standing in the world and making no other calls.
+minutes. So refresh ahead of time — a minute before the `expiresAt` that
+each refresh (and `GET /v1/auth/me`) returns — even while the user is only
+standing in the world and making no other calls.
 Refreshing only after an API call fails would let the socket close with
 `session_ended` during a quiet stretch. See
 [auth-flow.md](./auth-flow.md#how-world-follows-a-sign-in).
