@@ -28,7 +28,7 @@ describe('OpenAPI security (e2e)', () => {
     // Mirrors main.ts
     const document = SwaggerModule.createDocument(
       app,
-      new DocumentBuilder().addServer('/v1').addBearerAuth().build(),
+      new DocumentBuilder().addBearerAuth().build(),
     );
     security = (path, method) =>
       (document.paths[path] as Record<string, { security?: unknown }>)[method]

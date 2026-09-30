@@ -108,7 +108,6 @@ async function bootstrap() {
     .setTitle('campus-api')
     .setDescription(loadApiDescription())
     .setVersion('0.0.1')
-    .addServer('/v1')
     .addBearerAuth()
     .build();
 
