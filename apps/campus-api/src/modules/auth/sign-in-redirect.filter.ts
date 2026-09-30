@@ -64,13 +64,19 @@ export class SignInRedirectFilter implements ExceptionFilter {
     const res = ctx.getResponse<Response>();
     const code = signInErrorCode(exception);
 
-    // The global filters never see this exception, so whatever they would
-    // have logged is logged here. Not the URL: it carries Google's code.
-    if (resolveExceptionStatus(exception) >= HttpStatus.INTERNAL_SERVER_ERROR) {
+    // The global filters never see this exception, so it is logged here,
+    // and every server_error is: the user is told something went wrong on our
+    // side, so there has to be a record of what. A 5xx is an error; anything
+    // else that lands here — a 4xx this route does not expect, such as an
+    // access grant ending mid-sign-in — is a warning. Not the URL: it carries
+    // Google's code.
+    if (code === 'server_error') {
       const req = ctx.getRequest<Request & { id?: string }>();
-      this.logger.error(
+      const fault =
+        resolveExceptionStatus(exception) >= HttpStatus.INTERNAL_SERVER_ERROR;
+      this.logger[fault ? 'error' : 'warn'](
         { err: exception, method: req.method, correlationId: req.id },
-        'Unhandled exception',
+        fault ? 'Unhandled exception' : 'Unexpected sign-in failure',
       );
     }
 
