@@ -72,10 +72,10 @@ export type DecisionOutcome =
  */
 function terminalInviteException(
   invite: { status: InviteStatus },
-  inviteId: string,
+  ref: InviteRef,
 ) {
   const message = `This invite is already ${invite.status}`;
-  const details = { inviteId, status: invite.status };
+  const details = { ...ref, status: invite.status };
 
   switch (invite.status) {
     case InviteStatus.Accepted:
@@ -88,6 +88,13 @@ function terminalInviteException(
       return new InviteConflictException(message, details);
   }
 }
+
+/**
+ * How an error names the invite it is about. Routes behind a session name it
+ * by id; the public preview names nothing, since its callers hold only a
+ * link and its contract carries no ids.
+ */
+type InviteRef = { inviteId: string } | Record<string, never>;
 
 /**
  * A row is live while it is still pending AND not yet lapsed.
@@ -347,7 +354,7 @@ export class InvitesService {
     }
 
     checkEmailMatch(row.invite, user);
-    await this.assertLive(row.invite, inviteId, now);
+    await this.assertLive(row.invite, inviteId, { inviteId }, now);
 
     const cohortRow = row.cohort;
     const cohortTrackRow = row.cohortTrack;
@@ -477,7 +484,7 @@ export class InvitesService {
       throw new InviteNotFoundException('No invite matches this link');
     }
 
-    await this.assertLive(row.invite, row.invite.id, now);
+    await this.assertLive(row.invite, row.invite.id, {}, now);
 
     return {
       email: row.invite.email,
@@ -499,6 +506,7 @@ export class InvitesService {
   private async assertLive(
     invite: { status: InviteStatus; expiresAt: Date },
     inviteId: string,
+    ref: InviteRef,
     now: Date,
   ): Promise<void> {
     if (isInviteLive(invite, now)) {
@@ -516,11 +524,11 @@ export class InvitesService {
         await this.expireLazily(inviteId, now);
       }
       throw new InviteForbiddenException('This invite has expired', {
-        inviteId,
+        ...ref,
         expiresAt: invite.expiresAt,
       });
     }
-    throw terminalInviteException(invite, inviteId);
+    throw terminalInviteException(invite, ref);
   }
 
   /**
@@ -693,7 +701,7 @@ export class InvitesService {
       });
     }
 
-    throw terminalInviteException(invite, inviteId);
+    throw terminalInviteException(invite, { inviteId });
   }
 
   /**

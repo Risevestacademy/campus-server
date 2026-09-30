@@ -191,6 +191,10 @@ describe('POST /v1/invites/preview (e2e)', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error.message).toBe('This invite has expired');
+    // Public route: the error names no invite either.
+    expect(res.body.error.details).toEqual({
+      expiresAt: row.expiresAt.toISOString(),
+    });
     const [after] = await db
       .select()
       .from(invites)
@@ -209,6 +213,7 @@ describe('POST /v1/invites/preview (e2e)', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe(code);
+    expect(res.body.error.details).toEqual({ status });
   });
 
   it('refuses a request with no token, and says that is why', async () => {
