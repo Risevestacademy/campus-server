@@ -18,7 +18,15 @@ export type Refusal =
 
 export type UpgradeDecision =
   | { ok: true; claims: SessionClaims }
-  | { ok: false; refusal: Refusal };
+  | {
+      ok: false;
+      refusal: Refusal;
+      /**
+       * Set only when the account itself was refused — suspended or gone —
+       * so the caller can forget anything it kept for them.
+       */
+      userId?: string;
+    };
 
 const SESSION_COOKIE = 'campus_session';
 
@@ -97,10 +105,10 @@ export async function decideUpgrade(
 
   const account = await accounts.find(claims.userId);
   if (!account) {
-    return { ok: false, refusal: 'account_gone' };
+    return { ok: false, refusal: 'account_gone', userId: claims.userId };
   }
   if (account.suspended) {
-    return { ok: false, refusal: 'account_suspended' };
+    return { ok: false, refusal: 'account_suspended', userId: claims.userId };
   }
 
   return { ok: true, claims };

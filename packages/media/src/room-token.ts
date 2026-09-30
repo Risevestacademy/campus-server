@@ -87,6 +87,13 @@ export async function mintRoomToken(
   }
 
   const ttlSeconds = grant.ttlSeconds ?? DEFAULT_ROOM_TOKEN_TTL_SECONDS;
+  // The SDK reads a falsy ttl as "use my default", which is six hours: a 0
+  // meant as "expire at once" would quietly become the longest token going.
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) {
+    throw new InvalidMediaConfigError(
+      'token lifetime must be a positive whole number of seconds',
+    );
+  }
   const token = new AccessToken(credentials.apiKey, credentials.apiSecret, {
     identity: grant.identity,
     name: grant.name,

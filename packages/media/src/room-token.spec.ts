@@ -134,6 +134,15 @@ describe('mintRoomToken', () => {
       ).rejects.toThrow(InvalidMediaConfigError);
     });
 
+    /** The SDK would turn 0 into its six-hour default. */
+    it('a lifetime that is not a positive whole number of seconds', async () => {
+      for (const ttlSeconds of [0, -60, 1.5, Number.NaN]) {
+        await expect(mintRoomToken(credentials, { ...grant, ttlSeconds })).rejects.toThrow(
+          InvalidMediaConfigError,
+        );
+      }
+    });
+
     it('nobody to join as', async () => {
       await expect(mintRoomToken(credentials, { ...grant, identity: '' })).rejects.toThrow(
         InvalidMediaConfigError,

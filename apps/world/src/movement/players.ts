@@ -135,12 +135,19 @@ export class Players {
     }
   }
 
-  /** Whether somebody who left is still remembered, expired or not. */
+  /**
+   * Whether a position is still held for somebody who left. May be true for
+   * a moment after their grace has run out, until the next `forgetExpired`;
+   * `join` checks the time itself, so that never resumes anybody late.
+   */
   isRemembered(userId: string): boolean {
     return this.departed.has(userId);
   }
 
-  /** How many have left and could still resume. */
+  /**
+   * How many positions are held for people who left, including any whose
+   * grace has run out since the last `forgetExpired`.
+   */
   get remembered(): number {
     return this.departed.size;
   }

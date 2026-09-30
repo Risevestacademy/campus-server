@@ -191,9 +191,16 @@ close alone, so read the reason from the close event, not from an `error`.
 
 **A reconnect resumes where you stood** if it comes within
 `WORLD_RECONNECT_GRACE_SECONDS` (30 by default) of your last tab closing.
-That covers a network blip and the server's own cut-offs — `rate_limited`, a
-missed heartbeat, not reading fast enough. Past the grace, after a suspension,
-or after a server restart (positions live in memory), you start at the spawn.
+That covers a network blip, the server's own cut-offs — `rate_limited`, a
+missed heartbeat, not reading fast enough — and `session_expired`: signing
+straight back in after a session runs out resumes too, since expiry is
+routine rather than access being taken away. Past the grace, or after a
+server restart (positions live in memory), you start at the spawn.
+
+A suspension or a removed account forgets the position as soon as world
+notices: at its next check of open sockets, or when a reconnect is refused
+for it. If a suspension is lifted before either happens, the person was never
+refused and resumes as normal.
 
 Either way, take your position from the new `snapshot`, never from what you
 drew before the drop, and throw away any moves still pending: they were

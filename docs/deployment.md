@@ -139,7 +139,7 @@ pnpm --filter @campus/media room-token --identity ada --room spike
 
 It defaults to the local server and the dev key in `livekit.yaml`; point it
 at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
-`LIVEKIT_API_SECRET`.
+`LIVEKIT_API_SECRET` — all three, or none.
 
 ## Open items
 

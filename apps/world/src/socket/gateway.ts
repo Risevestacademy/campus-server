@@ -267,6 +267,14 @@ export function registerGateway(
       return;
     }
 
+    // A position kept from an earlier drop must not survive access being
+    // taken away. The sweep forgets it only for somebody still connected; a
+    // suspended account whose socket had already gone is caught here, at its
+    // next attempt — whether or not this socket is still around to be told.
+    if (!decision.ok && decision.userId) {
+      players.leave(decision.userId, Date.now(), false);
+    }
+
     if (closed || ws.readyState !== ws.OPEN) {
       return;
     }

@@ -745,6 +745,37 @@ describe('movement', () => {
       await leave(again);
     });
 
+    /**
+     * The heartbeat sweep only sees accounts that are still connected. One
+     * suspended after its socket had already dropped is caught when it next
+     * tries to come back.
+     */
+    it('forgets a kept position once a reconnect is refused for suspension', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      // The client sees its close before the server has handled it.
+      await expect.poll(() => world.gateway.players.isRemembered(ada)).toBe(true);
+
+      accounts.suspended.add(ada);
+      const refused = connect({
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
+      });
+      await expect(refused.first).resolves.toMatchObject({ message: 'account_suspended' });
+      await refused.settled;
+      expect(world.gateway.players.isRemembered(ada)).toBe(false);
+
+      // Suspension lifted: welcome back, but at the spawn.
+      accounts.suspended.delete(ada);
+      const again = await arrive(ada);
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({ userId: ada, x: 0, y: 0, facing: 'down' });
+      await leave(again);
+    });
+
     /** Gone from everybody's screen at once, and back in the same place. */
     it('shows others a departure, then an arrival where it left', async () => {
       const ada = person();
