@@ -49,7 +49,6 @@ import { InvitesService } from './invites.service.js';
 import { InviteNotFoundException } from './invites.exceptions.js';
 
 @ApiTags('invites')
-@ApiBearerAuth()
 @Controller('invites')
 export class InvitesController {
   constructor(
@@ -64,6 +63,7 @@ export class InvitesController {
   // SessionGuard authenticates and puts req.user there; AdminGuard decides
   // whether that user may invite. Order matters — guards run left to right.
   @UseGuards(SessionGuard, AdminGuard)
+  @ApiBearerAuth()
   @ApiCreateInvite()
   create(
     @Body() dto: CreateInviteDto,
@@ -72,8 +72,9 @@ export class InvitesController {
     return this.invites.create(dto, inviter);
   }
 
-  // No guard: the invitee has not signed in yet. The token is the credential,
-  // and all it opens is a read of the offer it was issued for.
+  // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The
+  // token is the credential, and all it opens is a read of the offer it was
+  // issued for.
   @Post('preview')
   @HttpCode(HttpStatus.OK)
   @ApiPreviewInvite()
@@ -86,6 +87,7 @@ export class InvitesController {
   // holding a token that has not accepted an invite yet.
   @Get('validate-user-invite')
   @UseGuards(ProvisionalSessionGuard)
+  @ApiBearerAuth()
   @ApiValidateUserInvite()
   async validateUserInvite(
     @CurrentSession() session: { inviteId?: string },
@@ -105,6 +107,7 @@ export class InvitesController {
   @Post('decision')
   @HttpCode(HttpStatus.OK)
   @UseGuards(ProvisionalSessionGuard)
+  @ApiBearerAuth()
   @ApiDecideInvite()
   async decide(
     @CurrentSession() session: { inviteId?: string },
