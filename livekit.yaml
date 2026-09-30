@@ -10,5 +10,7 @@ rtc:
 redis:
   address: redis:6379
 
+# Local only. At least 32 characters: shorter secrets can be brute-forced
+# from a single token, and @campus/media refuses them.
 keys:
-  devkey: devsecret
+  devkey: local-dev-secret-not-for-production-use

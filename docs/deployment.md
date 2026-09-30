@@ -124,7 +124,22 @@ assume otherwise:
 A Cloud project per environment, so a staging room can never collide with a
 production one. The key and secret are server-side only: clients get a
 short-lived room token minted by the server, never the credentials
-themselves. Which service mints it — campus-api or world — is still open.
+themselves. Which service mints it — campus-api or world — is still open;
+the minting itself lives in `packages/media` (`@campus/media`) so either can
+use it. Its secret must be at least 32 characters, and it refuses anything
+shorter.
+
+To try the media server by hand, mint a token and join from any LiveKit
+client, such as LiveKit's hosted Meet page:
+
+```bash
+pnpm --filter @campus/media build
+pnpm --filter @campus/media room-token --identity ada --room spike
+```
+
+It defaults to the local server and the dev key in `livekit.yaml`; point it
+at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`.
 
 ## Open items
 
