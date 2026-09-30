@@ -84,7 +84,7 @@ invite expires (and, for a guest, when the visit ends). The response's
 | `emailStatus` | Meaning | The admin should |
 | --- | --- | --- |
 | `sent` | Resend accepted the email | Nothing |
-| `failed` | Not confirmed sent — refused, or no answer in 10 s | Share `inviteLink` by hand |
+| `failed` | Not confirmed sent — refused, or no answer after a retry (5 s each) | Share `inviteLink` by hand |
 | `disabled` | This deployment sends no email (`FF_EMAIL_ENABLED` off) | Share `inviteLink` by hand |
 
 Either way the invite exists: a failed email never undoes it.
