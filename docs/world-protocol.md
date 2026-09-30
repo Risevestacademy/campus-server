@@ -189,9 +189,19 @@ reason as its `message` arrives just before the close. A socket closed later
 — `session_expired`, or a suspension that reaches an open socket — gets the
 close alone, so read the reason from the close event, not from an `error`.
 
-**A reconnect starts from spawn.** Positions are not kept for a dropped
-socket yet, and a server restart forgets everybody's. Treat every
-`snapshot` as a fresh start.
+**A reconnect resumes where you stood** if it comes within
+`WORLD_RECONNECT_GRACE_SECONDS` (30 by default) of your last tab closing.
+That covers a network blip and the server's own cut-offs — `rate_limited`, a
+missed heartbeat, not reading fast enough. Past the grace, after a suspension,
+or after a server restart (positions live in memory), you start at the spawn.
+
+Either way, take your position from the new `snapshot`, never from what you
+drew before the drop, and throw away any moves still pending: they were
+answered, or not, on the old socket.
+
+Others see you leave straight away and arrive again when you return. There
+is no frozen stand-in while you are gone — somebody who closed the tab should
+not linger on everybody's screen for the length of the grace.
 
 ## Changing the protocol
 

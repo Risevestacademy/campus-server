@@ -40,6 +40,7 @@ export function registerGateway(
       spawn: { x: env.WORLD_SPAWN_X, y: env.WORLD_SPAWN_Y },
     },
     env.WORLD_STEP_MS,
+    env.WORLD_RECONNECT_GRACE_SECONDS * 1000,
   );
 
   /**
@@ -106,13 +107,19 @@ export function registerGateway(
    * never outlive the last socket standing for them. The avatar stays while
    * any tab is open, and leaves with the last one. Idempotent: a socket
    * dropped by the heartbeat comes back through here from its close event.
+   *
+   * Where the last tab stood is remembered for the reconnect grace, unless
+   * `remember` is false — for access taken away, where a reconnect would be
+   * refused anyway and there is nothing to come back to. The avatar leaves
+   * everybody else's screen either way: a frozen stand-in for somebody who
+   * may never return is worse than a flicker for somebody who does.
    */
-  function drop(connection: Connection): void {
+  function drop(connection: Connection, remember = true): void {
     connections.remove(connection);
     if (connections.forUser(connection.userId).length > 0) {
       return;
     }
-    if (players.leave(connection.userId)) {
+    if (players.leave(connection.userId, Date.now(), remember)) {
       broadcast({ type: 'left', userId: connection.userId });
     }
   }
@@ -163,7 +170,7 @@ export function registerGateway(
           { connectionId: connection.id, userId, reason },
           'closing socket, account no longer welcome',
         );
-        drop(connection);
+        drop(connection, false);
         connection.socket.close(POLICY_VIOLATION, reason);
       }
     }
@@ -172,6 +179,7 @@ export function registerGateway(
   const heartbeat = setInterval(() => {
     void dropRevokedAccounts();
     const now = Date.now();
+    players.forgetExpired(now);
     for (const connection of connections.all()) {
       // A session that has run out does not get to keep a socket it already
       // holds: otherwise signing out, or simply waiting, leaves the campus

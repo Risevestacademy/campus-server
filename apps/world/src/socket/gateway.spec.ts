@@ -725,6 +725,49 @@ describe('movement', () => {
     });
   });
 
+  /**
+   * A dropped connection — a blip, or the server cutting it for sending too
+   * fast or reading too slowly — comes back where it was, not at the spawn.
+   */
+  describe('reconnecting', () => {
+    it('comes back where it stood, not at the spawn', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      move(first, 'down', 2);
+      await waitFor(first, (m) => m.type === 'moveResult' && m.seq === 2);
+      await leave(first);
+
+      const again = await arrive(ada);
+
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({ userId: ada, x: 1, y: 1, facing: 'down' });
+      await leave(again);
+    });
+
+    /** Gone from everybody's screen at once, and back in the same place. */
+    it('shows others a departure, then an arrival where it left', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      await waitFor(watcher, (m) => m.type === 'left' && m.userId === ada);
+
+      const again = await arrive(ada);
+
+      await expect(
+        waitFor(
+          watcher,
+          (m) => m.type === 'joined' && (m.player as { x: number }).x === 1,
+        ),
+      ).resolves.toMatchObject({ player: { userId: ada, x: 1, y: 0 } });
+      await leave(again);
+      await leave(watcher);
+    });
+  });
+
   /** Whichever way a socket is dropped, its player must not be left standing. */
   it('removes the player when a suspension closes their socket', async () => {
     const ada = person();
@@ -738,6 +781,8 @@ describe('movement', () => {
       userId: ada,
     });
     expect(world.gateway.players.has(ada)).toBe(false);
+    // Access taken away: nothing kept to come back to.
+    expect(world.gateway.players.isRemembered(ada)).toBe(false);
 
     await leave(watcher);
   }, 15_000);

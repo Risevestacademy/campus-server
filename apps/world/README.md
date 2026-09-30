@@ -22,6 +22,7 @@ server decides every position.
   - the server enforces walking speed
   - one avatar per person, however many tabs they have open
   - other players' moves are sent once per tick
+  - a reconnect within a grace period resumes where the player stood
 - **Limits:**
   - per-socket message size and rate
   - a cap on what may wait unsent to a client that stops reading

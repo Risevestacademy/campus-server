@@ -77,6 +77,12 @@ const schema = z.object({
    * more frames. Below 10ms the loop would be spinning, not batching.
    */
   WORLD_TICK_MS: z.coerce.number().int().min(10).default(50),
+
+  /**
+   * How long somebody who dropped out is remembered: reconnect within it and
+   * you are back where you stood, not at the spawn. 0 turns it off.
+   */
+  WORLD_RECONNECT_GRACE_SECONDS: z.coerce.number().int().min(0).default(30),
 }).superRefine((env, ctx) => {
   // A spawn off the map would place every arrival somewhere they could not
   // move from; better to refuse to boot.

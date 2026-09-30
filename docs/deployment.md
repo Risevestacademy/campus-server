@@ -93,10 +93,12 @@ change to either reaches both apps:
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
-  and the placeholder map until real maps load: `WORLD_MAP_WIDTH`,
-  `WORLD_MAP_HEIGHT`, `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
-- Positions are per-process state, lost on a restart or redeploy: everyone
-  reconnects at the spawn tile.
+  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, and the placeholder
+  map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
+  `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
+- Positions are per-process state. A reconnect within the grace resumes where
+  somebody stood, but a restart or redeploy forgets everyone: they all
+  reconnect at the spawn tile.
 - Sockets are per-process state too. Running more than one instance needs the
   presence work first, or two tabs may land on different instances and
   disagree about who is online.
