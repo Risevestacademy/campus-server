@@ -166,10 +166,11 @@ export class InvitesService {
     @Inject(CONFIG) private readonly config: Env,
   ) {}
 
+  /** The receipt without emailStatus, which InviteMailer adds after. */
   async create(
     dto: CreateInviteDto,
     inviter: AuthenticatedUser,
-  ): Promise<InviteResponseDto> {
+  ): Promise<Omit<InviteResponseDto, 'emailStatus'>> {
     const email = dto.email.trim().toLowerCase();
     const systemRole = dto.systemRole ?? SystemRole.User;
 

@@ -271,3 +271,40 @@ describe('parseCorsOrigins', () => {
     expect(parseCorsOrigins('  ,  ')).toEqual([]);
   });
 });
+
+describe('loadEnv email (Resend)', () => {
+  const ON = {
+    FF_EMAIL_ENABLED: 'true',
+    RESEND_API_KEY: 're_123456789',
+    EMAIL_FROM: 'Campus by Rise <invites@campusbyrise.com>',
+  };
+
+  it('is off by default and needs nothing', () => {
+    expect(testEnv({}).FF_EMAIL_ENABLED).toBe(false);
+  });
+
+  it('accepts a key and a from-address, bare or named', () => {
+    expect(() => testEnv(ON)).not.toThrow();
+    expect(() =>
+      testEnv({ ...ON, EMAIL_FROM: 'invites@campusbyrise.com' }),
+    ).not.toThrow();
+  });
+
+  it('requires the key and the from-address once switched on', () => {
+    expect(() => testEnv({ ...ON, RESEND_API_KEY: undefined })).toThrow(
+      /RESEND_API_KEY/,
+    );
+    expect(() => testEnv({ ...ON, EMAIL_FROM: undefined })).toThrow(
+      /EMAIL_FROM/,
+    );
+  });
+
+  it('refuses a key that is not a Resend key, and a from that is not an address', () => {
+    expect(() => testEnv({ ...ON, RESEND_API_KEY: 'sk_live_x' })).toThrow(
+      /RESEND_API_KEY must start with "re_"/,
+    );
+    expect(() => testEnv({ ...ON, EMAIL_FROM: 'Campus by Rise' })).toThrow(
+      /EMAIL_FROM/,
+    );
+  });
+});

@@ -34,7 +34,10 @@ export function ApiCreateInvite(): MethodDecorator {
         'rejected with 409 (revoke the open one first). expiresAt defaults ' +
         'to now + INVITE_TTL_DAYS and never exceeds it — nor the guest ' +
         'window, since a link must not stay redeemable past the visit it ' +
-        'grants.',
+        'grants. Then emails the link to the invitee through Resend, when ' +
+        'FF_EMAIL_ENABLED is on; emailStatus says how that went. A failed ' +
+        'send still answers 201 — the invite exists, and inviteLink can be ' +
+        'shared by hand.',
     }),
     ApiCreatedResponse({ type: InviteResponseDto }),
     ApiBadRequestResponse({

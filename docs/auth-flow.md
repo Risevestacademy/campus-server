@@ -115,7 +115,7 @@ sequenceDiagram
     A->>DB: insert invite, store only the token hash
     A-->>Admin: invite link carrying the raw token
 
-    Admin-->>B: sends the link out of band
+    A-->>B: emails the link (Resend); the admin can also share it
     B->>A: POST /v1/invites/preview { token } — no session
     A-->>B: the offer: cohort, track, role, invited by, address
     B->>A: Google sign-in (as above)

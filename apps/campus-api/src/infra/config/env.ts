@@ -296,6 +296,34 @@ export class Env {
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
 
+  // Email (Resend) ------------------------------------------------------
+  // Off by default, like PostHog: local development and CI never send mail.
+  // With the flag off, invites are still created and the admin shares the
+  // link by hand, which is how it worked before email existed.
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_EMAIL_ENABLED: boolean = false;
+
+  @ValidateIf((o: Env) => o.FF_EMAIL_ENABLED)
+  @IsNotEmpty()
+  @Matches(/^re_/, { message: 'RESEND_API_KEY must start with "re_"' })
+  RESEND_API_KEY?: string;
+
+  /** The sender: a bare address or `Name <address>`. */
+  @ValidateIf((o: Env) => o.FF_EMAIL_ENABLED)
+  @Matches(
+    /^(?:[^<>]*<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)$/,
+    {
+      message: 'EMAIL_FROM must be an address, or "Name <address>"',
+    },
+  )
+  EMAIL_FROM?: string;
+
   // require_tld: false keeps http://localhost:3000 valid for local dev;
   // require_protocol: true still rejects bare words like "not-a-url".
   @IsUrl({ require_tld: false, require_protocol: true })
