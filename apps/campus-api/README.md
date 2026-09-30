@@ -52,7 +52,7 @@ a clear error.
 | `NODE_ENV`                        | *(unset)*                                 | Node runtime mode; **the app itself never branches on this** — feature behavior comes from the explicit `FF_` flags below |
 | `PORT`                            | `3000`                                    | HTTP port                            |
 | `DATABASE_URL`                    | `postgresql://postgres:postgres@localhost:5432/campus` | Postgres connection string |
-| `DEFAULT_ADMIN_EMAIL`             | *(unset)*                                 | Email of the default admin user. Read only by `pnpm db:seed` — the API never reads it; seeding fails if unset |
+| `DEFAULT_ADMIN_EMAIL`             | *(unset)*                                 | The admins to create or promote: one address, or several separated by commas. Read only by `pnpm db:seed` — the API never reads it; seeding fails if unset |
 | `APP_PUBLIC_URL`                  | *(required, no default)*                  | Base URL for shareable invite links (`{base}/invitation?token=<raw>`). Boot fails without it — no silent fallback |
 | `INVITE_TTL_DAYS`                 | `7`                                       | Days until a new invite expires when the request omits `expiresAt`; also the ceiling any caller-supplied `expiresAt` is clamped to |
 | `FF_EMAIL_ENABLED`                | `false`                                   | Emails each new invite's link through Resend. When `true`, `RESEND_API_KEY` and `EMAIL_FROM` are required and the app refuses to boot without them. Off, invites still work and the create response says `emailStatus: disabled` |
@@ -112,7 +112,7 @@ under `src/infra/database/migrations`.
 $ pnpm run db:generate   # generate a migration from schema changes
 $ pnpm run db:migrate    # apply pending migrations
 $ pnpm run db:push       # push schema directly (dev only)
-$ pnpm run db:seed       # upsert the DEFAULT_ADMIN_EMAIL admin (needs a build)
+$ pnpm run db:seed       # upsert the DEFAULT_ADMIN_EMAIL admins (needs a build)
 $ pnpm run db:studio     # open Drizzle Studio
 ```
 

@@ -46,8 +46,9 @@ change to either reaches both apps:
   `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED=false` (no collector deployed),
   `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST` (see
   [posthog.md](./posthog.md) — region must match the frontend's project),
-  `DEFAULT_ADMIN_EMAIL` (address promoted to admin by the pre-deploy seed;
-  set it per environment before the first deploy, or the seed step fails),
+  `DEFAULT_ADMIN_EMAIL` (the admins the pre-deploy seed creates or promotes:
+  one Google address, or several separated by commas; set it per
+  environment before the first deploy, or the seed step fails),
   `CORS_ORIGINS` (the frontend origin for that environment — without it every
   browser call is blocked), `TRUST_PROXY_HOPS=1` (Railway runs one proxy;
   without it the rate limiter treats all traffic as a single client),

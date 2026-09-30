@@ -64,6 +64,23 @@ function assertCookieDomainCovers(env: Env): void {
   }
 }
 
+/**
+ * Comma-separated addresses, trimmed, lowercased (how USERS stores them) and
+ * de-duplicated. Undefined when nothing is left, so an empty variable reads
+ * as unset.
+ */
+export function parseEmailList(value: string): string[] | undefined {
+  const emails = [
+    ...new Set(
+      value
+        .split(',')
+        .map((email) => email.trim().toLowerCase())
+        .filter((email) => email.length > 0),
+    ),
+  ];
+  return emails.length > 0 ? emails : undefined;
+}
+
 export function parseCorsOrigins(value: string | undefined): string[] {
   return (value ?? '')
     .split(',')
@@ -86,9 +103,23 @@ export class Env {
   @IsString()
   DATABASE_URL: string = 'postgresql://postgres:postgres@localhost:5432/campus';
 
+  /**
+   * The admins `db:seed` creates or promotes: one address, or several
+   * separated by commas. The API itself never reads it.
+   */
   @IsOptional()
-  @IsEmail()
-  DEFAULT_ADMIN_EMAIL?: string;
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? parseEmailList(value) : value,
+  )
+  @IsEmail(
+    {},
+    {
+      each: true,
+      message:
+        'DEFAULT_ADMIN_EMAIL must be one or more email addresses, separated by commas',
+    },
+  )
+  DEFAULT_ADMIN_EMAIL?: string[];
 
   // Google sign-in ------------------------------------------------------
   // Flag-gated the same way PostHog is, so the API still boots on an empty
