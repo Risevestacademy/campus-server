@@ -160,13 +160,14 @@ describe('completeGoogleSignIn', () => {
   it('lets a member invited to another cohort in, carrying the invite', async () => {
     users.findForGoogleIdentity.mockResolvedValue(user());
     members.resolveActiveAccess.mockResolvedValue({ endsAt: null });
-    invites.findUsableForEmail.mockResolvedValue(invite());
+    const pending = invite();
+    invites.findUsableForEmail.mockResolvedValue(pending);
 
     const outcome = await service.completeGoogleSignIn('code');
 
     expect(outcome).toMatchObject({
       kind: 'full_access',
-      pendingInvite: invite(),
+      pendingInvite: pending,
     });
     expect(users.createFromGoogleIdentity).not.toHaveBeenCalled();
   });
