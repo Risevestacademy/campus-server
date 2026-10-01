@@ -388,9 +388,26 @@ export function registerGateway(
     // taken away. The sweep forgets it only for somebody still connected; a
     // suspended account whose socket had already gone is caught here, at its
     // next attempt — whether or not this socket is still around to be told.
+    //
+    // Any tab still open for them is closed the way the revocation sweep
+    // closes it, through drop(): taking the player away underneath an open
+    // tab would leave that tab registered with nobody standing for it, so
+    // nobody would be told they left and its next move would throw.
     if (!decision.ok && decision.userId) {
-      players.leave(decision.userId, Date.now(), false);
-      forgetSaved(decision.userId);
+      const open = connections.forUser(decision.userId);
+      if (open.length > 0) {
+        for (const connection of open) {
+          app.log.info(
+            { connectionId: connection.id, userId: connection.userId, reason: decision.refusal },
+            'closing socket, account no longer welcome',
+          );
+          drop(connection, false);
+          connection.socket.close(POLICY_VIOLATION, decision.refusal);
+        }
+      } else {
+        players.leave(decision.userId, Date.now(), false);
+        forgetSaved(decision.userId);
+      }
     }
 
     // Where they stood on an earlier visit, read before the socket is

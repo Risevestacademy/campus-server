@@ -1000,6 +1000,38 @@ describe('movement', () => {
     });
   });
 
+  /**
+   * A second tab refused for suspension, while the first is still open. The
+   * open tab must be closed through the normal lifecycle — not have its
+   * player removed from under it, which left it registered with nobody
+   * standing for it. Whichever notices first, the refusal or the sweep, the
+   * outcome is the same, so this does not depend on timing.
+   */
+  it('closes an open tab properly when another tab is refused for suspension', async () => {
+    const ada = person();
+    const open = await arrive(ada);
+    const watcher = await arrive(person());
+
+    accounts.suspended.add(ada);
+    const refused = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
+    });
+
+    await expect(refused.settled).resolves.toMatchObject({ closeCode: 1008 });
+    await expect(open.settled).resolves.toMatchObject({
+      closeCode: 1008,
+      closeReason: 'account_suspended',
+    });
+    await expect(waitFor(watcher, (m) => m.type === 'left')).resolves.toMatchObject({
+      userId: ada,
+    });
+    expect(world.gateway.players.has(ada)).toBe(false);
+    expect(world.gateway.connections.forUser(ada)).toHaveLength(0);
+
+    await leave(watcher);
+  }, 15_000);
+
   /** Whichever way a socket is dropped, its player must not be left standing. */
   it('removes the player when a suspension closes their socket', async () => {
     const ada = person();
