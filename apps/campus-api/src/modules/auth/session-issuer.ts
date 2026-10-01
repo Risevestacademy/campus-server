@@ -155,7 +155,7 @@ export class SessionIssuer {
       refreshExpiresAt,
       expiresAt,
       scope: SessionScope.FullAccess,
-      redirectPath: '/',
+      redirectPath: '/campus',
     };
   }
 

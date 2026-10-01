@@ -25,6 +25,7 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { ApiErrorResponseDto } from '../../shared/dto/index.js';
 import { CohortMembersService } from '../cohorts/cohort-members.service.js';
+import { InvitesService } from '../invites/invites.service.js';
 import { UsersService } from '../users/users.service.js';
 import {
   GoogleSignInFailedError,
@@ -65,6 +66,7 @@ export class AuthController {
     private readonly sessions: SessionIssuer,
     private readonly users: UsersService,
     private readonly members: CohortMembersService,
+    private readonly invites: InvitesService,
     @Inject(CONFIG) private readonly config: Env,
   ) {}
 
@@ -98,7 +100,9 @@ export class AuthController {
     status: 302,
     description:
       'On success, sets the session cookie and redirects to /invitation ' +
-      'when an invite is still to be answered, otherwise to /. On failure, ' +
+      'when an invite is still to be answered — including for somebody ' +
+      'already a member, invited to another cohort — otherwise to /campus. ' +
+      'On failure, ' +
       'redirects to /sign-in?error=<code>, where code is one of ' +
       'invite_required, account_suspended, denied, invalid_state, ' +
       'expired_state, missing_code, exchange_failed, unverified_email, ' +
@@ -137,12 +141,19 @@ export class AuthController {
         ? await this.sessions.issueFullAccess(outcome.user, outcome.grant)
         : await this.sessions.issueProvisional(outcome.user, outcome.invite);
 
+    // A member invited to another cohort keeps their access and goes to
+    // answer the invite first; it is reachable from a full-access session.
+    const redirectPath =
+      outcome.kind === 'full_access' && outcome.pendingInvite
+        ? '/invitation'
+        : session.redirectPath;
+
     // This is a top-level browser navigation, so the answer is a redirect and
     // a cookie, not a JSON body the user would be left staring at. The token
     // never reaches the page itself, and never reaches browser history.
     setSessionCookies(res, cookieSite(this.config), session);
     res.redirect(
-      `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${session.redirectPath}`,
+      `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${redirectPath}`,
     );
   }
 
@@ -169,11 +180,13 @@ export class AuthController {
     @CurrentSession() session: SessionClaims,
     @CurrentUser() current: AuthenticatedUser,
   ): Promise<SessionResponseDto> {
-    const [user, membership] = await Promise.all([
+    const fullAccess = session.scope === SessionScope.FullAccess;
+    const [user, memberships, pendingInvite] = await Promise.all([
       this.users.findById(current.id),
-      session.scope === SessionScope.FullAccess
-        ? this.members.resolveActiveMembership(current.id)
-        : null,
+      fullAccess ? this.members.listActiveMemberships(current.id) : [],
+      // A member can be invited to another cohort; the web app sends them to
+      // answer it, the same as a provisional session.
+      fullAccess ? this.invites.findUsableForEmail(current.email) : null,
     ]);
     if (!user) {
       // The guard read this row a moment ago; it went away underneath us.
@@ -183,7 +196,7 @@ export class AuthController {
     return {
       scope: session.scope,
       expiresAt: session.expiresAt,
-      inviteId: session.inviteId ?? null,
+      inviteId: session.inviteId ?? pendingInvite?.id ?? null,
       user: {
         id: user.id,
         email: user.email,
@@ -193,7 +206,10 @@ export class AuthController {
         avatarUrl: user.avatarUrl,
         systemRole: user.systemRole,
       },
-      membership,
+      membership: memberships[0]
+        ? { cohortId: memberships[0].cohortId, role: memberships[0].role }
+        : null,
+      memberships,
     };
   }
 

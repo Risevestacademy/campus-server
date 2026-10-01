@@ -100,7 +100,7 @@ describe('the shared session domain', () => {
     expiresAt: expires,
     refreshToken: 'refresh',
     refreshExpiresAt: expires,
-    redirectPath: '/',
+    redirectPath: '/campus',
   };
 
   function recorder() {

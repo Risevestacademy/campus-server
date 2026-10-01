@@ -5,7 +5,10 @@ import { alias } from 'drizzle-orm/pg-core';
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
-import { isNotLiveMembership } from '../cohorts/cohort-members.service.js';
+import {
+  isLiveMembership,
+  isNotLiveMembership,
+} from '../cohorts/cohort-members.service.js';
 import {
   CohortRole,
   cohortMembers,
@@ -178,6 +181,7 @@ export class InvitesService {
 
     await this.assertNoLiveInvite(email);
     await this.assertReferencesExist(dto);
+    await this.assertNotAlreadyMember(email, dto.cohortId);
 
     const guestAccessExpiresAt = this.resolveGuestExpiry(dto);
     // An invite must not stay redeemable past the visit it grants. Without
@@ -257,6 +261,25 @@ export class InvitesService {
    * yet lapsed. expires_at is the source of truth, per isInviteLive — the
    * status flip is lazy, so a stale 'pending' row must not let anyone in.
    */
+  /**
+   * Whether an invite exists and is addressed to this address, whatever its
+   * status. For a caller naming an invite: one that is not theirs is
+   * answered as not found, so its existence is not revealed.
+   */
+  async isAddressedTo(inviteId: string, email: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: invites.id })
+      .from(invites)
+      .where(
+        and(
+          eq(invites.id, inviteId),
+          eq(invites.email, email.trim().toLowerCase()),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
+  }
+
   async findUsableForEmail(
     email: string,
     now: Date = new Date(),
@@ -1009,6 +1032,40 @@ export class InvitesService {
       `A pending invite already exists for ${email}: revoke it before re-inviting`,
       { email, inviteId: existing.id },
     );
+  }
+
+  /**
+   * An invite to a cohort somebody already belongs to could never be
+   * accepted — accept refuses to overwrite a live membership — yet it would
+   * stay pending, and sign-in sends a member with a pending invite to answer
+   * it. So it is refused here, where the admin can see why. A membership that
+   * has ended (left, dismissed, a visit over) is no obstacle: the invite is
+   * how somebody is brought back. Other cohorts are no obstacle either; a
+   * person can belong to several.
+   */
+  private async assertNotAlreadyMember(
+    email: string,
+    cohortId: string | undefined,
+  ): Promise<void> {
+    if (!cohortId) return;
+    const [live] = await this.db
+      .select({ userId: cohortMembers.userId })
+      .from(cohortMembers)
+      .innerJoin(users, eq(users.id, cohortMembers.userId))
+      .where(
+        and(
+          eq(users.email, email),
+          eq(cohortMembers.cohortId, cohortId),
+          isLiveMembership(new Date()),
+        ),
+      )
+      .limit(1);
+    if (live) {
+      throw new InviteConflictException(
+        `${email} is already a member of this cohort`,
+        { email, cohortId },
+      );
+    }
   }
 
   /** Friendly 404s for bad FKs instead of raw FK violations. */

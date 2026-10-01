@@ -13,8 +13,17 @@ import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import { SessionScope, verifySessionToken } from '@campus/session';
+import {
+  CohortRole,
+  cohortMembers,
+  cohorts,
+} from './../src/modules/cohorts/schema.js';
 import { InviteStatus, invites } from './../src/modules/invites/schema.js';
-import { SystemRole, UserStatus, users } from './../src/modules/users/schema.js';
+import {
+  SystemRole,
+  UserStatus,
+  users,
+} from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
   DomainExceptionFilter,
@@ -176,6 +185,48 @@ describe('Google sign-in (e2e)', () => {
     expect(await db.select().from(users)).toHaveLength(2);
   });
 
+  /**
+   * A person can belong to several cohorts. A member invited to another one
+   * keeps full access and is sent to answer the invite, not to the campus.
+   */
+  it('sends a member with an invite to another cohort to answer it, still fully signed in', async () => {
+    const [member] = await db
+      .insert(users)
+      .values({ email: IDENTITY.email })
+      .returning({ id: users.id });
+    const [current, next] = await db
+      .insert(cohorts)
+      .values([
+        { name: 'Cohort 2', code: 'C2' },
+        { name: 'Cohort 3', code: 'C3' },
+      ])
+      .returning({ id: cohorts.id });
+    await db.insert(cohortMembers).values({
+      cohortId: current.id,
+      userId: member.id,
+      role: CohortRole.Mentor,
+    });
+    await db.insert(invites).values({
+      email: IDENTITY.email,
+      tokenHash: 'hashed-token',
+      invitedBy: member.id,
+      cohortId: next.id,
+      cohortRole: CohortRole.Professor,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+
+    const { state, cookie } = await beginSignIn();
+    const response = await callback(state, cookie);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe('http://localhost:3000/invitation');
+    const claims = await verifySessionToken(
+      sessionFrom(response),
+      SESSION_SECRET,
+    );
+    expect(claims.scope).toBe(SessionScope.FullAccess);
+  });
+
   // The seeded admin has no Google subject until the moment they first sign
   // in, so this is the path that has to link one on.
   it('links the seeded admin to their Google identity and lets them in', async () => {
@@ -187,7 +238,7 @@ describe('Google sign-in (e2e)', () => {
     const response = await callback(state, cookie);
 
     expect(response.status).toBe(302);
-    expect(response.headers.location).toBe('http://localhost:3000/');
+    expect(response.headers.location).toBe('http://localhost:3000/campus');
 
     const claims = await verifySessionToken(
       sessionFrom(response),
@@ -237,7 +288,9 @@ describe('Google sign-in (e2e)', () => {
       'http://localhost:3000/sign-in?error=denied',
     );
     const cookies = (response.headers['set-cookie'] ?? []) as string[];
-    expect(cookies.some((c) => c.startsWith('campus_oauth_state=;'))).toBe(true);
+    expect(cookies.some((c) => c.startsWith('campus_oauth_state=;'))).toBe(
+      true,
+    );
   });
 
   it('sends a suspended account back to sign-in', async () => {
