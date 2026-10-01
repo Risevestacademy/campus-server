@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { AbstractConnector, Redis } from 'ioredis';
+import { Duplex } from 'node:stream';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { loadEnv } from './env.js';
 import {
   PLACEHOLDER_MAP_ID,
-  REDIS_CLIENT_OPTIONS,
   RedisPositionStore,
+  createPositionStore,
   positionKey,
+  type PositionStore,
   type RedisLike,
 } from './positions.js';
 
@@ -160,14 +164,160 @@ describe('RedisPositionStore', () => {
       expect(listeners.size).toBe(0);
     });
   });
+});
 
-  /**
-   * What keeps a join from waiting on a Redis that is down: commands are
-   * refused at once while disconnected, and bounded while connected.
-   */
-  it('makes the Redis client fail fast rather than queue', () => {
-    expect(REDIS_CLIENT_OPTIONS.enableOfflineQueue).toBe(false);
-    expect(REDIS_CLIENT_OPTIONS.commandTimeout).toBeGreaterThan(0);
-    expect(REDIS_CLIENT_OPTIONS.commandTimeout).toBeLessThanOrEqual(1_000);
+/**
+ * The store as production builds it — createPositionStore, with the real
+ * ioredis client — given a transport that never connects, so Redis is
+ * unavailable without relying on a port nobody happens to use.
+ *
+ * A join waits on a load, so an operation against an unavailable Redis has to
+ * be refused, not queued until Redis is back. "Refused" is settled within one
+ * turn of the event loop; a queued command would still be pending then.
+ */
+describe('createPositionStore with Redis unavailable', () => {
+  /** A connection attempt that never completes: Redis is simply not there. */
+  class Unreachable extends AbstractConnector {
+    constructor() {
+      super(0);
+    }
+    connect(): Promise<never> {
+      return new Promise(() => undefined);
+    }
+  }
+
+  const env = loadEnv({
+    AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+    DATABASE_URL: 'postgres://unused',
+    REDIS_URL: 'redis://unreachable.invalid:6379',
+  } as NodeJS.ProcessEnv);
+  const log = { info: () => undefined, warn: () => undefined } as never;
+
+  /** How the promise stands once everything already due to run has run. */
+  const afterOneTurn = (operation: Promise<unknown>) =>
+    Promise.race([
+      operation.then(
+        () => 'resolved',
+        () => 'rejected',
+      ),
+      new Promise((resolve) => setImmediate(() => resolve('pending'))),
+    ]);
+
+  const build = () =>
+    createPositionStore(
+      env,
+      log,
+      (url, options) => new Redis(url, { ...options, Connector: Unreachable }),
+    );
+
+  it.each([
+    ['load', (store: PositionStore) => store.load('ada')],
+    [
+      'save',
+      (store: PositionStore) =>
+        store.save([{ userId: 'ada', x: 1, y: 1, facing: 'up' }]),
+    ],
+    ['forget', (store: PositionStore) => store.forget('ada')],
+  ])('refuses a %s at once instead of queueing it', async (_name, operate) => {
+    const store = build();
+
+    await expect(afterOneTurn(operate(store))).resolves.toBe('rejected');
+
+    await store.close();
+  });
+
+  it('reports not ready, without waiting past the timeout it was given', async () => {
+    const store = build();
+
+    await expect(store.ready(1)).resolves.toBe(false);
+
+    await store.close();
   });
 });
+
+/**
+ * The other way Redis fails: connected, then silent. Nothing is refused at
+ * the door, so only the command timeout stands between a join and waiting on
+ * a load for as long as Redis stays quiet. Built through createPositionStore
+ * with the real client; time is faked, so nothing here waits on the clock.
+ */
+describe('createPositionStore with Redis connected but not answering', () => {
+  /**
+   * Connects at once and answers the client's startup commands, as an older
+   * Redis would — no HELLO, OK to CLIENT SETINFO, a reply to the INFO
+   * readiness check — then says nothing to anything else: a Redis that has
+   * stalled. Replies go out in the order the commands came in, which is how
+   * the client matches them up.
+   */
+  class Stalled extends AbstractConnector {
+    constructor() {
+      super(0);
+    }
+    connect(): Promise<never> {
+      const stream = new Duplex({
+        read: () => undefined,
+        write(chunk: Buffer, _encoding, done) {
+          // Each command is an array whose first bulk string is its name.
+          const names = [...chunk.toString().matchAll(/\*\d+\r\n\$\d+\r\n(\w+)/g)];
+          for (const [, name] of names) {
+            const command = name.toLowerCase();
+            if (command === 'hello') {
+              stream.push("-ERR unknown command 'hello'\r\n");
+            } else if (command === 'client') {
+              stream.push('+OK\r\n');
+            } else if (command === 'info') {
+              const body = 'redis_version:7.0.0';
+              stream.push(`$${body.length}\r\n${body}\r\n`);
+            }
+          }
+          done();
+        },
+      });
+      // The two socket calls the client makes on a connected stream.
+      Object.assign(stream, {
+        setNoDelay: () => stream,
+        setKeepAlive: () => stream,
+      });
+      return Promise.resolve(stream as never);
+    }
+  }
+
+  const env = loadEnv({
+    AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+    DATABASE_URL: 'postgres://unused',
+    REDIS_URL: 'redis://stalled.invalid:6379',
+  } as NodeJS.ProcessEnv);
+  const log = { info: () => undefined, warn: () => undefined } as never;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('gives up on a load once the command timeout passes, not before', async () => {
+    const store = createPositionStore(
+      env,
+      log,
+      (url, options) => new Redis(url, { ...options, Connector: Stalled }),
+    );
+    await expect(store.ready(1_000)).resolves.toBe(true);
+    // Only timers are faked; the stream still runs on real ticks.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    let outcome = 'pending';
+    store.load('ada').then(
+      () => (outcome = 'resolved'),
+      () => (outcome = 'rejected'),
+    );
+
+    // Sent and unanswered: still waiting, as it would without a timeout.
+    await vi.advanceTimersByTimeAsync(499);
+    expect(outcome).toBe('pending');
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toBe('rejected');
+
+    vi.useRealTimers();
+    await store.close();
+  });
+});
+
