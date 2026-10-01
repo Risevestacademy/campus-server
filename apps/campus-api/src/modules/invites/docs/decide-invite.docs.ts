@@ -21,10 +21,13 @@ export function ApiDecideInvite(): MethodDecorator {
     ApiOperation({
       summary: 'Accept or decline the invite the signed-in account has',
       description:
-        'Answers the invite the session points at — the caller does not say ' +
-        'which one: for a provisional session, the one it was issued for; ' +
-        'for a full-access session (a member invited to another cohort), the ' +
-        'pending invite addressed to the account. Accept enrols the invitee ' +
+        'Answers the invite identified by the signed-in session and request. ' +
+        'A provisional session already identifies the invite it was issued ' +
+        'for, so `inviteId` may be omitted; when supplied, it must match the ' +
+        'session. A full-access session (a member invited to another cohort) ' +
+        'must supply the `inviteId` returned by validate-user-invite. This ' +
+        'ensures the server answers the invite the member saw rather than a ' +
+        'replacement created afterward. Accept enrols the invitee ' +
         '(or revives a membership they previously left) and applies the ' +
         "invite's systemRole; a provisional cookie is replaced with a " +
         'full-access one. Decline closes the invite; a provisional cookie is ' +
@@ -110,19 +113,22 @@ export function ApiDecideInvite(): MethodDecorator {
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
       description:
-        'The session names no invite, names one that does not exist, or is ' +
-        'a full-access session with no pending invite addressed to it. All ' +
-        'mean there is nothing here to decide.',
+        'A provisional session names no invite or one that does not exist, ' +
+        'or a full-access caller names an invite that does not exist or is ' +
+        'addressed to another account. All mean there is nothing here to ' +
+        'decide.',
       content: {
         'application/json': {
           examples: {
-            memberWithoutInvite: {
-              summary: 'Full-access session with no pending invite',
+            memberInviteMismatch: {
+              summary: 'Invite does not belong to the full-access account',
               value: {
                 error: {
                   code: 'NOT_FOUND',
-                  message: 'No pending invite for this account',
-                  details: { userId: '55555555-5555-4555-8555-555555555555' },
+                  message: 'No invite matches this account',
+                  details: {
+                    inviteId: '55555555-5555-4555-8555-555555555555',
+                  },
                 },
               },
             },
