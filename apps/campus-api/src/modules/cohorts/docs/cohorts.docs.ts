@@ -51,8 +51,12 @@ export function ApiCreateCohort(): MethodDecorator {
               value: {
                 error: {
                   code: 'INVALID_ARGUMENT',
-                  message: 'endDate must be on or after startDate',
-                  details: { startDate: '2027-01-01', endDate: '2026-09-01' },
+                  message: 'Request validation failed',
+                  details: {
+                    fields: {
+                      endDate: 'endDate must be on or after startDate',
+                    },
+                  },
                 },
               },
             },

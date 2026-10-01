@@ -11,7 +11,6 @@ import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
   CohortConflictException,
-  CohortInvalidArgumentException,
   CohortNotFoundException,
 } from './cohorts.exceptions.js';
 import type {
@@ -32,14 +31,6 @@ export class CohortsService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
 
   async create(dto: CreateCohortDto): Promise<Cohort> {
-    // YYYY-MM-DD strings compare in date order, so no parsing is needed.
-    if (dto.startDate && dto.endDate && dto.endDate < dto.startDate) {
-      throw new CohortInvalidArgumentException(
-        'endDate must be on or after startDate',
-        { startDate: dto.startDate, endDate: dto.endDate },
-      );
-    }
-
     try {
       const [row] = await this.db
         .insert(cohorts)

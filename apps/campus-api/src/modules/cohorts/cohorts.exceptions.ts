@@ -8,7 +8,3 @@ export class CohortConflictException extends DomainException {
 export class CohortNotFoundException extends DomainException {
   readonly code = ExceptionCode.NotFound;
 }
-
-export class CohortInvalidArgumentException extends DomainException {
-  readonly code = ExceptionCode.InvalidArgument;
-}

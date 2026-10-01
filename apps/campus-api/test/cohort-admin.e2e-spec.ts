@@ -206,15 +206,31 @@ describe('cohort and track admin routes (e2e)', () => {
       });
     });
 
-    it('refuses an end date before the start date', async () => {
+    // The documented validation shape: clients map details.fields to inputs.
+    it('refuses an end date before the start date, as a field error', async () => {
       const res = await createCohort({
         name: 'Cohort 1',
         code: 'C1',
         startDate: '2027-01-01',
         endDate: '2026-09-01',
       }).expect(400);
-      expect(res.body.error.message).toBe(
-        'endDate must be on or after startDate',
+      expect(res.body).toEqual({
+        error: {
+          code: 'INVALID_ARGUMENT',
+          message: 'Request validation failed',
+          details: {
+            fields: { endDate: 'endDate must be on or after startDate' },
+          },
+        },
+      });
+    });
+
+    it.each([
+      ['on the same day', { startDate: '2026-09-01', endDate: '2026-09-01' }],
+      ['with no start date', { endDate: '2026-09-01' }],
+    ])('accepts an end date %s', async (_label, dates) => {
+      await createCohort({ name: 'Cohort 1', code: 'C1', ...dates }).expect(
+        201,
       );
     });
 
