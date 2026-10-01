@@ -101,14 +101,21 @@ app loads:
   "expiresAt": "2026-09-30T12:15:00.000Z",
   "inviteId": null,
   "user": { "id": "…", "email": "ada@campus.local", "displayName": "Ada Lovelace", "systemRole": "user", "…": "…" },
-  "membership": { "cohortId": "…", "role": "student" }
+  "membership": { "cohortId": "…", "role": "student" },
+  "memberships": [
+    { "cohortId": "…", "role": "student", "cohort": { "name": "Cohort 3", "code": "C3" } },
+    { "cohortId": "…", "role": "mentor", "cohort": { "name": "Cohort 2", "code": "C2" } }
+  ]
 }
 ```
 
 - `inviteId` set → an invite to answer, whatever the scope (a member can be
   invited to another cohort). Load it with
   `GET /v1/invites/validate-user-invite`.
-- `scope: "full_access"` → the campus.
+- `scope: "full_access"` → the campus. A person can belong to several
+  cohorts, in any mix of roles: `memberships` lists every one they may enter,
+  most recently joined first, for the cohort picker. `membership` is only
+  the first of them, kept for older clients.
 - `scope: "provisional"` → onboarding. Load the invite with
   `GET /v1/invites/validate-user-invite`, then answer it with
   `POST /v1/invites/decision`. Accepting upgrades the cookies to full access

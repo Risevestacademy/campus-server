@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { type SQL, and, eq, gt, isNull, ne, not, or, sql } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
-import { CohortRole, StudentStatus, cohortMembers } from './schema.js';
+import { CohortRole, StudentStatus, cohortMembers, cohorts } from './schema.js';
 
 /**
  * What a live place on the roster is, as one expression.
@@ -56,6 +56,11 @@ export interface SessionMembership {
   cohortId: string;
 }
 
+/** A live membership with what a cohort picker needs to label it. */
+export interface CohortPlace extends SessionMembership {
+  cohort: { name: string; code: string };
+}
+
 @Injectable()
 export class CohortMembersService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
@@ -96,6 +101,36 @@ export class CohortMembersService {
     now: Date = new Date(),
   ): Promise<boolean> {
     return (await this.resolveActiveAccess(userId, now)) !== null;
+  }
+
+  /**
+   * Every cohort this account may enter now, most recently joined first. A
+   * person can belong to several at once, in any mix of roles, and picks
+   * which one to enter.
+   */
+  async listActiveMemberships(
+    userId: string,
+    now: Date = new Date(),
+  ): Promise<CohortPlace[]> {
+    const rows = await this.db
+      .select({
+        cohortId: cohortMembers.cohortId,
+        role: cohortMembers.role,
+        name: cohorts.name,
+        code: cohorts.code,
+      })
+      .from(cohortMembers)
+      .innerJoin(cohorts, eq(cohorts.id, cohortMembers.cohortId))
+      .where(and(eq(cohortMembers.userId, userId), isLiveMembership(now)))
+      // Same order resolveActiveMembership picks its one from, so the first
+      // entry here is the membership a single-membership caller sees.
+      .orderBy(sql`${cohortMembers.joinedAt} desc`, cohortMembers.cohortId);
+
+    return rows.map(({ cohortId, role, name, code }) => ({
+      cohortId,
+      role,
+      cohort: { name, code },
+    }));
   }
 
   async resolveActiveMembership(

@@ -127,8 +127,63 @@ describe('GET /v1/auth/me (e2e)', () => {
         systemRole: SystemRole.User,
       },
       membership: { cohortId, role: CohortRole.Professor },
+      memberships: [
+        {
+          cohortId,
+          role: CohortRole.Professor,
+          cohort: { name: 'Cohort 1', code: 'C1' },
+        },
+      ],
     });
     expect(new Date(res.body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  /**
+   * A person can belong to several cohorts, in any mix of roles; the web
+   * app's cohort picker lists them from here.
+   */
+  it('lists every cohort somebody may enter, newest first', async () => {
+    const [second, left] = await db
+      .insert(cohorts)
+      .values([
+        { name: 'Cohort 2', code: 'C2' },
+        { name: 'Cohort 0', code: 'C0' },
+      ])
+      .returning();
+    await db.insert(cohortMembers).values([
+      {
+        cohortId: second.id,
+        userId: member.id,
+        role: CohortRole.Mentor,
+        joinedAt: new Date(Date.now() + 60_000),
+      },
+      // Left: no longer theirs to enter.
+      {
+        cohortId: left.id,
+        userId: member.id,
+        role: CohortRole.Mentor,
+        leftAt: new Date(),
+      },
+    ]);
+
+    const res = await me(await cookieFor(member, SessionScope.FullAccess));
+
+    expect(res.body.memberships).toEqual([
+      {
+        cohortId: second.id,
+        role: CohortRole.Mentor,
+        cohort: { name: 'Cohort 2', code: 'C2' },
+      },
+      {
+        cohortId,
+        role: CohortRole.Professor,
+        cohort: { name: 'Cohort 1', code: 'C1' },
+      },
+    ]);
+    expect(res.body.membership).toEqual({
+      cohortId: second.id,
+      role: CohortRole.Mentor,
+    });
   });
 
   it("tells a member about an invite to another cohort they've yet to answer", async () => {
@@ -167,6 +222,7 @@ describe('GET /v1/auth/me (e2e)', () => {
       scope: SessionScope.Provisional,
       inviteId,
       membership: null,
+      memberships: [],
     });
   });
 

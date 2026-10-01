@@ -41,6 +41,20 @@ export class SessionMembershipDto {
   role: CohortRole;
 }
 
+export class SessionCohortDto {
+  @ApiProperty({ example: 'Cohort 3' })
+  name: string;
+
+  @ApiProperty({ example: 'C3' })
+  code: string;
+}
+
+/** One cohort this account may enter, labelled for a cohort picker. */
+export class SessionCohortPlaceDto extends SessionMembershipDto {
+  @ApiProperty({ type: () => SessionCohortDto })
+  cohort: SessionCohortDto;
+}
+
 export class SessionResponseDto {
   @ApiProperty({
     enum: Object.values(SessionScope),
@@ -79,8 +93,19 @@ export class SessionResponseDto {
     type: () => SessionMembershipDto,
     nullable: true,
     description:
-      'Null for a provisional session, and for an admin who holds no ' +
-      'cohort place.',
+      'The first of `memberships` — only one, so it cannot describe ' +
+      'somebody in several cohorts; read `memberships` instead. Null for a ' +
+      'provisional session, and for an admin who holds no cohort place.',
   })
   membership: SessionMembershipDto | null;
+
+  @ApiProperty({
+    type: () => [SessionCohortPlaceDto],
+    description:
+      'Every cohort this account may enter, most recently joined first — a ' +
+      'person can belong to several, in any mix of roles. Empty for a ' +
+      'provisional session and for an admin with no cohort place. ' +
+      '`membership` is the first entry, kept while clients move to this.',
+  })
+  memberships: SessionCohortPlaceDto[];
 }
