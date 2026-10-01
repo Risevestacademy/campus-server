@@ -76,6 +76,15 @@ function makeDb(state: FakeState) {
         findFirst: () => Promise.resolve(state.trackRow),
       },
     },
+    // The already-a-member check: nobody here is, so it finds nothing.
+    // Behaviour against real rows is in invites.service.db.spec.
+    select: () => ({
+      from: () => ({
+        innerJoin: () => ({
+          where: () => ({ limit: () => Promise.resolve([]) }),
+        }),
+      }),
+    }),
     update: () => ({
       set: () => ({
         where: () => {

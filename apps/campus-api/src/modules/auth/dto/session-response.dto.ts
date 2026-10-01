@@ -66,8 +66,9 @@ export class SessionResponseDto {
     nullable: true,
     example: '66666666-6666-4666-8666-666666666666',
     description:
-      'Provisional sessions only: the invite to answer. Load it with ' +
-      'GET /v1/invites/validate-user-invite.',
+      'The invite to answer, if any: for a provisional session, the one it ' +
+      'was issued for; for a full-access session, a pending invite to ' +
+      'another cohort. Load it with GET /v1/invites/validate-user-invite.',
   })
   inviteId: string | null;
 

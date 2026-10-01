@@ -18,6 +18,7 @@ import {
   cohortMembers,
   cohorts,
 } from './../src/modules/cohorts/schema.js';
+import { invites } from './../src/modules/invites/schema.js';
 import { SystemRole, UserStatus, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
@@ -128,6 +129,31 @@ describe('GET /v1/auth/me (e2e)', () => {
       membership: { cohortId, role: CohortRole.Professor },
     });
     expect(new Date(res.body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("tells a member about an invite to another cohort they've yet to answer", async () => {
+    const [next] = await db
+      .insert(cohorts)
+      .values({ name: 'Cohort 2', code: 'C2' })
+      .returning();
+    const [invite] = await db
+      .insert(invites)
+      .values({
+        email: member.email,
+        cohortId: next.id,
+        cohortRole: CohortRole.Mentor,
+        invitedBy: member.id,
+        tokenHash: 'hash-member',
+        expiresAt: new Date(Date.now() + 86_400_000),
+      })
+      .returning();
+
+    const res = await me(await cookieFor(member, SessionScope.FullAccess));
+
+    expect(res.body).toMatchObject({
+      scope: SessionScope.FullAccess,
+      inviteId: invite.id,
+    });
   });
 
   it('tells a provisional session which invite it still has to answer', async () => {

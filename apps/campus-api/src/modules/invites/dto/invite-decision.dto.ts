@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum } from 'class-validator';
+import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 
 import { CohortRole, StudentStatus } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
@@ -27,6 +27,19 @@ export class InviteDecisionDto {
     message: `decision must be one of: ${Object.values(InviteDecision).join(', ')}`,
   })
   decision: InviteDecision;
+
+  @ApiPropertyOptional({
+    example: '66666666-6666-4666-8666-666666666666',
+    description:
+      'The invite being answered — the id GET /v1/invites/validate-user-invite ' +
+      'returned. Required for a full-access session (a member invited to ' +
+      'another cohort), so an invite replaced since the member read it is ' +
+      'never accepted unseen. A provisional session may omit it; its ' +
+      'session already names the invite, and an id that differs is refused.',
+  })
+  @IsOptional()
+  @IsUUID()
+  inviteId?: string;
 }
 
 /** The membership an accept created, or restored for a returning member. */

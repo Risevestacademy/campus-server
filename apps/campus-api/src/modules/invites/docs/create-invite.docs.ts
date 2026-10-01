@@ -206,10 +206,26 @@ export function ApiCreateInvite(): MethodDecorator {
         'partial unique index invites_email_pending_unique. The open invite ' +
         'must be revoked or allowed to lapse first — it is never reused or ' +
         'rotated, since a link the first recipient still holds would stop ' +
-        'working.',
+        'working. Also refused: an invite to a cohort the address is already ' +
+        'a live member of, which could never be accepted. Membership of other ' +
+        'cohorts is no obstacle, and nor is one that has ended.',
       content: {
         'application/json': {
           examples: {
+            alreadyMember: {
+              summary: 'Address is already a live member of that cohort',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'member@campus.local is already a member of this cohort',
+                  details: {
+                    email: 'member@campus.local',
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                  },
+                },
+              },
+            },
             pendingDuplicate: {
               summary: 'Address already holds a pending invite',
               value: {

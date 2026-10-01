@@ -171,6 +171,33 @@ Navigate to `/campus/{membership.cohortId}/join` — or `/campus` when
 on the invitee is a member: sessions renew with `POST /api/v1/auth/refresh`,
 and next time they sign in from `/sign-in` they go straight to `/`.
 
+## Members invited to another cohort
+
+A person can belong to several cohorts at once, in any mix of roles — a
+student in one and a mentor in the next. Somebody who is already a member
+keeps their full-access session throughout; they never get a provisional one.
+
+- **Signing in** with a pending invite redirects to `/invitation` instead
+  of `/`.
+- **`GET /api/v1/auth/me`** answers `full_access` with `inviteId` set while
+  they have a pending invite. That is the signal to show the invite rather
+  than send them to the campus — whether they arrived by signing in or are
+  already signed in and opened the link.
+- **`validate-user-invite` and `decision`** work with their full-access
+  session: the invite is the pending one addressed to their account. Skip
+  Google (steps 4–6); they are signed in already.
+- **`decision` must name the invite**: send
+  `{ "decision": "accept", "inviteId": "<id from validate-user-invite>" }`.
+  If an admin replaced the invite after it was shown, the answer is about the
+  one they saw — `409 INVITE_REVOKED` — never the replacement they did not
+  see. Missing `inviteId` is a 400 under `details.fields.inviteId`.
+- **An admin cannot invite somebody to a cohort they are already in** (409);
+  any other cohort is fine.
+- **Neither answer touches the cookies.** Accepting only adds a membership,
+  and declining leaves them a member, so there is no new cookie and nothing
+  to clear. After accepting, go to `/campus/{membership.cohortId}/join` for
+  the new cohort.
+
 ## When it goes another way
 
 | Situation                                     | What happens                                                     | What the invitee sees                                                   |
@@ -182,8 +209,9 @@ and next time they sign in from `/sign-in` they go straight to `/`.
 | Takes longer than 30 minutes on steps 5–7     | Provisional session lapses, `me` answers 401, no refresh         | Continue with Google again; they land back on `/invitation`             |
 | Cancels at Google                             | —                                                                | `/sign-in?error=denied`                                                 |
 | Opens the link again after accepting          | Sign-in finds a member, not an invite                            | Straight to `/`                                                         |
-| Already signed in as a member, opens the link | `me` answers `full_access`                                       | Send them to `/campus`                                                  |
+| Already signed in as a member, opens the link | `me` answers `full_access`, with `inviteId` if the invite is live | Show the invite (see above); with no `inviteId`, send them to `/campus` |
 | Declines                                      | `decision` with `decline`; invite closed, session cookie cleared | Nothing left to do; the admin can invite again                          |
+| A member declines another cohort's invite     | Invite closed; their session is untouched                        | Back to `/campus`, still a member of what they had                      |
 
 Every `?error=` code is listed in the API guide
 (`apps/campus-api/docs/intro.md`).

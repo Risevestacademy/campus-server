@@ -65,7 +65,7 @@ Every outcome of step 3 is a redirect to the web app (`APP_PUBLIC_URL`):
 | Redirect | Meaning |
 | --- | --- |
 | `/` | On the roster (an admin, or an active cohort member). Full access. |
-| `/invitation` | Holds an invite they have not answered. Provisional session. |
+| `/invitation` | Holds an invite they have not answered. Provisional session — or full access for a member invited to another cohort. |
 | `/sign-in?error=<code>` | Refused. Nothing was signed in. |
 
 The web app needs a `/sign-in` page that reads `error` and explains it:
@@ -105,6 +105,9 @@ app loads:
 }
 ```
 
+- `inviteId` set → an invite to answer, whatever the scope (a member can be
+  invited to another cohort). Load it with
+  `GET /v1/invites/validate-user-invite`.
 - `scope: "full_access"` → the campus.
 - `scope: "provisional"` → onboarding. Load the invite with
   `GET /v1/invites/validate-user-invite`, then answer it with

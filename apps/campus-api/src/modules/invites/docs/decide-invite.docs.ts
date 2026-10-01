@@ -19,13 +19,18 @@ import { InviteDecisionResponseDto } from '../dto/invite-decision.dto.js';
 export function ApiDecideInvite(): MethodDecorator {
   return applyDecorators(
     ApiOperation({
-      summary: 'Accept or decline the invite this session was opened with',
+      summary: 'Accept or decline the invite the signed-in account has',
       description:
-        'Answers the invite named in the session cookie — the caller does not ' +
-        'say which one. Accept enrols the invitee (or revives a membership they ' +
-        "previously left), applies the invite's systemRole, and replaces the " +
-        'provisional cookie with a full-access one. Decline closes the invite ' +
-        'and clears the cookie, leaving the account row in place. An invite ' +
+        'Answers the invite the session points at — the caller does not say ' +
+        'which one: for a provisional session, the one it was issued for; ' +
+        'for a full-access session (a member invited to another cohort), the ' +
+        'pending invite addressed to the account. Accept enrols the invitee ' +
+        '(or revives a membership they previously left) and applies the ' +
+        "invite's systemRole; a provisional cookie is replaced with a " +
+        'full-access one. Decline closes the invite; a provisional cookie is ' +
+        'cleared, leaving the account row in place. A full-access session ' +
+        'keeps its cookies either way: accepting only adds a membership, ' +
+        'which never shortens access. An invite ' +
         'that already carries an answer is a 409 — branch on error.code to ' +
         'decide where the caller goes next.',
     }),
@@ -33,8 +38,9 @@ export function ApiDecideInvite(): MethodDecorator {
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
       description:
-        'The body is not one of the two decisions. An absent or empty body ' +
-        'reports the same way, since `decision` is the only field.',
+        'The body is not one of the two decisions (an absent or empty body ' +
+        'reports the same way), or a full-access session did not name the ' +
+        'invite it is answering in `inviteId`.',
       content: {
         'application/json': {
           examples: {
@@ -52,6 +58,21 @@ export function ApiDecideInvite(): MethodDecorator {
                 },
               },
             },
+            memberWithoutInviteId: {
+              summary: 'Full-access session without inviteId',
+              value: {
+                error: {
+                  code: 'INVALID_ARGUMENT',
+                  message: 'Request validation failed',
+                  details: {
+                    fields: {
+                      inviteId:
+                        'inviteId is required when a member answers an invite',
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -59,10 +80,8 @@ export function ApiDecideInvite(): MethodDecorator {
     ApiUnauthorizedResponse({
       type: ApiErrorResponseDto,
       description:
-        'The session cannot answer a decision. A full-access session is ' +
-        'refused here: someone already on the roster has nothing left to ' +
-        'decide. A suspended account is a 401 rather than a 403 because the ' +
-        'guard rejects it before the route runs.',
+        'No usable session. A suspended account is a 401 rather than a 403 ' +
+        'because the guard rejects it before the route runs.',
       content: {
         'application/json': {
           examples: {
@@ -72,15 +91,6 @@ export function ApiDecideInvite(): MethodDecorator {
                 error: {
                   code: 'UNAUTHORIZED',
                   message: 'Authentication required',
-                },
-              },
-            },
-            alreadyOnRoster: {
-              summary: 'Full-access session',
-              value: {
-                error: {
-                  code: 'UNAUTHORIZED',
-                  message: 'Session is of the wrong kind',
                 },
               },
             },
@@ -100,11 +110,22 @@ export function ApiDecideInvite(): MethodDecorator {
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
       description:
-        'The session names no invite, or names one that does not exist. Both ' +
+        'The session names no invite, names one that does not exist, or is ' +
+        'a full-access session with no pending invite addressed to it. All ' +
         'mean there is nothing here to decide.',
       content: {
         'application/json': {
           examples: {
+            memberWithoutInvite: {
+              summary: 'Full-access session with no pending invite',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message: 'No pending invite for this account',
+                  details: { userId: '55555555-5555-4555-8555-555555555555' },
+                },
+              },
+            },
             noInviteClaim: {
               summary: 'Session carries no inviteId',
               value: {
