@@ -12,6 +12,7 @@ across environments.
 | `world` (`apps/world`)           | Not yet                              |
 | `frontend` (separate repo)       | Yes                                  |
 | `postgres` (Railway plugin)      | No — internal + admin proxy URL only |
+| `redis` (Railway Redis)          | No — internal only                   |
 
 All app services use **Root Directory `/`** (repo root), not their
 subfolder — required so Railway's builder (Railpack) sees the shared pnpm
@@ -174,6 +175,24 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   connection string; the public/proxy one is for local admin tasks only
   (`drizzle-kit studio`, manual migrations) — never the deployed app.
 
+## redis
+
+- One instance per environment, like Postgres. Only `world` connects, over
+  the **internal** URL.
+- It holds state that is cheap to lose but should not vanish on every
+  restart: each player's last position between visits (W13), and later who
+  is online where (presence, W9) and the fan-out between world instances.
+- **Persistence on.** A restart that empties Redis sends everyone back to
+  the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
+- **Eviction `noeviction` (Redis's default) or `volatile-lru`.** Never an
+  `allkeys-*` policy: under memory pressure it would drop positions and
+  presence to make room, silently. Position keys carry a TTL (~90 days), so
+  `volatile-lru` only ever evicts those.
+- Locally, the `redis` container in `docker-compose.local.yml` already runs
+  this way: append-only on, default eviction.
+- world does not read `REDIS_URL` yet; the task that first uses Redis adds
+  it to world's config, and to `apps/world/.env.example`.
+
 ## world
 
 - Build: `pnpm install --frozen-lockfile && pnpm --filter world... build`
@@ -221,13 +240,24 @@ assume otherwise:
 | URL         | `ws://localhost:7880`              | the project's `wss://` URL         |
 | Credentials | the dev key pair in `livekit.yaml` | per-environment API key and secret |
 
-A Cloud project per environment, so a staging room can never collide with a
-production one. The key and secret are server-side only: clients get a
-short-lived room token minted by the server, never the credentials
-themselves. Which service mints it — campus-api or world — is still open;
-the minting itself lives in `packages/media` (`@campus/media`) so either can
-use it. Its secret must be at least 32 characters, and it refuses anything
-shorter.
+A Cloud project per environment (`campus-dev`, `campus-staging`,
+`campus-production`), so a staging room can never collide with a production
+one. The key and secret are server-side only: clients get a short-lived room
+token, never the credentials themselves.
+
+**world mints the room tokens.** A token is permission to hear a room, and
+only world knows who is actually standing in which space: campus-api could
+check that someone _may_ enter a space, not that they did. world also sees
+the exit, so it can remove the participant through LiveKit's server API at
+once instead of waiting for the token to run out, and it owns the lifecycle
+of a space's room (open on first entry, close on last exit). So the LiveKit
+key and secret belong to world, and campus-api never holds them.
+
+The minting itself lives in `packages/media` (`@campus/media`). Its secret
+must be at least 32 characters, and it refuses anything shorter. world will
+read `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` once rooms per
+space (W10) or the pre-join network check (F2) land; until then, set them on
+world's Railway service so they are ready.
 
 To try the media server by hand, mint a token and join from any LiveKit
 client, such as LiveKit's hosted Meet page:
@@ -244,8 +274,6 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 ## Open items
 
 - `world` has no public domain — add one once something actually calls it.
-- Redis isn't provisioned (local-dev-only in `docker-compose.local.yml`);
-  `world` needs it for presence before that service is deployed.
 - Node version isn't pinned on Railway. Railpack takes it from `engines.node`
   in the root `package.json`, which says `>=20`, so it builds on Node 20
   while CI runs 24. Pin it (for example `"node": "24.x"`) to match.
