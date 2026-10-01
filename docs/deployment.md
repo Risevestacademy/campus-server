@@ -180,8 +180,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
 - One instance per environment, like Postgres. Only `world` connects, over
   the **internal** URL.
 - It holds state that is cheap to lose but should not vanish on every
-  restart: each player's last position between visits (W13), and later who
-  is online where (presence, W9) and the fan-out between world instances.
+  restart: each player's last position between visits, and later who is
+  online where (presence) and the fan-out between world instances.
 - **Persistence on.** A restart that empties Redis sends everyone back to
   the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
 - **Eviction `noeviction` (Redis's default) or `volatile-lru`.** Never an
@@ -263,8 +263,8 @@ key and secret belong to world, and campus-api never holds them.
 The minting itself lives in `packages/media` (`@campus/media`). Its secret
 must be at least 32 characters, and it refuses anything shorter. world will
 read `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` once rooms per
-space (W10) or the pre-join network check (F2) land; until then, set them on
-world's Railway service so they are ready.
+space or the pre-join network check land; until then, set them on world's
+Railway service so they are ready.
 
 To try the media server by hand, mint a token and join from any LiveKit
 client, such as LiveKit's hosted Meet page:

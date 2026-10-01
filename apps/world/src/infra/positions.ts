@@ -7,7 +7,7 @@ import type { Player } from '../movement/players.js';
 import type { Env } from './env.js';
 
 /**
- * The map everybody stands on until real maps load (W6). Saved with every
+ * The map everybody stands on until real maps load. Saved with every
  * position, so once maps exist a position from the placeholder is recognised
  * as belonging to a map that is gone, and its owner starts at the spawn.
  */
@@ -20,7 +20,7 @@ export interface SavedPosition {
 }
 
 /**
- * Where each player last stood, kept between visits (W13). In Redis rather
+ * Where each player last stood, kept between visits. In Redis rather
  * than Postgres: the data is small, changes often and is cheap to lose — the
  * worst case is one start at the spawn. An interface so the gateway can be
  * tested without Redis, and run without it.
