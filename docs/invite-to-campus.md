@@ -169,7 +169,7 @@ plus a refresh cookie. The body says where they now belong:
 Navigate to `/campus/{membership.cohortId}/join` — or `/campus` when
 `membership` is `null`, which is an admin invite with no cohort. From here
 on the invitee is a member: sessions renew with `POST /api/v1/auth/refresh`,
-and next time they sign in from `/sign-in` they go straight to `/`.
+and next time they sign in from `/sign-in` they go straight to `/campus`.
 
 ## Members invited to another cohort
 
@@ -178,7 +178,7 @@ student in one and a mentor in the next. Somebody who is already a member
 keeps their full-access session throughout; they never get a provisional one.
 
 - **Signing in** with a pending invite redirects to `/invitation` instead
-  of `/`.
+  of `/campus`.
 - **`GET /api/v1/auth/me`** answers `full_access` with `inviteId` set while
   they have a pending invite. That is the signal to show the invite rather
   than send them to the campus — whether they arrived by signing in or are
@@ -208,7 +208,7 @@ keeps their full-access session throughout; they never get a provisional one.
 | Admin revokes it between sign-in and accept   | They answer 409 `INVITE_REVOKED`                                 | Same                                                                    |
 | Takes longer than 30 minutes on steps 5–7     | Provisional session lapses, `me` answers 401, no refresh         | Continue with Google again; they land back on `/invitation`             |
 | Cancels at Google                             | —                                                                | `/sign-in?error=denied`                                                 |
-| Opens the link again after accepting          | Sign-in finds a member, not an invite                            | Straight to `/`                                                         |
+| Opens the link again after accepting          | Sign-in finds a member, not an invite                            | Straight to `/campus`                                                   |
 | Already signed in as a member, opens the link | `me` answers `full_access`, with `inviteId` if the invite is live | Show the invite (see above); with no `inviteId`, send them to `/campus` |
 | Declines                                      | `decision` with `decline`; invite closed, session cookie cleared | Nothing left to do; the admin can invite again                          |
 | A member declines another cohort's invite     | Invite closed; their session is untouched                        | Back to `/campus`, still a member of what they had                      |
@@ -223,8 +223,6 @@ Every `?error=` code is listed in the API guide
 - **Decline and "Flag an Issue".** campus-api supports declining; the
   designs have no button for it. "Flag an Issue" on `/preview` has no
   backend yet.
-- **`/` in campus-web.** Returning members land on `/`, which has to send
-  them on to `/campus`.
 - **campus-web's proxy** still forwards only an `accessToken` cookie and
   drops `Location`, so steps 3–8 do not work through it yet. What it needs
   is listed in [deployment.md](./deployment.md#how-campus-web-reaches-the-api-its-own-proxy).

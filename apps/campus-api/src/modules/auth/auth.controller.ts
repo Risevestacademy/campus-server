@@ -101,7 +101,7 @@ export class AuthController {
     description:
       'On success, sets the session cookie and redirects to /invitation ' +
       'when an invite is still to be answered — including for somebody ' +
-      'already a member, invited to another cohort — otherwise to /. ' +
+      'already a member, invited to another cohort — otherwise to /campus. ' +
       'On failure, ' +
       'redirects to /sign-in?error=<code>, where code is one of ' +
       'invite_required, account_suspended, denied, invalid_state, ' +

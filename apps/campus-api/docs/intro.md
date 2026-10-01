@@ -64,7 +64,7 @@ Every outcome of step 3 is a redirect to the web app (`APP_PUBLIC_URL`):
 
 | Redirect | Meaning |
 | --- | --- |
-| `/` | On the roster (an admin, or an active cohort member). Full access. |
+| `/campus` | On the roster (an admin, or an active cohort member). Full access. |
 | `/invitation` | Holds an invite they have not answered. Provisional session — or full access for a member invited to another cohort. |
 | `/sign-in?error=<code>` | Refused. Nothing was signed in. |
 

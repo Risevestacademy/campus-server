@@ -238,7 +238,7 @@ describe('Google sign-in (e2e)', () => {
     const response = await callback(state, cookie);
 
     expect(response.status).toBe(302);
-    expect(response.headers.location).toBe('http://localhost:3000/');
+    expect(response.headers.location).toBe('http://localhost:3000/campus');
 
     const claims = await verifySessionToken(
       sessionFrom(response),
