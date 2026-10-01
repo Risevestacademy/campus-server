@@ -190,8 +190,10 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   `volatile-lru` only ever evicts those.
 - Locally, the `redis` container in `docker-compose.local.yml` already runs
   this way: append-only on, default eviction.
-- world does not read `REDIS_URL` yet; the task that first uses Redis adds
-  it to world's config, and to `apps/world/.env.example`.
+- world reads it as `REDIS_URL`. Unset, world still runs and keeps nothing
+  between visits. Redis going down never keeps anybody out: a position that
+  cannot be read means starting at the spawn, and one that cannot be written
+  is lost.
 
 ## world
 
@@ -204,19 +206,24 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
   world re-checks that the account behind a token still exists and is not
   suspended, so a ban reaches open sockets instead of waiting out the token).
-  `PORT` is injected by Railway.
+  `PORT` is injected by Railway. `REDIS_URL` (the Redis service's internal
+  URL) keeps where each player last stood between visits.
 - Tuning, all defaulted — see `apps/world/.env.example`: `WORLD_DB_POOL`,
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
-  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, the session refresh
+  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
+  `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, the session refresh
   window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
   and the placeholder
   map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
   `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
-- Positions are per-process state. A reconnect within the grace resumes where
-  somebody stood, but a restart or redeploy forgets everyone: they all
-  reconnect at the spawn tile.
+- Live positions are per-process state. A reconnect within the grace resumes
+  from memory; otherwise a player starts where they last stood, read from
+  Redis. Positions are written when somebody's last tab closes, every
+  `WORLD_POSITION_SAVE_SECONDS` for anyone who moved, and for everybody on a
+  graceful shutdown — so a redeploy puts people back where they were, and a
+  crash loses at most one save interval.
 - Sockets are per-process state too. Running more than one instance needs the
   presence work first, or two tabs may land on different instances and
   disagree about who is online.

@@ -4,6 +4,7 @@ import type { WebSocket } from 'ws';
 
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
+import type { PositionStore, SavedPosition } from '../infra/positions.js';
 import { Players, type Player } from '../movement/players.js';
 import { decideUpgrade, sessionRefreshedSince, type Refusal } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
@@ -31,6 +32,7 @@ export function registerGateway(
   app: FastifyInstance,
   env: Env,
   accounts: AccountLookup,
+  positions: PositionStore,
 ): Gateway {
   const connections = new Connections();
   const players = new Players(
@@ -103,6 +105,55 @@ export function registerGateway(
   tick.unref();
 
   /**
+   * Who has moved since their position was last written to the store. A
+   * name, not a position: the save reads where they stand when it runs.
+   */
+  const unsaved = new Set<string>();
+  /** Set once shutdown has written everybody, so the closes it causes do not write again. */
+  let stopping = false;
+
+  /**
+   * Writes positions without holding anybody up. A failure only means the
+   * position is not kept — see PositionStore — so it is logged, and anybody
+   * still here is put back for the next periodic save to retry. Somebody who
+   * has left cannot be retried that way: if the save as they left fails,
+   * what was last written for them, at most one interval old, stands.
+   */
+  function persist(standing: Player[]): void {
+    if (standing.length === 0) return;
+    positions.save(standing).catch((err: unknown) => {
+      app.log.warn({ err, count: standing.length }, 'could not save positions');
+      for (const player of standing) {
+        if (players.has(player.userId)) unsaved.add(player.userId);
+      }
+    });
+  }
+
+  function forgetSaved(userId: string): void {
+    unsaved.delete(userId);
+    positions.forget(userId).catch((err: unknown) => {
+      app.log.warn({ err, userId }, 'could not forget saved position');
+    });
+  }
+
+  /**
+   * Everybody still here who moved since the last write. Somebody who left
+   * in the meantime was written as they left (drop), so is skipped here.
+   */
+  function saveMoved(): void {
+    const standing: Player[] = [];
+    for (const userId of unsaved) {
+      const player = players.get(userId);
+      if (player) standing.push(player);
+    }
+    unsaved.clear();
+    persist(standing);
+  }
+
+  const periodicSave = setInterval(saveMoved, env.WORLD_POSITION_SAVE_SECONDS * 1000);
+  periodicSave.unref();
+
+  /**
    * Every way a socket stops counting goes through here, so a player can
    * never outlive the last socket standing for them. The avatar stays while
    * any tab is open, and leaves with the last one. Idempotent: a socket
@@ -119,8 +170,17 @@ export function registerGateway(
     if (connections.forUser(connection.userId).length > 0) {
       return;
     }
+    const standing = players.get(connection.userId);
     if (players.leave(connection.userId, Date.now(), remember)) {
       broadcast({ type: 'left', userId: connection.userId });
+    }
+    // Kept for the next visit only when they may come back; after shutdown
+    // began, everybody has been written already.
+    if (!remember) {
+      forgetSaved(connection.userId);
+    } else if (standing && !stopping) {
+      unsaved.delete(connection.userId);
+      persist([standing]);
     }
   }
 
@@ -330,6 +390,27 @@ export function registerGateway(
     // next attempt — whether or not this socket is still around to be told.
     if (!decision.ok && decision.userId) {
       players.leave(decision.userId, Date.now(), false);
+      forgetSaved(decision.userId);
+    }
+
+    // Where they stood on an earlier visit, read before the socket is
+    // checked again: the read is asynchronous too, and the socket may go in
+    // the meantime. Only asked for when this process holds nothing fresher —
+    // another tab, or a reconnect within the grace.
+    let saved: SavedPosition | undefined;
+    if (
+      decision.ok &&
+      !players.has(decision.claims.userId) &&
+      !players.isRemembered(decision.claims.userId)
+    ) {
+      try {
+        saved = await positions.load(decision.claims.userId);
+      } catch (err) {
+        app.log.warn(
+          { err, userId: decision.claims.userId },
+          'could not load saved position, starting at the spawn',
+        );
+      }
     }
 
     if (closed || ws.readyState !== ws.OPEN) {
@@ -354,7 +435,7 @@ export function registerGateway(
     // Joined before anybody is told, and before any frame is read, so a move
     // can never arrive for a player who is not standing anywhere yet.
     const arriving = !players.has(connection.userId);
-    const player = players.join(connection.userId, Date.now());
+    const player = players.join(connection.userId, Date.now(), saved);
     if (arriving) {
       // Told to everyone already here; the arrival learns of itself from the
       // snapshot. A second tab is not an arrival.
@@ -415,6 +496,7 @@ export function registerGateway(
           send(ws, { type: 'moveResult', seq, outcome: moved.outcome, player: moved.player });
           if (moved.changed) {
             pendingMoves.set(connection.userId, connection);
+            unsaved.add(connection.userId);
           }
           return;
         }
@@ -471,6 +553,17 @@ export function registerGateway(
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       clearInterval(tick);
+      clearInterval(periodicSave);
+      // Everybody still here, whether or not they moved since the last save:
+      // a redeploy should put nobody back at the spawn. Before the sockets
+      // close, so the positions written are the ones they stood at.
+      stopping = true;
+      unsaved.clear();
+      try {
+        await positions.save(players.all());
+      } catch (err) {
+        app.log.warn({ err }, 'could not save positions on shutdown');
+      }
       for (const connection of connections.all()) {
         connection.socket.close(GOING_AWAY, 'server shutting down');
       }

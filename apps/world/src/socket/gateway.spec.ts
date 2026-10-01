@@ -25,6 +25,30 @@ const accounts = {
   close: async () => undefined,
 };
 
+/** Stands in for Redis: where each person last stood, kept between visits. */
+const store = {
+  positions: new Map<string, { x: number; y: number; facing: string }>(),
+  failLoad: false,
+  loads: 0,
+  load: async (userId: string) => {
+    store.loads += 1;
+    if (store.failLoad) throw new Error('redis is down');
+    return store.positions.get(userId) as
+      | { x: number; y: number; facing: 'up' | 'down' | 'left' | 'right' }
+      | undefined;
+  },
+  save: async (players: readonly { userId: string; x: number; y: number; facing: string }[]) => {
+    for (const { userId, x, y, facing } of players) {
+      store.positions.set(userId, { x, y, facing });
+    }
+  },
+  forget: async (userId: string) => {
+    store.positions.delete(userId);
+  },
+  ready: async () => true,
+  close: async () => undefined,
+};
+
 const env = loadEnv({
   AUTH_SESSION_SECRET: SECRET,
   DATABASE_URL: 'postgres://unused',
@@ -38,6 +62,8 @@ const env = loadEnv({
   WORLD_SPAWN_Y: '0',
   // Long enough that steps sent together reliably land in one tick.
   WORLD_TICK_MS: '200',
+  // The shortest allowed, so a periodic save lands within a test.
+  WORLD_POSITION_SAVE_SECONDS: '1',
   FF_LOG_LEVEL: 'fatal',
 } as NodeJS.ProcessEnv);
 
@@ -98,6 +124,9 @@ beforeEach(() => {
   accounts.suspended.clear();
   accounts.gone.clear();
   accounts.endedSessions.clear();
+  store.positions.clear();
+  store.failLoad = false;
+  store.loads = 0;
 });
 
 /**
@@ -118,7 +147,7 @@ afterEach(async () => {
 });
 
 beforeAll(async () => {
-  world = await buildWorld(env, accounts);
+  world = await buildWorld(env, accounts, store);
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket`;
@@ -989,4 +1018,123 @@ describe('movement', () => {
 
     await leave(watcher);
   }, 15_000);
+
+  /**
+   * Beyond the reconnect grace, where somebody stood is kept in the store
+   * (Redis in production) and they start there on their next visit.
+   */
+  describe('between visits', () => {
+    it('starts somebody where they stood last time', async () => {
+      const ada = person();
+      store.positions.set(ada, { x: 2, y: 3, facing: 'left' });
+
+      const conn = await arrive(ada);
+
+      const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({ userId: ada, x: 2, y: 3, facing: 'left' });
+      await leave(conn);
+    });
+
+    it('starts at the spawn when the saved tile is no longer on the map', async () => {
+      const ada = person();
+      store.positions.set(ada, { x: 9, y: 9, facing: 'up' });
+
+      const conn = await arrive(ada);
+
+      const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({ userId: ada, x: 0, y: 0, facing: 'down' });
+      await leave(conn);
+    });
+
+    it('starts at the spawn when the store cannot answer', async () => {
+      const ada = person();
+      store.failLoad = true;
+
+      const conn = await arrive(ada);
+
+      const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({ userId: ada, x: 0, y: 0, facing: 'down' });
+      await leave(conn);
+    });
+
+    it('saves where they stood when their last tab closes', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+      move(conn, 'right', 1);
+      await waitFor(conn, (m) => m.type === 'moveResult');
+
+      await leave(conn);
+
+      await expect
+        .poll(() => store.positions.get(ada))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+    });
+
+    it('saves somebody who moved while they are still here', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+      move(conn, 'down', 1);
+      await waitFor(conn, (m) => m.type === 'moveResult');
+
+      await expect
+        .poll(() => store.positions.get(ada), { timeout: 3_000 })
+        .toEqual({ x: 0, y: 1, facing: 'down' });
+      await leave(conn);
+    });
+
+    /** The grace in memory is fresher than the store, and costs no round trip. */
+    it('does not ask the store when reconnecting within the grace', async () => {
+      const ada = person();
+      await leave(await arrive(ada));
+      await expect.poll(() => world.gateway.players.isRemembered(ada)).toBe(true);
+      const loadsBefore = store.loads;
+
+      const again = await arrive(ada);
+
+      expect(store.loads).toBe(loadsBefore);
+      await leave(again);
+    });
+
+    it('forgets the saved position when access is taken away', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+      move(conn, 'right', 1);
+      await waitFor(conn, (m) => m.type === 'moveResult');
+      await expect.poll(() => store.positions.has(ada), { timeout: 3_000 }).toBe(true);
+
+      accounts.suspended.add(ada);
+
+      await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
+      await expect.poll(() => store.positions.has(ada)).toBe(false);
+    }, 15_000);
+  });
+});
+
+/** A redeploy must not send everybody back to the spawn. */
+describe('shutdown', () => {
+  it('saves everybody still here before closing their sockets', async () => {
+    const saved = new Map<string, unknown>();
+    const own = await buildWorld(env, accounts, {
+      ...store,
+      save: async (players) => {
+        for (const { userId, x, y, facing } of players) saved.set(userId, { x, y, facing });
+      },
+    });
+    await own.app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = own.app.server.address() as AddressInfo;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
+      headers: {
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, 'leaving-1')}`,
+      },
+    });
+    const closed = new Promise((resolve) => ws.on('close', resolve));
+    await new Promise((resolve) => ws.on('message', resolve));
+
+    await own.gateway.stop();
+
+    expect(saved.get('leaving-1')).toEqual({ x: 0, y: 0, facing: 'down' });
+    await closed;
+    await own.app.close();
+  });
 });

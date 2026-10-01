@@ -72,10 +72,15 @@ export class Players {
 
   /**
    * Places somebody on the map: where they stood if they left within the
-   * grace period, otherwise at the spawn. Returns the existing player if
-   * they are already here.
+   * grace period, else where they last stood on an earlier visit (`saved`,
+   * if that tile is still walkable), else at the spawn. Returns the existing
+   * player if they are already here.
    */
-  join(userId: string, now: number): Player {
+  join(
+    userId: string,
+    now: number,
+    saved?: Pick<Player, 'x' | 'y' | 'facing'>,
+  ): Player {
     const existing = this.byUser.get(userId);
     if (existing) {
       return { ...existing.player };
@@ -90,12 +95,18 @@ export class Players {
       return { ...remembered.held.player };
     }
 
-    const player: Player = {
-      userId,
-      x: this.grid.spawn.x,
-      y: this.grid.spawn.y,
-      facing: Direction.Down,
-    };
+    // A map can change between visits: a tile that was floor may be a wall
+    // now, or off the edge. Standing somebody somewhere they could never have
+    // walked to is worse than the spawn.
+    const player: Player =
+      saved && walkable(this.grid, saved)
+        ? { userId, x: saved.x, y: saved.y, facing: saved.facing }
+        : {
+            userId,
+            x: this.grid.spawn.x,
+            y: this.grid.spawn.y,
+            facing: Direction.Down,
+          };
     this.byUser.set(userId, { player, steps: STEP_BURST, refilledAt: now });
     return { ...player };
   }
