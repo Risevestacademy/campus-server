@@ -16,6 +16,9 @@ import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { SessionScope, signSessionToken } from '@campus/session';
 
+/** The transaction handle drizzle hands a `db.transaction` callback. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
 /**
  * The configured lifetime, shortened when the grant behind it ends sooner.
  *
@@ -103,6 +106,7 @@ export class SessionIssuer {
     grant: AccessGrant,
     now: Date = new Date(),
     familyId: string = randomUUID(),
+    tx?: Tx,
   ): Promise<FullAccessSession> {
     const endsAt = grant.endsAt;
     if (endsAt !== null && endsAt.getTime() <= now.getTime()) {
@@ -113,6 +117,29 @@ export class SessionIssuer {
       throw new SessionUnauthorizedError('Account is not usable');
     }
     const membership = await this.members.resolveActiveMembership(user.id, now);
+    return this.mintSession(account, membership, endsAt, now, familyId, tx);
+  }
+
+  /**
+   * The minting half of issueFullAccess, split out so refreshSession can run
+   * it inside an open transaction.
+   *
+   * Only signs a token and inserts the refresh row: no UsersService or
+   * CohortMembersService call, so it needs nothing but the transaction handle
+   * it is given. Those services each hold their own connection, and querying
+   * one from inside an open transaction asks a single connection to serve
+   * itself.
+   */
+  private async mintSession(
+    account: User,
+    membership: Awaited<
+      ReturnType<CohortMembersService['resolveActiveMembership']>
+    >,
+    endsAt: Date | null,
+    now: Date,
+    familyId: string,
+    tx?: Tx,
+  ): Promise<FullAccessSession> {
     const { token, expiresAt } = await signSessionToken(
       {
         userId: account.id,
@@ -142,7 +169,8 @@ export class SessionIssuer {
     const refreshExpiresAt = new Date(
       now.getTime() + this.config.AUTH_REFRESH_TTL_DAYS * 86_400_000,
     );
-    await this.db.insert(refreshTokens).values({
+    const db = tx ?? this.db;
+    await db.insert(refreshTokens).values({
       userId: account.id,
       familyId,
       tokenHash: hashRefreshToken(refreshToken),
@@ -204,6 +232,10 @@ export class SessionIssuer {
   ): Promise<FullAccessSession> {
     await this.cleanupRefreshTokens(now);
 
+    // Read-only work happens outside the transaction, both because it needs
+    // no lock and because UsersService/CohortMembersService hold their own
+    // connection: querying them from inside an open transaction would ask one
+    // connection to serve itself.
     const [stored] = await this.db
       .select()
       .from(refreshTokens)
@@ -218,44 +250,13 @@ export class SessionIssuer {
       throw new SessionUnauthorizedError('Refresh token is not usable');
     }
 
-    let familyId = stored.familyId;
-    if (stored.usedAt === null) {
-      const [claimed] = await this.db
-        .update(refreshTokens)
-        .set({ usedAt: now })
-        .where(
-          and(eq(refreshTokens.id, stored.id), isNull(refreshTokens.usedAt)),
-        )
-        .returning({ familyId: refreshTokens.familyId });
-
-      if (!claimed) {
-        const [raced] = await this.db
-          .select()
-          .from(refreshTokens)
-          .where(eq(refreshTokens.id, stored.id))
-          .limit(1);
-        if (
-          !raced?.usedAt ||
-          raced.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()
-        ) {
-          await this.revokeFamily(stored.familyId, now);
-          throw new SessionUnauthorizedError('Refresh token reuse detected');
-        }
-      } else {
-        familyId = claimed.familyId;
-      }
-    } else if (stored.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()) {
-      await this.revokeFamily(stored.familyId, now);
-      throw new SessionUnauthorizedError('Refresh token reuse detected');
-    }
-
     const user = await this.users.findById(stored.userId);
     if (!user) {
-      await this.revokeFamily(familyId, now);
+      await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Refresh token is not usable');
     }
     if (isSuspended(user)) {
-      await this.revokeFamily(familyId, now);
+      await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Account is suspended');
     }
 
@@ -263,15 +264,109 @@ export class SessionIssuer {
       ? { endsAt: null }
       : await this.members.resolveActiveAccess(user.id, now);
     if (!grant) {
-      await this.revokeFamily(familyId, now);
+      await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Access has already ended');
     }
 
-    return this.issueFullAccess(user, grant, now, familyId);
+    const membership = await this.members.resolveActiveMembership(user.id, now);
+
+    // One transaction for the three steps that must not interleave: claim the
+    // old token, re-check the family, mint the replacement. The family is
+    // locked first so that a replayed token revoking it, and this refresh
+    // minting its replacement, serialise. Whichever commits first, the second
+    // sees it: if the revoke lands first this re-read finds the family revoked
+    // and mints nothing; if this lands first, the revoke's UPDATE -- matching
+    // on family_id AND revoked_at IS NULL -- catches the row inserted here.
+    return this.db
+      .transaction(async (tx) => {
+        await tx
+          .select({ id: refreshTokens.id })
+          .from(refreshTokens)
+          .where(eq(refreshTokens.familyId, stored.familyId))
+          .for('update');
+
+        // Re-read under the lock: the row may have been used or revoked during
+        // the checks above, while this transaction waited for the family.
+        const [locked] = await tx
+          .select()
+          .from(refreshTokens)
+          .where(eq(refreshTokens.id, stored.id))
+          .limit(1);
+
+        if (
+          !locked ||
+          locked.revokedAt !== null ||
+          locked.expiresAt.getTime() <= now.getTime()
+        ) {
+          return { kind: 'unusable' } as const;
+        }
+
+        const familyId = locked.familyId;
+        if (locked.usedAt === null) {
+          const [claimed] = await tx
+            .update(refreshTokens)
+            .set({ usedAt: now })
+            .where(
+              and(
+                eq(refreshTokens.id, locked.id),
+                isNull(refreshTokens.usedAt),
+              ),
+            )
+            .returning({ id: refreshTokens.id });
+
+          if (!claimed) {
+            // Another request claimed it between our read and the lock.
+            const [raced] = await tx
+              .select({ usedAt: refreshTokens.usedAt })
+              .from(refreshTokens)
+              .where(eq(refreshTokens.id, locked.id))
+              .limit(1);
+            if (
+              !raced?.usedAt ||
+              raced.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()
+            ) {
+              return { kind: 'reuse', familyId } as const;
+            }
+          }
+        } else if (locked.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()) {
+          return { kind: 'reuse', familyId } as const;
+        }
+
+        return {
+          kind: 'session',
+          session: await this.mintSession(
+            user,
+            membership,
+            grant.endsAt,
+            now,
+            familyId,
+            tx,
+          ),
+        } as const;
+      })
+      .then(async (outcome) => {
+        // Revoking from inside the transaction would be undone by the throw
+        // that follows it, leaving a replayed token's family live. It has to
+        // run once the transaction has committed -- and committing first is
+        // what makes it see, and revoke, any row minted above.
+        if (outcome.kind === 'reuse') {
+          await this.revokeFamily(outcome.familyId, now);
+          throw new SessionUnauthorizedError('Refresh token reuse detected');
+        }
+        if (outcome.kind === 'unusable') {
+          throw new SessionUnauthorizedError('Refresh token is not usable');
+        }
+        return outcome.session;
+      });
   }
 
-  private async revokeFamily(familyId: string, now: Date): Promise<void> {
-    await this.db
+  private async revokeFamily(
+    familyId: string,
+    now: Date,
+    tx?: Tx,
+  ): Promise<void> {
+    const db = tx ?? this.db;
+    await db
       .update(refreshTokens)
       .set({ revokedAt: now })
       .where(
