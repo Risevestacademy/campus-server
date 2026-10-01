@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { SessionScope } from '@campus/session';
 
 import type { IssuedSession } from '../session-issuer.js';
@@ -7,6 +7,10 @@ import type { IssuedSession } from '../session-issuer.js';
  * A session handed over in a response body, for a client with no cookie jar
  * to keep it in — a native app. A browser never receives this: its tokens
  * travel in httpOnly cookies so the page cannot read them.
+ *
+ * Every field is always present. The ones with no value are null rather
+ * than left out, so they are required-and-nullable in the OpenAPI document:
+ * a generated client must not model them as fields that may be missing.
  */
 export class SessionTokensDto {
   @ApiProperty({
@@ -31,7 +35,7 @@ export class SessionTokensDto {
   })
   expiresAt: Date;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: String,
     nullable: true,
     description:
@@ -41,7 +45,7 @@ export class SessionTokensDto {
   })
   refreshToken: string | null;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: String,
     format: 'date-time',
     nullable: true,
@@ -54,7 +58,7 @@ export class SessionTokensDto {
 }
 
 export class TokenSignInResponseDto extends SessionTokensDto {
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: String,
     nullable: true,
     example: '66666666-6666-4666-8666-666666666666',
