@@ -2,7 +2,7 @@ import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 
 import type { AuthenticatedRequest } from '../../shared/auth/authenticated-user.js';
 import type { SessionClaims } from '@campus/session';
-import type { ProvisionalRequest } from './session.guard.js';
+import type { ProvisionalRequest, SessionTransport } from './session.guard.js';
 
 /**
  * Reads req.session set by a SessionGuard, exposing the verified claims
@@ -19,5 +19,20 @@ export const CurrentSession = createParamDecorator(
       throw new Error('CurrentSession used without a session guard');
     }
     return req.session;
+  },
+);
+
+/**
+ * Whether the session came in the cookie or in an Authorization header. A
+ * route that issues a new session answers the same way: a browser gets
+ * cookies, and a client that holds its own tokens gets them in the body.
+ */
+export const CurrentSessionTransport = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): SessionTransport => {
+    const req = ctx.switchToHttp().getRequest<ProvisionalRequest>();
+    if (!req.sessionTransport) {
+      throw new Error('CurrentSessionTransport used without a session guard');
+    }
+    return req.sessionTransport;
   },
 );

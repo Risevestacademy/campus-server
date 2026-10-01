@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -31,15 +32,21 @@ import {
   GoogleSignInFailedError,
   SessionUnauthorizedError,
 } from './auth.exceptions.js';
-import { AuthService } from './auth.service.js';
+import { AuthService, type SignInOutcome } from './auth.service.js';
 import { CurrentSession } from './current-session.decorator.js';
 import { GoogleCallbackQueryDto } from './dto/google-callback.query.dto.js';
+import { GoogleTokenSignInDto } from './dto/google-token-sign-in.dto.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { RefreshResponseDto } from './dto/refresh-response.dto.js';
+import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { SessionResponseDto } from './dto/session-response.dto.js';
+import {
+  TokenSignInResponseDto,
+  sessionTokens,
+} from './dto/session-tokens.dto.js';
 import { GoogleOAuthService } from './google-oauth.service.js';
 import { OAuthStateService } from './oauth-state.service.js';
-import { SessionIssuer } from './session-issuer.js';
+import { SessionIssuer, type IssuedSession } from './session-issuer.js';
 import {
   clearSessionCookies,
   cookieSite,
@@ -136,10 +143,7 @@ export class AuthController {
     }
 
     const outcome = await this.auth.completeGoogleSignIn(query.code);
-    const session =
-      outcome.kind === 'full_access'
-        ? await this.sessions.issueFullAccess(outcome.user, outcome.grant)
-        : await this.sessions.issueProvisional(outcome.user, outcome.invite);
+    const session = await this.issue(outcome);
 
     // A member invited to another cohort keeps their access and goes to
     // answer the invite first; it is reachable from a full-access session.
@@ -155,6 +159,52 @@ export class AuthController {
     res.redirect(
       `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${redirectPath}`,
     );
+  }
+
+  @Post('google/token')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Sign in from a native app',
+    description:
+      'For a client that cannot keep cookies. The app signs the user in ' +
+      "with Google's own SDK and posts the id_token it receives; the API " +
+      'makes the same decision the browser callback makes and answers with ' +
+      'the session in the body instead of a redirect and cookies. Send ' +
+      '`accessToken` as a bearer token from then on, and keep ' +
+      '`refreshToken` for POST /v1/auth/refresh. `inviteId` set means there ' +
+      'is an invite to answer first.',
+  })
+  @ApiResponse({ status: 200, type: TokenSignInResponseDto })
+  @ApiResponse({
+    status: 401,
+    description:
+      'UNAUTHORIZED: the id_token could not be verified, is addressed to a ' +
+      'client this deployment does not name, or carries no verified email ' +
+      'address. `details.reason` says which: exchange_failed, ' +
+      'unverified_email or incomplete_profile.',
+    type: ApiErrorResponseDto,
+  })
+  @ApiResponse({
+    status: 403,
+    description:
+      'INVITE_REQUIRED: nobody invited this address. ACCOUNT_SUSPENDED: the ' +
+      'account exists but has been closed.',
+    type: ApiErrorResponseDto,
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Google sign-in is switched off on this deployment.',
+    type: ApiErrorResponseDto,
+  })
+  async tokenSignIn(
+    @Body() dto: GoogleTokenSignInDto,
+  ): Promise<TokenSignInResponseDto> {
+    const outcome = await this.auth.completeGoogleIdTokenSignIn(dto.idToken);
+    const session = await this.issue(outcome);
+    const invite =
+      outcome.kind === 'full_access' ? outcome.pendingInvite : outcome.invite;
+
+    return { ...sessionTokens(session), inviteId: invite?.id ?? null };
   }
 
   @Get('me')
@@ -220,7 +270,9 @@ export class AuthController {
     description:
       'Rotates both cookies and issues a new full-access session. The body ' +
       'says when the new tokens lapse, so the next refresh can be scheduled ' +
-      'rather than guessed; the tokens themselves stay in the cookies.',
+      'rather than guessed; the tokens themselves stay in the cookies. A ' +
+      'client that holds its own tokens sends `refreshToken` in the body ' +
+      'instead, and gets the new pair back in the body with no cookies set.',
   })
   @ApiResponse({ status: 200, type: RefreshResponseDto })
   @ApiResponse({
@@ -233,37 +285,59 @@ export class AuthController {
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
+    // Absent altogether from a browser, which sends no body.
+    @Body() dto?: RefreshTokenDto,
   ): Promise<RefreshResponseDto> {
-    const token = readRefreshCookie(req.headers.cookie);
+    // The cookie wins when both arrive, so a browser cannot be talked into
+    // being answered in the body, where script could read the tokens.
+    const cookieToken = readRefreshCookie(req.headers.cookie);
+    const token = cookieToken ?? dto?.refreshToken;
     if (!token) {
       throw new SessionUnauthorizedError('Refresh token required');
     }
 
     assertAllowedOrigin(this.config, req.headers.origin);
     const session = await this.sessions.refreshSession(token);
-    setSessionCookies(res, cookieSite(this.config), session);
-
-    return {
+    const deadlines = {
       expiresAt: session.expiresAt,
       refreshExpiresAt: session.refreshExpiresAt,
     };
+    if (cookieToken === undefined) {
+      return {
+        ...deadlines,
+        accessToken: session.token,
+        refreshToken: session.refreshToken,
+      };
+    }
+
+    setSessionCookies(res, cookieSite(this.config), session);
+    return deadlines;
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Revoke the refresh session',
-    description: 'Revokes the refresh cookie and clears both session cookies.',
+    description:
+      'Revokes the refresh cookie and clears both session cookies. A client ' +
+      'that holds its own tokens sends `refreshToken` in the body instead.',
   })
   async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
+    @Body() dto?: RefreshTokenDto,
   ): Promise<void> {
     assertAllowedOrigin(this.config, req.headers.origin);
-    const token = readRefreshCookie(req.headers.cookie);
+    const token = readRefreshCookie(req.headers.cookie) ?? dto?.refreshToken;
     if (token) {
       await this.sessions.revokeRefreshToken(token);
     }
     clearSessionCookies(res, cookieSite(this.config));
+  }
+
+  private issue(outcome: SignInOutcome): Promise<IssuedSession> {
+    return outcome.kind === 'full_access'
+      ? this.sessions.issueFullAccess(outcome.user, outcome.grant)
+      : this.sessions.issueProvisional(outcome.user, outcome.invite);
   }
 }

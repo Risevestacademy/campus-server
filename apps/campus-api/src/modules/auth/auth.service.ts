@@ -50,8 +50,20 @@ export class AuthService {
   }
 
   async completeGoogleSignIn(code: string): Promise<SignInOutcome> {
-    const identity = await this.google.exchangeCode(code);
+    return this.admit(await this.google.exchangeCode(code));
+  }
 
+  /**
+   * The same decision for a native app, which arrives with the id_token
+   * Google's SDK gave it rather than a code from a redirect.
+   */
+  async completeGoogleIdTokenSignIn(idToken: string): Promise<SignInOutcome> {
+    return this.admit(await this.google.verifyIdToken(idToken));
+  }
+
+  private async admit(
+    identity: VerifiedGoogleIdentity,
+  ): Promise<SignInOutcome> {
     // An unverified address proves control of a Google account, not of the
     // mailbox — and the mailbox is what an invite was sent to.
     if (!identity.emailVerified) {

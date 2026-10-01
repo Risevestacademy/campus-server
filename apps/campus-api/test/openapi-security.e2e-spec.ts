@@ -43,6 +43,11 @@ describe('OpenAPI security (e2e)', () => {
     expect(security('/v1/invites/preview', 'post')).toBeUndefined();
   });
 
+  // The id_token in the body is the credential; there is no session yet.
+  it('marks the native-app sign-in as public', () => {
+    expect(security('/v1/auth/google/token', 'post')).toBeUndefined();
+  });
+
   it.each([
     ['/v1/invites', 'post'],
     ['/v1/invites/validate-user-invite', 'get'],
