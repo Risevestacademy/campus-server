@@ -63,25 +63,31 @@ describe('the HTTP surface', () => {
 });
 
 /**
- * The real Redis client, pointed at a port nothing listens on. Redis being
- * down must cost somebody their saved position, never their way in: with
- * commands failing fast instead of queueing, a join starts at the spawn at
- * once rather than waiting for Redis to come back.
+ * A store that fails every call, standing in for Redis being down. Redis
+ * being down must cost somebody their saved position, never their way in,
+ * and must not hold up a shutdown.
  */
-describe('with Redis unreachable', () => {
-  it('still lets somebody in, at the spawn, without waiting', async () => {
+describe('with the position store failing', () => {
+  const failing = {
+    load: () => Promise.reject(new Error('redis is down')),
+    save: () => Promise.reject(new Error('redis is down')),
+    forget: () => Promise.reject(new Error('redis is down')),
+    ready: async () => false,
+    close: async () => undefined,
+  };
+
+  it('still lets somebody in, at the spawn, and still shuts down', async () => {
     const secret = 'a-world-session-secret-of-at-least-32-chars';
-    const unreachable = loadEnv({
-      AUTH_SESSION_SECRET: secret,
-      DATABASE_URL: 'postgres://unused',
-      REDIS_URL: 'redis://127.0.0.1:1',
-      CORS_ORIGINS: 'https://campus.example.com',
-      FF_LOG_LEVEL: 'fatal',
-    } as NodeJS.ProcessEnv);
-    const world = await buildWorld(unreachable, {
-      ...accounts,
-      find: async (id: string) => ({ id, suspended: false }),
-    });
+    const world = await buildWorld(
+      loadEnv({
+        AUTH_SESSION_SECRET: secret,
+        DATABASE_URL: 'postgres://unused',
+        CORS_ORIGINS: 'https://campus.example.com',
+        FF_LOG_LEVEL: 'fatal',
+      } as NodeJS.ProcessEnv),
+      { ...accounts, find: async (id: string) => ({ id, suspended: false }) },
+      failing,
+    );
     await world.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = world.app.server.address() as AddressInfo;
     const { token } = await signSessionToken(
@@ -89,7 +95,6 @@ describe('with Redis unreachable', () => {
       { secret, ttlMinutes: 30 },
     );
 
-    const started = Date.now();
     const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
       headers: { origin: 'https://campus.example.com', cookie: `campus_session=${token}` },
     });
@@ -100,13 +105,12 @@ describe('with Redis unreachable', () => {
       });
     });
 
-    expect(Date.now() - started).toBeLessThan(1_000);
     expect(snapshot.players).toEqual([{ userId: 'ada', x: 20, y: 15, facing: 'down' }]);
 
     const closed = new Promise((resolve) => ws.on('close', resolve));
+    // The save on shutdown fails; stop() must still finish and close sockets.
     await world.gateway.stop();
     await closed;
     await world.app.close();
-    await world.positions.close();
   });
 });

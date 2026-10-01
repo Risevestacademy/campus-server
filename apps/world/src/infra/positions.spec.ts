@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   PLACEHOLDER_MAP_ID,
+  REDIS_CLIENT_OPTIONS,
   RedisPositionStore,
   positionKey,
   type RedisLike,
@@ -158,5 +159,15 @@ describe('RedisPositionStore', () => {
       await expect(store.ready(20)).resolves.toBe(false);
       expect(listeners.size).toBe(0);
     });
+  });
+
+  /**
+   * What keeps a join from waiting on a Redis that is down: commands are
+   * refused at once while disconnected, and bounded while connected.
+   */
+  it('makes the Redis client fail fast rather than queue', () => {
+    expect(REDIS_CLIENT_OPTIONS.enableOfflineQueue).toBe(false);
+    expect(REDIS_CLIENT_OPTIONS.commandTimeout).toBeGreaterThan(0);
+    expect(REDIS_CLIENT_OPTIONS.commandTimeout).toBeLessThanOrEqual(1_000);
   });
 });

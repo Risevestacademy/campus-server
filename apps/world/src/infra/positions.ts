@@ -66,6 +66,18 @@ export const noPositionStore: PositionStore = {
   close: async () => undefined,
 };
 
+/**
+ * A join waits on a load, so a command must fail fast rather than queue
+ * while Redis is away: somebody should start at the spawn, not stand at a
+ * loading screen until Redis comes back. Exported so a test can hold the
+ * client to that without needing a Redis that is down.
+ */
+export const REDIS_CLIENT_OPTIONS = {
+  enableOfflineQueue: false,
+  commandTimeout: 500,
+  maxRetriesPerRequest: 1,
+} as const;
+
 export function createPositionStore(
   env: Env,
   log: FastifyBaseLogger,
@@ -75,14 +87,7 @@ export function createPositionStore(
     return noPositionStore;
   }
 
-  const redis = new Redis(env.REDIS_URL, {
-    // A join waits on a load, so a command must fail fast rather than queue
-    // while Redis is away: somebody should start at the spawn, not stand at
-    // a loading screen until Redis comes back.
-    enableOfflineQueue: false,
-    commandTimeout: 500,
-    maxRetriesPerRequest: 1,
-  });
+  const redis = new Redis(env.REDIS_URL, REDIS_CLIENT_OPTIONS);
 
   // ioredis reports every failed reconnect attempt; one line per outage is
   // what somebody reading the logs needs.
