@@ -22,12 +22,19 @@ import {
 /**
  * Who signed in, and how far they get.
  *
- * `full_access` is someone already on the campus roster. `provisional` is
- * someone holding an invite they have not accepted yet, who still has
+ * `full_access` is someone already on the campus roster, who may also hold
+ * an invite to another cohort — a member can belong to several. `provisional`
+ * is someone holding an invite they have not accepted yet, who still has
  * onboarding to finish before they belong anywhere.
  */
 export type SignInOutcome =
-  | { kind: 'full_access'; user: User; grant: AccessGrant }
+  | {
+      kind: 'full_access';
+      user: User;
+      grant: AccessGrant;
+      /** A pending invite addressed to them, to answer without losing access. */
+      pendingInvite: Invite | null;
+    }
   | { kind: 'provisional'; user: User; invite: Invite };
 
 @Injectable()
@@ -67,17 +74,22 @@ export class AuthService {
     }
 
     const grant = existing ? await this.resolveAccess(existing) : null;
+    const invite = await this.invites.findUsableForEmail(email);
     if (existing && grant) {
       const user = await this.linkIfUnbound(existing, normalized);
       await this.users.recordLogin(user.id);
       this.logger.info(
-        { userId: user.id, outcome: 'full_access', endsAt: grant.endsAt },
+        {
+          userId: user.id,
+          outcome: 'full_access',
+          endsAt: grant.endsAt,
+          inviteId: invite?.id ?? null,
+        },
         'google sign-in',
       );
-      return { kind: 'full_access', user, grant };
+      return { kind: 'full_access', user, grant, pendingInvite: invite };
     }
 
-    const invite = await this.invites.findUsableForEmail(email);
     if (!invite) {
       // Covers both the stranger and the former member whose row outlived
       // their place here. Neither gets an account created for them.

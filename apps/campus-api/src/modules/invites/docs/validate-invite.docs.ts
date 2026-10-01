@@ -18,15 +18,15 @@ import { InviteOnboardingResponseDto } from '../dto/invite-onboarding-response.d
 export function ApiValidateUserInvite(): MethodDecorator {
   return applyDecorators(
     ApiOperation({
-      summary:
-        'Validate the invite the current provisional session was issued for',
+      summary: 'Validate the invite the signed-in account has to answer',
       description:
-        'Resolves the invite from the inviteId carried in the provisional ' +
-        'session, confirms it is addressed to the signed-in account, and ' +
-        'returns it only while it is still live. Takes no body: the session ' +
-        'identifies both the invite and the caller, so a full-access session ' +
-        "is rejected with 401 rather than quietly reading someone else's " +
-        'offer. Returns 200 only for a live invite, so the decision screen can ' +
+        'For a provisional session, the invite it was issued for. For a ' +
+        'full-access session — a member, who can be invited to another ' +
+        'cohort — the pending invite addressed to the account. Confirms it ' +
+        'is addressed to the signed-in account and returns it only while it ' +
+        'is still live. Takes no body: the session identifies both the ' +
+        "invite and the caller, so nobody can read someone else's offer. " +
+        'Returns 200 only for a live invite, so the decision screen can ' +
         'be rendered as-is. Not a re-send of the admin create-receipt: the ' +
         'token, the shareable link and mentorshipGroupId (no MENTORSHIP_GROUPS ' +
         'table) are withheld. The address under `invitee` is the signed-in ' +
@@ -39,10 +39,7 @@ export function ApiValidateUserInvite(): MethodDecorator {
     ApiOkResponse({ type: InviteOnboardingResponseDto }),
     ApiUnauthorizedResponse({
       type: ApiErrorResponseDto,
-      description:
-        'No session, or a session that is not provisional. A full-access ' +
-        'session lands here too: this endpoint only finishes onboarding, so ' +
-        'there is no invite for an already-onboarded caller to read.',
+      description: 'No usable session.',
       content: {
         'application/json': {
           examples: {
@@ -55,15 +52,6 @@ export function ApiValidateUserInvite(): MethodDecorator {
                 },
               },
             },
-            wrongScope: {
-              summary: 'Valid session, but full_access rather than provisional',
-              value: {
-                error: {
-                  code: 'UNAUTHORIZED',
-                  message: 'Session is of the wrong kind',
-                },
-              },
-            },
           },
         },
       },
@@ -71,10 +59,10 @@ export function ApiValidateUserInvite(): MethodDecorator {
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
       description:
-        'The session carries an inviteId but no such invite exists, or the ' +
-        'provisional session has no inviteId at all. The first means a stale ' +
-        'or tampered cookie; the second is answered identically rather than ' +
-        'distinguished, so a probe cannot tell the two apart.',
+        'The session carries an inviteId but no such invite exists, the ' +
+        'provisional session has no inviteId at all, or a full-access ' +
+        'session has no pending invite addressed to it. All three mean ' +
+        'there is nothing here to answer.',
       content: {
         'application/json': {
           examples: {
@@ -85,6 +73,16 @@ export function ApiValidateUserInvite(): MethodDecorator {
                   code: 'NOT_FOUND',
                   message: 'No invite matches this session',
                   details: { inviteId: '66666666-6666-4666-8666-666666666666' },
+                },
+              },
+            },
+            memberWithoutInvite: {
+              summary: 'Full-access session with no pending invite',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message: 'No pending invite for this account',
+                  details: { userId: '55555555-5555-4555-8555-555555555555' },
                 },
               },
             },

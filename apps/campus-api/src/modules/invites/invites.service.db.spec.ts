@@ -376,6 +376,72 @@ describe('InvitesService against real Postgres', () => {
  * the join shape, the nullable cohort columns for guest invites, and the
  * lazy status flip are all things a mocked db can only agree with.
  */
+/**
+ * A person can belong to several cohorts, so being a member never stands in
+ * the way of an invite — except to the cohort they are already in, which
+ * accept could never honour.
+ */
+describe('create() for somebody who is already a member', () => {
+  const studentInvite = (email: string) => ({
+    email,
+    cohortId: fixtures.cohortId,
+    cohortRole: CohortRole.Student,
+    cohortTrackId: fixtures.cohortTrackId,
+  });
+
+  const enrol = async (
+    overrides: Partial<typeof cohortMembers.$inferInsert> = {},
+  ) => {
+    const [user] = await db
+      .insert(users)
+      .values({ email: 'member@campus.local' })
+      .returning();
+    await db.insert(cohortMembers).values({
+      cohortId: fixtures.cohortId,
+      userId: user.id,
+      role: CohortRole.Mentor,
+      ...overrides,
+    });
+    return user;
+  };
+
+  it('refuses an invite to the cohort they are already in', async () => {
+    const member = await enrol();
+
+    await expect(
+      service.create(studentInvite(member.email), inviter),
+    ).rejects.toBeInstanceOf(InviteConflictException);
+    expect(await db.select().from(invites)).toHaveLength(0);
+  });
+
+  it('invites them to another cohort', async () => {
+    const member = await enrol();
+    const [other] = await db
+      .insert(cohorts)
+      .values({ name: 'Cohort 2', code: 'C2' })
+      .returning();
+
+    await expect(
+      service.create(
+        {
+          email: member.email,
+          cohortId: other.id,
+          cohortRole: CohortRole.Professor,
+        },
+        inviter,
+      ),
+    ).resolves.toMatchObject({ cohortId: other.id });
+  });
+
+  it('invites them back once their membership has ended', async () => {
+    const member = await enrol({ leftAt: new Date() });
+
+    await expect(
+      service.create(studentInvite(member.email), inviter),
+    ).resolves.toMatchObject({ cohortId: fixtures.cohortId });
+  });
+});
+
 describe('getOnboardingInvite', () => {
   const seedInvitee = async (
     email = 'invitee@campus.local',

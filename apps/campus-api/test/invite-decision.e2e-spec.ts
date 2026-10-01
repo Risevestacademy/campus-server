@@ -80,10 +80,11 @@ describe('POST /v1/invites/decision (e2e)', () => {
   const decide = async (
     cookie: string | Promise<string> | undefined,
     decision: string,
+    inviteId?: string,
   ) => {
     const req = request(app.getHttpServer()).post(URL_UNDER_TEST);
     if (cookie) req.set('Cookie', await cookie);
-    return req.send({ decision });
+    return req.send({ decision, inviteId });
   };
 
   /** Reads the session cookie out of a Set-Cookie header list, if present. */
@@ -215,24 +216,172 @@ describe('POST /v1/invites/decision (e2e)', () => {
     const res = await decide(provisional(invite.id), InviteDecision.Accept);
     const upgraded = sessionCookieOf(res)!;
 
-    // validate-user-invite is provisional-only, so the upgraded cookie must be
-    // refused there — proof the scope really changed rather than the claim
-    // merely being relabelled.
-    const validation = await request(app.getHttpServer())
-      .get('/v1/invites/validate-user-invite')
+    // /auth/me reads the scope from the cookie itself — proof the scope
+    // really changed rather than the claim merely being relabelled.
+    const me = await request(app.getHttpServer())
+      .get('/v1/auth/me')
       .set('Cookie', upgraded);
-    expect(validation.status).toBe(401);
+    expect(me.status).toBe(200);
+    expect(me.body.scope).toBe(SessionScope.FullAccess);
   });
 
-  it('refuses a decision from a full-access session', async () => {
-    const full = await cookieFor(
-      inviteeId,
-      inviteeEmail,
-      SessionScope.FullAccess,
+  it('refuses a provisional decision naming a different invite', async () => {
+    const invite = await makeInvite({
+      cohortId,
+      cohortRole: CohortRole.Mentor,
+    });
+
+    const res = await decide(
+      provisional(invite.id),
+      InviteDecision.Accept,
+      '99999999-9999-4999-8999-999999999999',
     );
 
-    const res = await decide(full, InviteDecision.Accept);
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(404);
+  });
+
+  /**
+   * A person can belong to several cohorts, in any mix of roles. A member of
+   * one, invited to another, answers from the session they already hold.
+   */
+  describe('a member invited to another cohort', () => {
+    let otherCohortId: string;
+    let member: string;
+
+    beforeEach(async () => {
+      const [other] = await db
+        .insert(cohorts)
+        .values({ name: 'Cohort 2', code: 'C2' })
+        .returning();
+      otherCohortId = other.id;
+      await db.insert(cohortMembers).values({
+        cohortId: otherCohortId,
+        userId: inviteeId,
+        role: CohortRole.Professor,
+      });
+      member = await cookieFor(
+        inviteeId,
+        inviteeEmail,
+        SessionScope.FullAccess,
+      );
+    });
+
+    it('joins the new cohort and keeps the one they had', async () => {
+      const invite = await makeInvite({
+        cohortId,
+        cohortRole: CohortRole.Student,
+        cohortTrackId,
+      });
+
+      const res = await decide(member, InviteDecision.Accept, invite.id);
+
+      expect(res.status).toBe(200);
+      expect(res.body.membership).toMatchObject({
+        cohortId,
+        role: CohortRole.Student,
+      });
+      const rows = await db
+        .select()
+        .from(cohortMembers)
+        .where(eq(cohortMembers.userId, inviteeId));
+      expect(rows.map((r) => [r.cohortId, r.role]).sort()).toEqual(
+        [
+          [otherCohortId, CohortRole.Professor],
+          [cohortId, CohortRole.Student],
+        ].sort(),
+      );
+    });
+
+    // Nothing about their access got shorter, so nothing is swapped out.
+    it('keeps the session they came with', async () => {
+      const invite = await makeInvite({
+        cohortId,
+        cohortRole: CohortRole.Mentor,
+      });
+
+      const res = await decide(member, InviteDecision.Accept, invite.id);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['set-cookie']).toBeUndefined();
+    });
+
+    // A provisional decline clears the cookie; a member stays signed in.
+    it('stays signed in after declining', async () => {
+      const invite = await makeInvite({
+        cohortId,
+        cohortRole: CohortRole.Mentor,
+      });
+
+      const res = await decide(member, InviteDecision.Decline, invite.id);
+
+      expect(res.status).toBe(200);
+      expect(res.headers['set-cookie']).toBeUndefined();
+      const [row] = await db
+        .select()
+        .from(invites)
+        .where(eq(invites.id, invite.id));
+      expect(row.status).toBe(InviteStatus.Declined);
+    });
+
+    it('must name the invite it answers', async () => {
+      await makeInvite({ cohortId, cohortRole: CohortRole.Mentor });
+
+      const res = await decide(member, InviteDecision.Accept);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        details: { fields: { inviteId: expect.any(String) } },
+      });
+    });
+
+    /**
+     * Read invite A, admin swaps it for B, then click Accept: the member
+     * answered A, so A's state is the answer — never B, which they never saw.
+     */
+    it('never accepts an invite that replaced the one it was shown', async () => {
+      const shown = await makeInvite({
+        cohortId,
+        cohortRole: CohortRole.Mentor,
+        status: InviteStatus.Revoked,
+      });
+      const replacement = await makeInvite({
+        cohortId,
+        systemRole: SystemRole.Admin,
+        cohortRole: CohortRole.Professor,
+      });
+
+      const res = await decide(member, InviteDecision.Accept, shown.id);
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('INVITE_REVOKED');
+      const [row] = await db
+        .select()
+        .from(invites)
+        .where(eq(invites.id, replacement.id));
+      expect(row.status).toBe(InviteStatus.Pending);
+      const [account] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, inviteeId));
+      expect(account.systemRole).toBe(SystemRole.User);
+    });
+
+    it('answers 404 for an invite addressed to somebody else', async () => {
+      const [stranger] = await db
+        .insert(users)
+        .values({ email: 'someone.else@campus.local' })
+        .returning();
+      const theirs = await makeInvite({
+        email: stranger.email,
+        cohortId,
+        cohortRole: CohortRole.Mentor,
+      });
+
+      const res = await decide(member, InviteDecision.Accept, theirs.id);
+
+      expect(res.status).toBe(404);
+    });
   });
 
   it('refuses a decision with no session', async () => {

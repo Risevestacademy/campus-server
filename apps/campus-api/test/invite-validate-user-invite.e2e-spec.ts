@@ -307,17 +307,31 @@ describe('GET /v1/invites/validate-user-invite (e2e)', () => {
    * wrong caller entirely — and it is the one that could reach a route this
    * way by accident, which is why the scope is a separate guard.
    */
-  it('refuses a full-access session', async () => {
-    const invitee = await seedInvitee('invitee@campus.local');
-    // Seeded so a 200 could only mean the scope check was skipped: the row
-    // is live and this user owns it.
-    await seedInvite(invitee.email);
+  /**
+   * A member can belong to several cohorts, so a full-access session can hold
+   * an invite too: the pending one addressed to its account.
+   */
+  it('shows a member the invite addressed to them', async () => {
+    const member = await seedInvitee('member@campus.local');
+    const invite = await seedInvite(member.email);
 
     const response = await call(
-      await cookieFor(invitee.id, invitee.email, SessionScope.FullAccess),
+      await cookieFor(member.id, member.email, SessionScope.FullAccess),
     );
 
-    expect(response.status).toBe(401);
-    expect(response.body.error.code).toBe('UNAUTHORIZED');
+    expect(response.status).toBe(200);
+    expect(response.body.id).toBe(invite.id);
+    expect(response.body.cohort.id).toBe(cohortId);
+  });
+
+  it('answers 404 to a member with no pending invite', async () => {
+    const member = await seedInvitee('member@campus.local');
+
+    const response = await call(
+      await cookieFor(member.id, member.email, SessionScope.FullAccess),
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe('NOT_FOUND');
   });
 });

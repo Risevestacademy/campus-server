@@ -138,9 +138,8 @@ describe('completeGoogleSignIn', () => {
 
     const outcome = await service.completeGoogleSignIn('code');
 
-    expect(outcome.kind).toBe('full_access');
+    expect(outcome).toMatchObject({ kind: 'full_access', pendingInvite: null });
     expect(members.resolveActiveAccess).not.toHaveBeenCalled();
-    expect(invites.findUsableForEmail).not.toHaveBeenCalled();
     expect(users.recordLogin).toHaveBeenCalledWith('user-1');
   });
 
@@ -150,8 +149,26 @@ describe('completeGoogleSignIn', () => {
 
     const outcome = await service.completeGoogleSignIn('code');
 
-    expect(outcome.kind).toBe('full_access');
-    expect(invites.findUsableForEmail).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ kind: 'full_access', pendingInvite: null });
+  });
+
+  /**
+   * Somebody can belong to several cohorts. A member invited to another one
+   * keeps full access, and carries the invite so sign-in can send them to
+   * answer it.
+   */
+  it('lets a member invited to another cohort in, carrying the invite', async () => {
+    users.findForGoogleIdentity.mockResolvedValue(user());
+    members.resolveActiveAccess.mockResolvedValue({ endsAt: null });
+    invites.findUsableForEmail.mockResolvedValue(invite());
+
+    const outcome = await service.completeGoogleSignIn('code');
+
+    expect(outcome).toMatchObject({
+      kind: 'full_access',
+      pendingInvite: invite(),
+    });
+    expect(users.createFromGoogleIdentity).not.toHaveBeenCalled();
   });
 
   it('creates an account for an invited stranger', async () => {
