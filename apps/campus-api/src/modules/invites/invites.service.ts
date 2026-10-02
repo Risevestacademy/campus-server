@@ -172,10 +172,15 @@ export class InvitesService {
     @Inject(CONFIG) private readonly config: Env,
   ) {}
 
-  /** The receipt without emailStatus, which InviteMailer adds after. */
+  /**
+   * The receipt without emailStatus, which InviteMailer adds after.
+   *
+   * `correlationId` is the request's, carried onto the audit entry.
+   */
   async create(
     dto: CreateInviteDto,
     inviter: AuthenticatedUser,
+    correlationId?: string,
   ): Promise<Omit<InviteResponseDto, 'emailStatus'>> {
     const email = dto.email.trim().toLowerCase();
     const systemRole = dto.systemRole ?? SystemRole.User;
@@ -205,27 +210,47 @@ export class InvitesService {
       const tokenHash = hashInviteToken(token);
 
       try {
-        const [row] = await this.db
-          .insert(invites)
-          .values({
-            email,
-            cohortId: dto.cohortId ?? null,
-            cohortTrackId: dto.cohortTrackId ?? null,
-            mentorshipGroupId: dto.mentorshipGroupId ?? null,
-            cohortRole: dto.cohortRole ?? null,
-            systemRole,
-            guestAccessExpiresAt,
-            tokenHash,
-            invitedBy: inviter.id,
-            expiresAt,
-          })
-          .returning();
+        // One transaction, so an invite is never created without its entry. A
+        // retry after a token collision starts a new one.
+        const row = await this.db.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(invites)
+            .values({
+              email,
+              cohortId: dto.cohortId ?? null,
+              cohortTrackId: dto.cohortTrackId ?? null,
+              mentorshipGroupId: dto.mentorshipGroupId ?? null,
+              cohortRole: dto.cohortRole ?? null,
+              systemRole,
+              guestAccessExpiresAt,
+              tokenHash,
+              invitedBy: inviter.id,
+              expiresAt,
+            })
+            .returning();
 
-        if (!row) {
-          throw new InviteInvalidArgumentException(
-            'Invite could not be created',
-          );
-        }
+          if (!row) {
+            throw new InviteInvalidArgumentException(
+              'Invite could not be created',
+            );
+          }
+
+          await writeAuditEntry(tx, {
+            actorUserId: inviter.id,
+            correlationId,
+            action: AuditAction.InviteCreated,
+            subject: { type: AuditSubjectType.Invite, id: row.id },
+            details: {
+              cohortId: row.cohortId,
+              cohortRole: row.cohortRole,
+              cohortTrackId: row.cohortTrackId,
+              systemRole: row.systemRole,
+              expiresAt: row.expiresAt,
+              guestAccessExpiresAt: row.guestAccessExpiresAt,
+            },
+          });
+          return row;
+        });
 
         const inviteLink = buildInviteLink(this.config.APP_PUBLIC_URL, token);
         return {

@@ -7,6 +7,8 @@ import type {
   PaginatedResponseDto,
   PaginationQueryDto,
 } from '../../shared/dto/index.js';
+import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
+import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
@@ -30,19 +32,34 @@ import { cohorts, cohortTracks, type Cohort } from './schema.js';
 export class CohortsService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
 
-  async create(dto: CreateCohortDto): Promise<Cohort> {
+  async create(dto: CreateCohortDto, audit: AuditContext): Promise<Cohort> {
     try {
-      const [row] = await this.db
-        .insert(cohorts)
-        .values({
-          name: dto.name,
-          code: dto.code,
-          startDate: dto.startDate ?? null,
-          endDate: dto.endDate ?? null,
-          status: dto.status,
-        })
-        .returning();
-      return row;
+      // One transaction, so a cohort is never created without its entry.
+      return await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(cohorts)
+          .values({
+            name: dto.name,
+            code: dto.code,
+            startDate: dto.startDate ?? null,
+            endDate: dto.endDate ?? null,
+            status: dto.status,
+          })
+          .returning();
+        await writeAuditEntry(tx, {
+          ...audit,
+          action: AuditAction.CohortCreated,
+          subject: { type: AuditSubjectType.Cohort, id: row.id },
+          details: {
+            name: row.name,
+            code: row.code,
+            status: row.status,
+            startDate: row.startDate,
+            endDate: row.endDate,
+          },
+        });
+        return row;
+      });
     } catch (err) {
       if (isUniqueViolation(err, 'cohorts_code_unique')) {
         throw new CohortConflictException(
@@ -100,6 +117,7 @@ export class CohortsService {
   async attachTrack(
     cohortId: string,
     trackId: string,
+    audit: AuditContext,
   ): Promise<CohortTrackResponseDto> {
     await this.findCohort(cohortId);
     const [track] = await this.db
@@ -114,10 +132,19 @@ export class CohortsService {
     }
 
     try {
-      const [link] = await this.db
-        .insert(cohortTracks)
-        .values({ cohortId, trackId })
-        .returning();
+      const link = await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(cohortTracks)
+          .values({ cohortId, trackId })
+          .returning();
+        await writeAuditEntry(tx, {
+          ...audit,
+          action: AuditAction.CohortTrackAttached,
+          subject: { type: AuditSubjectType.CohortTrack, id: row.id },
+          details: { cohortId, trackId },
+        });
+        return row;
+      });
       return {
         id: link.id,
         cohortId: link.cohortId,

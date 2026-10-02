@@ -11,10 +11,13 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { AdminGuard } from '../../shared/auth/admin.guard.js';
+import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import {
   PaginatedResponseDto,
   PaginationQueryDto,
 } from '../../shared/dto/index.js';
+import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiCreateTrack, ApiListTracks } from './docs/tracks.docs.js';
 import { CreateTrackDto } from './dto/create-track.dto.js';
@@ -33,8 +36,12 @@ export class TracksController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiCreateTrack()
-  create(@Body() dto: CreateTrackDto): Promise<TrackResponseDto> {
-    return this.tracks.create(dto);
+  create(
+    @Body() dto: CreateTrackDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<TrackResponseDto> {
+    return this.tracks.create(dto, { actorUserId: admin.id, correlationId });
   }
 
   @Get()

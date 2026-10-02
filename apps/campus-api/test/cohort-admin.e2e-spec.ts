@@ -15,6 +15,11 @@ import {
   disabledEmailSender,
   EMAIL_SENDER,
 } from './../src/infra/email/email-sender.js';
+import {
+  AuditAction,
+  AuditSubjectType,
+  auditLog,
+} from './../src/modules/audit/schema.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import { SessionScope, signSessionToken } from '@campus/session';
 import { CohortRole } from './../src/modules/cohorts/schema.js';
@@ -41,6 +46,7 @@ describe('cohort and track admin routes (e2e)', () => {
   let app: INestApplication<App>;
   let adminCookie: string;
   let memberCookie: string;
+  let adminId: string;
 
   const as = (cookie: string) => ({
     get: (path: string) =>
@@ -105,6 +111,7 @@ describe('cohort and track admin routes (e2e)', () => {
       .insert(users)
       .values({ email: 'member@campus.local', systemRole: SystemRole.User })
       .returning();
+    adminId = admin.id;
     adminCookie = await cookieFor(admin);
     memberCookie = await cookieFor(member);
   });
@@ -323,6 +330,114 @@ describe('cohort and track admin routes (e2e)', () => {
 
     it('answers 400 for an id that is not a UUID', async () => {
       await as(adminCookie).get('/v1/cohorts/not-a-uuid').expect(400);
+    });
+  });
+
+  /**
+   * None of these tables names who created a row, so the audit entry is the
+   * only record of which admin set a cohort up — and the correlation id on
+   * it is what leads from the entry back to the request's log lines.
+   */
+  describe('audit log', () => {
+    const entries = () =>
+      db.select().from(auditLog).orderBy(auditLog.createdAt);
+
+    it('records who created a track, and in which request', async () => {
+      const response = await createTrack()
+        .set('x-correlation-id', 'e2e-track-1')
+        .expect(201);
+
+      expect(await entries()).toEqual([
+        expect.objectContaining({
+          actorUserId: adminId,
+          action: AuditAction.TrackCreated,
+          subjectType: AuditSubjectType.Track,
+          subjectId: response.body.id,
+          correlationId: 'e2e-track-1',
+          details: { name: 'Software Engineering', code: 'SE' },
+        }),
+      ]);
+    });
+
+    it('records who created a cohort, with what it was created as', async () => {
+      const response = await createCohort({
+        name: 'Cohort 1',
+        code: 'c1',
+        startDate: '2026-11-01',
+        endDate: '2027-03-01',
+      }).expect(201);
+
+      expect(await entries()).toEqual([
+        expect.objectContaining({
+          actorUserId: adminId,
+          action: AuditAction.CohortCreated,
+          subjectType: AuditSubjectType.Cohort,
+          subjectId: response.body.id,
+          // No header sent: the id the API generated, which it also returns.
+          correlationId: response.headers['x-correlation-id'],
+          details: {
+            name: 'Cohort 1',
+            code: 'C1',
+            status: 'upcoming',
+            startDate: '2026-11-01',
+            endDate: '2027-03-01',
+          },
+        }),
+      ]);
+    });
+
+    it('records who attached a track to a cohort', async () => {
+      const track = (await createTrack().expect(201)).body;
+      const cohort = (await createCohort().expect(201)).body;
+      const link = (
+        await as(adminCookie)
+          .post(`/v1/cohorts/${cohort.id}/tracks`, { trackId: track.id })
+          .expect(201)
+      ).body;
+
+      expect((await entries()).at(-1)).toMatchObject({
+        actorUserId: adminId,
+        action: AuditAction.CohortTrackAttached,
+        subjectType: AuditSubjectType.CohortTrack,
+        subjectId: link.id,
+        details: { cohortId: cohort.id, trackId: track.id },
+      });
+    });
+
+    it('records an invite, with what it offers and not who it went to', async () => {
+      const response = await as(adminCookie)
+        .post('/v1/invites', {
+          email: 'new-admin@campus.local',
+          systemRole: SystemRole.Admin,
+        })
+        .expect(201);
+
+      const [entry] = await entries();
+      expect(entry).toMatchObject({
+        actorUserId: adminId,
+        action: AuditAction.InviteCreated,
+        subjectType: AuditSubjectType.Invite,
+        subjectId: response.body.id,
+        correlationId: response.headers['x-correlation-id'],
+        details: { cohortId: null, cohortRole: null, systemRole: 'admin' },
+      });
+      expect(JSON.stringify(entry.details)).not.toContain('campus.local');
+    });
+
+    // The entry and the change share a transaction, so a refusal leaves
+    // neither behind.
+    it('records nothing for a change that was refused', async () => {
+      await createTrack().expect(201);
+      await createCohort().expect(201);
+      const before = (await entries()).length;
+
+      await createTrack({ name: 'Another', code: 'SE' }).expect(409);
+      await createCohort({ name: 'Another', code: 'C1' }).expect(409);
+      await as(memberCookie)
+        .post('/v1/tracks', { name: 'Design', code: 'ds' })
+        .expect(403);
+
+      expect(await entries()).toHaveLength(before);
     });
   });
 });

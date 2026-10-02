@@ -1632,6 +1632,51 @@ describe('decide()', () => {
       ]);
     });
 
+    it('records an invite alongside the row it describes', async () => {
+      const res = await service.create(
+        {
+          email: 'student@campus.local',
+          cohortId: fixtures.cohortId,
+          cohortRole: CohortRole.Student,
+          cohortTrackId: fixtures.cohortTrackId,
+        },
+        inviter,
+        'corr-invite',
+      );
+
+      expect(await entries()).toEqual([
+        expect.objectContaining({
+          actorUserId: inviter.id,
+          action: AuditAction.InviteCreated,
+          subjectType: AuditSubjectType.Invite,
+          subjectId: res.id,
+          correlationId: 'corr-invite',
+          details: expect.objectContaining({
+            cohortId: fixtures.cohortId,
+            cohortRole: CohortRole.Student,
+            cohortTrackId: fixtures.cohortTrackId,
+            systemRole: SystemRole.User,
+            guestAccessExpiresAt: null,
+          }),
+        }),
+      ]);
+    });
+
+    // Postgres aborts the transaction on the unique violation, so the entry
+    // could not survive it even if it had been written first.
+    it('records nothing for an invite the pending slot refused', async () => {
+      await makeInvite({ email: 'taken@campus.local' });
+
+      await expect(
+        service.create(
+          { email: 'taken@campus.local', systemRole: SystemRole.Admin },
+          inviter,
+        ),
+      ).rejects.toBeInstanceOf(InviteConflictException);
+
+      expect(await entries()).toEqual([]);
+    });
+
     it('records nothing when the account is already an admin', async () => {
       await db
         .update(users)

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { auditLog } from '../audit/schema.js';
 import { CohortRole } from '../cohorts/schema.js';
 import { SystemRole } from '../users/schema.js';
 import type { CreateInviteDto } from './dto/create-invite.dto.js';
@@ -60,10 +61,14 @@ interface FakeState {
   insertErrorQueue?: unknown[];
   insertCalls?: number;
   updatedToExpired: string[];
+  auditEntries: Record<string, unknown>[];
 }
 
 function makeDb(state: FakeState) {
-  return {
+  const db = {
+    // The invite and its audit entry are written together; the fake has no
+    // rollback, so a failed insert is simply never followed by an entry.
+    transaction: <T>(run: (tx: unknown) => Promise<T>): Promise<T> => run(db),
     query: {
       invites: {
         findFirst: () => Promise.resolve(state.pendingInvite ?? null),
@@ -94,8 +99,12 @@ function makeDb(state: FakeState) {
         },
       }),
     }),
-    insert: () => ({
+    insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => {
+        if (table === auditLog) {
+          state.auditEntries.push(values);
+          return Promise.resolve();
+        }
         state.lastInsert = values as Record<string, unknown>;
         state.insertCalls = (state.insertCalls ?? 0) + 1;
         return {
@@ -125,6 +134,7 @@ function makeDb(state: FakeState) {
       },
     }),
   };
+  return db;
 }
 
 function serviceWith(state: Partial<FakeState> = {}) {
@@ -133,6 +143,7 @@ function serviceWith(state: Partial<FakeState> = {}) {
     cohortExists: true,
     trackRow: { id: TRACK_ID, cohortId: COHORT_ID },
     updatedToExpired: [],
+    auditEntries: [],
     ...state,
   };
   const service = new InvitesService(makeDb(full) as never, config);
@@ -320,6 +331,43 @@ describe('InvitesService.create', () => {
     );
     expect(res.token).toBe('fresh-token');
     expect(state.insertCalls).toBe(2);
+  });
+
+  it('records who created the invite and what it offers, never the address', async () => {
+    const { service, state } = serviceWith();
+    const res = await service.create(cohortStudentDto(), inviter, 'corr-1');
+
+    expect(state.auditEntries).toEqual([
+      expect.objectContaining({
+        actorUserId: ADMIN_ID,
+        action: 'invite_created',
+        subjectType: 'invite',
+        subjectId: res.id,
+        correlationId: 'corr-1',
+        details: expect.objectContaining({
+          cohortId: COHORT_ID,
+          cohortRole: CohortRole.Student,
+          cohortTrackId: TRACK_ID,
+          systemRole: SystemRole.User,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(state.auditEntries)).not.toContain('campus.local');
+  });
+
+  it('records one entry for an invite that took two attempts to create', async () => {
+    nextToken('colliding-token');
+    nextToken('fresh-token');
+    const { service, state } = serviceWith({
+      insertErrorQueue: [pgUniqueViolation('invites_token_hash_unique')],
+    });
+
+    await service.create(
+      { email: 'lucky@campus.local', systemRole: SystemRole.Admin },
+      inviter,
+    );
+
+    expect(state.auditEntries).toHaveLength(1);
   });
 
   it('does not mistake other errors for conflicts — non-23505 rethrows', () => {

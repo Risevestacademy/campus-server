@@ -80,8 +80,9 @@ export class InvitesController {
   async create(
     @Body() dto: CreateInviteDto,
     @CurrentUser() inviter: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<InviteResponseDto> {
-    const receipt = await this.invites.create(dto, inviter);
+    const receipt = await this.invites.create(dto, inviter, correlationId);
     // After the write, not inside it: a failed send must not undo an invite
     // the admin can still share by hand.
     return { ...receipt, emailStatus: await this.mailer.send(receipt) };

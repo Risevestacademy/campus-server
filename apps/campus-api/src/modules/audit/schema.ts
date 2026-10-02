@@ -23,11 +23,27 @@ export enum AuditAction {
   MembershipRevived = 'membership_revived',
   /** An account's system_role changed; `details` has `from` and `to`. */
   SystemRoleChanged = 'system_role_changed',
+  /**
+   * An admin offered somebody a place. `details` has what was offered — the
+   * cohort, the roles — and never the address, which stays on the invite.
+   */
+  InviteCreated = 'invite_created',
+  /**
+   * The three below are the admin setup an invite depends on. None of their
+   * tables names who created the row, so the entry is the only record of it.
+   */
+  CohortCreated = 'cohort_created',
+  CohortTrackAttached = 'cohort_track_attached',
+  TrackCreated = 'track_created',
 }
 
 export enum AuditSubjectType {
   CohortMember = 'cohort_member',
   User = 'user',
+  Invite = 'invite',
+  Cohort = 'cohort',
+  CohortTrack = 'cohort_track',
+  Track = 'track',
 }
 
 /**

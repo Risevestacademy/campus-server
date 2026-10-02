@@ -7,6 +7,8 @@ import type {
   PaginatedResponseDto,
   PaginationQueryDto,
 } from '../../shared/dto/index.js';
+import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
+import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import type { CreateTrackDto } from './dto/create-track.dto.js';
 import { tracks, type Track } from './schema.js';
 import { TrackConflictException } from './tracks.exceptions.js';
@@ -15,17 +17,26 @@ import { TrackConflictException } from './tracks.exceptions.js';
 export class TracksService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
 
-  async create(dto: CreateTrackDto): Promise<Track> {
+  async create(dto: CreateTrackDto, audit: AuditContext): Promise<Track> {
     try {
-      const [row] = await this.db
-        .insert(tracks)
-        .values({
-          name: dto.name,
-          code: dto.code,
-          description: dto.description || null,
-        })
-        .returning();
-      return row;
+      // One transaction, so a track is never created without its entry.
+      return await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(tracks)
+          .values({
+            name: dto.name,
+            code: dto.code,
+            description: dto.description || null,
+          })
+          .returning();
+        await writeAuditEntry(tx, {
+          ...audit,
+          action: AuditAction.TrackCreated,
+          subject: { type: AuditSubjectType.Track, id: row.id },
+          details: { name: row.name, code: row.code },
+        });
+        return row;
+      });
     } catch (err) {
       // Left to the unique index rather than checked first: a check-then-
       // insert still loses to a concurrent create, and would answer 500.

@@ -12,10 +12,13 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { AdminGuard } from '../../shared/auth/admin.guard.js';
+import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import {
   PaginatedResponseDto,
   PaginationQueryDto,
 } from '../../shared/dto/index.js';
+import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { CohortsService } from './cohorts.service.js';
 import {
@@ -44,8 +47,12 @@ export class CohortsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiCreateCohort()
-  create(@Body() dto: CreateCohortDto): Promise<CohortResponseDto> {
-    return this.cohorts.create(dto);
+  create(
+    @Body() dto: CreateCohortDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<CohortResponseDto> {
+    return this.cohorts.create(dto, { actorUserId: admin.id, correlationId });
   }
 
   @Get()
@@ -68,7 +75,12 @@ export class CohortsController {
   attachTrack(
     @Param() params: CohortIdParamDto,
     @Body() dto: AttachTrackDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<CohortTrackResponseDto> {
-    return this.cohorts.attachTrack(params.id, dto.trackId);
+    return this.cohorts.attachTrack(params.id, dto.trackId, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 }
