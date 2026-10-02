@@ -424,6 +424,18 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(JSON.stringify(entry.details)).not.toContain('campus.local');
     });
 
+    // The id is whatever the caller put in x-correlation-id, and the column
+    // holds 64 characters. An over-long one must not fail the insert, which
+    // would take the change down with it.
+    it('keeps the start of a correlation id too long to store', async () => {
+      const long = 'c'.repeat(200);
+
+      await createTrack().set('x-correlation-id', long).expect(201);
+
+      const [entry] = await entries();
+      expect(entry.correlationId).toBe('c'.repeat(64));
+    });
+
     // The entry and the change share a transaction, so a refusal leaves
     // neither behind.
     it('records nothing for a change that was refused', async () => {

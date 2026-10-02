@@ -46,6 +46,9 @@ export enum AuditSubjectType {
   Track = 'track',
 }
 
+/** How much of a correlation id the column keeps. */
+export const CORRELATION_ID_MAX_LENGTH = 64;
+
 /**
  * Append-only: nothing updates or deletes a row. Written in the same
  * transaction as the change it records, so a change is never committed
@@ -64,7 +67,9 @@ export const auditLog = pgTable(
     spaceId: uuid('space_id'),
     details: jsonb('details'),
     /** The request's x-correlation-id, so an entry leads to its log lines. */
-    correlationId: varchar('correlation_id', { length: 64 }),
+    correlationId: varchar('correlation_id', {
+      length: CORRELATION_ID_MAX_LENGTH,
+    }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
