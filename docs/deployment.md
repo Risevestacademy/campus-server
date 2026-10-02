@@ -4,14 +4,40 @@ Single Railway project, two Environments (`staging`, `production`), each
 with its own independent services and Postgres database — nothing shared
 across environments.
 
+## Infrastructure as code
+
+Staging's backend services are described in
+[`.railway/railway.ts`](../.railway/railway.ts) and changed through it, not
+through the dashboard:
+
+```bash
+railway config plan    # what would change; touches nothing
+railway config apply   # the same plan, applied after confirmation
+```
+
+- The file is a named partial, `campus-backend`. It owns `campus-api`,
+  `campus-world`, Postgres, Redis and their volumes. The web app and
+  storybook belong to campus-web's partial, `campus-frontends`, and are not
+  declared here; a partial only touches what it declares.
+- Variable names are listed, values are not: each is `preserve()`, which
+  keeps whatever Railway already holds. Set or rotate a value in Railway.
+- Staging only. The file refuses to plan for any other environment, because
+  production has a different shape that it does not describe yet.
+- A dashboard edit to something the file declares shows up as a difference
+  in the next plan, and the next apply puts the file's value back.
+
+Config as code (`railway.json`, `railway.toml`) is deprecated by Railway and
+stops being read on 2026-12-01; do not add either.
+
 ## Services
 
 | Service                          | Public domain?                       |
 | -------------------------------- | ------------------------------------ |
 | `campus-api` (`apps/campus-api`) | Yes                                  |
-| `world` (`apps/world`)           | Not yet                              |
+| `world` (`apps/world`)           | Yes                                  |
 | `frontend` (separate repo)       | Yes                                  |
 | `postgres` (Railway plugin)      | No — internal + admin proxy URL only |
+| `redis` (Railway Redis)          | No — internal only                   |
 
 All app services use **Root Directory `/`** (repo root), not their
 subfolder — required so Railway's builder (Railpack) sees the shared pnpm
@@ -40,7 +66,19 @@ change to either reaches both apps:
   — the trailing `...` builds the workspace packages campus-api depends on
   (`@campus/session`), which ship compiled output. Without it the API starts
   and then cannot resolve them.
-- Start: `pnpm --filter campus-api start:prod`
+- Start: `node --max-old-space-size=128 --max-semi-space-size=2 apps/campus-api/dist/main.js`
+  — `node` directly, because started through pnpm the wrapper stays alive as
+  the parent and holds about as much memory as the API. The flags cap V8's
+  heap, which otherwise grows to fit a container far larger than the API
+  needs; on the command rather than in `NODE_OPTIONS` so the pre-deploy step
+  does not run under them. If the logs ever show `Reached heap limit`, raise
+  the first one.
+- Serverless on staging: the API sleeps once it has sent nothing for a few
+  minutes and wakes on the next request, from the internet or from the web
+  app over the private network. The first request after a sleep is slow and
+  may answer 502. Anything that keeps sending keeps it awake, which is why
+  the database pool closes idle connections and why nothing here should
+  poll; a signed-in browser refreshing its token also wakes it.
 - Healthcheck path: `/v1/health`
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
   `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED=false` (no collector deployed),
@@ -69,6 +107,12 @@ change to either reaches both apps:
   the shared session policy in `@campus/session`: campus-api refuses to boot
   above it, and world refuses a refresh window shorter than it plus two
   minutes, since world relies on sign-ins being refreshed that often.
+- `GOOGLE_MOBILE_CLIENT_IDS` (optional): the Google client ids of the native
+  apps, comma-separated, from the same Google project as `GOOGLE_CLIENT_ID`.
+  A native app signs in by posting an id_token to `/v1/auth/google/token`.
+  A token is accepted when it is addressed to one of the clients named here
+  or to the web client, and refused otherwise. Unset, only the web client's
+  tokens are accepted.
 - `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
   shared under, so world on its own subdomain receives it — for example
   `campus.example`. Only `campus_session` gets it; the refresh and state
@@ -174,10 +218,32 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   connection string; the public/proxy one is for local admin tasks only
   (`drizzle-kit studio`, manual migrations) — never the deployed app.
 
+## redis
+
+- One instance per environment, like Postgres. Only `world` connects, over
+  the **internal** URL.
+- It holds state that is cheap to lose but should not vanish on every
+  restart: each player's last position between visits, and later who is
+  online where (presence) and the fan-out between world instances.
+- **Persistence on.** A restart that empties Redis sends everyone back to
+  the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
+- **Eviction `noeviction` (Redis's default) or `volatile-lru`.** Never an
+  `allkeys-*` policy: under memory pressure it would drop positions and
+  presence to make room, silently. Position keys carry a TTL (~90 days), so
+  `volatile-lru` only ever evicts those.
+- Locally, the `redis` container in `docker-compose.local.yml` already runs
+  this way: append-only on, default eviction.
+- world reads it as `REDIS_URL`. Unset, world still runs and keeps nothing
+  between visits. Redis going down never keeps anybody out: a position that
+  cannot be read means starting at the spawn, and one that cannot be written
+  is lost.
+
 ## world
 
 - Build: `pnpm install --frozen-lockfile && pnpm --filter world... build`
-- Start: `pnpm --filter world start:prod`
+- Start: `node --max-old-space-size=96 --max-semi-space-size=2 apps/world/dist/index.js`
+  — for the same reasons as campus-api's. Never serverless: it holds sockets
+  open, and a sleep would drop everybody.
 - Healthcheck path: `/health` (no `/v1`). It answers while the process is
   up; it does not check the database.
 - Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
@@ -185,19 +251,24 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
   world re-checks that the account behind a token still exists and is not
   suspended, so a ban reaches open sockets instead of waiting out the token).
-  `PORT` is injected by Railway.
+  `PORT` is injected by Railway. `REDIS_URL` (the Redis service's internal
+  URL) keeps where each player last stood between visits.
 - Tuning, all defaulted — see `apps/world/.env.example`: `WORLD_DB_POOL`,
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
-  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, the session refresh
+  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
+  `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, the session refresh
   window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
   and the placeholder
   map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
   `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
-- Positions are per-process state. A reconnect within the grace resumes where
-  somebody stood, but a restart or redeploy forgets everyone: they all
-  reconnect at the spawn tile.
+- Live positions are per-process state. A reconnect within the grace resumes
+  from memory; otherwise a player starts where they last stood, read from
+  Redis. Positions are written when somebody's last tab closes, every
+  `WORLD_POSITION_SAVE_SECONDS` for anyone who moved, and for everybody on a
+  graceful shutdown — so a redeploy puts people back where they were, and a
+  crash loses at most one save interval.
 - Sockets are per-process state too. Running more than one instance needs the
   presence work first, or two tabs may land on different instances and
   disagree about who is online.
@@ -221,13 +292,24 @@ assume otherwise:
 | URL         | `ws://localhost:7880`              | the project's `wss://` URL         |
 | Credentials | the dev key pair in `livekit.yaml` | per-environment API key and secret |
 
-A Cloud project per environment, so a staging room can never collide with a
-production one. The key and secret are server-side only: clients get a
-short-lived room token minted by the server, never the credentials
-themselves. Which service mints it — campus-api or world — is still open;
-the minting itself lives in `packages/media` (`@campus/media`) so either can
-use it. Its secret must be at least 32 characters, and it refuses anything
-shorter.
+A Cloud project per environment (`campus-dev`, `campus-staging`,
+`campus-production`), so a staging room can never collide with a production
+one. The key and secret are server-side only: clients get a short-lived room
+token, never the credentials themselves.
+
+**world mints the room tokens.** A token is permission to hear a room, and
+only world knows who is actually standing in which space: campus-api could
+check that someone _may_ enter a space, not that they did. world also sees
+the exit, so it can remove the participant through LiveKit's server API at
+once instead of waiting for the token to run out, and it owns the lifecycle
+of a space's room (open on first entry, close on last exit). So the LiveKit
+key and secret belong to world, and campus-api never holds them.
+
+The minting itself lives in `packages/media` (`@campus/media`). Its secret
+must be at least 32 characters, and it refuses anything shorter. world will
+read `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` once rooms per
+space or the pre-join network check land; until then, set them on world's
+Railway service so they are ready.
 
 To try the media server by hand, mint a token and join from any LiveKit
 client, such as LiveKit's hosted Meet page:
@@ -244,8 +326,11 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 ## Open items
 
 - `world` has no public domain — add one once something actually calls it.
-- Redis isn't provisioned (local-dev-only in `docker-compose.local.yml`);
-  `world` needs it for presence before that service is deployed.
+- Production is not described in `.railway/railway.ts`. It has no Redis, no
+  variables on campus-api or world, and older build settings; bring it in
+  line before the file is taught about it.
+- Redis is provisioned on staging and `world` is given `REDIS_URL`, but
+  nothing connects to it until the presence work lands.
 - Node version isn't pinned on Railway. Railpack takes it from `engines.node`
   in the root `package.json`, which says `>=20`, so it builds on Node 20
   while CI runs 24. Pin it (for example `"node": "24.x"`) to match.
