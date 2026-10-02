@@ -72,7 +72,8 @@ describe('SessionIssuer refresh persistence', () => {
    */
   it('names the refresh family in every access token it issues', async () => {
     const first = await issuer.issueFullAccess(user, { endsAt: null }, now);
-    if (first.scope !== 'full_access') throw new Error('expected a full session');
+    if (first.scope !== 'full_access')
+      throw new Error('expected a full session');
     const second = await issuer.refreshSession(first.refreshToken, now);
 
     const [row] = await db.select().from(refreshTokens).limit(1);
@@ -87,7 +88,10 @@ describe('SessionIssuer refresh persistence', () => {
     await issuer.refreshSession(first.refreshToken, now);
 
     await expect(
-      issuer.refreshSession(first.refreshToken, new Date(now.getTime() + 30_000)),
+      issuer.refreshSession(
+        first.refreshToken,
+        new Date(now.getTime() + 30_000),
+      ),
     ).resolves.toMatchObject({ scope: 'full_access' });
 
     const rows = await db.select().from(refreshTokens);
@@ -100,7 +104,10 @@ describe('SessionIssuer refresh persistence', () => {
     await issuer.refreshSession(first.refreshToken, now);
 
     await expect(
-      issuer.refreshSession(first.refreshToken, new Date(now.getTime() + 61_000)),
+      issuer.refreshSession(
+        first.refreshToken,
+        new Date(now.getTime() + 61_000),
+      ),
     ).rejects.toBeInstanceOf(SessionUnauthorizedError);
 
     const rows = await db.select().from(refreshTokens);
@@ -114,9 +121,9 @@ describe('SessionIssuer refresh persistence', () => {
       .set({ status: UserStatus.Suspended })
       .where(eq(users.id, user.id));
 
-    await expect(issuer.refreshSession(first.refreshToken, now)).rejects.toThrow(
-      'Account is suspended',
-    );
+    await expect(
+      issuer.refreshSession(first.refreshToken, now),
+    ).rejects.toThrow('Account is suspended');
 
     const [row] = await db.select().from(refreshTokens);
     expect(row.revokedAt).not.toBeNull();
@@ -143,13 +150,68 @@ describe('SessionIssuer refresh persistence', () => {
     await issuer.refreshSession(active.refreshToken, now);
 
     const rows = await db.select().from(refreshTokens);
-    expect(rows.some((row) => row.tokenHash.startsWith('used-token'))).toBe(false);
-    expect(rows.some((row) => row.tokenHash.startsWith('expired-token'))).toBe(false);
+    expect(rows.some((row) => row.tokenHash.startsWith('used-token'))).toBe(
+      false,
+    );
+    expect(rows.some((row) => row.tokenHash.startsWith('expired-token'))).toBe(
+      false,
+    );
+  });
+
+  /**
+   * The race the transaction exists to close: the family is revoked between
+   * this refresh reading the token and minting its replacement, so the token it
+   * hands back would be the one live row left in a family that reuse detection
+   * had just killed.
+   *
+   * The revoke is timed to land in exactly that window. refreshSession reads
+   * the token, then resolves the account, then opens the transaction -- and the
+   * wrapped findById revokes the family in the gap. Revoking from *inside* the
+   * transaction is not an option here: PGlite serves one connection, so a query
+   * on db while a transaction is open asks it to serve itself and deadlocks.
+   * This is the faithful single-connection equivalent, and it fails against an
+   * implementation that checks the family before claiming and then inserts
+   * without re-reading under the lock.
+   */
+  it('never mints into a family revoked between reading the token and minting', async () => {
+    const first = await issuer.issueFullAccess(user, { endsAt: null }, now);
+    const [tokenRow] = await db.select().from(refreshTokens).limit(1);
+
+    const realUsers = new UsersService(db as never);
+    const revokingUsers = {
+      findById: async (id: string) => {
+        const account = await realUsers.findById(id);
+        // The replayed token wins the race here.
+        await db
+          .update(refreshTokens)
+          .set({ revokedAt: now })
+          .where(eq(refreshTokens.familyId, tokenRow.familyId));
+        return account;
+      },
+    };
+    const racing = new SessionIssuer(
+      config,
+      db as never,
+      revokingUsers as never,
+      new CohortMembersService(db as never),
+    );
+
+    await expect(
+      racing.refreshSession(first.refreshToken, now),
+    ).rejects.toBeInstanceOf(SessionUnauthorizedError);
+
+    // Nothing minted: the one row in the family is the revoked original.
+    const rows = await db.select().from(refreshTokens);
+    expect(rows).toHaveLength(1);
+    expect(rows.every((row) => row.revokedAt !== null)).toBe(true);
   });
 });
 
 function sessionIdOf(token: string): unknown {
   const payload = token.split('.')[1] ?? '';
-  return (JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { sid?: unknown })
-    .sid;
+  return (
+    JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+      sid?: unknown;
+    }
+  ).sid;
 }

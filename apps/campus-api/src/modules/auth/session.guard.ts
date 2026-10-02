@@ -19,9 +19,13 @@ import {
   type SessionClaims,
 } from '@campus/session';
 
+/** How the session reached us, which is also how a new one has to go back. */
+export type SessionTransport = 'cookie' | 'bearer';
+
 /** The provisional half of a session, for routes that finish onboarding. */
 export type ProvisionalRequest = AuthenticatedRequest & {
   session?: SessionClaims;
+  sessionTransport?: SessionTransport;
 };
 
 /** Methods a cross-site form can send without a preflight to stop it. */
@@ -100,6 +104,7 @@ abstract class SessionGuardBase implements CanActivate {
     }
 
     req.session = claims;
+    req.sessionTransport = fromCookie ? 'cookie' : 'bearer';
     req.user = {
       id: user.id,
       email: user.email,
@@ -107,7 +112,6 @@ abstract class SessionGuardBase implements CanActivate {
     };
     return true;
   }
-
 }
 
 /** Requires a full-access session: someone already on the roster. */

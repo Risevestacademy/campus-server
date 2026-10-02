@@ -17,7 +17,6 @@ import { initPostHog } from './infra/posthog/posthog.js';
 import { PostHogExceptionInterceptor } from './infra/posthog/posthog.interceptor.js';
 import { CORRELATION_ID_HEADER } from './infra/logger/logger.module.js';
 import { gracefulShutdown } from './infra/shutdown.js';
-import { initTelemetry } from './infra/telemetry/telemetry.js';
 import { ValidationException } from './shared/exceptions/index.js';
 import {
   DomainExceptionFilter,
@@ -38,13 +37,18 @@ function loadApiDescription(): string {
 
 async function bootstrap() {
   const config = loadEnv();
-  const telemetry = initTelemetry({
-    serviceName: config.OTEL_SERVICE_NAME,
-    version: '1.0.0',
-    environment: config.DEPLOYMENT_ENVIRONMENT,
-    enabled: config.FF_OTEL_ENABLED,
-    metricsEnabled: config.FF_OTEL_METRICS_ENABLED,
-  });
+  // Imported only when it is on: the SDK is the slowest thing to load at boot
+  // and the largest thing held afterwards, and a deployment with telemetry
+  // off should pay for neither.
+  const telemetry = config.FF_OTEL_ENABLED
+    ? (await import('./infra/telemetry/telemetry.js')).initTelemetry({
+        serviceName: config.OTEL_SERVICE_NAME,
+        version: '1.0.0',
+        environment: config.DEPLOYMENT_ENVIRONMENT,
+        enabled: true,
+        metricsEnabled: config.FF_OTEL_METRICS_ENABLED,
+      })
+    : undefined;
   const posthogClient = initPostHog({
     apiKey: config.POSTHOG_PROJECT_TOKEN,
     host: config.POSTHOG_HOST,
@@ -55,7 +59,7 @@ async function bootstrap() {
 
   process.on('SIGTERM', () => {
     gracefulShutdown(app, [
-      () => (config.FF_OTEL_ENABLED ? telemetry.shutdown() : Promise.resolve()),
+      () => (telemetry ? telemetry.shutdown() : Promise.resolve()),
       () => (posthogClient ? posthogClient.shutdown() : Promise.resolve()),
     ])
       .then(() => process.exit(0))

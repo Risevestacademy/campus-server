@@ -256,4 +256,41 @@ describe('Players', () => {
   it('refuses to move somebody who never joined', () => {
     expect(() => players().move('nobody', 'up', 0)).toThrow(/not joined/);
   });
+
+  /** A position kept from an earlier visit, which the gateway loads from the store. */
+  describe('joining with a saved position', () => {
+    it('starts there', () => {
+      expect(players().join('ada', 0, { x: 3, y: 2, facing: 'left' })).toEqual({
+        userId: 'ada',
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+    });
+
+    it('starts at the spawn when the tile is off the map', () => {
+      expect(players().join('ada', 0, { x: 9, y: 2, facing: 'left' })).toMatchObject({
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
+    });
+
+    it('is ignored for somebody already here', () => {
+      const world = players();
+      world.join('ada', 0);
+
+      expect(world.join('ada', 0, { x: 3, y: 2, facing: 'left' })).toMatchObject({ x: 0, y: 0 });
+    });
+
+    /** What this process remembers is fresher than what the store kept. */
+    it('is ignored for somebody returning within the grace', () => {
+      const world = new Players({ width: 5, height: 4, spawn: { x: 0, y: 0 } }, STEP_MS, 1_000);
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 0, true);
+
+      expect(world.join('ada', 10, { x: 3, y: 2, facing: 'left' })).toMatchObject({ x: 1, y: 0 });
+    });
+  });
 });

@@ -43,6 +43,9 @@ API clients and the Scalar UI can send the same token as a header instead:
 Authorization: Bearer <token>
 ```
 
+A native app works this way throughout, and gets its tokens in response
+bodies rather than cookies: see [Native apps](#native-apps).
+
 In the Scalar UI, use the **Authorize** button to paste a token and it will be
 added to every request automatically.
 
@@ -159,6 +162,74 @@ minutes over onboarding signs in again, and lands back on `/invitation`.
 
 `POST /v1/auth/logout`, with credentials. It revokes the refresh token and
 clears both cookies. It answers `204` even when nobody was signed in.
+
+### Native apps
+
+A native app has no cookie jar to rely on, so it holds its own tokens. Every
+route behaves the same; only how the session travels differs.
+
+**Sign in.** Run Google sign-in with Google's SDK on the device, then post the
+`idToken` it returns:
+
+```
+POST /v1/auth/google/token
+{ "idToken": "<id_token from the Google SDK>" }
+```
+
+```json
+{
+  "scope": "full_access",
+  "accessToken": "…",
+  "expiresAt": "2026-09-30T12:15:00.000Z",
+  "refreshToken": "…",
+  "refreshExpiresAt": "2026-10-30T12:00:00.000Z",
+  "inviteId": null
+}
+```
+
+The decision is the one the browser callback makes, answered as JSON instead
+of a redirect:
+
+| Answer | Meaning |
+| --- | --- |
+| `200`, `scope: "full_access"` | On the roster. `inviteId` set means an invite to another cohort is waiting. |
+| `200`, `scope: "provisional"` | Holds an invite to answer (`inviteId`). No refresh token: `refreshToken` and `refreshExpiresAt` are null. |
+| `403 INVITE_REQUIRED` | Nobody invited this Google account's address. |
+| `403 ACCOUNT_SUSPENDED` | The account exists but has been closed. |
+| `401 UNAUTHORIZED` | The id_token was not accepted. `details.reason` is `exchange_failed` (not verifiable, or addressed to a client this deployment does not name), `unverified_email` or `incomplete_profile`. |
+
+The id_token must be addressed to a Google client this deployment names:
+its web client, or a native client listed in `GOOGLE_MOBILE_CLIENT_IDS`.
+
+**Call the API.** Send `Authorization: Bearer <accessToken>` on every
+request, and on the `world` socket upgrade.
+
+**Stay signed in.** `POST /v1/auth/refresh` with
+`{ "refreshToken": "…" }` answers with a new pair:
+
+```json
+{
+  "accessToken": "…",
+  "expiresAt": "2026-09-30T12:30:00.000Z",
+  "refreshToken": "…",
+  "refreshExpiresAt": "2026-10-30T12:15:00.000Z"
+}
+```
+
+Store both, replacing the old ones: a refresh token works once. The timing
+rules above apply unchanged — refresh ahead of `expiresAt`, share one
+in-flight refresh, and treat a `401` from refresh as signed out.
+
+**Answer an invite.** `POST /v1/invites/decision` with the bearer token. When
+an accept upgrades a provisional session, the response carries the new
+full-access tokens in `session`, in the same shape as sign-in without
+`inviteId`. Replace the provisional token with them.
+
+**Sign out.** `POST /v1/auth/logout` with `{ "refreshToken": "…" }`, then
+discard both tokens.
+
+Keep the tokens in the platform's secure storage (Keychain, Keystore), never
+in plain preferences.
 
 ## Resources
 

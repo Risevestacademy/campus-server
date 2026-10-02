@@ -246,6 +246,53 @@ sequenceDiagram
   subdomains, which is how `world` on its own host receives it.
   `campus_refresh` stays on campus-api's host and path alone.
 
+## Native apps
+
+A native app cannot use the redirect flow: it has no cookie jar the API can
+rely on, and no page for the callback to land on. It gets the same sessions
+by a different road, and the same rules decide who gets one.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as Native app
+    participant G as Google SDK
+    participant A as campus-api
+
+    M->>G: sign in on the device
+    G-->>M: id_token
+    M->>A: POST /v1/auth/google/token { idToken }
+    A->>A: verify signature and audience, require email_verified
+    Note over A: then the same branches as the browser callback
+    alt admitted
+        A-->>M: 200 { scope, accessToken, refreshToken, expiresAt, inviteId }
+    else refused
+        A-->>M: 401 or 403 in the error contract
+    end
+
+    M->>A: any route, Authorization: Bearer accessToken
+    M->>A: POST /v1/auth/refresh { refreshToken }
+    A-->>M: 200 { accessToken, refreshToken, expiresAt, refreshExpiresAt }
+    M->>A: POST /v1/auth/logout { refreshToken }
+```
+
+- **Audience.** The id_token must be addressed to `GOOGLE_CLIENT_ID` or to a
+  client listed in `GOOGLE_MOBILE_CLIENT_IDS`. That is the whole of the check
+  that the token was minted for this campus and not for another app the user
+  signs in to with Google, so only this project's own clients belong there.
+- **No state, no nonce cookie.** Those protect a redirect from being forged
+  or replayed into a browser. There is no redirect here: the app hands over
+  a token Google signed for it directly.
+- **Tokens in the body, only for a caller with no cookie.** Refresh answers
+  in the body only when the refresh token arrived in the body and no refresh
+  cookie did; the invite decision only when the session arrived as a bearer
+  token. A browser is always answered in httpOnly cookies, so a page cannot
+  ask to be handed tokens its script could read.
+- **Everything else is shared.** One family per sign-in, rotation with the
+  grace window, the access cap, and the per-refresh re-check are the same
+  code. `world` already takes a bearer token on an upgrade that carries no
+  `Origin`.
+
 ### How `world` follows a sign-in
 
 A socket lasts for hours; an access token for fifteen minutes, and the

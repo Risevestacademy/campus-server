@@ -65,4 +65,13 @@ describe('Google sign-in while switched off (e2e)', () => {
     expect(res.status).toBe(404);
     expect(res.headers['set-cookie']).toBeUndefined();
   });
+
+  it('answers the native-app sign-in the same way', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/v1/auth/google/token')
+      .send({ idToken: 'an-id-token' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
+  });
 });

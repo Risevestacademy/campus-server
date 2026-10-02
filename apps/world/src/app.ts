@@ -6,6 +6,7 @@ import Fastify, {
 
 import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
+import { createPositionStore, type PositionStore } from './infra/positions.js';
 import { CORRELATION_ID_HEADER, correlationId, loggerOptions } from './infra/logger.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
 
@@ -14,12 +15,15 @@ export interface World {
   gateway: Gateway;
   env: Env;
   accounts: AccountLookup;
+  positions: PositionStore;
 }
 
 export async function buildWorld(
   env: Env = loadEnv(),
   // Injectable so tests can answer for the database without one.
   accounts: AccountLookup = createAccountLookup(env),
+  // Also injectable; defaults to Redis when REDIS_URL is set, nothing if not.
+  positions?: PositionStore,
 ): Promise<World> {
   const app = Fastify({
     logger: loggerOptions(env),
@@ -56,7 +60,8 @@ export async function buildWorld(
     options: { maxPayload: env.WORLD_MAX_MESSAGE_BYTES },
   });
 
-  const gateway = registerGateway(app, env, accounts);
+  const store = positions ?? createPositionStore(env, app.log);
+  const gateway = registerGateway(app, env, accounts, store);
 
   app.get('/health', async () => ({
     status: 'ok',
@@ -65,5 +70,5 @@ export async function buildWorld(
     sockets: { connections: gateway.connections.size, users: gateway.connections.users },
   }));
 
-  return { app, gateway, env, accounts };
+  return { app, gateway, env, accounts, positions: store };
 }

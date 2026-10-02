@@ -86,6 +86,28 @@ const schema = z.object({
   WORLD_RECONNECT_GRACE_SECONDS: z.coerce.number().int().min(0).default(30),
 
   /**
+   * Where each player last stood, kept between visits. Unset keeps nothing:
+   * everybody starts at the spawn, beyond the reconnect grace above. Empty
+   * counts as unset, so a blank line in a .env file means "off".
+   */
+  REDIS_URL: z
+    .string()
+    .optional()
+    .transform((value) => (value ? value : undefined)),
+
+  /**
+   * How often positions of people who moved are written to Redis, besides
+   * whenever somebody's last tab closes. A crash loses at most this much.
+   */
+  WORLD_POSITION_SAVE_SECONDS: z.coerce.number().int().min(1).default(60),
+
+  /**
+   * How long a saved position lasts without a visit. Somebody away longer
+   * starts fresh at the spawn, and nothing has to clean up after them.
+   */
+  WORLD_POSITION_TTL_DAYS: z.coerce.number().int().min(1).default(90),
+
+  /**
    * How recently a login must have been refreshed for its socket to stay
    * open. A client refreshes at least once per access token, and the shared
    * session policy caps those at fifteen minutes, so the window must cover
