@@ -273,10 +273,11 @@ export class SessionIssuer {
     // One transaction for the three steps that must not interleave: claim the
     // old token, re-check the family, mint the replacement. The family is
     // locked first so that a replayed token revoking it, and this refresh
-    // minting its replacement, serialise. Whichever commits first, the second
-    // sees it: if the revoke lands first this re-read finds the family revoked
-    // and mints nothing; if this lands first, the revoke's UPDATE -- matching
-    // on family_id AND revoked_at IS NULL -- catches the row inserted here.
+    // minting its replacement, serialise. revokeFamily takes the same lock, so
+    // whichever gets it first, the other sees its work: if the revoke lands
+    // first this re-read finds the family revoked and mints nothing; if this
+    // lands first, the revoke waits for it to commit and then revokes the row
+    // inserted here too.
     return this.db
       .transaction(async (tx) => {
         await tx
@@ -325,11 +326,13 @@ export class SessionIssuer {
               !raced?.usedAt ||
               raced.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()
             ) {
-              return { kind: 'reuse', familyId } as const;
+              await this.revokeFamily(familyId, now, tx);
+              return { kind: 'reuse' } as const;
             }
           }
         } else if (locked.usedAt.getTime() + REFRESH_GRACE_MS < now.getTime()) {
-          return { kind: 'reuse', familyId } as const;
+          await this.revokeFamily(familyId, now, tx);
+          return { kind: 'reuse' } as const;
         }
 
         return {
@@ -344,13 +347,12 @@ export class SessionIssuer {
           ),
         } as const;
       })
-      .then(async (outcome) => {
-        // Revoking from inside the transaction would be undone by the throw
-        // that follows it, leaving a replayed token's family live. It has to
-        // run once the transaction has committed -- and committing first is
-        // what makes it see, and revoke, any row minted above.
+      .then((outcome) => {
+        // Thrown only once the transaction has committed: a throw inside it
+        // would roll back the revoke made there. The revoke itself stays
+        // inside, under the family lock -- after commit, a refresh of a sibling
+        // token could take the lock first and mint a row it would miss.
         if (outcome.kind === 'reuse') {
-          await this.revokeFamily(outcome.familyId, now);
           throw new SessionUnauthorizedError('Refresh token reuse detected');
         }
         if (outcome.kind === 'unusable') {
@@ -360,13 +362,30 @@ export class SessionIssuer {
       });
   }
 
+  /**
+   * Locks the family before revoking it, so a refresh holding the lock is
+   * waited out and the row it minted is revoked too.
+   *
+   * A bare UPDATE would miss that row: it reads the family as of its own
+   * start, and on waking re-checks only the rows it already found. The UPDATE
+   * is a separate statement from the lock for the same reason -- it reads the
+   * family afresh once the lock is held.
+   */
   private async revokeFamily(
     familyId: string,
     now: Date,
     tx?: Tx,
   ): Promise<void> {
-    const db = tx ?? this.db;
-    await db
+    if (!tx) {
+      await this.db.transaction((tx) => this.revokeFamily(familyId, now, tx));
+      return;
+    }
+    await tx
+      .select({ id: refreshTokens.id })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.familyId, familyId))
+      .for('update');
+    await tx
       .update(refreshTokens)
       .set({ revokedAt: now })
       .where(
