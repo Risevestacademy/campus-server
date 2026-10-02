@@ -16,7 +16,11 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { AdminGuard } from '../../shared/auth/admin.guard.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
-import { CurrentSession } from '../auth/current-session.decorator.js';
+import {
+  CurrentSession,
+  CurrentSessionTransport,
+} from '../auth/current-session.decorator.js';
+import { sessionTokens } from '../auth/dto/session-tokens.dto.js';
 import {
   clearSessionCookies,
   cookieSite,
@@ -26,7 +30,11 @@ import { SessionUnauthorizedError } from '../auth/auth.exceptions.js';
 import { SessionIssuer } from '../auth/session-issuer.js';
 import { CohortMembersService } from '../cohorts/cohort-members.service.js';
 import { isAdmin } from '../users/users.service.js';
-import { AnySessionGuard, SessionGuard } from '../auth/session.guard.js';
+import {
+  AnySessionGuard,
+  SessionGuard,
+  type SessionTransport,
+} from '../auth/session.guard.js';
 import { SessionScope } from '@campus/session';
 import { ApiCreateInvite } from './docs/create-invite.docs.js';
 import { ApiDecideInvite } from './docs/decide-invite.docs.js';
@@ -112,6 +120,7 @@ export class InvitesController {
   @ApiDecideInvite()
   async decide(
     @CurrentSession() session: InviteSession,
+    @CurrentSessionTransport() transport: SessionTransport,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: InviteDecisionDto,
     // passthrough keeps Nest serialising `response` below; a bare @Res would
@@ -145,8 +154,13 @@ export class InvitesController {
         outcome.account,
         grant,
       );
+      // Answered the way it was asked: a client that sent a bearer token
+      // holds its own tokens and has no cookie jar to put new ones in.
+      if (transport === 'bearer') {
+        return { ...outcome.response, session: sessionTokens(upgraded) };
+      }
       setSessionCookies(res, cookieSite(this.config), upgraded);
-    } else {
+    } else if (transport === 'cookie') {
       // A provisional session with nothing left to finish is a dead end, so
       // declining takes the cookie with it. The options are the same ones the
       // cookie was set with — a mismatched path or SameSite would leave it in

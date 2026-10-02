@@ -4,12 +4,37 @@ Single Railway project, two Environments (`staging`, `production`), each
 with its own independent services and Postgres database — nothing shared
 across environments.
 
+## Infrastructure as code
+
+Staging's backend services are described in
+[`.railway/railway.ts`](../.railway/railway.ts) and changed through it, not
+through the dashboard:
+
+```bash
+railway config plan    # what would change; touches nothing
+railway config apply   # the same plan, applied after confirmation
+```
+
+- The file is a named partial, `campus-backend`. It owns `campus-api`,
+  `campus-world`, Postgres, Redis and their volumes. The web app and
+  storybook belong to campus-web's partial, `campus-frontends`, and are not
+  declared here; a partial only touches what it declares.
+- Variable names are listed, values are not: each is `preserve()`, which
+  keeps whatever Railway already holds. Set or rotate a value in Railway.
+- Staging only. The file refuses to plan for any other environment, because
+  production has a different shape that it does not describe yet.
+- A dashboard edit to something the file declares shows up as a difference
+  in the next plan, and the next apply puts the file's value back.
+
+Config as code (`railway.json`, `railway.toml`) is deprecated by Railway and
+stops being read on 2026-12-01; do not add either.
+
 ## Services
 
 | Service                          | Public domain?                       |
 | -------------------------------- | ------------------------------------ |
 | `campus-api` (`apps/campus-api`) | Yes                                  |
-| `world` (`apps/world`)           | Not yet                              |
+| `world` (`apps/world`)           | Yes                                  |
 | `frontend` (separate repo)       | Yes                                  |
 | `postgres` (Railway plugin)      | No — internal + admin proxy URL only |
 | `redis` (Railway Redis)          | No — internal only                   |
@@ -41,7 +66,19 @@ change to either reaches both apps:
   — the trailing `...` builds the workspace packages campus-api depends on
   (`@campus/session`), which ship compiled output. Without it the API starts
   and then cannot resolve them.
-- Start: `pnpm --filter campus-api start:prod`
+- Start: `node --max-old-space-size=128 --max-semi-space-size=2 apps/campus-api/dist/main.js`
+  — `node` directly, because started through pnpm the wrapper stays alive as
+  the parent and holds about as much memory as the API. The flags cap V8's
+  heap, which otherwise grows to fit a container far larger than the API
+  needs; on the command rather than in `NODE_OPTIONS` so the pre-deploy step
+  does not run under them. If the logs ever show `Reached heap limit`, raise
+  the first one.
+- Serverless on staging: the API sleeps once it has sent nothing for a few
+  minutes and wakes on the next request, from the internet or from the web
+  app over the private network. The first request after a sleep is slow and
+  may answer 502. Anything that keeps sending keeps it awake, which is why
+  the database pool closes idle connections and why nothing here should
+  poll; a signed-in browser refreshing its token also wakes it.
 - Healthcheck path: `/v1/health`
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
   `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED=false` (no collector deployed),
@@ -70,6 +107,12 @@ change to either reaches both apps:
   the shared session policy in `@campus/session`: campus-api refuses to boot
   above it, and world refuses a refresh window shorter than it plus two
   minutes, since world relies on sign-ins being refreshed that often.
+- `GOOGLE_MOBILE_CLIENT_IDS` (optional): the Google client ids of the native
+  apps, comma-separated, from the same Google project as `GOOGLE_CLIENT_ID`.
+  A native app signs in by posting an id_token to `/v1/auth/google/token`.
+  A token is accepted when it is addressed to one of the clients named here
+  or to the web client, and refused otherwise. Unset, only the web client's
+  tokens are accepted.
 - `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
   shared under, so world on its own subdomain receives it — for example
   `campus.example`. Only `campus_session` gets it; the refresh and state
@@ -198,7 +241,9 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
 ## world
 
 - Build: `pnpm install --frozen-lockfile && pnpm --filter world... build`
-- Start: `pnpm --filter world start:prod`
+- Start: `node --max-old-space-size=96 --max-semi-space-size=2 apps/world/dist/index.js`
+  — for the same reasons as campus-api's. Never serverless: it holds sockets
+  open, and a sleep would drop everybody.
 - Healthcheck path: `/health` (no `/v1`). It answers while the process is
   up; it does not check the database.
 - Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
@@ -281,6 +326,11 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 ## Open items
 
 - `world` has no public domain — add one once something actually calls it.
+- Production is not described in `.railway/railway.ts`. It has no Redis, no
+  variables on campus-api or world, and older build settings; bring it in
+  line before the file is taught about it.
+- Redis is provisioned on staging and `world` is given `REDIS_URL`, but
+  nothing connects to it until the presence work lands.
 - Node version isn't pinned on Railway. Railpack takes it from `engines.node`
   in the root `package.json`, which says `>=20`, so it builds on Node 20
   while CI runs 24. Pin it (for example `"node": "24.x"`) to match.

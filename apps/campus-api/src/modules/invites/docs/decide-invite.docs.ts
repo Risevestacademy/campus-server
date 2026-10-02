@@ -33,7 +33,10 @@ export function ApiDecideInvite(): MethodDecorator {
         'full-access one. Decline closes the invite; a provisional cookie is ' +
         'cleared, leaving the account row in place. A full-access session ' +
         'keeps its cookies either way: accepting only adds a membership, ' +
-        'which never shortens access. An invite ' +
+        'which never shortens access. A caller authenticated with a bearer ' +
+        'token rather than the cookie is answered in the body instead: an ' +
+        'accept that upgrades a provisional session returns the new tokens ' +
+        'in `session`, and no cookie is set or cleared. An invite ' +
         'that already carries an answer is a 409 — branch on error.code to ' +
         'decide where the caller goes next.',
     }),

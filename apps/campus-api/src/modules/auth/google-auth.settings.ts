@@ -1,8 +1,14 @@
 import type { Env } from '../../infra/config/config.module.js';
+import { parseList } from '../../infra/config/env.js';
 import { GoogleAuthNotConfiguredError } from './auth.exceptions.js';
 
 export interface GoogleAuthSettings {
   clientId: string;
+  /**
+   * Every client an id_token may be addressed to: the web client, and the
+   * native apps named in GOOGLE_MOBILE_CLIENT_IDS.
+   */
+  idTokenAudiences: string[];
   clientSecret: string;
   callbackUrl: string;
   stateSecret: string;
@@ -26,6 +32,10 @@ export function requireGoogleAuth(env: Env): GoogleAuthSettings {
 
   return {
     clientId: env.GOOGLE_CLIENT_ID,
+    idTokenAudiences: [
+      env.GOOGLE_CLIENT_ID,
+      ...parseList(env.GOOGLE_MOBILE_CLIENT_IDS),
+    ],
     clientSecret: env.GOOGLE_CLIENT_SECRET,
     callbackUrl: env.GOOGLE_CALLBACK_URL,
     stateSecret: env.AUTH_STATE_SECRET,
