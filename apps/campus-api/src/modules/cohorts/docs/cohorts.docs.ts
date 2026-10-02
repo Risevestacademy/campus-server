@@ -3,6 +3,7 @@ import {
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -174,6 +175,93 @@ export function ApiAttachTrack(): MethodDecorator {
                     cohortId: '11111111-1111-4111-8111-111111111111',
                     trackId: '33333333-3333-4333-8333-333333333333',
                   },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
+export function ApiUpdateCohort(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Update a cohort (admin only)',
+      description:
+        'A partial edit: only the fields present are written. code is ' +
+        'trimmed and uppercased, and must be unique. An endDate before the ' +
+        'merged startDate is refused.',
+    }),
+    ApiOkResponse({ type: CohortResponseDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'A malformed field, or an endDate before startDate. id is not a UUID.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No cohort has this id.',
+      content: { 'application/json': { examples: { cohortNotFound } } },
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description: 'Another cohort already has this code.',
+      content: {
+        'application/json': {
+          examples: {
+            duplicateCode: {
+              summary: 'Code taken',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'A cohort with code C1 already exists',
+                  details: { code: 'C1' },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
+export function ApiDeleteCohort(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Delete a cohort (admin only)',
+      description:
+        'Removes a cohort with nothing attached to it. A cohort that still ' +
+        'has tracks, members or invites is refused with a 409.',
+    }),
+    ApiNoContentResponse({ description: 'The cohort was deleted.' }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'id is not a UUID.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No cohort has this id.',
+      content: { 'application/json': { examples: { cohortNotFound } } },
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description: 'The cohort still has tracks, members or invites.',
+      content: {
+        'application/json': {
+          examples: {
+            hasDependents: {
+              summary: 'Cohort in use',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'Cohort cannot be deleted while it still has tracks, members or invites',
+                  details: { cohortId: '11111111-1111-4111-8111-111111111111' },
                 },
               },
             },
