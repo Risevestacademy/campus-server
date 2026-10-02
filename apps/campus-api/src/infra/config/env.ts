@@ -81,11 +81,16 @@ export function parseEmailList(value: string): string[] | undefined {
   return emails.length > 0 ? emails : undefined;
 }
 
-export function parseCorsOrigins(value: string | undefined): string[] {
+/** Comma-separated values, trimmed, with the empty ones dropped. */
+export function parseList(value: string | undefined): string[] {
   return (value ?? '')
     .split(',')
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+export function parseCorsOrigins(value: string | undefined): string[] {
+  return parseList(value);
 }
 
 export class Env {
@@ -145,6 +150,18 @@ export class Env {
   @IsNotEmpty()
   @IsString()
   GOOGLE_CLIENT_SECRET?: string;
+
+  /**
+   * Client ids of the native apps, comma-separated. A native app signs in
+   * with Google's own SDK and posts the id_token it is given; that token is
+   * addressed to the app's client, not the web one, so each has to be named
+   * here before POST /v1/auth/google/token will take it. Unset = only tokens
+   * addressed to GOOGLE_CLIENT_ID are accepted, which is what an Android app
+   * asking for the web client as its server client receives.
+   */
+  @IsOptional()
+  @IsString()
+  GOOGLE_MOBILE_CLIENT_IDS?: string;
 
   /**
    * Must point at this API, not at the web app, and must match a redirect URI

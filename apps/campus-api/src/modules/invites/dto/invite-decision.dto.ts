@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 
+import { SessionTokensDto } from '../../auth/dto/session-tokens.dto.js';
 import { CohortRole, StudentStatus } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
 import { InviteStatus } from '../schema.js';
@@ -82,9 +83,10 @@ export class MembershipGrantedDto {
 
 /**
  * What the onboarding screen needs to move on: where the invite ended up, the
- * membership that produced, and the role the account now carries. The session
- * upgrade itself travels in a Set-Cookie header, not in this body — the token
- * is httpOnly precisely so the page never holds it.
+ * membership that produced, and the role the account now carries. For a
+ * browser the session upgrade itself travels in a Set-Cookie header, not in
+ * this body — the token is httpOnly precisely so the page never holds it.
+ * Only a caller that authenticated with a bearer token is handed `session`.
  */
 export class InviteDecisionResponseDto {
   @ApiProperty({ example: '66666666-6666-4666-8666-666666666666' })
@@ -120,4 +122,15 @@ export class InviteDecisionResponseDto {
       'Null on decline.',
   })
   systemRole: SystemRole | null;
+
+  @ApiPropertyOptional({
+    type: () => SessionTokensDto,
+    description:
+      'The full-access session an accept upgraded a provisional one to. ' +
+      'Present only when the request was authenticated with a bearer token ' +
+      'rather than the cookie; replace the provisional token with it. ' +
+      'Absent on a decline, and for a full-access caller, who keeps the ' +
+      'session they came with.',
+  })
+  session?: SessionTokensDto;
 }
