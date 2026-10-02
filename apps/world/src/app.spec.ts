@@ -1,4 +1,7 @@
+import { SessionScope, signSessionToken } from '@campus/session';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import WebSocket from 'ws';
 
 import { buildWorld } from './app.js';
 import { loadEnv } from './infra/env.js';
@@ -56,5 +59,58 @@ describe('the HTTP surface', () => {
     expect(response.headers['x-correlation-id']).toBe('from-the-api');
     await gateway.stop();
     await app.close();
+  });
+});
+
+/**
+ * A store that fails every call, standing in for Redis being down. Redis
+ * being down must cost somebody their saved position, never their way in,
+ * and must not hold up a shutdown.
+ */
+describe('with the position store failing', () => {
+  const failing = {
+    load: () => Promise.reject(new Error('redis is down')),
+    save: () => Promise.reject(new Error('redis is down')),
+    forget: () => Promise.reject(new Error('redis is down')),
+    ready: async () => false,
+    close: async () => undefined,
+  };
+
+  it('still lets somebody in, at the spawn, and still shuts down', async () => {
+    const secret = 'a-world-session-secret-of-at-least-32-chars';
+    const world = await buildWorld(
+      loadEnv({
+        AUTH_SESSION_SECRET: secret,
+        DATABASE_URL: 'postgres://unused',
+        CORS_ORIGINS: 'https://campus.example.com',
+        FF_LOG_LEVEL: 'fatal',
+      } as NodeJS.ProcessEnv),
+      { ...accounts, find: async (id: string) => ({ id, suspended: false }) },
+      failing,
+    );
+    await world.app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = world.app.server.address() as AddressInfo;
+    const { token } = await signSessionToken(
+      { userId: 'ada', email: 'ada@campus.local', scope: SessionScope.FullAccess },
+      { secret, ttlMinutes: 30 },
+    );
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
+      headers: { origin: 'https://campus.example.com', cookie: `campus_session=${token}` },
+    });
+    const snapshot = await new Promise<Record<string, unknown>>((resolve) => {
+      ws.on('message', (raw) => {
+        const message = JSON.parse(raw.toString()) as Record<string, unknown>;
+        if (message.type === 'snapshot') resolve(message);
+      });
+    });
+
+    expect(snapshot.players).toEqual([{ userId: 'ada', x: 20, y: 15, facing: 'down' }]);
+
+    const closed = new Promise((resolve) => ws.on('close', resolve));
+    // The save on shutdown fails; stop() must still finish and close sockets.
+    await world.gateway.stop();
+    await closed;
+    await world.app.close();
   });
 });

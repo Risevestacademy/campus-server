@@ -25,6 +25,8 @@ server decides every position.
   - one avatar per person, however many tabs they have open
   - other players' moves are sent once per tick
   - a reconnect within a grace period resumes where the player stood
+  - between visits, players start where they last stood, kept in Redis
+    (`REDIS_URL`; unset keeps nothing)
 - **Limits:**
   - per-socket message size and rate
   - a cap on what may wait unsent to a client that stops reading
