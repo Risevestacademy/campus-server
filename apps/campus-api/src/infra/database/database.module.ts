@@ -14,7 +14,11 @@ import * as schema from './schema/index.js';
       provide: DRIZZLE,
       inject: [CONFIG],
       useFactory: (config: Env): Db => {
-        const sql = postgres(config.DATABASE_URL);
+        // Idle connections are closed rather than held: an open one sends
+        // keepalives for as long as it lives, which is traffic enough to
+        // stop a serverless deployment ever going to sleep. The next query
+        // reconnects on its own.
+        const sql = postgres(config.DATABASE_URL, { idle_timeout: 20 });
         return drizzle(sql, { schema });
       },
     },
