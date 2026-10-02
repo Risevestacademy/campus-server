@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { OAuth2Client } from 'google-auth-library';
+import { OAuth2Client, type TokenPayload } from 'google-auth-library';
 import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -51,8 +51,21 @@ export class GoogleOAuthService {
 
   async exchangeCode(code: string): Promise<VerifiedGoogleIdentity> {
     const idToken = await this.redeem(code);
-    const payload = await this.verify(idToken);
+    return this.identityFrom(await this.verify(idToken, this.google.clientId));
+  }
 
+  /**
+   * The native apps' way in. Google's SDK on the device runs the consent
+   * screen and hands the app an id_token, so there is no code to redeem —
+   * only a token to check, addressed to one of the clients this deployment
+   * names as its own.
+   */
+  async verifyIdToken(idToken: string): Promise<VerifiedGoogleIdentity> {
+    const { idTokenAudiences } = requireGoogleAuth(this.config);
+    return this.identityFrom(await this.verify(idToken, idTokenAudiences));
+  }
+
+  private identityFrom(payload: TokenPayload): VerifiedGoogleIdentity {
     if (!payload.sub || !payload.email) {
       throw new GoogleSignInFailedError('incomplete_profile');
     }
@@ -84,12 +97,15 @@ export class GoogleOAuthService {
     }
   }
 
-  private async verify(idToken: string) {
-    const { client, clientId } = this.google;
+  private async verify(
+    idToken: string,
+    audience: string | string[],
+  ): Promise<TokenPayload> {
+    const { client } = this.google;
     try {
       const ticket = await client.verifyIdToken({
         idToken,
-        audience: clientId,
+        audience,
       });
       const payload = ticket.getPayload();
       if (!payload) {

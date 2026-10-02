@@ -61,12 +61,14 @@ a clear error.
 | `FF_GOOGLE_AUTH_ENABLED`          | `false`                                   | Master switch for Google sign-in. When `true`, the four `GOOGLE_*` / `AUTH_*` values below are all required and the app refuses to boot without them |
 | `GOOGLE_CLIENT_ID`                | *(unset)*                                 | OAuth **web-application** client ID. Android and iOS clients cannot perform the code exchange |
 | `GOOGLE_CLIENT_SECRET`            | *(unset)*                                 | Secret for that web client. Never ships to a mobile app |
+| `GOOGLE_MOBILE_CLIENT_IDS`        | *(unset)*                                 | Optional. Google client IDs of the native apps, comma-separated, from the same Google project as `GOOGLE_CLIENT_ID`. A native app signs in by posting an id_token to `POST /v1/auth/google/token`; a token is accepted when addressed to one of these or to the web client. Unset, only the web client's tokens are accepted |
 | `GOOGLE_CALLBACK_URL`             | *(unset)*                                 | Where Google returns the user. Must point at **this API**, not the web app, and match a registered redirect URI exactly |
 | `AUTH_STATE_SECRET`               | *(unset)*                                 | Signs the OAuth `state` parameter; at least 32 characters. Rotating it only interrupts sign-ins already in flight |
 | `AUTH_SESSION_SECRET`             | *(unset)*                                 | Signs session tokens; at least 32 characters. Separate from the state secret — rotating this one signs everybody out |
 | `AUTH_SESSION_TTL_MINUTES`        | `15`                                      | Lifetime of a full-access session |
 | `AUTH_PROVISIONAL_TTL_MINUTES`    | `30`                                      | Lifetime of the provisional session handed out before an invite is accepted |
 | `AUTH_REFRESH_TTL_DAYS`           | `30`                                      | Lifetime of the revocable refresh token stored by the API |
+| `AUTH_COOKIE_DOMAIN`              | *(unset)*                                 | Optional. Parent domain the access cookie is shared under, so `world` on its own subdomain receives it (`campus.example` covers `world.campus.example`). A bare domain: no scheme, no leading dot. It must cover the hosts of both `APP_PUBLIC_URL` and `GOOGLE_CALLBACK_URL`, or the app refuses to boot. Unset keeps the cookie host-only, which is right for local development. The refresh and state cookies stay host-only either way |
 | `CORS_ORIGINS`                    | *(unset)*                                 | Comma-separated browser origins allowed to call the API. Unset sends no CORS headers, which blocks browser apps |
 | `TRUST_PROXY_HOPS`                | `1`                                       | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none |
 | `FF_LOG_LEVEL`                    | `info`                                    | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal` |
@@ -75,6 +77,9 @@ a clear error.
 | `OTEL_SERVICE_NAME`               | `campus-api`                              | Service name sent with traces        |
 | `FF_OTEL_ENABLED`                 | `true`                                    | Master switch for OpenTelemetry      |
 | `FF_OTEL_METRICS_ENABLED`         | `true`                                    | Enable Node.js runtime metrics export |
+| `FF_POSTHOG_ENABLED`              | `false`                                   | Master switch for PostHog analytics and error tracking. When `true`, `POSTHOG_PROJECT_TOKEN` is required and the app refuses to boot without it |
+| `POSTHOG_PROJECT_TOKEN`           | *(unset)*                                 | PostHog project API key (`phc_…`). Use the project matching this environment, so frontend and backend events land together |
+| `POSTHOG_HOST`                    | `https://eu.i.posthog.com`                | PostHog ingestion host; must be `https` |
 
 > Other OpenTelemetry variables (`OTEL_EXPORTER_OTLP_ENDPOINT`,
 > `OTEL_EXPORTER_OTLP_HEADERS`, etc.) are read directly by the OTel SDK from the

@@ -19,7 +19,7 @@ import type {
   VerifiedGoogleIdentity,
 } from './google-oauth.service.js';
 
-const google = { exchangeCode: vi.fn() };
+const google = { exchangeCode: vi.fn(), verifyIdToken: vi.fn() };
 const users = {
   findForGoogleIdentity: vi.fn(),
   linkGoogleIdentity: vi.fn(),
@@ -279,5 +279,42 @@ describe('completeGoogleSignIn', () => {
     const logged = JSON.stringify(logger.info.mock.calls);
     expect(logged).not.toContain('ada@campus.local');
     expect(logged).toContain('user-1');
+  });
+});
+
+/**
+ * A native app arrives with an id_token instead of a code. Only where the
+ * identity comes from differs; who gets in is decided by the same rules.
+ */
+describe('completeGoogleIdTokenSignIn', () => {
+  beforeEach(() => {
+    google.verifyIdToken.mockResolvedValue(verifiedIdentity());
+  });
+
+  it('admits a current member on the identity the id_token carries', async () => {
+    users.findForGoogleIdentity.mockResolvedValue(user());
+    members.resolveActiveAccess.mockResolvedValue({ endsAt: null });
+
+    const outcome = await service.completeGoogleIdTokenSignIn('id-token');
+
+    expect(outcome).toMatchObject({ kind: 'full_access', pendingInvite: null });
+    expect(google.verifyIdToken).toHaveBeenCalledWith('id-token');
+    expect(google.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('holds an id_token to the same rules as a code', async () => {
+    google.verifyIdToken.mockResolvedValue(
+      verifiedIdentity({ emailVerified: false }),
+    );
+
+    await expect(
+      service.completeGoogleIdTokenSignIn('id-token'),
+    ).rejects.toThrow(GoogleSignInFailedError);
+
+    google.verifyIdToken.mockResolvedValue(verifiedIdentity());
+    await expect(
+      service.completeGoogleIdTokenSignIn('id-token'),
+    ).rejects.toThrow(InviteRequiredError);
+    expect(users.createFromGoogleIdentity).not.toHaveBeenCalled();
   });
 });

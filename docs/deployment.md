@@ -107,6 +107,12 @@ change to either reaches both apps:
   the shared session policy in `@campus/session`: campus-api refuses to boot
   above it, and world refuses a refresh window shorter than it plus two
   minutes, since world relies on sign-ins being refreshed that often.
+- `GOOGLE_MOBILE_CLIENT_IDS` (optional): the Google client ids of the native
+  apps, comma-separated, from the same Google project as `GOOGLE_CLIENT_ID`.
+  A native app signs in by posting an id_token to `/v1/auth/google/token`.
+  A token is accepted when it is addressed to one of the clients named here
+  or to the web client, and refused otherwise. Unset, only the web client's
+  tokens are accepted.
 - `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
   shared under, so world on its own subdomain receives it — for example
   `campus.example`. Only `campus_session` gets it; the refresh and state
