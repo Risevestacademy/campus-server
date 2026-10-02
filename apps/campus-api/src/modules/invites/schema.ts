@@ -66,6 +66,14 @@ export const invites = pgTable(
       withTimezone: true,
     }),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    /**
+     * Who cancelled the invite, and when. Accepted/declined leave these null:
+     * nobody cancels their own acceptance, so there is no actor to name. Kept
+     * as columns rather than an audit-log entry so the question "who killed
+     * this offer" is answerable from the invite itself.
+     */
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    revokedBy: uuid('revoked_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

@@ -1511,3 +1511,367 @@ describe('decide()', () => {
     expect(row.dismissalReason).toBeNull();
   });
 });
+
+/**
+ * Admin surface: cancelling an offer and seeing the ones still out.
+ *
+ * Separate fixtures from the decide() block above so revoking a pending invite
+ * cannot be confused with settling one — the two write the same row from
+ * opposite directions.
+ */
+describe('InvitesService admin revoke and list', () => {
+  let admin: AuthenticatedUser;
+  let cohortId: string;
+  let cohortTrackId: string;
+
+  beforeEach(async () => {
+    await db.execute(
+      sql`truncate invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+    );
+
+    const [adminRow] = await db
+      .insert(users)
+      .values({ email: 'admin@campus.local', systemRole: SystemRole.Admin })
+      .returning();
+    admin = {
+      id: adminRow.id,
+      email: adminRow.email,
+      systemRole: SystemRole.Admin,
+    };
+
+    const [track] = await db
+      .insert(tracks)
+      .values({ name: 'Software Engineering', code: 'SE' })
+      .returning();
+    const [cohort] = await db
+      .insert(cohorts)
+      .values({ name: 'Cohort 1', code: 'C1', status: CohortStatus.Active })
+      .returning();
+    const [link] = await db
+      .insert(cohortTracks)
+      .values({ cohortId: cohort.id, trackId: track.id })
+      .returning();
+    cohortId = cohort.id;
+    cohortTrackId = link.id;
+  });
+
+  let sequence = 0;
+  const makeInvite = async (
+    overrides: Partial<typeof invites.$inferInsert> = {},
+  ) => {
+    sequence += 1;
+    const [row] = await db
+      .insert(invites)
+      .values({
+        email: `person${sequence}@campus.local`,
+        cohortId,
+        cohortRole: CohortRole.Student,
+        cohortTrackId,
+        systemRole: SystemRole.User,
+        tokenHash: hashInviteToken(generateInviteToken()),
+        expiresAt: new Date(Date.now() + 86_400_000),
+        invitedBy: admin.id,
+        createdAt: new Date(Date.UTC(2026, 0, 1) + sequence * 60_000),
+        ...overrides,
+      })
+      .returning();
+    return row;
+  };
+
+  const rowOf = async (id: string) => {
+    const [row] = await db.select().from(invites).where(eq(invites.id, id));
+    return row;
+  };
+
+  describe('revoke', () => {
+    it('moves a pending invite to revoked, naming who and when', async () => {
+      const invite = await makeInvite();
+      const at = new Date('2026-03-04T10:00:00.000Z');
+
+      const result = await service.revoke(invite.id, admin, at);
+
+      expect(result.status).toBe(InviteStatus.Revoked);
+      expect(result.revokedBy).toBe(admin.id);
+      expect(result.revokedAt).toBe(at.toISOString());
+
+      const row = await rowOf(invite.id);
+      expect(row.status).toBe(InviteStatus.Revoked);
+      expect(row.revokedBy).toBe(admin.id);
+      expect(row.revokedAt).toEqual(at);
+    });
+
+    /**
+     * Revoked, not expired: an admin pulled this one. The distinction only
+     * exists in the record, so nothing in the status column can carry it — the
+     * actor columns are the whole of the difference.
+     */
+    it('records a cancellation rather than a lapse', async () => {
+      const invite = await makeInvite();
+
+      await service.revoke(invite.id, admin);
+
+      const row = await rowOf(invite.id);
+      expect(row.status).not.toBe(InviteStatus.Expired);
+      expect(row.revokedBy).not.toBeNull();
+      expect(row.revokedAt).not.toBeNull();
+      // A lapsed invite has no actor, so these must not be conflated.
+      expect(row.acceptedAt).toBeNull();
+    });
+
+    it('refuses an already-revoked invite with INVITE_REVOKED', async () => {
+      const invite = await makeInvite();
+      await service.revoke(invite.id, admin);
+
+      await expect(service.revoke(invite.id, admin)).rejects.toBeInstanceOf(
+        InviteRevokedException,
+      );
+    });
+
+    it('refuses an accepted invite with INVITE_ALREADY_ACCEPTED', async () => {
+      const invite = await makeInvite({
+        status: InviteStatus.Accepted,
+        acceptedAt: new Date(),
+      });
+
+      await expect(service.revoke(invite.id, admin)).rejects.toBeInstanceOf(
+        InviteAlreadyAcceptedException,
+      );
+      expect((await rowOf(invite.id)).status).toBe(InviteStatus.Accepted);
+    });
+
+    it('refuses a declined invite with INVITE_ALREADY_DECLINED', async () => {
+      const invite = await makeInvite({ status: InviteStatus.Declined });
+
+      await expect(service.revoke(invite.id, admin)).rejects.toBeInstanceOf(
+        InviteAlreadyDeclinedException,
+      );
+      expect((await rowOf(invite.id)).status).toBe(InviteStatus.Declined);
+    });
+
+    /**
+     * An invite that has already stopped on its own has no cancellation to
+     * record. Refusing it also refuses to relabel it: the row becomes expired,
+     * which is what it was, rather than revoked, which would put an actor on
+     * an event nobody performed.
+     */
+    it('answers a lapsed invite as expired and materialises the flip', async () => {
+      const invite = await makeInvite({
+        expiresAt: new Date(Date.now() - 86_400_000),
+      });
+
+      await expect(service.revoke(invite.id, admin)).rejects.toBeInstanceOf(
+        InviteForbiddenException,
+      );
+
+      const row = await rowOf(invite.id);
+      expect(row.status).toBe(InviteStatus.Expired);
+      expect(row.revokedAt).toBeNull();
+      expect(row.revokedBy).toBeNull();
+    });
+
+    it('404s an invite that does not exist', async () => {
+      await expect(
+        service.revoke('00000000-0000-4000-8000-000000000000', admin),
+      ).rejects.toBeInstanceOf(InviteNotFoundException);
+    });
+
+    /**
+     * The whole point of the route. invites_email_pending_unique covers only
+     * pending rows, so revoking is what frees the slot create() refuses to
+     * take twice.
+     */
+    it('frees the address so the same person can be invited again', async () => {
+      const invite = await makeInvite({ email: 'again@campus.local' });
+
+      await expect(
+        service.create(
+          {
+            email: 'again@campus.local',
+            cohortId,
+            cohortRole: CohortRole.Professor,
+          },
+          admin,
+        ),
+      ).rejects.toBeInstanceOf(InviteConflictException);
+
+      await service.revoke(invite.id, admin);
+
+      const reissued = await service.create(
+        {
+          email: 'again@campus.local',
+          cohortId,
+          cohortRole: CohortRole.Professor,
+        },
+        admin,
+      );
+      expect(reissued.id).not.toBe(invite.id);
+      expect(reissued.status).toBe(InviteStatus.Pending);
+    });
+  });
+
+  describe('list', () => {
+    it('returns newest first with pagination totals', async () => {
+      await makeInvite({ email: 'a@campus.local' });
+      await makeInvite({ email: 'b@campus.local' });
+      await makeInvite({ email: 'c@campus.local' });
+
+      const page = await service.list({ page: 1, perPage: 2 });
+
+      expect(page.items.map((i) => i.email)).toEqual([
+        'c@campus.local',
+        'b@campus.local',
+      ]);
+      expect(page.meta).toEqual({
+        page: 1,
+        perPage: 2,
+        total: 3,
+        totalPages: 2,
+      });
+    });
+
+    it('walks pages without repeating or dropping a row', async () => {
+      await makeInvite({ email: 'a@campus.local' });
+      await makeInvite({ email: 'b@campus.local' });
+      await makeInvite({ email: 'c@campus.local' });
+
+      const first = await service.list({ page: 1, perPage: 2 });
+      const second = await service.list({ page: 2, perPage: 2 });
+
+      expect(first.items.map((i) => i.id)).not.toEqual(
+        expect.arrayContaining(second.items.map((i) => i.id)),
+      );
+      expect([...first.items, ...second.items]).toHaveLength(3);
+    });
+
+    it('filters by status', async () => {
+      const pending = await makeInvite({ email: 'open@campus.local' });
+      const revoked = await makeInvite({ email: 'gone@campus.local' });
+      await service.revoke(revoked.id, admin);
+
+      const onlyPending = await service.list({
+        page: 1,
+        perPage: 20,
+        status: InviteStatus.Pending,
+      });
+      expect(onlyPending.items.map((i) => i.id)).toEqual([pending.id]);
+      expect(onlyPending.meta.total).toBe(1);
+
+      const onlyRevoked = await service.list({
+        page: 1,
+        perPage: 20,
+        status: InviteStatus.Revoked,
+      });
+      expect(onlyRevoked.items.map((i) => i.id)).toEqual([revoked.id]);
+    });
+
+    /**
+     * The one that justifies not reusing InviteResponseDto. That one carries
+     * the raw token because it is shown exactly once at creation; a list would
+     * hand out every unredeemed token in the system to any admin who asked for
+     * page 1.
+     */
+    it('never carries a token, a hash or a shareable link', async () => {
+      await makeInvite({ email: 'a@campus.local' });
+
+      const page = await service.list({ page: 1, perPage: 20 });
+      const [item] = page.items;
+      const row = await rowOf(item.id);
+
+      const serialised = JSON.stringify(page);
+      expect(serialised).not.toContain('token');
+      expect(serialised).not.toContain('tokenHash');
+      expect(serialised).not.toContain('inviteLink');
+      expect(serialised).not.toContain(row.tokenHash);
+      expect(Object.keys(item).sort()).toEqual([
+        'cohortId',
+        'cohortRole',
+        'createdAt',
+        'email',
+        'expiresAt',
+        'id',
+        'invitedBy',
+        'revokedAt',
+        'revokedBy',
+        'status',
+        'systemRole',
+      ]);
+    });
+
+    /**
+     * A revoked invite is invisible to sign-in, so this list is the only place
+     * the question "who killed this offer" can be answered.
+     */
+    it('keeps revoked invites visible with their actor', async () => {
+      const invite = await makeInvite({ email: 'gone@campus.local' });
+      await service.revoke(invite.id, admin, new Date('2026-03-04T10:00:00Z'));
+
+      const page = await service.list({ page: 1, perPage: 20 });
+      const found = page.items.find((i) => i.id === invite.id);
+
+      expect(found).toBeDefined();
+      expect(found?.status).toBe(InviteStatus.Revoked);
+      expect(found?.revokedBy).toBe(admin.id);
+      expect(found?.revokedAt).toBe('2026-03-04T10:00:00.000Z');
+    });
+
+    it('leaves revokedBy and revokedAt null for invites nobody cancelled', async () => {
+      const invite = await makeInvite({
+        status: InviteStatus.Accepted,
+        acceptedAt: new Date(),
+      });
+
+      const page = await service.list({ page: 1, perPage: 20 });
+      const found = page.items.find((i) => i.id === invite.id);
+
+      expect(found?.status).toBe(InviteStatus.Accepted);
+      expect(found?.revokedBy).toBeNull();
+      expect(found?.revokedAt).toBeNull();
+    });
+
+    /**
+     * Migration 0002 revoked every cohort-less pending invite by UPDATE alone,
+     * so those rows say `revoked` with nobody to blame. They predate the
+     * attribution columns and must be listed honestly rather than guessed at:
+     * the columns say "nobody recorded this", and inventing an actor would be
+     * a false record of who cancelled an offer.
+     */
+    it('lists a revoked invite that predates the attribution columns', async () => {
+      const invite = await makeInvite({
+        cohortId: null,
+        cohortRole: null,
+        // invites_scoped_fields_require_cohort: the scoped columns have to go
+        // with the cohort, and a cohort-less invite must be an admin one.
+        cohortTrackId: null,
+        systemRole: SystemRole.Admin,
+        status: InviteStatus.Revoked,
+      });
+      expect((await rowOf(invite.id)).revokedAt).toBeNull();
+
+      const page = await service.list({
+        page: 1,
+        perPage: 20,
+        status: InviteStatus.Revoked,
+      });
+      const found = page.items.find((i) => i.id === invite.id);
+
+      expect(found).toBeDefined();
+      expect(found?.status).toBe(InviteStatus.Revoked);
+      expect(found?.revokedBy).toBeNull();
+      expect(found?.revokedAt).toBeNull();
+    });
+
+    it('does not backfill an actor when refusing to revoke a revoked row', async () => {
+      const invite = await makeInvite({ status: InviteStatus.Revoked });
+
+      await expect(service.revoke(invite.id, admin)).rejects.toBeInstanceOf(
+        InviteRevokedException,
+      );
+
+      // The revocation already happened; stamping this admin onto it now would
+      // claim they did it.
+      const row = await rowOf(invite.id);
+      expect(row.revokedBy).toBeNull();
+      expect(row.revokedAt).toBeNull();
+    });
+  });
+});

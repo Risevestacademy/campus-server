@@ -5,7 +5,9 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
+  Param,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -17,6 +19,7 @@ import { AdminGuard } from '../../shared/auth/admin.guard.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { CurrentSession } from '../auth/current-session.decorator.js';
+import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import {
   clearSessionCookies,
   cookieSite,
@@ -30,9 +33,16 @@ import { AnySessionGuard, SessionGuard } from '../auth/session.guard.js';
 import { SessionScope } from '@campus/session';
 import { ApiCreateInvite } from './docs/create-invite.docs.js';
 import { ApiDecideInvite } from './docs/decide-invite.docs.js';
+import { ApiListInvites } from './docs/list-invites.docs.js';
 import { ApiPreviewInvite } from './docs/preview-invite.docs.js';
+import { ApiRevokeInvite } from './docs/revoke-invite.docs.js';
 import { ApiValidateUserInvite } from './docs/validate-invite.docs.js';
 import { CreateInviteDto } from './dto/create-invite.dto.js';
+import {
+  AdminInviteListItemDto,
+  InviteIdParamDto,
+  ListInvitesQueryDto,
+} from './dto/invite-admin-list.dto.js';
 import {
   InviteDecisionDto,
   InviteDecisionResponseDto,
@@ -76,6 +86,39 @@ export class InvitesController {
     // After the write, not inside it: a failed send must not undo an invite
     // the admin can still share by hand.
     return { ...receipt, emailStatus: await this.mailer.send(receipt) };
+  }
+
+  /**
+   * The admin's view of the offers they have out.
+   *
+   * Declared before `validate-user-invite` so it cannot be shadowed by it, and
+   * guarded exactly like create: an admin listing invites is no different from
+   * an admin making one.
+   */
+  @Get()
+  @UseGuards(SessionGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiListInvites()
+  list(
+    @Query() query: ListInvitesQueryDto,
+  ): Promise<PaginatedResponseDto<AdminInviteListItemDto>> {
+    return this.invites.list(query);
+  }
+
+  /**
+   * Cancels a pending invite. Guarded like create, and it needs the actor to
+   * record who revoked — the reason the columns exist.
+   */
+  @Post(':id/revoke')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(SessionGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiRevokeInvite()
+  revoke(
+    @Param() params: InviteIdParamDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<AdminInviteListItemDto> {
+    return this.invites.revoke(params.id, actor);
   }
 
   // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The

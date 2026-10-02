@@ -45,6 +45,8 @@ describe('OpenAPI security (e2e)', () => {
 
   it.each([
     ['/v1/invites', 'post'],
+    ['/v1/invites', 'get'],
+    ['/v1/invites/{id}/revoke', 'post'],
     ['/v1/invites/validate-user-invite', 'get'],
     ['/v1/invites/decision', 'post'],
     ['/v1/auth/me', 'get'],
