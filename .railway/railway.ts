@@ -140,6 +140,7 @@ export default defineRailway((ctx) => {
       GOOGLE_CALLBACK_URL: preserve(),
       GOOGLE_CLIENT_ID: preserve(),
       GOOGLE_CLIENT_SECRET: preserve(),
+      GOOGLE_MOBILE_CLIENT_IDS: preserve(),
       INVITE_TTL_DAYS: preserve(),
       OTEL_SERVICE_NAME: preserve(),
       PORT: preserve(),
