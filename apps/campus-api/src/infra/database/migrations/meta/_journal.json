@@ -43,6 +43,13 @@
       "when": 1790987403238,
       "tag": "0005_invites_revoked_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790998517690,
+      "tag": "0006_audit_log",
+      "breakpoints": true
     }
   ]
 }

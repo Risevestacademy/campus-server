@@ -14,10 +14,13 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { AdminGuard } from '../../shared/auth/admin.guard.js';
+import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import {
   PaginatedResponseDto,
   PaginationQueryDto,
 } from '../../shared/dto/index.js';
+import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import {
   ApiCreateTrack,
@@ -42,8 +45,12 @@ export class TracksController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiCreateTrack()
-  create(@Body() dto: CreateTrackDto): Promise<TrackResponseDto> {
-    return this.tracks.create(dto);
+  create(
+    @Body() dto: CreateTrackDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<TrackResponseDto> {
+    return this.tracks.create(dto, { actorUserId: admin.id, correlationId });
   }
 
   @Get()
@@ -59,14 +66,26 @@ export class TracksController {
   update(
     @Param() params: TrackIdParamDto,
     @Body() dto: UpdateTrackDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<TrackResponseDto> {
-    return this.tracks.update(params.id, dto);
+    return this.tracks.update(params.id, dto, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiDeleteTrack()
-  remove(@Param() params: TrackIdParamDto): Promise<void> {
-    return this.tracks.remove(params.id);
+  remove(
+    @Param() params: TrackIdParamDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<void> {
+    return this.tracks.remove(params.id, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 }

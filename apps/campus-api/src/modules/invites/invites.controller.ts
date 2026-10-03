@@ -18,6 +18,7 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { AdminGuard } from '../../shared/auth/admin.guard.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
+import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import {
   CurrentSession,
   CurrentSessionTransport,
@@ -91,8 +92,9 @@ export class InvitesController {
   async create(
     @Body() dto: CreateInviteDto,
     @CurrentUser() inviter: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<InviteResponseDto> {
-    const receipt = await this.invites.create(dto, inviter);
+    const receipt = await this.invites.create(dto, inviter, correlationId);
     // After the write, not inside it: a failed send must not undo an invite
     // the admin can still share by hand.
     return { ...receipt, emailStatus: await this.mailer.send(receipt) };
@@ -127,8 +129,9 @@ export class InvitesController {
   revoke(
     @Param() params: InviteIdParamDto,
     @CurrentUser() actor: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<AdminInviteListItemDto> {
-    return this.invites.revoke(params.id, actor);
+    return this.invites.revoke(params.id, actor, correlationId);
   }
 
   /**
@@ -200,12 +203,19 @@ export class InvitesController {
     @CurrentSessionTransport() transport: SessionTransport,
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: InviteDecisionDto,
+    @CorrelationId() correlationId: string | undefined,
     // passthrough keeps Nest serialising `response` below; a bare @Res would
     // hand body-writing to this method instead.
     @Res({ passthrough: true }) res: Response,
   ): Promise<InviteDecisionResponseDto> {
     const inviteId = await this.inviteToDecide(session, user, dto.inviteId);
-    const outcome = await this.invites.decide(inviteId, dto.decision, user);
+    const outcome = await this.invites.decide(
+      inviteId,
+      dto.decision,
+      user,
+      new Date(),
+      correlationId,
+    );
 
     // A member keeps the session they came with either way. Accepting only
     // adds a membership, which can extend their access but never cut it

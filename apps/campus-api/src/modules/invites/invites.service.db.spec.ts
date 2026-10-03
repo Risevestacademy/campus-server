@@ -6,6 +6,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
+import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import {
   CohortRole,
   CohortStatus,
@@ -55,7 +56,15 @@ const MIGRATIONS = fileURLToPath(
 );
 
 const db = drizzle(new PGlite(), {
-  schema: { users, tracks, cohorts, cohortTracks, cohortMembers, invites },
+  schema: {
+    users,
+    tracks,
+    cohorts,
+    cohortTracks,
+    cohortMembers,
+    invites,
+    auditLog,
+  },
 });
 
 const config = {
@@ -79,7 +88,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await db.execute(
-    sql`truncate invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate audit_log, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
   );
 
   const [admin] = await db
@@ -1511,6 +1520,176 @@ describe('decide()', () => {
     expect(row.role).toBe(CohortRole.Professor);
     expect(row.dismissalReason).toBeNull();
   });
+
+  describe('audit log', () => {
+    const entries = () => db.select().from(auditLog);
+
+    /**
+     * The revive clears the dismissal reason from cohort_members, so the
+     * audit entry is now the only record of why somebody once left.
+     */
+    it('keeps the row a revive replaced, dismissal reason included', async () => {
+      const leftAt = new Date('2026-06-01T00:00:00.000Z');
+      await db.insert(cohortMembers).values({
+        cohortId: fixtures.cohortId,
+        userId: invitee.id,
+        cohortTrackId: fixtures.cohortTrackId,
+        role: CohortRole.Student,
+        status: StudentStatus.Dismissed,
+        dismissalReason: 'plagiarism',
+        leftAt,
+      });
+      const invite = await makeInvite({
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Professor,
+      });
+
+      await service.decide(
+        invite.id,
+        InviteDecision.Accept,
+        invitee,
+        new Date(),
+        'corr-revive',
+      );
+
+      const [membership] = await membershipOf(invitee.id);
+      expect(await entries()).toEqual([
+        expect.objectContaining({
+          actorUserId: invitee.id,
+          action: AuditAction.MembershipRevived,
+          subjectType: AuditSubjectType.CohortMember,
+          subjectId: membership.id,
+          correlationId: 'corr-revive',
+          details: {
+            inviteId: invite.id,
+            invitedBy: inviter.id,
+            previous: expect.objectContaining({
+              role: CohortRole.Student,
+              status: StudentStatus.Dismissed,
+              dismissalReason: 'plagiarism',
+              leftAt: leftAt.toISOString(),
+            }),
+          },
+        }),
+      ]);
+    });
+
+    it('writes nothing for a first enrolment', async () => {
+      const invite = await makeInvite({
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Professor,
+      });
+
+      await service.decide(invite.id, InviteDecision.Accept, invitee);
+
+      expect(await entries()).toEqual([]);
+    });
+
+    it('writes nothing when the accept is refused', async () => {
+      await db.insert(cohortMembers).values({
+        cohortId: fixtures.cohortId,
+        userId: invitee.id,
+        cohortTrackId: fixtures.cohortTrackId,
+        role: CohortRole.Student,
+        status: StudentStatus.Active,
+      });
+      const invite = await makeInvite({
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Professor,
+      });
+
+      await expect(
+        service.decide(invite.id, InviteDecision.Accept, invitee),
+      ).rejects.toBeInstanceOf(InviteConflictException);
+
+      expect(await entries()).toEqual([]);
+    });
+
+    it('records an admin grant, with who invited them', async () => {
+      const invite = await makeInvite({ systemRole: SystemRole.Admin });
+
+      await service.decide(
+        invite.id,
+        InviteDecision.Accept,
+        invitee as never,
+        new Date(),
+        'corr-admin',
+      );
+
+      expect(await entries()).toEqual([
+        expect.objectContaining({
+          actorUserId: invitee.id,
+          action: AuditAction.SystemRoleChanged,
+          subjectType: AuditSubjectType.User,
+          subjectId: invitee.id,
+          correlationId: 'corr-admin',
+          details: {
+            from: SystemRole.User,
+            to: SystemRole.Admin,
+            inviteId: invite.id,
+            invitedBy: inviter.id,
+          },
+        }),
+      ]);
+    });
+
+    it('records an invite alongside the row it describes', async () => {
+      const res = await service.create(
+        {
+          email: 'student@campus.local',
+          cohortId: fixtures.cohortId,
+          cohortRole: CohortRole.Student,
+          cohortTrackId: fixtures.cohortTrackId,
+        },
+        inviter,
+        'corr-invite',
+      );
+
+      expect(await entries()).toEqual([
+        expect.objectContaining({
+          actorUserId: inviter.id,
+          action: AuditAction.InviteCreated,
+          subjectType: AuditSubjectType.Invite,
+          subjectId: res.id,
+          correlationId: 'corr-invite',
+          details: expect.objectContaining({
+            cohortId: fixtures.cohortId,
+            cohortRole: CohortRole.Student,
+            cohortTrackId: fixtures.cohortTrackId,
+            systemRole: SystemRole.User,
+            guestAccessExpiresAt: null,
+          }),
+        }),
+      ]);
+    });
+
+    // Postgres aborts the transaction on the unique violation, so the entry
+    // could not survive it even if it had been written first.
+    it('records nothing for an invite the pending slot refused', async () => {
+      await makeInvite({ email: 'taken@campus.local' });
+
+      await expect(
+        service.create(
+          { email: 'taken@campus.local', systemRole: SystemRole.Admin },
+          inviter,
+        ),
+      ).rejects.toBeInstanceOf(InviteConflictException);
+
+      expect(await entries()).toEqual([]);
+    });
+
+    it('records nothing when the account is already an admin', async () => {
+      await db
+        .update(users)
+        .set({ systemRole: SystemRole.Admin })
+        .where(eqUser(invitee.id));
+      const invite = await makeInvite({ systemRole: SystemRole.Admin });
+
+      await service.decide(invite.id, InviteDecision.Accept, invitee as never);
+
+      expect(await entries()).toEqual([]);
+    });
+  });
 });
 
 /**
@@ -1589,7 +1768,7 @@ describe('InvitesService admin revoke and list', () => {
       const invite = await makeInvite();
       const at = new Date('2026-03-04T10:00:00.000Z');
 
-      const result = await service.revoke(invite.id, admin, at);
+      const result = await service.revoke(invite.id, admin, undefined, at);
 
       expect(result.status).toBe(InviteStatus.Revoked);
       expect(result.revokedBy).toBe(admin.id);
@@ -1804,7 +1983,12 @@ describe('InvitesService admin revoke and list', () => {
      */
     it('keeps revoked invites visible with their actor', async () => {
       const invite = await makeInvite({ email: 'gone@campus.local' });
-      await service.revoke(invite.id, admin, new Date('2026-03-04T10:00:00Z'));
+      await service.revoke(
+        invite.id,
+        admin,
+        undefined,
+        new Date('2026-03-04T10:00:00Z'),
+      );
 
       const page = await service.list({ page: 1, perPage: 20 });
       const found = page.items.find((i) => i.id === invite.id);

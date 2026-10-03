@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
 
+import { writeAuditEntry } from '../../modules/audit/audit-log.js';
+import { AuditAction, AuditSubjectType } from '../../modules/audit/schema.js';
 import { SystemRole, UserStatus, users } from '../../modules/users/schema.js';
 import type { Db } from './database.constants.js';
 
@@ -33,25 +35,45 @@ export async function seedAdmin(
 ): Promise<SeedOutcome> {
   const address = email.trim().toLowerCase();
 
-  const [row] = await db
-    .insert(users)
-    .values({
-      email: address,
-      systemRole: SystemRole.Admin,
-      status: UserStatus.Active,
-    })
-    .onConflictDoUpdate({
-      target: users.email,
-      // updated_at is set explicitly built in hook only fires for db.update()
-      set: { systemRole: SystemRole.Admin, updatedAt: sql`now()` },
-      // Skip the write when the user is already an admin, so re-running the
-      setWhere: sql`${users.systemRole} <> ${SystemRole.Admin}`,
-    })
-    .returning({
-      id: users.id,
-      createdAt: users.createdAt,
-      updatedAt: users.updatedAt,
-    });
+  // One transaction, so an admin is never granted without its audit entry.
+  const row = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(users)
+      .values({
+        email: address,
+        systemRole: SystemRole.Admin,
+        status: UserStatus.Active,
+      })
+      .onConflictDoUpdate({
+        target: users.email,
+        // updated_at is set explicitly built in hook only fires for db.update()
+        set: { systemRole: SystemRole.Admin, updatedAt: sql`now()` },
+        // Skip the write when the user is already an admin, so re-running the
+        setWhere: sql`${users.systemRole} <> ${SystemRole.Admin}`,
+      })
+      .returning({
+        id: users.id,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      });
+
+    if (row) {
+      await writeAuditEntry(tx, {
+        // Nobody is signed in: the grant comes from DEFAULT_ADMIN_EMAIL.
+        actorUserId: null,
+        action: AuditAction.SystemRoleChanged,
+        subject: { type: AuditSubjectType.User, id: row.id },
+        details: {
+          // A new account had no role before; an existing one was a user,
+          // since the upsert skips anyone already an admin.
+          from: isNew(row) ? null : SystemRole.User,
+          to: SystemRole.Admin,
+          source: 'seed',
+        },
+      });
+    }
+    return row;
+  });
 
   if (!row) {
     logger.info(
@@ -61,10 +83,7 @@ export async function seedAdmin(
     return 'unchanged';
   }
 
-  const outcome =
-    row.createdAt.getTime() === row.updatedAt.getTime()
-      ? 'created'
-      : 'promoted';
+  const outcome = isNew(row) ? 'created' : 'promoted';
   logger.info(
     { email: address, userId: row.id },
     outcome === 'created'
@@ -72,4 +91,9 @@ export async function seedAdmin(
       : 'promoted existing user to admin',
   );
   return outcome;
+}
+
+/** An insert sets both timestamps together; a promotion moves only updatedAt. */
+function isNew(row: { createdAt: Date; updatedAt: Date }): boolean {
+  return row.createdAt.getTime() === row.updatedAt.getTime();
 }
