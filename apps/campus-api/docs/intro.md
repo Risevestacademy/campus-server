@@ -279,7 +279,11 @@ Every error response in the API shares a single envelope:
   | `NOT_FOUND`         | 404         | The resource does not exist    |
   | `CONFLICT`          | 409         | State conflict (e.g. duplicate)|
   | `SPACE_AT_CAPACITY` | 409         | The space is at capacity       |
+  | `INVITE_ALREADY_ACCEPTED` | 409   | The invite was already accepted |
+  | `INVITE_ALREADY_DECLINED` | 409   | The invite was already declined |
+  | `INVITE_REVOKED`    | 409         | An admin revoked the invite    |
   | `INVITE_REQUIRED`   | 403         | No invite for this address     |
+  | `INVITE_EXPIRED`    | 403         | The invite has expired         |
   | `ACCOUNT_SUSPENDED` | 403         | The account exists but is closed |
   | `RATE_LIMITED`      | 429         | Too many requests, retry later |
   | `INTERNAL_ERROR`    | 500         | Unexpected server error        |
