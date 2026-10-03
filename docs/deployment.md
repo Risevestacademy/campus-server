@@ -246,6 +246,12 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   open, and a sleep would drop everybody.
 - Healthcheck path: `/health` (no `/v1`). It answers while the process is
   up; it does not check the database.
+- Reads campus-api's tables with its own SQL (`users`, `refresh_tokens`), so
+  a campus-api migration that adds a column world selects has to be applied
+  before the world build that selects it starts. campus-api's pre-deploy
+  step runs the migrations; when a change touches both, let campus-api
+  finish deploying first. `users.session_epoch` was the first such column:
+  world's account lookup fails on every socket without it.
 - Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
   no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
   from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
