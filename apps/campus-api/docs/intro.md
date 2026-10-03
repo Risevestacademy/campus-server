@@ -258,6 +258,7 @@ in the docs:
 | `auth`    | Google sign-in (`GET /v1/auth/google`)                 |
 | `health`  | Service health and performance data (`GET /v1/health`) |
 | `cohorts` | Cohort management                                      |
+| `users`   | The admin's list of accounts, with filters             |
 | `spaces`  | Physical spaces and occupancy                          |
 
 Each operation documents its path, expected request body/query parameters, and
