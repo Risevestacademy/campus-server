@@ -87,6 +87,8 @@ erDiagram
         timestamptz accepted_at
         timestamptz revoked_at "admin cancellation; null unless status is revoked"
         uuid revoked_by FK "who cancelled it; null unless status is revoked"
+        timestamptz flagged_at "invitee reported a mistake; the invite stays pending"
+        text flag_message "what the invitee said is wrong; null unless flagged"
         timestamptz created_at
         timestamptz updated_at
     }

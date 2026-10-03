@@ -6,6 +6,8 @@ import {
   desc,
   eq,
   gt,
+  isNotNull,
+  isNull,
   lte,
   ne,
   or,
@@ -56,6 +58,7 @@ import type {
   InviteTrackDto,
 } from './dto/invite-onboarding-response.dto.js';
 import type { InvitePreviewResponseDto } from './dto/invite-preview.dto.js';
+import type { InviteFlagNotice } from './invite-flag-email.js';
 import type { InviteResponseDto } from './dto/invite-response.dto.js';
 import {
   buildInviteLink,
@@ -392,6 +395,7 @@ export class InvitesService {
           status: invites.status,
           expiresAt: invites.expiresAt,
           guestAccessExpiresAt: invites.guestAccessExpiresAt,
+          flaggedAt: invites.flaggedAt,
           createdAt: invites.createdAt,
         },
         cohort: {
@@ -526,6 +530,7 @@ export class InvitesService {
       status: row.invite.status,
       expiresAt: row.invite.expiresAt,
       guestAccessExpiresAt: row.invite.guestAccessExpiresAt,
+      flaggedAt: row.invite.flaggedAt,
       invitedBy,
       createdAt: row.invite.createdAt,
       user: account,
@@ -1169,6 +1174,105 @@ export class InvitesService {
   }
 
   /**
+   * The invitee telling the admin something on the offer is wrong.
+   *
+   * A note on the invite and nothing more: the status is not touched, so the
+   * invite stays pending and accepting it works exactly as before. What the
+   * admin does about it — revoke and re-invite, or nothing — is theirs to
+   * decide.
+   *
+   * Only a live invite can be flagged, by the same conditional UPDATE accept,
+   * decline and revoke claim with, so a settled or lapsed one answers with
+   * the code every other route gives it. One flag per invite: the admin has
+   * been told, and a second note would only be a second email, so a repeat
+   * is a 409 rather than an overwrite of what the first one said.
+   */
+  async flag(
+    inviteId: string,
+    message: string,
+    user: AuthenticatedUser,
+    correlationId?: string,
+    now: Date = new Date(),
+  ): Promise<Invite> {
+    // One transaction, so a flag is never recorded without its entry, and a
+    // session pointed at somebody else's invite leaves nothing behind.
+    const flagged = await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(invites)
+        .set({ flaggedAt: now, flagMessage: message })
+        .where(
+          and(
+            eq(invites.id, inviteId),
+            eq(invites.status, InviteStatus.Pending),
+            // Same comparison isInviteLive makes, so a lapsed invite is
+            // refused here exactly as it is on the read path.
+            gt(invites.expiresAt, now),
+            isNull(invites.flaggedAt),
+          ),
+        )
+        .returning();
+
+      if (row) {
+        checkEmailMatch(row, user);
+        await writeAuditEntry(tx, {
+          actorUserId: user.id,
+          correlationId,
+          action: AuditAction.InviteFlagged,
+          subject: { type: AuditSubjectType.Invite, id: row.id },
+          details: { cohortId: row.cohortId, invitedBy: row.invitedBy },
+        });
+      }
+      return row;
+    });
+
+    if (flagged) {
+      return flagged;
+    }
+
+    const existing = await this.findInvite(inviteId);
+    if (isInviteLive(existing, now)) {
+      // Live, so the only condition left to have failed is the flag itself.
+      throw new InviteConflictException('This invite is already flagged', {
+        inviteId,
+        flaggedAt: existing.flaggedAt,
+      });
+    }
+    await this.expireLazily(inviteId, now);
+    return this.throwUnclaimable(existing, inviteId);
+  }
+
+  /**
+   * What the email about a flag says: who to tell, whose invite, what it
+   * offered and what they wrote. Null for an invite nobody has flagged.
+   */
+  async getFlagNotice(inviteId: string): Promise<InviteFlagNotice | null> {
+    const [row] = await this.db
+      .select({
+        inviterEmail: users.email,
+        inviteeEmail: invites.email,
+        cohortName: cohorts.name,
+        trackName: tracks.name,
+        cohortRole: invites.cohortRole,
+        systemRole: invites.systemRole,
+        guestAccessExpiresAt: invites.guestAccessExpiresAt,
+        message: invites.flagMessage,
+        flaggedAt: invites.flaggedAt,
+      })
+      .from(invites)
+      .innerJoin(users, eq(users.id, invites.invitedBy))
+      .leftJoin(cohorts, eq(cohorts.id, invites.cohortId))
+      .leftJoin(cohortTracks, eq(cohortTracks.id, invites.cohortTrackId))
+      .leftJoin(tracks, eq(tracks.id, cohortTracks.trackId))
+      .where(eq(invites.id, inviteId))
+      .limit(1);
+
+    if (!row || row.message === null || row.flaggedAt === null) {
+      return null;
+    }
+    return { ...row, message: row.message, flaggedAt: row.flaggedAt };
+  }
+
+  /**
    * An admin cancelling an offer they no longer want to honour.
    *
    * Revoked, not expired: the invite did not run out of time, somebody pulled
@@ -1419,7 +1523,10 @@ export class InvitesService {
     query: ListInvitesQueryDto,
     now: Date = new Date(),
   ): Promise<PaginatedResponseDto<AdminInviteListItemDto>> {
-    const filter = statusFilter(query.status, now);
+    const filter = and(
+      statusFilter(query.status, now),
+      flaggedFilter(query.flagged),
+    );
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -1578,6 +1685,14 @@ function statusFilter(
   }
 }
 
+/** Flagged invites only, unflagged only, or — left out — both. */
+function flaggedFilter(flagged: boolean | undefined): SQL | undefined {
+  if (flagged === undefined) {
+    return undefined;
+  }
+  return flagged ? isNotNull(invites.flaggedAt) : isNull(invites.flaggedAt);
+}
+
 /**
  * Projects an invite row down to what an admin is allowed to see in a list.
  *
@@ -1605,6 +1720,8 @@ function toAdminInviteItem(row: Invite, now: Date): AdminInviteListItemDto {
     invitedBy: row.invitedBy,
     revokedBy: row.revokedBy,
     revokedAt: row.revokedAt?.toISOString() ?? null,
+    flaggedAt: row.flaggedAt?.toISOString() ?? null,
+    flagMessage: row.flagMessage,
     createdAt: row.createdAt.toISOString(),
   };
 }

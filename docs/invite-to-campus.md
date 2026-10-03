@@ -156,6 +156,16 @@ Name and email come from `user` in the same response (`firstName`,
 `lastName`, `email` — as Google gave them); role and cohort as above. Keep
 the step 5 response in memory rather than refetching.
 
+**Flag an Issue** is for an invitee who can see the offer is wrong — the
+wrong track, the wrong role. `POST /api/v1/invites/flag` with
+`{ "message": "<what is wrong>", "inviteId": "<id from validate-user-invite>" }`.
+The message (required, up to 1000 characters) is recorded on the invite and
+emailed to the admin who sent it. It is a note, not an answer: the invite
+stays pending, the session is untouched, and **Go to Campus** still works.
+An invite takes one flag — a second is `409 CONFLICT` — and
+`validate-user-invite` returns `flaggedAt`, so show "sent" instead of the
+button once it is set.
+
 ### 7. Go to Campus
 
 `POST /api/v1/invites/decision` with
@@ -228,6 +238,7 @@ keeps their full-access session throughout; they never get a provisional one.
 | Cancels at Google                             | —                                                                 | `/sign-in?error=denied`                                                 |
 | Opens the link again after accepting          | Sign-in finds a member, not an invite                             | Straight to `/campus`                                                   |
 | Already signed in as a member, opens the link | `me` answers `full_access`, with `inviteId` if the invite is live | Show the invite (see above); with no `inviteId`, send them to `/campus` |
+| Flags the invite as wrong                     | `flag` records the message and emails the inviting admin          | Still on `/preview`; accepting works as before                          |
 | Declines                                      | `decision` with `decline`; invite closed, session cookie cleared  | Nothing left to do; the admin can invite again                          |
 | A member declines another cohort's invite     | Invite closed; their session is untouched                         | Back to `/campus`, still a member of what they had                      |
 
@@ -238,9 +249,11 @@ Every `?error=` code is listed in the API guide
 
 - **Resending the email.** A failed send is reported once, in the create
   response; there is no route to send it again.
-- **Decline and "Flag an Issue".** campus-api supports declining; the
-  designs have no button for it. "Flag an Issue" on `/preview` has no
-  backend yet.
+- **Decline.** campus-api supports declining; the designs have no button
+  for it.
+- **Correcting a flagged invite.** A flag tells the admin; fixing the offer
+  is still revoke and re-invite. Flagged invites are listed by
+  `GET /v1/invites?flagged=true`.
 - **campus-web's proxy** still forwards only an `accessToken` cookie and
   drops `Location`, so steps 3–8 do not work through it yet. What it needs
   is listed in [deployment.md](./deployment.md#how-campus-web-reaches-the-api-its-own-proxy).

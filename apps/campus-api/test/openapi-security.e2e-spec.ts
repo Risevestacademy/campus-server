@@ -27,7 +27,10 @@ describe('OpenAPI security (e2e)', () => {
       .compile();
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('v1');
-    await app.init();
+    // Listening once, rather than app.init(): supertest otherwise opens a
+    // server on a new port for every request, and files running in parallel
+    // collide on them.
+    await app.listen(0);
 
     // Mirrors main.ts
     const document = SwaggerModule.createDocument(
@@ -59,6 +62,8 @@ describe('OpenAPI security (e2e)', () => {
     ['/v1/invites/{id}/revoke', 'post'],
     ['/v1/invites/validate-user-invite', 'get'],
     ['/v1/invites/decision', 'post'],
+    ['/v1/invites/flag', 'post'],
+    ['/v1/users', 'get'],
     ['/v1/auth/me', 'get'],
   ])('still marks %s (%s) as needing a session', (path, method) => {
     expect(security(path, method)).toEqual([{ bearer: [] }]);

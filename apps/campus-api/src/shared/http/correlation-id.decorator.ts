@@ -1,9 +1,9 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 
 /**
- * The request's correlation id — what pino-http assigned from the
- * x-correlation-id header, or generated — for records that should lead back
- * to this request's log lines. Undefined outside an HTTP request.
+ * The request's correlation id — the caller's x-correlation-id when it was
+ * usable, otherwise generated; see resolveCorrelationId — for records that
+ * should lead back to this request's log lines. Undefined outside an HTTP request.
  */
 export const CorrelationId = createParamDecorator(
   (_data: unknown, context: ExecutionContext): string | undefined => {

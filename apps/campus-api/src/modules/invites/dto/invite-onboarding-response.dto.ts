@@ -189,6 +189,19 @@ export class InviteOnboardingResponseDto {
   })
   guestAccessExpiresAt: Date | null;
 
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: null,
+    description:
+      'When the invitee flagged a mistake on this invite with ' +
+      'POST /v1/invites/flag; null if they have not. An invite takes one ' +
+      'flag, so once this is set the button has nothing left to do. ' +
+      'Accepting works either way.',
+  })
+  flaggedAt: Date | null;
+
   @ApiProperty({ type: () => InvitedByDto })
   invitedBy: InvitedByDto;
 
