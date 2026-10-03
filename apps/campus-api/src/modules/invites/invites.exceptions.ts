@@ -40,6 +40,14 @@ export class InviteForbiddenException extends DomainException {
 }
 
 /**
+ * The invite lapsed. Lapsed-but-still-pending and materialised Expired are
+ * one outcome, so every route that finds either answers with this.
+ */
+export class InviteExpiredException extends DomainException {
+  readonly code = ExceptionCode.InviteExpired;
+}
+
+/**
  * An invariant this service relies on does not hold — e.g. a provisional
  * session whose invite is addressed to a different account. Both inputs are
  * server-derived (the verified identity and a signed cookie), so no caller

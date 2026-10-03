@@ -485,7 +485,7 @@ describe('POST /v1/invites/decision (e2e)', () => {
     });
     const res = await decide(provisional(invite.id), InviteDecision.Accept);
     expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('FORBIDDEN');
+    expect(res.body.error.code).toBe('INVITE_EXPIRED');
   });
 
   it('answers 403 for a lapsed invite even once the status is materialised', async () => {
@@ -509,7 +509,7 @@ describe('POST /v1/invites/decision (e2e)', () => {
 
     const res = await decide(provisional(invite.id), InviteDecision.Accept);
     expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('FORBIDDEN');
+    expect(res.body.error.code).toBe('INVITE_EXPIRED');
   });
 
   it('refuses to decline an invite that was accepted', async () => {

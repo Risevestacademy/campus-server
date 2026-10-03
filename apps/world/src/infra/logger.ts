@@ -24,7 +24,12 @@ export function loggerOptions(env: Env): FastifyServerOptions['logger'] {
         }
       : undefined,
     redact: {
-      paths: ['req.headers.authorization', 'req.headers.cookie', '*.token', '*.secret'],
+      paths: [
+        'req.headers.authorization',
+        'req.headers.cookie',
+        '*.token',
+        '*.secret',
+      ],
       censor: '[REDACTED]',
     },
     serializers: {

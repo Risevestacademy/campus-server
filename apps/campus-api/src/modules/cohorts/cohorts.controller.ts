@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -24,8 +26,10 @@ import { CohortsService } from './cohorts.service.js';
 import {
   ApiAttachTrack,
   ApiCreateCohort,
+  ApiDeleteCohort,
   ApiGetCohort,
   ApiListCohorts,
+  ApiUpdateCohort,
 } from './docs/cohorts.docs.js';
 import { AttachTrackDto, CohortIdParamDto } from './dto/attach-track.dto.js';
 import {
@@ -34,6 +38,7 @@ import {
   CohortTrackResponseDto,
 } from './dto/cohort-response.dto.js';
 import { CreateCohortDto } from './dto/create-cohort.dto.js';
+import { UpdateCohortDto } from './dto/update-cohort.dto.js';
 
 @ApiTags('cohorts')
 @ApiBearerAuth()
@@ -82,5 +87,21 @@ export class CohortsController {
       actorUserId: admin.id,
       correlationId,
     });
+  }
+
+  @Patch(':id')
+  @ApiUpdateCohort()
+  update(
+    @Param() params: CohortIdParamDto,
+    @Body() dto: UpdateCohortDto,
+  ): Promise<CohortResponseDto> {
+    return this.cohorts.update(params.id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiDeleteCohort()
+  remove(@Param() params: CohortIdParamDto): Promise<void> {
+    return this.cohorts.remove(params.id);
   }
 }

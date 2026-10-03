@@ -231,12 +231,20 @@ export class AuthController {
     @CurrentUser() current: AuthenticatedUser,
   ): Promise<SessionResponseDto> {
     const fullAccess = session.scope === SessionScope.FullAccess;
-    const [user, memberships, pendingInvite] = await Promise.all([
+    const [user, memberships, inviteId] = await Promise.all([
       this.users.findById(current.id),
       fullAccess ? this.members.listActiveMemberships(current.id) : [],
       // A member can be invited to another cohort; the web app sends them to
-      // answer it, the same as a provisional session.
-      fullAccess ? this.invites.findUsableForEmail(current.email) : null,
+      // answer it, the same as a provisional session. A provisional session's
+      // own invite is followed to its replacement if it has been revoked, the
+      // same one validate-user-invite now shows.
+      fullAccess
+        ? this.invites
+            .findUsableForEmail(current.email)
+            .then((invite) => invite?.id ?? null)
+        : session.inviteId
+          ? this.invites.currentInviteFor(session.inviteId, current.email)
+          : null,
     ]);
     if (!user) {
       // The guard read this row a moment ago; it went away underneath us.
@@ -246,7 +254,7 @@ export class AuthController {
     return {
       scope: session.scope,
       expiresAt: session.expiresAt,
-      inviteId: session.inviteId ?? pendingInvite?.id ?? null,
+      inviteId,
       user: {
         id: user.id,
         email: user.email,

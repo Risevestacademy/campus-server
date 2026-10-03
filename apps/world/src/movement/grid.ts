@@ -44,5 +44,7 @@ export function step(from: Tile, direction: Direction): Tile {
 }
 
 export function walkable(grid: Grid, tile: Tile): boolean {
-  return tile.x >= 0 && tile.y >= 0 && tile.x < grid.width && tile.y < grid.height;
+  return (
+    tile.x >= 0 && tile.y >= 0 && tile.x < grid.width && tile.y < grid.height
+  );
 }

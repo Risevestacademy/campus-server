@@ -2,7 +2,10 @@ import { ArgumentsHost, Catch, ExceptionFilter } from '@nestjs/common';
 import { Request, Response } from 'express';
 
 import { DomainException } from '../exceptions/domain.exception.js';
-import { ExceptionCode, mapExceptionCodeToStatus } from '../exceptions/exception-code.enum.js';
+import {
+  ExceptionCode,
+  mapExceptionCodeToStatus,
+} from '../exceptions/exception-code.enum.js';
 import type { ErrorResponse } from './error-response.js';
 import type { ErrorLogger } from './global-exception.filter.js';
 

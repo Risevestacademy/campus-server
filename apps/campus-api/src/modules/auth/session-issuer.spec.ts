@@ -20,7 +20,9 @@ const config = {
 } as never;
 
 const user = { id: 'user-1', email: 'guest@campus.local' } as User;
-const users = { findById: vi.fn(async () => ({ ...user, systemRole: 'user' })) };
+const users = {
+  findById: vi.fn(async () => ({ ...user, systemRole: 'user' })),
+};
 const members = {
   resolveActiveMembership: vi.fn(async () => null),
   resolveActiveAccess: vi.fn(async () => ({ endsAt: null })),
@@ -39,7 +41,10 @@ const db = {
   insert: () => ({ values: vi.fn(async () => undefined) }),
   select: () => ({
     from: () => ({
-      where: () => ({ limit: vi.fn(async () => [storedRefresh]) }),
+      where: () => ({
+        limit: vi.fn(async () => [storedRefresh]),
+        for: vi.fn(async () => [storedRefresh]),
+      }),
     }),
   }),
   delete: () => ({ where: vi.fn(async () => undefined) }),
@@ -49,11 +54,12 @@ const db = {
         returning: vi.fn(async () => {
           if (values.usedAt) storedRefresh.usedAt = values.usedAt;
           if (values.revokedAt) storedRefresh.revokedAt = values.revokedAt;
-          return values.usedAt ? [{ familyId: storedRefresh.familyId }] : [];
+          return values.usedAt ? [{ id: storedRefresh.id }] : [];
         }),
       }),
     }),
   }),
+  transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db)),
 };
 const unbounded: AccessGrant = { endsAt: null };
 
@@ -73,6 +79,11 @@ describe('SessionIssuer', () => {
     members as never,
   );
   const at = (ms: number) => new Date(now.getTime() + ms);
+
+  beforeEach(() => {
+    storedRefresh.usedAt = null;
+    storedRefresh.revokedAt = null;
+  });
 
   it('mints the configured lifetime when the grant has no deadline', async () => {
     const session = await issuer.issueFullAccess(user, unbounded, now);
@@ -161,8 +172,8 @@ describe('SessionIssuer', () => {
   it('rejects a refresh token that was already consumed', async () => {
     storedRefresh.usedAt = new Date(now.getTime() - 2 * 60_000);
 
-    await expect(issuer.refreshSession('refresh-token', now)).rejects.toBeInstanceOf(
-      SessionUnauthorizedError,
-    );
+    await expect(
+      issuer.refreshSession('refresh-token', now),
+    ).rejects.toBeInstanceOf(SessionUnauthorizedError);
   });
 });

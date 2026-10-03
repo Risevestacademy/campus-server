@@ -1,4 +1,8 @@
-export { ApiErrorResponseDto, ApiErrorBodyDto, ApiErrorDetailsDto } from './api-error-response.dto.js';
+export {
+  ApiErrorResponseDto,
+  ApiErrorBodyDto,
+  ApiErrorDetailsDto,
+} from './api-error-response.dto.js';
 export {
   PaginatedResponseDto,
   PaginationMetaDto,

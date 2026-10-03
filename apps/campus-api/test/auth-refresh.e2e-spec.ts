@@ -127,9 +127,9 @@ describe('refresh and logout sessions (e2e)', () => {
     expect(expiresAt).toBeGreaterThan(before);
     expect(refreshExpiresAt).toBeGreaterThan(expiresAt);
 
-    const session = (response.headers['set-cookie'] as unknown as string[]).find(
-      (c) => c.startsWith(`${SESSION_COOKIE}=`),
-    );
+    const session = (
+      response.headers['set-cookie'] as unknown as string[]
+    ).find((c) => c.startsWith(`${SESSION_COOKIE}=`));
     expect(new Date(/Expires=([^;]+)/.exec(session!)![1]).getTime()).toBe(
       expiresAt,
     );

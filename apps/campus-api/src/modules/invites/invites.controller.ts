@@ -5,7 +5,9 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
+  Param,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -22,6 +24,7 @@ import {
   CurrentSessionTransport,
 } from '../auth/current-session.decorator.js';
 import { sessionTokens } from '../auth/dto/session-tokens.dto.js';
+import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import {
   clearSessionCookies,
   cookieSite,
@@ -39,9 +42,16 @@ import {
 import { SessionScope } from '@campus/session';
 import { ApiCreateInvite } from './docs/create-invite.docs.js';
 import { ApiDecideInvite } from './docs/decide-invite.docs.js';
+import { ApiListInvites } from './docs/list-invites.docs.js';
 import { ApiPreviewInvite } from './docs/preview-invite.docs.js';
+import { ApiRevokeInvite } from './docs/revoke-invite.docs.js';
 import { ApiValidateUserInvite } from './docs/validate-invite.docs.js';
 import { CreateInviteDto } from './dto/create-invite.dto.js';
+import {
+  AdminInviteListItemDto,
+  InviteIdParamDto,
+  ListInvitesQueryDto,
+} from './dto/invite-admin-list.dto.js';
 import {
   InviteDecisionDto,
   InviteDecisionResponseDto,
@@ -86,6 +96,39 @@ export class InvitesController {
     // After the write, not inside it: a failed send must not undo an invite
     // the admin can still share by hand.
     return { ...receipt, emailStatus: await this.mailer.send(receipt) };
+  }
+
+  /**
+   * The admin's view of the offers they have out.
+   *
+   * Declared before `validate-user-invite` so it cannot be shadowed by it, and
+   * guarded exactly like create: an admin listing invites is no different from
+   * an admin making one.
+   */
+  @Get()
+  @UseGuards(SessionGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiListInvites()
+  list(
+    @Query() query: ListInvitesQueryDto,
+  ): Promise<PaginatedResponseDto<AdminInviteListItemDto>> {
+    return this.invites.list(query);
+  }
+
+  /**
+   * Cancels a pending invite. Guarded like create, and it needs the actor to
+   * record who revoked — the reason the columns exist.
+   */
+  @Post(':id/revoke')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(SessionGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiRevokeInvite()
+  revoke(
+    @Param() params: InviteIdParamDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<AdminInviteListItemDto> {
+    return this.invites.revoke(params.id, actor);
   }
 
   // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The
@@ -182,7 +225,8 @@ export class InvitesController {
 
   /**
    * Which invite this caller is answering. A provisional session carries the
-   * one it was issued for. A full-access session carries none — it was
+   * one it was issued for, followed to its live replacement if that one has
+   * since been revoked or lapsed. A full-access session carries none — it was
    * issued for a membership — so its invite is the pending one addressed to
    * the account, the same one sign-in found.
    */
@@ -191,15 +235,10 @@ export class InvitesController {
     user: AuthenticatedUser,
   ): Promise<string> {
     if (session.scope === SessionScope.Provisional) {
-      // issueProvisional always sets inviteId, but the claims type it
-      // optional for scopes that have no invite, so it is checked rather
-      // than asserted.
-      if (!session.inviteId) {
-        throw new InviteNotFoundException('This session has no invite', {
-          userId: user.id,
-        });
-      }
-      return session.inviteId;
+      return this.invites.currentInviteFor(
+        sessionInvite(session, user),
+        user.email,
+      );
     }
 
     const invite = await this.invites.findUsableForEmail(user.email);
@@ -218,6 +257,11 @@ export class InvitesController {
    * lookup would accept the new one unseen. So a member names the invite,
    * and the decision is about that one — a replaced invite then answers as
    * revoked, which is the truth.
+   *
+   * A provisional session is held to the same rule once it has moved on.
+   * Unnamed, a decision answers the session's own invite, so a replacement is
+   * never accepted unseen. Another invite may be named only when it is the
+   * live replacement validate-user-invite is now showing.
    */
   private async inviteToDecide(
     session: InviteSession,
@@ -225,13 +269,16 @@ export class InvitesController {
     named: string | undefined,
   ): Promise<string> {
     if (session.scope === SessionScope.Provisional) {
-      const inviteId = await this.inviteToAnswer(session, user);
-      if (named !== undefined && named !== inviteId) {
+      const own = sessionInvite(session, user);
+      if (named === undefined || named === own) {
+        return own;
+      }
+      if (named !== (await this.invites.currentInviteFor(own, user.email))) {
         throw new InviteNotFoundException('No invite matches this session', {
           inviteId: named,
         });
       }
-      return inviteId;
+      return named;
     }
 
     if (named === undefined) {
@@ -251,3 +298,18 @@ export class InvitesController {
 }
 
 type InviteSession = { scope: SessionScope; inviteId?: string };
+
+/** The invite a provisional session was issued for. */
+function sessionInvite(
+  session: InviteSession,
+  user: AuthenticatedUser,
+): string {
+  // issueProvisional always sets inviteId, but the claims type it optional
+  // for scopes that have no invite, so it is checked rather than asserted.
+  if (!session.inviteId) {
+    throw new InviteNotFoundException('This session has no invite', {
+      userId: user.id,
+    });
+  }
+  return session.inviteId;
+}

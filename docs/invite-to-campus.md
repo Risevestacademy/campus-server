@@ -11,16 +11,16 @@ The mechanics behind each step (state, sessions, refresh) are in
 
 ## At a glance
 
-| #   | Where                     | What the invitee sees                                                                    | Call                                                                                 |
-| --- | ------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| 1   | Admin                     | —                                                                                        | `POST /v1/invites` returns `inviteLink`                                              |
-| 2   | Inbox                     | An email from campus-api with the link (Resend, when `FF_EMAIL_ENABLED` is on)           | —                                                                                    |
-| 3   | `/invitation?token=…`     | The invite: cohort, track, role, who invited them, Continue with Google                  | `GET /api/v1/auth/me` → 401, then `POST /api/v1/invites/preview`                     |
-| 4   | Google                    | Account picker                                                                           | top-level navigation to `/api/v1/auth/google`                                        |
-| 5   | `/invitation`             | Back from Google, signed in                                                              | `GET /api/v1/auth/me` → provisional, then `GET /api/v1/invites/validate-user-invite` |
-| 6   | `/preview`                | "Are your details correct?"                                                              | none — reuses step 5's answer                                                        |
-| 7   | Go to Campus              | —                                                                                        | `POST /api/v1/invites/decision` `{ "decision": "accept" }`                           |
-| 8   | `/campus/{cohortId}/join` | Their cohort's campus                                                                    | `GET /api/v1/auth/me` → full access                                                  |
+| #   | Where                     | What the invitee sees                                                          | Call                                                                                 |
+| --- | ------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| 1   | Admin                     | —                                                                              | `POST /v1/invites` returns `inviteLink`                                              |
+| 2   | Inbox                     | An email from campus-api with the link (Resend, when `FF_EMAIL_ENABLED` is on) | —                                                                                    |
+| 3   | `/invitation?token=…`     | The invite: cohort, track, role, who invited them, Continue with Google        | `GET /api/v1/auth/me` → 401, then `POST /api/v1/invites/preview`                     |
+| 4   | Google                    | Account picker                                                                 | top-level navigation to `/api/v1/auth/google`                                        |
+| 5   | `/invitation`             | Back from Google, signed in                                                    | `GET /api/v1/auth/me` → provisional, then `GET /api/v1/invites/validate-user-invite` |
+| 6   | `/preview`                | "Are your details correct?"                                                    | none — reuses step 5's answer                                                        |
+| 7   | Go to Campus              | —                                                                              | `POST /api/v1/invites/decision` `{ "decision": "accept" }`                           |
+| 8   | `/campus/{cohortId}/join` | Their cohort's campus                                                          | `GET /api/v1/auth/me` → full access                                                  |
 
 ## The whole journey
 
@@ -81,13 +81,20 @@ them, to which cohort and role, the address to sign in with, and when the
 invite expires (and, for a guest, when the visit ends). The response's
 `emailStatus` says how it went:
 
-| `emailStatus` | Meaning | The admin should |
-| --- | --- | --- |
-| `sent` | Resend accepted the email | Nothing |
-| `failed` | Not confirmed sent — refused, or no answer after a retry (5 s each) | Share `inviteLink` by hand |
-| `disabled` | This deployment sends no email (`FF_EMAIL_ENABLED` off) | Share `inviteLink` by hand |
+| `emailStatus` | Meaning                                                             | The admin should           |
+| ------------- | ------------------------------------------------------------------- | -------------------------- |
+| `sent`        | Resend accepted the email                                           | Nothing                    |
+| `failed`      | Not confirmed sent — refused, or no answer after a retry (5 s each) | Share `inviteLink` by hand |
+| `disabled`    | This deployment sends no email (`FF_EMAIL_ENABLED` off)             | Share `inviteLink` by hand |
 
 Either way the invite exists: a failed email never undoes it.
+
+An admin sees every invite with `GET /v1/invites` (paginated, filterable by
+`status`; a lapsed invite is listed as `expired`), and cancels a pending one
+with `POST /v1/invites/{id}/revoke`, which records who revoked it and when.
+An address holds one pending invite at a time, so re-inviting somebody means
+revoking the open invite first. Revoking an invite that has already expired
+answers 403 `INVITE_EXPIRED`.
 
 ### 3. `/invitation`, signed out
 
@@ -123,7 +130,7 @@ When the preview refuses, say why instead of offering Google:
 | Answer                                           | Say                                                    |
 | ------------------------------------------------ | ------------------------------------------------------ |
 | 404 `NOT_FOUND`                                  | The link is incomplete — copy it again from the email. |
-| 403 `FORBIDDEN`                                  | The invite has expired; ask for a new one.             |
+| 403 `INVITE_EXPIRED`                             | The invite has expired; ask for a new one.             |
 | 409 `INVITE_ALREADY_ACCEPTED`                    | Already joined — sign in from `/sign-in`.              |
 | 409 `INVITE_ALREADY_DECLINED` / `INVITE_REVOKED` | This invite is closed; ask the admin.                  |
 
@@ -151,10 +158,20 @@ the step 5 response in memory rather than refetching.
 
 ### 7. Go to Campus
 
-`POST /api/v1/invites/decision` with `{ "decision": "accept" }`. In one
-response campus-api creates the membership, fills the profile, marks the
-invite accepted, and replaces the provisional cookie with a full-access one
-plus a refresh cookie. The body says where they now belong:
+`POST /api/v1/invites/decision` with
+`{ "decision": "accept", "inviteId": "<id from validate-user-invite>" }`.
+In one response campus-api creates the membership, fills the profile, marks
+the invite accepted, and replaces the provisional cookie with a full-access
+one plus a refresh cookie.
+
+Send `inviteId` even though the session already names an invite. If an
+admin revoked that invite and sent a new one while the invitee was on these
+screens, `validate-user-invite` shows the new one, and a decision only
+answers it when it is named. Left out, the decision answers the invite the
+session was issued for — `409 INVITE_REVOKED` — so a replacement is never
+accepted unseen.
+
+The body says where they now belong:
 
 ```json
 {
@@ -200,18 +217,19 @@ keeps their full-access session throughout; they never get a provisional one.
 
 ## When it goes another way
 
-| Situation                                     | What happens                                                     | What the invitee sees                                                   |
-| --------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Signs in with a different Google account      | No invite for that address                                       | `/sign-in?error=invite_required` — say which address the invite went to |
-| Invite expired or revoked before they open it | The preview refuses                                              | `/invitation` explains it, and never sends them to Google               |
-| Invite expires between sign-in and accept     | `validate-user-invite` and `decision` answer 403 `FORBIDDEN`     | Ask the admin for a new invite                                          |
-| Admin revokes it between sign-in and accept   | They answer 409 `INVITE_REVOKED`                                 | Same                                                                    |
-| Takes longer than 30 minutes on steps 5–7     | Provisional session lapses, `me` answers 401, no refresh         | Continue with Google again; they land back on `/invitation`             |
-| Cancels at Google                             | —                                                                | `/sign-in?error=denied`                                                 |
-| Opens the link again after accepting          | Sign-in finds a member, not an invite                            | Straight to `/campus`                                                   |
+| Situation                                     | What happens                                                      | What the invitee sees                                                   |
+| --------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Signs in with a different Google account      | No invite for that address                                        | `/sign-in?error=invite_required` — say which address the invite went to |
+| Invite expired or revoked before they open it | The preview refuses                                               | `/invitation` explains it, and never sends them to Google               |
+| Invite expires between sign-in and accept     | `validate-user-invite` and `decision` answer 403 `INVITE_EXPIRED` | Ask the admin for a new invite                                          |
+| Admin revokes it between sign-in and accept   | They answer 409 `INVITE_REVOKED`                                  | Same                                                                    |
+| Admin revokes it and sends a new one          | `me` and `validate-user-invite` now answer with the new invite    | Show the new invite; `decision` must name it (see step 7)               |
+| Takes longer than 30 minutes on steps 5–7     | Provisional session lapses, `me` answers 401, no refresh          | Continue with Google again; they land back on `/invitation`             |
+| Cancels at Google                             | —                                                                 | `/sign-in?error=denied`                                                 |
+| Opens the link again after accepting          | Sign-in finds a member, not an invite                             | Straight to `/campus`                                                   |
 | Already signed in as a member, opens the link | `me` answers `full_access`, with `inviteId` if the invite is live | Show the invite (see above); with no `inviteId`, send them to `/campus` |
-| Declines                                      | `decision` with `decline`; invite closed, session cookie cleared | Nothing left to do; the admin can invite again                          |
-| A member declines another cohort's invite     | Invite closed; their session is untouched                        | Back to `/campus`, still a member of what they had                      |
+| Declines                                      | `decision` with `decline`; invite closed, session cookie cleared  | Nothing left to do; the admin can invite again                          |
+| A member declines another cohort's invite     | Invite closed; their session is untouched                         | Back to `/campus`, still a member of what they had                      |
 
 Every `?error=` code is listed in the API guide
 (`apps/campus-api/docs/intro.md`).

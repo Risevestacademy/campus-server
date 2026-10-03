@@ -32,7 +32,11 @@ export type Delivery = 'sent' | 'closed' | 'lagging';
  * whatever broadcast is in progress has finished, so nobody is told somebody
  * left in the middle of a frame that still lists them.
  */
-export function deliver(ws: Outbound, frame: string, maxBufferedBytes: number): Delivery {
+export function deliver(
+  ws: Outbound,
+  frame: string,
+  maxBufferedBytes: number,
+): Delivery {
   if (ws.readyState !== ws.OPEN) {
     return 'closed';
   }

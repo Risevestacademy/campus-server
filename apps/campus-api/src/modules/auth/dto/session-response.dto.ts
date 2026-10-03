@@ -18,7 +18,11 @@ export class SessionUserDto {
   @ApiPropertyOptional({ type: String, example: 'Lovelace', nullable: true })
   lastName: string | null;
 
-  @ApiPropertyOptional({ type: String, example: 'Ada Lovelace', nullable: true })
+  @ApiPropertyOptional({
+    type: String,
+    example: 'Ada Lovelace',
+    nullable: true,
+  })
   displayName: string | null;
 
   @ApiPropertyOptional({
@@ -81,7 +85,8 @@ export class SessionResponseDto {
     example: '66666666-6666-4666-8666-666666666666',
     description:
       'The invite to answer, if any: for a provisional session, the one it ' +
-      'was issued for; for a full-access session, a pending invite to ' +
+      'was issued for, or the live invite that replaced it if that one was ' +
+      'revoked or lapsed; for a full-access session, a pending invite to ' +
       'another cohort. Load it with GET /v1/invites/validate-user-invite.',
   })
   inviteId: string | null;

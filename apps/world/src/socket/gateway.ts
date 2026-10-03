@@ -6,7 +6,11 @@ import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import type { PositionStore, SavedPosition } from '../infra/positions.js';
 import { Players, type Player } from '../movement/players.js';
-import { decideUpgrade, sessionRefreshedSince, type Refusal } from './authenticate.js';
+import {
+  decideUpgrade,
+  sessionRefreshedSince,
+  type Refusal,
+} from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
 import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
@@ -96,7 +100,10 @@ export function registerGateway(
       }
       const others = moved.filter((player) => !own.has(player.userId));
       if (others.length > 0) {
-        sendFrame(connection.socket, encode({ type: 'moved', players: others }));
+        sendFrame(
+          connection.socket,
+          encode({ type: 'moved', players: others }),
+        );
       }
     }
   }
@@ -150,7 +157,10 @@ export function registerGateway(
     persist(standing);
   }
 
-  const periodicSave = setInterval(saveMoved, env.WORLD_POSITION_SAVE_SECONDS * 1000);
+  const periodicSave = setInterval(
+    saveMoved,
+    env.WORLD_POSITION_SAVE_SECONDS * 1000,
+  );
   periodicSave.unref();
 
   /**
@@ -244,7 +254,9 @@ export function registerGateway(
    * suspension and access within the window. One query for every socket.
    */
   async function dropEndedSessions(): Promise<void> {
-    const following = connections.all().filter((c) => c.sessionId !== undefined);
+    const following = connections
+      .all()
+      .filter((c) => c.sessionId !== undefined);
     if (following.length === 0) {
       return;
     }
@@ -301,7 +313,10 @@ export function registerGateway(
       // it lasts exactly as long as that token does — otherwise signing out,
       // or simply waiting, would leave the campus open with nothing to end
       // it. A socket that names one follows the login (dropEndedSessions).
-      if (connection.sessionId === undefined && connection.expiresAt.getTime() <= now) {
+      if (
+        connection.sessionId === undefined &&
+        connection.expiresAt.getTime() <= now
+      ) {
         app.log.info(
           { connectionId: connection.id, userId: connection.userId },
           'session expired, closing socket',
@@ -398,7 +413,11 @@ export function registerGateway(
       if (open.length > 0) {
         for (const connection of open) {
           app.log.info(
-            { connectionId: connection.id, userId: connection.userId, reason: decision.refusal },
+            {
+              connectionId: connection.id,
+              userId: connection.userId,
+              reason: decision.refusal,
+            },
             'closing socket, account no longer welcome',
           );
           drop(connection, false);
@@ -468,7 +487,10 @@ export function registerGateway(
       connection.alive = true;
     });
 
-    const budget = new FrameBudget(env.WORLD_MAX_MESSAGES_PER_SECOND, Date.now());
+    const budget = new FrameBudget(
+      env.WORLD_MAX_MESSAGES_PER_SECOND,
+      Date.now(),
+    );
 
     ws.on('message', (raw: Buffer) => {
       // A socket we have dropped can still deliver frames while its close
@@ -510,7 +532,12 @@ export function registerGateway(
         case 'move': {
           const { direction, seq } = result.message;
           const moved = players.move(connection.userId, direction, Date.now());
-          send(ws, { type: 'moveResult', seq, outcome: moved.outcome, player: moved.player });
+          send(ws, {
+            type: 'moveResult',
+            seq,
+            outcome: moved.outcome,
+            player: moved.player,
+          });
           if (moved.changed) {
             pendingMoves.set(connection.userId, connection);
             unsaved.add(connection.userId);

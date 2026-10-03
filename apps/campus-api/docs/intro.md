@@ -65,26 +65,26 @@ itself:
 
 Every outcome of step 3 is a redirect to the web app (`APP_PUBLIC_URL`):
 
-| Redirect | Meaning |
-| --- | --- |
-| `/campus` | On the roster (an admin, or an active cohort member). Full access. |
-| `/invitation` | Holds an invite they have not answered. Provisional session — or full access for a member invited to another cohort. |
-| `/sign-in?error=<code>` | Refused. Nothing was signed in. |
+| Redirect                | Meaning                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `/campus`               | On the roster (an admin, or an active cohort member). Full access.                                                   |
+| `/invitation`           | Holds an invite they have not answered. Provisional session — or full access for a member invited to another cohort. |
+| `/sign-in?error=<code>` | Refused. Nothing was signed in.                                                                                      |
 
 The web app needs a `/sign-in` page that reads `error` and explains it:
 
-| `error` | What happened |
-| --- | --- |
-| `invite_required` | Nobody invited this Google account's address. The usual cause is signing in with a different account from the one the invite went to. |
-| `account_suspended` | The account exists but has been closed. |
-| `denied` | The user cancelled at Google. |
-| `expired_state` | The sign-in took longer than 10 minutes. Start again. |
-| `invalid_state` | The callback could not be matched to a sign-in this browser started, for example because it was opened in another browser. Start again. |
-| `unverified_email` | The Google account has no verified address. |
-| `missing_code`, `exchange_failed`, `incomplete_profile` | Google did not complete the exchange. Start again. |
-| `invalid_request` | The callback URL was malformed. |
-| `rate_limited` | Too many attempts. Wait a minute. |
-| `server_error` | Something failed on our side. |
+| `error`                                                 | What happened                                                                                                                           |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `invite_required`                                       | Nobody invited this Google account's address. The usual cause is signing in with a different account from the one the invite went to.   |
+| `account_suspended`                                     | The account exists but has been closed.                                                                                                 |
+| `denied`                                                | The user cancelled at Google.                                                                                                           |
+| `expired_state`                                         | The sign-in took longer than 10 minutes. Start again.                                                                                   |
+| `invalid_state`                                         | The callback could not be matched to a sign-in this browser started, for example because it was opened in another browser. Start again. |
+| `unverified_email`                                      | The Google account has no verified address.                                                                                             |
+| `missing_code`, `exchange_failed`, `incomplete_profile` | Google did not complete the exchange. Start again.                                                                                      |
+| `invalid_request`                                       | The callback URL was malformed.                                                                                                         |
+| `rate_limited`                                          | Too many attempts. Wait a minute.                                                                                                       |
+| `server_error`                                          | Something failed on our side.                                                                                                           |
 
 The invite link (`/invitation?token=…`) opens the web app's invitation
 screen. Before anyone signs in, `POST /v1/invites/preview` with `{ "token" }`
@@ -103,11 +103,25 @@ app loads:
   "scope": "full_access",
   "expiresAt": "2026-09-30T12:15:00.000Z",
   "inviteId": null,
-  "user": { "id": "…", "email": "ada@campus.local", "displayName": "Ada Lovelace", "systemRole": "user", "…": "…" },
+  "user": {
+    "id": "…",
+    "email": "ada@campus.local",
+    "displayName": "Ada Lovelace",
+    "systemRole": "user",
+    "…": "…"
+  },
   "membership": { "cohortId": "…", "role": "student" },
   "memberships": [
-    { "cohortId": "…", "role": "student", "cohort": { "name": "Cohort 3", "code": "C3" } },
-    { "cohortId": "…", "role": "mentor", "cohort": { "name": "Cohort 2", "code": "C2" } }
+    {
+      "cohortId": "…",
+      "role": "student",
+      "cohort": { "name": "Cohort 3", "code": "C3" }
+    },
+    {
+      "cohortId": "…",
+      "role": "mentor",
+      "cohort": { "name": "Cohort 2", "code": "C2" }
+    }
   ]
 }
 ```
@@ -134,7 +148,10 @@ default) and a refresh token (30 days).
 both cookies and says when the new ones lapse:
 
 ```json
-{ "expiresAt": "2026-09-30T12:15:00.000Z", "refreshExpiresAt": "2026-10-30T12:00:00.000Z" }
+{
+  "expiresAt": "2026-09-30T12:15:00.000Z",
+  "refreshExpiresAt": "2026-10-30T12:00:00.000Z"
+}
 ```
 
 Schedule the next refresh a minute before `expiresAt`. Take the first
@@ -190,13 +207,13 @@ POST /v1/auth/google/token
 The decision is the one the browser callback makes, answered as JSON instead
 of a redirect:
 
-| Answer | Meaning |
-| --- | --- |
-| `200`, `scope: "full_access"` | On the roster. `inviteId` set means an invite to another cohort is waiting. |
-| `200`, `scope: "provisional"` | Holds an invite to answer (`inviteId`). No refresh token: `refreshToken` and `refreshExpiresAt` are null. |
-| `403 INVITE_REQUIRED` | Nobody invited this Google account's address. |
-| `403 ACCOUNT_SUSPENDED` | The account exists but has been closed. |
-| `401 UNAUTHORIZED` | The id_token was not accepted. `details.reason` is `exchange_failed` (not verifiable, or addressed to a client this deployment does not name), `unverified_email` or `incomplete_profile`. |
+| Answer                        | Meaning                                                                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `200`, `scope: "full_access"` | On the roster. `inviteId` set means an invite to another cohort is waiting.                                                                                                                |
+| `200`, `scope: "provisional"` | Holds an invite to answer (`inviteId`). No refresh token: `refreshToken` and `refreshExpiresAt` are null.                                                                                  |
+| `403 INVITE_REQUIRED`         | Nobody invited this Google account's address.                                                                                                                                              |
+| `403 ACCOUNT_SUSPENDED`       | The account exists but has been closed.                                                                                                                                                    |
+| `401 UNAUTHORIZED`            | The id_token was not accepted. `details.reason` is `exchange_failed` (not verifiable, or addressed to a client this deployment does not name), `unverified_email` or `incomplete_profile`. |
 
 The id_token must be addressed to a Google client this deployment names:
 its web client, or a native client listed in `GOOGLE_MOBILE_CLIENT_IDS`.
@@ -236,12 +253,12 @@ in plain preferences.
 The API is organized by resource, and each resource appears as its own section
 in the docs:
 
-| Resource                | Description                          |
-| ----------------------- | ------------------------------------ |
-| `auth`                  | Google sign-in (`GET /v1/auth/google`) |
-| `health`                | Service health and performance data (`GET /v1/health`) |
-| `cohorts`               | Cohort management                    |
-| `spaces`                | Physical spaces and occupancy        |
+| Resource  | Description                                            |
+| --------- | ------------------------------------------------------ |
+| `auth`    | Google sign-in (`GET /v1/auth/google`)                 |
+| `health`  | Service health and performance data (`GET /v1/health`) |
+| `cohorts` | Cohort management                                      |
+| `spaces`  | Physical spaces and occupancy                          |
 
 Each operation documents its path, expected request body/query parameters, and
 every possible response (including each error status) inline.
@@ -271,18 +288,22 @@ Every error response in the API shares a single envelope:
 
 - **`code`** — machine-readable, always one of the values below:
 
-  | Code                | HTTP status | Meaning                        |
-  | ------------------- | ----------- | ------------------------------ |
-  | `INVALID_ARGUMENT`  | 400         | Malformed input / validation   |
-  | `UNAUTHORIZED`      | 401         | Missing or invalid credentials |
-  | `FORBIDDEN`         | 403         | Authenticated but not allowed  |
-  | `NOT_FOUND`         | 404         | The resource does not exist    |
-  | `CONFLICT`          | 409         | State conflict (e.g. duplicate)|
-  | `SPACE_AT_CAPACITY` | 409         | The space is at capacity       |
-  | `INVITE_REQUIRED`   | 403         | No invite for this address     |
-  | `ACCOUNT_SUSPENDED` | 403         | The account exists but is closed |
-  | `RATE_LIMITED`      | 429         | Too many requests, retry later |
-  | `INTERNAL_ERROR`    | 500         | Unexpected server error        |
+  | Code                      | HTTP status | Meaning                          |
+  | ------------------------- | ----------- | -------------------------------- |
+  | `INVALID_ARGUMENT`        | 400         | Malformed input / validation     |
+  | `UNAUTHORIZED`            | 401         | Missing or invalid credentials   |
+  | `FORBIDDEN`               | 403         | Authenticated but not allowed    |
+  | `NOT_FOUND`               | 404         | The resource does not exist      |
+  | `CONFLICT`                | 409         | State conflict (e.g. duplicate)  |
+  | `SPACE_AT_CAPACITY`       | 409         | The space is at capacity         |
+  | `INVITE_ALREADY_ACCEPTED` | 409         | The invite was already accepted  |
+  | `INVITE_ALREADY_DECLINED` | 409         | The invite was already declined  |
+  | `INVITE_REVOKED`          | 409         | An admin revoked the invite      |
+  | `INVITE_REQUIRED`         | 403         | No invite for this address       |
+  | `INVITE_EXPIRED`          | 403         | The invite has expired           |
+  | `ACCOUNT_SUSPENDED`       | 403         | The account exists but is closed |
+  | `RATE_LIMITED`            | 429         | Too many requests, retry later   |
+  | `INTERNAL_ERROR`          | 500         | Unexpected server error          |
 
 - **`message`** — a human-readable description, safe to show to end users.
 - **`details`** — optional structured context specific to the error.
@@ -335,10 +356,10 @@ Endpoints that return a list of resources respond with a paginated document:
 
 List endpoints accept the following query parameters:
 
-| Parameter  | Type   | Default | Description                    |
-| ---------- | ------ | ------- | ------------------------------ |
-| `page`     | number | `1`     | Page to fetch (1-based).       |
-| `perPage`  | number | `20`    | Number of items per page.      |
+| Parameter | Type   | Default | Description               |
+| --------- | ------ | ------- | ------------------------- |
+| `page`    | number | `1`     | Page to fetch (1-based).  |
+| `perPage` | number | `20`    | Number of items per page. |
 
 `page` must be at least 1 and `perPage` is capped at 100.
 

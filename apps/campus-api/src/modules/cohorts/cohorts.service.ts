@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { asc, count, desc, eq } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
 import { isUniqueViolation } from '../../infra/database/unique-violation.js';
 import type {
   PaginatedResponseDto,
@@ -13,6 +14,7 @@ import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
   CohortConflictException,
+  CohortInvalidArgumentException,
   CohortNotFoundException,
 } from './cohorts.exceptions.js';
 import type {
@@ -20,6 +22,7 @@ import type {
   CohortTrackResponseDto,
 } from './dto/cohort-response.dto.js';
 import type { CreateCohortDto } from './dto/create-cohort.dto.js';
+import type { UpdateCohortDto } from './dto/update-cohort.dto.js';
 import { cohorts, cohortTracks, type Cohort } from './schema.js';
 
 /**
@@ -159,6 +162,109 @@ export class CohortsService {
         throw new CohortConflictException(
           `Track ${track.code} is already attached to this cohort`,
           { cohortId, trackId },
+        );
+      }
+      // Both were found above, so this is one deleted between that read and
+      // the insert: the same 404 the read would have given a moment later.
+      if (isForeignKeyViolation(err, 'cohort_tracks_cohort_id_cohorts_id_fk')) {
+        throw new CohortNotFoundException(`Cohort ${cohortId} not found`, {
+          cohortId,
+        });
+      }
+      if (isForeignKeyViolation(err, 'cohort_tracks_track_id_tracks_id_fk')) {
+        throw new TrackNotFoundException(`Track ${trackId} not found`, {
+          trackId,
+        });
+      }
+      throw err;
+    }
+  }
+
+  async update(id: string, dto: UpdateCohortDto): Promise<Cohort> {
+    try {
+      return await this.db.transaction(async (tx) => {
+        // Locked, so the range check below and the write it guards see the
+        // same row. Unlocked, two edits each moving one date could both pass
+        // against the old pair and together store an end before the start.
+        const [existing] = await tx
+          .select()
+          .from(cohorts)
+          .where(eq(cohorts.id, id))
+          .for('update');
+        if (!existing) {
+          throw new CohortNotFoundException(`Cohort ${id} not found`, {
+            cohortId: id,
+          });
+        }
+
+        // The DTO checks each date on its own; only the merged pair can say
+        // whether a one-sided change inverts the range.
+        const startDate =
+          dto.startDate === undefined
+            ? existing.startDate
+            : (dto.startDate ?? null);
+        const endDate =
+          dto.endDate === undefined ? existing.endDate : (dto.endDate ?? null);
+        if (startDate !== null && endDate !== null && endDate < startDate) {
+          throw new CohortInvalidArgumentException(
+            'Request validation failed',
+            { fields: { endDate: 'endDate must be on or after startDate' } },
+          );
+        }
+
+        if (
+          dto.name === undefined &&
+          dto.code === undefined &&
+          dto.startDate === undefined &&
+          dto.endDate === undefined &&
+          dto.status === undefined
+        ) {
+          return existing;
+        }
+
+        const [row] = await tx
+          .update(cohorts)
+          .set({
+            ...(dto.name !== undefined ? { name: dto.name } : {}),
+            ...(dto.code !== undefined ? { code: dto.code } : {}),
+            ...(dto.startDate !== undefined ? { startDate } : {}),
+            ...(dto.endDate !== undefined ? { endDate } : {}),
+            ...(dto.status !== undefined ? { status: dto.status } : {}),
+          })
+          .where(eq(cohorts.id, id))
+          .returning();
+        return row;
+      });
+    } catch (err) {
+      if (isUniqueViolation(err, 'cohorts_code_unique')) {
+        throw new CohortConflictException(
+          `A cohort with code ${dto.code} already exists`,
+          { code: dto.code },
+        );
+      }
+      throw err;
+    }
+  }
+
+  async remove(id: string): Promise<void> {
+    try {
+      const [row] = await this.db
+        .delete(cohorts)
+        .where(eq(cohorts.id, id))
+        .returning({ id: cohorts.id });
+      if (!row) {
+        throw new CohortNotFoundException(`Cohort ${id} not found`, {
+          cohortId: id,
+        });
+      }
+    } catch (err) {
+      // The FKs are restrictive on purpose: a cohort with tracks, members
+      // or invites is refused rather than emptied, and there is no detach
+      // route yet, so the message says what has to go first.
+      if (isForeignKeyViolation(err)) {
+        throw new CohortConflictException(
+          'Cohort cannot be deleted while it still has tracks, members or invites',
+          { cohortId: id },
         );
       }
       throw err;

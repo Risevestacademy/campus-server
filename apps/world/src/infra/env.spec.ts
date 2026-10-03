@@ -9,12 +9,17 @@ const minimal = {
 
 describe('loadEnv', () => {
   it('refuses to start without a session secret, since nothing could sign in', () => {
-    expect(() => loadEnv({} as NodeJS.ProcessEnv)).toThrow(/AUTH_SESSION_SECRET/);
+    expect(() => loadEnv({} as NodeJS.ProcessEnv)).toThrow(
+      /AUTH_SESSION_SECRET/,
+    );
   });
 
   it('refuses a secret short enough to be guessed', () => {
     expect(() =>
-      loadEnv({ ...minimal, AUTH_SESSION_SECRET: 'too-short' } as NodeJS.ProcessEnv),
+      loadEnv({
+        ...minimal,
+        AUTH_SESSION_SECRET: 'too-short',
+      } as NodeJS.ProcessEnv),
     ).toThrow(/AUTH_SESSION_SECRET/);
   });
 
@@ -60,24 +65,40 @@ describe('loadEnv', () => {
    */
   it('refuses a session refresh window the shared session policy cannot meet', () => {
     expect(() =>
-      loadEnv({ ...minimal, WORLD_SESSION_REFRESH_WINDOW_SECONDS: '60' } as NodeJS.ProcessEnv),
+      loadEnv({
+        ...minimal,
+        WORLD_SESSION_REFRESH_WINDOW_SECONDS: '60',
+      } as NodeJS.ProcessEnv),
     ).toThrow(/WORLD_SESSION_REFRESH_WINDOW_SECONDS.*at least 1020/);
     expect(() =>
-      loadEnv({ ...minimal, WORLD_SESSION_REFRESH_WINDOW_SECONDS: '900' } as NodeJS.ProcessEnv),
+      loadEnv({
+        ...minimal,
+        WORLD_SESSION_REFRESH_WINDOW_SECONDS: '900',
+      } as NodeJS.ProcessEnv),
     ).toThrow(/WORLD_SESSION_REFRESH_WINDOW_SECONDS/);
     expect(
-      loadEnv({ ...minimal, WORLD_SESSION_REFRESH_WINDOW_SECONDS: '1020' } as NodeJS.ProcessEnv)
-        .WORLD_SESSION_REFRESH_WINDOW_SECONDS,
+      loadEnv({
+        ...minimal,
+        WORLD_SESSION_REFRESH_WINDOW_SECONDS: '1020',
+      } as NodeJS.ProcessEnv).WORLD_SESSION_REFRESH_WINDOW_SECONDS,
     ).toBe(1020);
   });
 
   /** A spawn off the map would drop every arrival where they cannot move. */
   it('refuses a spawn outside the map', () => {
     expect(() =>
-      loadEnv({ ...minimal, WORLD_MAP_WIDTH: '10', WORLD_SPAWN_X: '10' } as NodeJS.ProcessEnv),
+      loadEnv({
+        ...minimal,
+        WORLD_MAP_WIDTH: '10',
+        WORLD_SPAWN_X: '10',
+      } as NodeJS.ProcessEnv),
     ).toThrow(/WORLD_SPAWN_X/);
     expect(() =>
-      loadEnv({ ...minimal, WORLD_MAP_HEIGHT: '10', WORLD_SPAWN_Y: '12' } as NodeJS.ProcessEnv),
+      loadEnv({
+        ...minimal,
+        WORLD_MAP_HEIGHT: '10',
+        WORLD_SPAWN_Y: '12',
+      } as NodeJS.ProcessEnv),
     ).toThrow(/WORLD_SPAWN_Y/);
   });
 
@@ -103,7 +124,9 @@ describe('loadEnv', () => {
   it('yields no origins when the list is unset or empty', () => {
     expect(allowedOrigins(loadEnv(minimal))).toEqual([]);
     expect(
-      allowedOrigins(loadEnv({ ...minimal, CORS_ORIGINS: ' , ' } as NodeJS.ProcessEnv)),
+      allowedOrigins(
+        loadEnv({ ...minimal, CORS_ORIGINS: ' , ' } as NodeJS.ProcessEnv),
+      ),
     ).toEqual([]);
   });
 });

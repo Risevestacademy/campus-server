@@ -15,7 +15,6 @@ export interface GoogleAuthSettings {
   sessionSecret: string;
 }
 
-
 export function requireGoogleAuth(env: Env): GoogleAuthSettings {
   if (
     !env.FF_GOOGLE_AUTH_ENABLED ||

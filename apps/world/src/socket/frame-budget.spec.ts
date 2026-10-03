@@ -13,13 +13,18 @@ function burst(budget: FrameBudget, count: number, now: number) {
 
 describe('FrameBudget', () => {
   it('accepts a second of frames arriving at once', () => {
-    expect(burst(new FrameBudget(RATE, 0), RATE, 0)).toEqual({ accept: RATE, drop: 0, close: 0 });
+    expect(burst(new FrameBudget(RATE, 0), RATE, 0)).toEqual({
+      accept: RATE,
+      drop: 0,
+      close: 0,
+    });
   });
 
   it('keeps accepting a client that sends at exactly the rate', () => {
     const budget = new FrameBudget(RATE, 0);
     const answers = new Set<string>();
-    for (let i = 1; i <= 1_000; i++) answers.add(budget.admit((i * 1000) / RATE));
+    for (let i = 1; i <= 1_000; i++)
+      answers.add(budget.admit((i * 1000) / RATE));
 
     expect([...answers]).toEqual(['accept']);
   });
@@ -41,6 +46,10 @@ describe('FrameBudget', () => {
   it('does not take budget away when the clock goes backwards', () => {
     const budget = new FrameBudget(RATE, 10_000);
 
-    expect(burst(budget, RATE, 5_000)).toEqual({ accept: RATE, drop: 0, close: 0 });
+    expect(burst(budget, RATE, 5_000)).toEqual({
+      accept: RATE,
+      drop: 0,
+      close: 0,
+    });
   });
 });

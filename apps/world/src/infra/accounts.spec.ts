@@ -57,7 +57,9 @@ describe("world's account lookup, against campus-api's schema", () => {
         ('22222222-2222-4222-8222-222222222222', 'banned@campus.local', 'suspended')`,
     );
 
-    expect(await accountRow('22222222-2222-4222-8222-222222222222')).toMatchObject({
+    expect(
+      await accountRow('22222222-2222-4222-8222-222222222222'),
+    ).toMatchObject({
       status: 'suspended',
     });
   });
@@ -82,7 +84,12 @@ describe("world's live-session check, against campus-api's schema", () => {
 
   async function token(
     family: string,
-    fields: { createdAt?: Date; expiresAt?: Date; usedAt?: Date; revokedAt?: Date } = {},
+    fields: {
+      createdAt?: Date;
+      expiresAt?: Date;
+      usedAt?: Date;
+      revokedAt?: Date;
+    } = {},
   ) {
     await db.query(
       `insert into refresh_tokens (user_id, family_id, token_hash, expires_at, used_at, revoked_at, created_at)
@@ -152,7 +159,14 @@ describe("world's live-session check, against campus-api's schema", () => {
 
   it('answers for many at once, and ignores families it has never heard of', async () => {
     expect(
-      await live([LIVE, SIGNED_OUT, EXPIRED, STALE, ROTATED, 'bbbbbbbb-0000-4000-8000-000000000009']),
+      await live([
+        LIVE,
+        SIGNED_OUT,
+        EXPIRED,
+        STALE,
+        ROTATED,
+        'bbbbbbbb-0000-4000-8000-000000000009',
+      ]),
     ).toEqual([LIVE, ROTATED].sort());
   });
 });

@@ -33,8 +33,22 @@
     {
       "idx": 4,
       "version": "7",
-      "when": 1790808952592,
-      "tag": "0004_audit_log",
+      "when": 1790898284271,
+      "tag": "0004_lucky_titanium_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790987403238,
+      "tag": "0005_invites_revoked_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790998517690,
+      "tag": "0006_audit_log",
       "breakpoints": true
     }
   ]

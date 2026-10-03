@@ -1,4 +1,9 @@
-import { CallHandler, ExecutionContext, HttpStatus, NestInterceptor } from '@nestjs/common';
+import {
+  CallHandler,
+  ExecutionContext,
+  HttpStatus,
+  NestInterceptor,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import type { PostHog } from 'posthog-node';
 import { Observable, throwError } from 'rxjs';
@@ -34,7 +39,9 @@ export class PostHogExceptionInterceptor implements NestInterceptor {
         const status = resolveExceptionStatus(exception);
         if (status >= MIN_STATUS_TO_CAPTURE) {
           const request = context.switchToHttp().getRequest<Request>();
-          const distinctId = sanitizeDistinctId(request.headers[DISTINCT_ID_HEADER]);
+          const distinctId = sanitizeDistinctId(
+            request.headers[DISTINCT_ID_HEADER],
+          );
           try {
             this.posthog.captureException(exception, distinctId, {
               method: request.method,

@@ -81,7 +81,11 @@ export function setSessionCookies(
   if (site.sessionDomain) {
     clearHostOnlySession(res, site);
   }
-  res.cookie(SESSION_COOKIE, session.token, sessionOptions(site, session.expiresAt));
+  res.cookie(
+    SESSION_COOKIE,
+    session.token,
+    sessionOptions(site, session.expiresAt),
+  );
   if (session.scope === 'full_access') {
     res.cookie(
       REFRESH_COOKIE,
@@ -104,7 +108,12 @@ export function clearSessionCookies(res: Response, site: CookieSite): void {
   }
   res.clearCookie(
     REFRESH_COOKIE,
-    sessionCookieOptions(site.apiUrl, site.appUrl, expired, REFRESH_COOKIE_PATH),
+    sessionCookieOptions(
+      site.apiUrl,
+      site.appUrl,
+      expired,
+      REFRESH_COOKIE_PATH,
+    ),
   );
 }
 

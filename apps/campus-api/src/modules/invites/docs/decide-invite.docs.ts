@@ -175,7 +175,7 @@ export function ApiDecideInvite(): MethodDecorator {
               summary: 'Past expires_at, still pending',
               value: {
                 error: {
-                  code: 'FORBIDDEN',
+                  code: 'INVITE_EXPIRED',
                   message: 'This invite has expired',
                   details: {
                     inviteId: '66666666-6666-4666-8666-666666666666',

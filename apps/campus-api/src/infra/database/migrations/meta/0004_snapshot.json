@@ -1,156 +1,9 @@
 {
-  "id": "7e64cf6f-0865-4085-af6e-195ea36b5867",
+  "id": "8892435c-52c9-40a3-99c5-4f64877b0282",
   "prevId": "398832bc-3354-4626-857f-7308517f6cf1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.audit_log": {
-      "name": "audit_log",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "actor_user_id": {
-          "name": "actor_user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "action": {
-          "name": "action",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "subject_type": {
-          "name": "subject_type",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "subject_id": {
-          "name": "subject_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "space_id": {
-          "name": "space_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "details": {
-          "name": "details",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "correlation_id": {
-          "name": "correlation_id",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "audit_log_created_idx": {
-          "name": "audit_log_created_idx",
-          "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "audit_log_actor_idx": {
-          "name": "audit_log_actor_idx",
-          "columns": [
-            {
-              "expression": "actor_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "audit_log_subject_idx": {
-          "name": "audit_log_subject_idx",
-          "columns": [
-            {
-              "expression": "subject_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "subject_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "audit_log_actor_user_id_users_id_fk": {
-          "name": "audit_log_actor_user_id_users_id_fk",
-          "tableFrom": "audit_log",
-          "tableTo": "users",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.cohort_members": {
       "name": "cohort_members",
       "schema": "",
@@ -713,6 +566,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_by": {
+          "name": "revoked_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -781,6 +646,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "invited_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "invites_revoked_by_users_id_fk": {
+          "name": "invites_revoked_by_users_id_fk",
+          "tableFrom": "invites",
+          "tableTo": "users",
+          "columnsFrom": [
+            "revoked_by"
           ],
           "columnsTo": [
             "id"

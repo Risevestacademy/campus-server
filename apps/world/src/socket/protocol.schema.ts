@@ -27,7 +27,11 @@ export function protocolJsonSchema(): Record<string, unknown> {
   for (const [id, schema] of Object.entries(schemas)) {
     // Each comes out as a standalone document; inside `definitions` those
     // two keys would only confuse a generator.
-    const { $schema: _schema, $id: _id, ...body } = schema as Record<string, unknown>;
+    const {
+      $schema: _schema,
+      $id: _id,
+      ...body
+    } = schema as Record<string, unknown>;
     definitions[id] = body;
   }
 
