@@ -99,4 +99,25 @@ describe('InviteMailer', () => {
     expect(logged).not.toContain('raw-token');
     expect(logged).toContain('refused');
   });
+
+  // A resend is the same invite sent again on purpose: under the invite's
+  // own key the provider would drop it as a repeat of the first email.
+  it('uses custom idempotency key when provided (for resend)', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, id: 'em_2' });
+    const { subject, previewByToken } = mailer(
+      { enabled: true, send },
+      vi.fn().mockResolvedValue(PREVIEW),
+    );
+
+    await expect(subject.send(INVITE, 'invite/custom-key')).resolves.toBe(
+      InviteEmailStatus.Sent,
+    );
+    expect(previewByToken).toHaveBeenCalledWith('raw-token');
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'ada@campus.local',
+        idempotencyKey: 'invite/custom-key',
+      }),
+    );
+  });
 });

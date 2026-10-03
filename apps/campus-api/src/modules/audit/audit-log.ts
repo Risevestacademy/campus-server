@@ -99,6 +99,15 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.Invite;
     details: { cohortId: string | null; expiresAt: Date };
   };
+  [AuditAction.InviteResent]: {
+    subject: AuditSubjectType.Invite;
+    details: {
+      cohortId: string | null;
+      /** The deadline the resend set, and the one it replaced. */
+      expiresAt: Date;
+      previousExpiresAt: Date;
+    };
+  };
   [AuditAction.InviteFlagged]: {
     subject: AuditSubjectType.Invite;
     details: { cohortId: string | null; invitedBy: string };

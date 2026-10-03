@@ -26,11 +26,14 @@ export class InviteMailer {
     this.logger.setContext(InviteMailer.name);
   }
 
-  async send(invite: {
-    id: string;
-    token: string;
-    inviteLink: string;
-  }): Promise<InviteEmailStatus> {
+  async send(
+    invite: {
+      id: string;
+      token: string;
+      inviteLink: string;
+    },
+    idempotencyKey?: string,
+  ): Promise<InviteEmailStatus> {
     if (!this.sender.enabled) {
       return InviteEmailStatus.Disabled;
     }
@@ -44,8 +47,9 @@ export class InviteMailer {
         to: details.email,
         ...rendered,
         // A retried create is a new invite with a new id, so this only
-        // guards the send itself against being repeated.
-        idempotencyKey: `invite/${invite.id}`,
+        // guards the send itself against being repeated. A resend is the
+        // same invite sent again on purpose, so it brings a key of its own.
+        idempotencyKey: idempotencyKey ?? `invite/${invite.id}`,
       });
 
       // Neither line carries the link, which opens the invite's preview, and

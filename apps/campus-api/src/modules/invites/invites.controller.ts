@@ -12,6 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -46,6 +47,7 @@ import { ApiFlagInvite } from './docs/flag-invite.docs.js';
 import { ApiListInvites } from './docs/list-invites.docs.js';
 import { ApiPreviewInvite } from './docs/preview-invite.docs.js';
 import { ApiRevokeInvite } from './docs/revoke-invite.docs.js';
+import { ApiResendInvite } from './docs/resend-invite.docs.js';
 import { ApiValidateUserInvite } from './docs/validate-invite.docs.js';
 import { CreateInviteDto } from './dto/create-invite.dto.js';
 import {
@@ -134,6 +136,39 @@ export class InvitesController {
     @CorrelationId() correlationId: string | undefined,
   ): Promise<AdminInviteListItemDto> {
     return this.invites.revoke(params.id, actor, correlationId);
+  }
+
+  /**
+   * A new link for an invite whose email never arrived or whose link ran
+   * out. Guarded like create, needing the actor for the audit entry like
+   * revoke, and answered like create: the receipt carries the
+   * link, so the admin can share it by hand if the email fails again.
+   */
+  @Post(':id/resend')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(SessionGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiResendInvite()
+  async resend(
+    @Param() params: InviteIdParamDto,
+    @CurrentUser() actor: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<InviteResponseDto> {
+    const receipt = await this.invites.resend(params.id, actor, correlationId);
+    // After the write, not inside it: a failed send must not undo a link the
+    // admin can still share by hand.
+    //
+    // A key of its own per resend. Under create's key, which is the invite
+    // id, the provider would take this for a repeat of the first email and
+    // drop it. Random rather than derived from the token: nothing about the
+    // token, its hash included, leaves this service except in the link.
+    return {
+      ...receipt,
+      emailStatus: await this.mailer.send(
+        receipt,
+        `invite/${receipt.id}/resend/${randomUUID()}`,
+      ),
+    };
   }
 
   // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The
