@@ -85,6 +85,8 @@ erDiagram
         uuid invited_by FK
         timestamptz expires_at
         timestamptz accepted_at
+        timestamptz revoked_at "admin cancellation; null unless status is revoked"
+        uuid revoked_by FK "who cancelled it; null unless status is revoked"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -425,6 +427,7 @@ erDiagram
     COHORT_TRACKS ||--o{ INVITES : "places"
     MENTORSHIP_GROUPS ||--o{ INVITES : "assigns_pod"
     USERS ||--o{ INVITES : "invited_by"
+    USERS ||--o{ INVITES : "revoked_by"
     COHORTS ||--o{ MENTORSHIP_GROUPS : "contains"
     COHORT_MEMBERS ||--o{ MENTORSHIP_GROUPS : "leads_as_mentor"
     SPACES ||--o{ MENTORSHIP_GROUPS : "meets_in"

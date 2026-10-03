@@ -35,7 +35,7 @@ export function ApiPreviewInvite(): MethodDecorator {
     }),
     ApiForbiddenResponse({
       type: ApiErrorResponseDto,
-      description: 'FORBIDDEN: the invite has expired.',
+      description: 'INVITE_EXPIRED: the invite has expired.',
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,

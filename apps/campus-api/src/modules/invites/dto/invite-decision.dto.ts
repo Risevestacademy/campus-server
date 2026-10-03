@@ -35,8 +35,10 @@ export class InviteDecisionDto {
       'The invite being answered — the id GET /v1/invites/validate-user-invite ' +
       'returned. Required for a full-access session (a member invited to ' +
       'another cohort), so an invite replaced since the member read it is ' +
-      'never accepted unseen. A provisional session may omit it; its ' +
-      'session already names the invite, and an id that differs is refused.',
+      'never accepted unseen. A provisional session may omit it to answer ' +
+      'the invite its session was issued for. If that one was revoked and ' +
+      'replaced, validate-user-invite shows the replacement, and answering ' +
+      'it means naming it here; any other id is refused.',
   })
   @IsOptional()
   @IsUUID()

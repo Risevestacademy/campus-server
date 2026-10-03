@@ -1,10 +1,22 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt, isNotNull, lte, ne, or } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  lte,
+  ne,
+  or,
+  type SQL,
+} from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import {
   isLiveMembership,
   isNotLiveMembership,
@@ -20,6 +32,10 @@ import {
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users, type User } from '../users/schema.js';
 import type { CreateInviteDto } from './dto/create-invite.dto.js';
+import type {
+  AdminInviteListItemDto,
+  ListInvitesQueryDto,
+} from './dto/invite-admin-list.dto.js';
 import {
   InviteDecision,
   type InviteDecisionResponseDto,
@@ -44,6 +60,7 @@ import {
   InviteAlreadyAcceptedException,
   InviteAlreadyDeclinedException,
   InviteConflictException,
+  InviteExpiredException,
   InviteForbiddenException,
   InviteRevokedException,
   InviteInternalException,
@@ -300,6 +317,33 @@ export class InvitesService {
   }
 
   /**
+   * The invite a provisional session should be answering now.
+   *
+   * Its own while that is still live. Once it is not — revoked and replaced,
+   * typically, which is what revoking is for — the live invite addressed to
+   * the same account, so the invitee is shown the offer that stands instead
+   * of being stuck on a closed one until the session lapses. With no live
+   * replacement it stays the session's own, whose settled state is then the
+   * true answer.
+   */
+  async currentInviteFor(
+    sessionInviteId: string,
+    email: string,
+    now: Date = new Date(),
+  ): Promise<string> {
+    const [own] = await this.db
+      .select({ status: invites.status, expiresAt: invites.expiresAt })
+      .from(invites)
+      .where(eq(invites.id, sessionInviteId))
+      .limit(1);
+    if (own && isInviteLive(own, now)) {
+      return sessionInviteId;
+    }
+    const replacement = await this.findUsableForEmail(email, now);
+    return replacement?.id ?? sessionInviteId;
+  }
+
+  /**
    * The live invite a provisional session was minted against, with everything
    * the onboarding screen needs to render a decision.
    */
@@ -547,7 +591,7 @@ export class InvitesService {
       if (invite.status === InviteStatus.Pending) {
         await this.expireLazily(inviteId, now);
       }
-      throw new InviteForbiddenException('This invite has expired', {
+      throw new InviteExpiredException('This invite has expired', {
         ...ref,
         expiresAt: invite.expiresAt,
       });
@@ -719,7 +763,7 @@ export class InvitesService {
       invite.status === InviteStatus.Pending ||
       invite.status === InviteStatus.Expired
     ) {
-      throw new InviteForbiddenException('This invite has expired', {
+      throw new InviteExpiredException('This invite has expired', {
         inviteId,
         expiresAt: invite.expiresAt,
       });
@@ -1035,6 +1079,158 @@ export class InvitesService {
   }
 
   /**
+   * An admin cancelling an offer they no longer want to honour.
+   *
+   * Revoked, not expired: the invite did not run out of time, somebody pulled
+   * it. That is why the actor and the moment are written alongside the status
+   * flip — an expired invite has nobody to blame, a revoked one does.
+   *
+   * Only a live pending invite can be revoked, and the claim is the same
+   * conditional UPDATE accept and decline use: one row matches
+   * `status='pending' AND expires_at > now`, so two admins revoking the same
+   * invite cannot both win, and the loser is diagnosed from the row it re-reads
+   * rather than overwriting the winner. An invite that lapsed between the
+   * admin's click and this write is reported as expired and is never converted
+   * into a revocation — the admin wanted to stop an offer that had already
+   * stopped on its own, and saying so is more useful than recording a
+   * cancellation nobody made.
+   *
+   * Once revoked the invite is invisible to sign-in and reads as
+   * INVITE_REVOKED to anybody already holding it mid-onboarding. The address
+   * is free to be invited again: the one-live-per-address index only covers
+   * pending rows, so this is the step POST /invites asks for before a
+   * re-invite.
+   */
+  async revoke(
+    inviteId: string,
+    actor: AuthenticatedUser,
+    now: Date = new Date(),
+  ): Promise<AdminInviteListItemDto> {
+    // One statement, so atomic on its own: no transaction needed.
+    const [revoked] = await this.db
+      .update(invites)
+      .set({
+        status: InviteStatus.Revoked,
+        revokedAt: now,
+        revokedBy: actor.id,
+      })
+      .where(
+        and(
+          eq(invites.id, inviteId),
+          eq(invites.status, InviteStatus.Pending),
+          // Same comparison isInviteLive makes, so a lapsed invite is
+          // refused here exactly as it is on the read path.
+          gt(invites.expiresAt, now),
+        ),
+      )
+      .returning();
+
+    if (revoked) {
+      return toAdminInviteItem(revoked, now);
+    }
+
+    // Nothing was claimed. Materialise the lapse on the read side first, so
+    // the record says expired rather than leaving a stale pending row for the
+    // next reader to trip over, then explain which of the settled states this
+    // was.
+    const existing = await this.findInvite(inviteId);
+    await this.expireLazily(inviteId, now);
+    return this.throwUnrevocable(existing, inviteId);
+  }
+
+  /**
+   * Explains a failed revoke claim, reusing the terminal-state mapping accept
+   * and decline already answer with, so one settled invite has one answer
+   * whichever route asked about it. Revoking an already-revoked invite is
+   * therefore a 409 rather than a silent success: the caller asked to stop an
+   * offer that is already stopped, and that is a disagreement about the state
+   * worth surfacing rather than papering over with a 200.
+   */
+  private async throwUnrevocable(
+    invite: Invite,
+    inviteId: string,
+  ): Promise<never> {
+    // Pending-but-lapsed and already-expired are one outcome, so they share a
+    // code: reporting them differently would make the response depend on
+    // whether something had read the invite first, which the caller cannot
+    // see. expireLazily above has already flipped the pending one.
+    if (
+      invite.status === InviteStatus.Pending ||
+      invite.status === InviteStatus.Expired
+    ) {
+      throw new InviteExpiredException('This invite has expired', {
+        inviteId,
+        expiresAt: invite.expiresAt,
+      });
+    }
+
+    throw terminalInviteException(invite, { inviteId });
+  }
+
+  /**
+   * The row for this id, or nothing. A missing invite is a 404 rather than an
+   * empty result: the caller named an invite that does not exist, which is a
+   * different mistake from naming one that has already settled.
+   */
+  private async findInvite(inviteId: string): Promise<Invite> {
+    const [invite] = await this.db
+      .select()
+      .from(invites)
+      .where(eq(invites.id, inviteId))
+      .limit(1);
+
+    if (!invite) {
+      throw new InviteNotFoundException('No invite matches this id', {
+        inviteId,
+      });
+    }
+    return invite;
+  }
+
+  /**
+   * One page of invites, newest first.
+   *
+   * The admin's view of the offers they have out, and the only place a
+   * revoked invite stays visible — sign-in cannot find one, so without this
+   * "who revoked that address" would have no answer at all.
+   *
+   * Rows are projected, never returned whole: the full invite carries
+   * token_hash and the raw token is derived from it, so a list must not hand
+   * out hashes any more than it hands out tokens.
+   *
+   * Status is read the way isInviteLive reads it, not off the column: the
+   * flip to expired is lazy, so a lapsed row can still say pending. It is
+   * filtered and reported as expired, so `pending` here means redeemable.
+   */
+  async list(
+    query: ListInvitesQueryDto,
+    now: Date = new Date(),
+  ): Promise<PaginatedResponseDto<AdminInviteListItemDto>> {
+    const filter = statusFilter(query.status, now);
+
+    const [rows, [{ total }]] = await Promise.all([
+      this.db
+        .select()
+        .from(invites)
+        .where(filter)
+        .orderBy(desc(invites.createdAt), asc(invites.id))
+        .limit(query.perPage)
+        .offset((query.page - 1) * query.perPage),
+      this.db.select({ total: count() }).from(invites).where(filter),
+    ]);
+
+    return {
+      items: rows.map((row) => toAdminInviteItem(row, now)),
+      meta: {
+        page: query.page,
+        perPage: query.perPage,
+        total,
+        totalPages: Math.ceil(total / query.perPage),
+      },
+    };
+  }
+
+  /**
    * An invite to a cohort somebody already belongs to could never be
    * accepted — accept refuses to overwrite a live membership — yet it would
    * stay pending, and sign-in sends a member with a pending invite to answer
@@ -1135,6 +1331,68 @@ function toMembershipDto(row: CohortMember): MembershipGrantedDto {
     status: row.status,
     joinedAt: row.joinedAt,
     accessExpiresAt: row.accessExpiresAt,
+  };
+}
+
+/**
+ * The list filter for one status, read as isInviteLive reads it. Pending
+ * means still redeemable; expired takes in the lapsed rows whose flip has not
+ * been materialised yet. The settled states are final, so their column is
+ * the truth.
+ */
+function statusFilter(
+  status: InviteStatus | undefined,
+  now: Date,
+): SQL | undefined {
+  switch (status) {
+    case undefined:
+      return undefined;
+    case InviteStatus.Pending:
+      return and(
+        eq(invites.status, InviteStatus.Pending),
+        gt(invites.expiresAt, now),
+      );
+    case InviteStatus.Expired:
+      return or(
+        eq(invites.status, InviteStatus.Expired),
+        and(
+          eq(invites.status, InviteStatus.Pending),
+          lte(invites.expiresAt, now),
+        ),
+      );
+    default:
+      return eq(invites.status, status);
+  }
+}
+
+/**
+ * Projects an invite row down to what an admin is allowed to see in a list.
+ *
+ * Named fields rather than a spread, so a column added to INVITES later is
+ * withheld by default instead of leaking until someone notices. That matters
+ * here more than usual: token_hash is a credential, and any future secret
+ * column added for a good reason would ride out in every admin list.
+ *
+ * Timestamps cross the wire as ISO strings rather than Date, matching
+ * InviteResponseDto and the rest of the invites responses.
+ *
+ * A lapsed row still marked pending is reported as expired, matching
+ * statusFilter, so a row listed under `expired` never says `pending`.
+ */
+function toAdminInviteItem(row: Invite, now: Date): AdminInviteListItemDto {
+  const lapsed = row.status === InviteStatus.Pending && !isInviteLive(row, now);
+  return {
+    id: row.id,
+    email: row.email,
+    status: lapsed ? InviteStatus.Expired : row.status,
+    cohortId: row.cohortId,
+    cohortRole: row.cohortRole,
+    systemRole: row.systemRole,
+    expiresAt: row.expiresAt.toISOString(),
+    invitedBy: row.invitedBy,
+    revokedBy: row.revokedBy,
+    revokedAt: row.revokedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
   };
 }
 
