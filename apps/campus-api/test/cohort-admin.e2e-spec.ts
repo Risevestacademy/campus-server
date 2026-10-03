@@ -295,6 +295,30 @@ describe('cohort and track admin routes (e2e)', () => {
       await as(adminCookie).patch(`/v1/tracks/${MISSING}`, {}).expect(404);
       await as(adminCookie).patch('/v1/tracks/not-a-uuid', {}).expect(400);
     });
+
+    // Optional on a PATCH, but not clearable: null used to reach the NOT NULL
+    // column and answer 500.
+    it.each(['name', 'code'])('refuses a null %s', async (field) => {
+      const track = (await createTrack().expect(201)).body;
+      const res = await as(adminCookie)
+        .patch(`/v1/tracks/${track.id}`, { [field]: null })
+        .expect(400);
+      expect(res.body.error.code).toBe('INVALID_ARGUMENT');
+    });
+
+    it('clears the description on null', async () => {
+      const track = (
+        await createTrack({
+          name: 'Software Engineering',
+          code: 'se',
+          description: 'Backend and infra',
+        }).expect(201)
+      ).body;
+      const res = await as(adminCookie)
+        .patch(`/v1/tracks/${track.id}`, { description: null })
+        .expect(200);
+      expect(res.body.description).toBeNull();
+    });
   });
 
   describe('deleting tracks', () => {
@@ -501,6 +525,34 @@ describe('cohort and track admin routes (e2e)', () => {
     it('answers 404 for a missing cohort and 400 for a bad id', async () => {
       await as(adminCookie).patch(`/v1/cohorts/${MISSING}`, {}).expect(404);
       await as(adminCookie).patch('/v1/cohorts/not-a-uuid', {}).expect(400);
+    });
+
+    // Optional on a PATCH, but not clearable: null used to reach the NOT NULL
+    // column and answer 500.
+    it.each(['name', 'code', 'status'])('refuses a null %s', async (field) => {
+      const cohort = (await createCohort().expect(201)).body;
+      const res = await as(adminCookie)
+        .patch(`/v1/cohorts/${cohort.id}`, { [field]: null })
+        .expect(400);
+      expect(res.body.error.code).toBe('INVALID_ARGUMENT');
+    });
+
+    // The dates are optional at create, so null is how one is unset.
+    it('clears a date on null and keeps the other', async () => {
+      const cohort = (
+        await createCohort({
+          name: 'Cohort 1',
+          code: 'c1',
+          startDate: '2026-09-01',
+          endDate: '2027-06-30',
+        }).expect(201)
+      ).body;
+
+      const res = await as(adminCookie)
+        .patch(`/v1/cohorts/${cohort.id}`, { startDate: null })
+        .expect(200);
+      expect(res.body.startDate).toBeNull();
+      expect(res.body.endDate).toBe('2027-06-30');
     });
   });
 

@@ -2,7 +2,9 @@ import { isForeignKeyViolation } from './foreign-key-violation.js';
 
 // drizzle wraps the driver error; its own message is just "Failed query: ...".
 const wrapped = (cause: object) =>
-  Object.assign(new Error('Failed query: delete from "cohorts" ...'), { cause });
+  Object.assign(new Error('Failed query: delete from "cohorts" ...'), {
+    cause,
+  });
 
 describe('isForeignKeyViolation', () => {
   it('recognises a foreign key violation', () => {
@@ -21,9 +23,9 @@ describe('isForeignKeyViolation', () => {
     expect(
       isForeignKeyViolation(err, 'cohort_tracks_cohort_id_cohorts_id_fk'),
     ).toBe(true);
-    expect(isForeignKeyViolation(err, 'cohort_members_cohort_id_cohorts_id_fk')).toBe(
-      false,
-    );
+    expect(
+      isForeignKeyViolation(err, 'cohort_members_cohort_id_cohorts_id_fk'),
+    ).toBe(false);
   });
 
   it('does not match an error that is not a foreign key violation', () => {

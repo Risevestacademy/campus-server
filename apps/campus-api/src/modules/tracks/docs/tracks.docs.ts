@@ -80,13 +80,13 @@ export function ApiUpdateTrack(): MethodDecorator {
       summary: 'Update a track (admin only)',
       description:
         'A partial edit: only the fields present are written. code is ' +
-        'trimmed and uppercased, and must be unique. An empty description ' +
-        'clears it.',
+        'trimmed and uppercased, and must be unique. An empty or null ' +
+        'description clears it; name and code cannot be cleared.',
     }),
     ApiOkResponse({ type: TrackResponseDto }),
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
-      description: 'A malformed field, or id is not a UUID.',
+      description: 'A malformed or null name or code, or id is not a UUID.',
     }),
     ApiAdminOnly(),
     ApiNotFoundResponse({

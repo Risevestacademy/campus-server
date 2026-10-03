@@ -192,13 +192,15 @@ export function ApiUpdateCohort(): MethodDecorator {
       description:
         'A partial edit: only the fields present are written. code is ' +
         'trimmed and uppercased, and must be unique. An endDate before the ' +
-        'merged startDate is refused.',
+        'merged startDate is refused. null clears startDate or endDate; ' +
+        'name, code and status cannot be cleared.',
     }),
     ApiOkResponse({ type: CohortResponseDto }),
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
       description:
-        'A malformed field, or an endDate before startDate. id is not a UUID.',
+        'A malformed field, a null name, code or status, or an endDate ' +
+        'before startDate. id is not a UUID.',
     }),
     ApiAdminOnly(),
     ApiNotFoundResponse({

@@ -9,14 +9,18 @@ import {
 } from 'class-validator';
 
 import { IsCatalogCode } from '../../../shared/dto/catalog-code.js';
+import { IsOptionalNotNull } from '../../../shared/dto/optional-not-null.js';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
 
-/** A partial track edit: only the fields present are written. */
+/**
+ * A partial track edit: only the fields present are written. Name and code
+ * can be changed but not cleared, so null is refused.
+ */
 export class UpdateTrackDto {
   @ApiPropertyOptional({ example: 'Software Engineering', maxLength: 128 })
-  @IsOptional()
+  @IsOptionalNotNull()
   @Transform(trim)
   @IsString()
   @IsNotEmpty()
@@ -28,18 +32,20 @@ export class UpdateTrackDto {
     maxLength: 32,
     description: 'Unique across tracks. Stored uppercase.',
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsCatalogCode()
   code?: string;
 
   @ApiPropertyOptional({
+    type: String,
+    nullable: true,
     example: 'Backend and infra',
-    description: 'An empty string clears it.',
+    description: 'An empty string or null clears it.',
   })
   @IsOptional()
   @Transform(trim)
   @IsString()
-  description?: string;
+  description?: string | null;
 }
 
 export class TrackIdParamDto {

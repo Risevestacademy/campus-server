@@ -11,6 +11,7 @@ import {
 } from 'class-validator';
 
 import { IsCatalogCode } from '../../../shared/dto/catalog-code.js';
+import { IsOptionalNotNull } from '../../../shared/dto/optional-not-null.js';
 import { CohortStatus } from '../schema.js';
 
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -23,10 +24,13 @@ const trim = ({ value }: { value: unknown }) =>
  * as create apply to whatever is sent, and the end-after-start check runs on
  * the merged row in the service, since changing one date can invert a pair
  * whose other half is already stored.
+ *
+ * Name, code and status can be changed but not cleared, so null is refused.
+ * The dates are optional at create, so null is how one is cleared.
  */
 export class UpdateCohortDto {
   @ApiPropertyOptional({ example: 'Cohort 1', maxLength: 128 })
-  @IsOptional()
+  @IsOptionalNotNull()
   @Transform(trim)
   @IsString()
   @IsNotEmpty()
@@ -38,32 +42,39 @@ export class UpdateCohortDto {
     maxLength: 32,
     description: 'Unique across cohorts. Stored uppercase.',
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsCatalogCode()
   code?: string;
-
-  @ApiPropertyOptional({ type: String, format: 'date', example: '2026-09-01' })
-  @IsOptional()
-  @IsISO8601({ strict: true })
-  @Matches(CALENDAR_DATE, { message: 'startDate must be YYYY-MM-DD' })
-  startDate?: string;
 
   @ApiPropertyOptional({
     type: String,
     format: 'date',
+    nullable: true,
+    example: '2026-09-01',
+    description: 'Null clears it.',
+  })
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  @Matches(CALENDAR_DATE, { message: 'startDate must be YYYY-MM-DD' })
+  startDate?: string | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date',
+    nullable: true,
     example: '2027-06-30',
-    description: 'On or after startDate.',
+    description: 'On or after startDate. Null clears it.',
   })
   @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(CALENDAR_DATE, { message: 'endDate must be YYYY-MM-DD' })
-  endDate?: string;
+  endDate?: string | null;
 
   @ApiPropertyOptional({
     enum: CohortStatus,
     enumName: 'CohortStatus',
   })
-  @IsOptional()
+  @IsOptionalNotNull()
   @IsEnum(CohortStatus)
   status?: CohortStatus;
 }

@@ -137,55 +137,77 @@ export class CohortsService {
           { cohortId, trackId },
         );
       }
+      // Both were found above, so this is one deleted between that read and
+      // the insert: the same 404 the read would have given a moment later.
+      if (isForeignKeyViolation(err, 'cohort_tracks_cohort_id_cohorts_id_fk')) {
+        throw new CohortNotFoundException(`Cohort ${cohortId} not found`, {
+          cohortId,
+        });
+      }
+      if (isForeignKeyViolation(err, 'cohort_tracks_track_id_tracks_id_fk')) {
+        throw new TrackNotFoundException(`Track ${trackId} not found`, {
+          trackId,
+        });
+      }
       throw err;
     }
   }
 
   async update(id: string, dto: UpdateCohortDto): Promise<Cohort> {
-    const existing = await this.findCohort(id);
-
-    // The DTO checks each date on its own; only the merged pair can say
-    // whether a one-sided change inverts the range.
-    const startDate =
-      dto.startDate === undefined
-        ? existing.startDate
-        : (dto.startDate ?? null);
-    const endDate =
-      dto.endDate === undefined ? existing.endDate : (dto.endDate ?? null);
-    if (startDate !== null && endDate !== null && endDate < startDate) {
-      throw new CohortInvalidArgumentException('Request validation failed', {
-        fields: { endDate: 'endDate must be on or after startDate' },
-      });
-    }
-
-    if (
-      dto.name === undefined &&
-      dto.code === undefined &&
-      dto.startDate === undefined &&
-      dto.endDate === undefined &&
-      dto.status === undefined
-    ) {
-      return existing;
-    }
-
     try {
-      const [row] = await this.db
-        .update(cohorts)
-        .set({
-          ...(dto.name !== undefined ? { name: dto.name } : {}),
-          ...(dto.code !== undefined ? { code: dto.code } : {}),
-          ...(dto.startDate !== undefined ? { startDate } : {}),
-          ...(dto.endDate !== undefined ? { endDate } : {}),
-          ...(dto.status !== undefined ? { status: dto.status } : {}),
-        })
-        .where(eq(cohorts.id, id))
-        .returning();
-      if (!row) {
-        throw new CohortNotFoundException(`Cohort ${id} not found`, {
-          cohortId: id,
-        });
-      }
-      return row;
+      return await this.db.transaction(async (tx) => {
+        // Locked, so the range check below and the write it guards see the
+        // same row. Unlocked, two edits each moving one date could both pass
+        // against the old pair and together store an end before the start.
+        const [existing] = await tx
+          .select()
+          .from(cohorts)
+          .where(eq(cohorts.id, id))
+          .for('update');
+        if (!existing) {
+          throw new CohortNotFoundException(`Cohort ${id} not found`, {
+            cohortId: id,
+          });
+        }
+
+        // The DTO checks each date on its own; only the merged pair can say
+        // whether a one-sided change inverts the range.
+        const startDate =
+          dto.startDate === undefined
+            ? existing.startDate
+            : (dto.startDate ?? null);
+        const endDate =
+          dto.endDate === undefined ? existing.endDate : (dto.endDate ?? null);
+        if (startDate !== null && endDate !== null && endDate < startDate) {
+          throw new CohortInvalidArgumentException(
+            'Request validation failed',
+            { fields: { endDate: 'endDate must be on or after startDate' } },
+          );
+        }
+
+        if (
+          dto.name === undefined &&
+          dto.code === undefined &&
+          dto.startDate === undefined &&
+          dto.endDate === undefined &&
+          dto.status === undefined
+        ) {
+          return existing;
+        }
+
+        const [row] = await tx
+          .update(cohorts)
+          .set({
+            ...(dto.name !== undefined ? { name: dto.name } : {}),
+            ...(dto.code !== undefined ? { code: dto.code } : {}),
+            ...(dto.startDate !== undefined ? { startDate } : {}),
+            ...(dto.endDate !== undefined ? { endDate } : {}),
+            ...(dto.status !== undefined ? { status: dto.status } : {}),
+          })
+          .where(eq(cohorts.id, id))
+          .returning();
+        return row;
+      });
     } catch (err) {
       if (isUniqueViolation(err, 'cohorts_code_unique')) {
         throw new CohortConflictException(
