@@ -18,6 +18,27 @@ export interface AuditEntry extends AuditContext {
   details?: Record<string, unknown>;
 }
 
+export type FieldChanges = Record<string, { from: unknown; to: unknown }>;
+
+/**
+ * The listed fields whose value differs between the row before an edit and
+ * after it, each with both values — what an update entry records, rather than
+ * the request body, which may name fields it left as they were.
+ */
+export function changedFields<T extends object>(
+  before: T,
+  after: T,
+  fields: readonly (keyof T & string)[],
+): FieldChanges {
+  const changes: FieldChanges = {};
+  for (const field of fields) {
+    if (!Object.is(before[field], after[field])) {
+      changes[field] = { from: before[field], to: after[field] };
+    }
+  }
+  return changes;
+}
+
 /**
  * Appends one entry. Takes the caller's transaction rather than the pool on
  * purpose: the entry commits or rolls back with the change it describes, so

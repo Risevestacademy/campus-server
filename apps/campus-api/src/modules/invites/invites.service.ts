@@ -1194,26 +1194,42 @@ export class InvitesService {
   async revoke(
     inviteId: string,
     actor: AuthenticatedUser,
+    correlationId?: string,
     now: Date = new Date(),
   ): Promise<AdminInviteListItemDto> {
-    // One statement, so atomic on its own: no transaction needed.
-    const [revoked] = await this.db
-      .update(invites)
-      .set({
-        status: InviteStatus.Revoked,
-        revokedAt: now,
-        revokedBy: actor.id,
-      })
-      .where(
-        and(
-          eq(invites.id, inviteId),
-          eq(invites.status, InviteStatus.Pending),
-          // Same comparison isInviteLive makes, so a lapsed invite is
-          // refused here exactly as it is on the read path.
-          gt(invites.expiresAt, now),
-        ),
-      )
-      .returning();
+    // The claim is one conditional UPDATE, atomic on its own; the transaction
+    // is for the entry, so a revoke is never recorded without happening, and
+    // a refused one records nothing.
+    const revoked = await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(invites)
+        .set({
+          status: InviteStatus.Revoked,
+          revokedAt: now,
+          revokedBy: actor.id,
+        })
+        .where(
+          and(
+            eq(invites.id, inviteId),
+            eq(invites.status, InviteStatus.Pending),
+            // Same comparison isInviteLive makes, so a lapsed invite is
+            // refused here exactly as it is on the read path.
+            gt(invites.expiresAt, now),
+          ),
+        )
+        .returning();
+
+      if (row) {
+        await writeAuditEntry(tx, {
+          actorUserId: actor.id,
+          correlationId,
+          action: AuditAction.InviteRevoked,
+          subject: { type: AuditSubjectType.Invite, id: row.id },
+          details: { cohortId: row.cohortId, expiresAt: row.expiresAt },
+        });
+      }
+      return row;
+    });
 
     if (revoked) {
       return toAdminInviteItem(revoked, now);

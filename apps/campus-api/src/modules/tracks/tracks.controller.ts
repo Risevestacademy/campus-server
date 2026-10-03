@@ -66,14 +66,26 @@ export class TracksController {
   update(
     @Param() params: TrackIdParamDto,
     @Body() dto: UpdateTrackDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<TrackResponseDto> {
-    return this.tracks.update(params.id, dto);
+    return this.tracks.update(params.id, dto, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiDeleteTrack()
-  remove(@Param() params: TrackIdParamDto): Promise<void> {
-    return this.tracks.remove(params.id);
+  remove(
+    @Param() params: TrackIdParamDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<void> {
+    return this.tracks.remove(params.id, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 }

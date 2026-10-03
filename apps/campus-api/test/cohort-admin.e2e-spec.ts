@@ -797,6 +797,174 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(JSON.stringify(entry.details)).not.toContain('campus.local');
     });
 
+    it('records only the fields a cohort edit actually moved', async () => {
+      const cohort = (
+        await createCohort({
+          name: 'Cohort 1',
+          code: 'c1',
+          startDate: '2026-11-01',
+        }).expect(201)
+      ).body;
+
+      await as(adminCookie)
+        .patch(`/v1/cohorts/${cohort.id}`, {
+          name: 'Cohort 1',
+          code: 'c2',
+          startDate: null,
+        })
+        .set('x-correlation-id', 'e2e-cohort-edit')
+        .expect(200);
+
+      expect((await entries()).at(-1)).toMatchObject({
+        actorUserId: adminId,
+        action: AuditAction.CohortUpdated,
+        subjectType: AuditSubjectType.Cohort,
+        subjectId: cohort.id,
+        correlationId: 'e2e-cohort-edit',
+        details: {
+          changes: {
+            code: { from: 'C1', to: 'C2' },
+            startDate: { from: '2026-11-01', to: null },
+          },
+        },
+      });
+    });
+
+    it('records the fields a track edit moved', async () => {
+      const track = (
+        await createTrack({
+          name: 'Software Engineering',
+          code: 'se',
+          description: 'Backend and frontend',
+        }).expect(201)
+      ).body;
+
+      await as(adminCookie)
+        .patch(`/v1/tracks/${track.id}`, { description: '' })
+        .expect(200);
+
+      expect((await entries()).at(-1)).toMatchObject({
+        actorUserId: adminId,
+        action: AuditAction.TrackUpdated,
+        subjectType: AuditSubjectType.Track,
+        subjectId: track.id,
+        details: {
+          changes: { description: { from: 'Backend and frontend', to: null } },
+        },
+      });
+    });
+
+    it('records nothing for an edit that moved nothing', async () => {
+      const cohort = (await createCohort().expect(201)).body;
+      const track = (await createTrack().expect(201)).body;
+      const before = (await entries()).length;
+
+      await as(adminCookie)
+        .patch(`/v1/cohorts/${cohort.id}`, { name: 'Cohort 1' })
+        .expect(200);
+      await as(adminCookie).patch(`/v1/tracks/${track.id}`, {}).expect(200);
+
+      expect(await entries()).toHaveLength(before);
+    });
+
+    // The row is gone afterwards, so the entry is the only thing left that
+    // says what it was.
+    it('records a deleted cohort and track, with what they were', async () => {
+      const cohort = (
+        await createCohort({
+          name: 'Cohort 1',
+          code: 'c1',
+          startDate: '2026-11-01',
+          endDate: '2027-03-01',
+        }).expect(201)
+      ).body;
+      const track = (await createTrack().expect(201)).body;
+
+      await as(adminCookie).del(`/v1/cohorts/${cohort.id}`).expect(204);
+      await as(adminCookie).del(`/v1/tracks/${track.id}`).expect(204);
+
+      const [cohortEntry, trackEntry] = (await entries()).slice(-2);
+      expect(cohortEntry).toMatchObject({
+        actorUserId: adminId,
+        action: AuditAction.CohortDeleted,
+        subjectType: AuditSubjectType.Cohort,
+        subjectId: cohort.id,
+        details: {
+          name: 'Cohort 1',
+          code: 'C1',
+          status: 'upcoming',
+          startDate: '2026-11-01',
+          endDate: '2027-03-01',
+        },
+      });
+      expect(trackEntry).toMatchObject({
+        actorUserId: adminId,
+        action: AuditAction.TrackDeleted,
+        subjectType: AuditSubjectType.Track,
+        subjectId: track.id,
+        details: {
+          name: 'Software Engineering',
+          code: 'SE',
+          description: null,
+        },
+      });
+    });
+
+    it('records who revoked an invite, and in which request', async () => {
+      const invite = (
+        await as(adminCookie)
+          .post('/v1/invites', {
+            email: 'new-admin@campus.local',
+            systemRole: SystemRole.Admin,
+          })
+          .expect(201)
+      ).body;
+
+      await as(adminCookie)
+        .post(`/v1/invites/${invite.id}/revoke`, {})
+        .set('x-correlation-id', 'e2e-revoke')
+        .expect(200);
+
+      const entry = (await entries()).at(-1);
+      expect(entry).toMatchObject({
+        actorUserId: adminId,
+        action: AuditAction.InviteRevoked,
+        subjectType: AuditSubjectType.Invite,
+        subjectId: invite.id,
+        correlationId: 'e2e-revoke',
+        details: { cohortId: null },
+      });
+      expect(JSON.stringify(entry?.details)).not.toContain('campus.local');
+    });
+
+    it('records nothing for a delete or revoke that was refused', async () => {
+      const track = (await createTrack().expect(201)).body;
+      const cohort = (await createCohort().expect(201)).body;
+      await as(adminCookie)
+        .post(`/v1/cohorts/${cohort.id}/tracks`, { trackId: track.id })
+        .expect(201);
+      const invite = (
+        await as(adminCookie)
+          .post('/v1/invites', {
+            email: 'new-admin@campus.local',
+            systemRole: SystemRole.Admin,
+          })
+          .expect(201)
+      ).body;
+      await as(adminCookie)
+        .post(`/v1/invites/${invite.id}/revoke`, {})
+        .expect(200);
+      const before = (await entries()).length;
+
+      await as(adminCookie).del(`/v1/cohorts/${cohort.id}`).expect(409);
+      await as(adminCookie).del(`/v1/tracks/${track.id}`).expect(409);
+      await as(adminCookie)
+        .post(`/v1/invites/${invite.id}/revoke`, {})
+        .expect(409);
+
+      expect(await entries()).toHaveLength(before);
+    });
+
     // The id is whatever the caller put in x-correlation-id, and the column
     // holds 64 characters. An over-long one must not fail the insert, which
     // would take the change down with it.

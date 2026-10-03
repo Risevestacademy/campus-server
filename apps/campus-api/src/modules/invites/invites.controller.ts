@@ -127,8 +127,9 @@ export class InvitesController {
   revoke(
     @Param() params: InviteIdParamDto,
     @CurrentUser() actor: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<AdminInviteListItemDto> {
-    return this.invites.revoke(params.id, actor);
+    return this.invites.revoke(params.id, actor, correlationId);
   }
 
   // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The

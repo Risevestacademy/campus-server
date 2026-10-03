@@ -35,6 +35,25 @@ export enum AuditAction {
   CohortCreated = 'cohort_created',
   CohortTrackAttached = 'cohort_track_attached',
   TrackCreated = 'track_created',
+  /**
+   * An admin edited a cohort or a track. `details.changes` maps each field
+   * that actually moved to its `from` and `to`; an edit that moved nothing
+   * writes no entry.
+   */
+  CohortUpdated = 'cohort_updated',
+  TrackUpdated = 'track_updated',
+  /**
+   * An admin deleted a cohort or a track. The row is gone, so `details`
+   * keeps what it was — the entry is the only trace left of it.
+   */
+  CohortDeleted = 'cohort_deleted',
+  TrackDeleted = 'track_deleted',
+  /**
+   * An admin withdrew a pending invite. The invite's own revoked_by and
+   * revoked_at say who and when; the entry adds the request it came from
+   * and keeps the revoke in the same history as the create.
+   */
+  InviteRevoked = 'invite_revoked',
 }
 
 export enum AuditSubjectType {

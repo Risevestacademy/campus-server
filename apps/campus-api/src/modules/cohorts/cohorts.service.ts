@@ -8,7 +8,11 @@ import type {
   PaginatedResponseDto,
   PaginationQueryDto,
 } from '../../shared/dto/index.js';
-import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
+import {
+  type AuditContext,
+  changedFields,
+  writeAuditEntry,
+} from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
@@ -24,6 +28,15 @@ import type {
 import type { CreateCohortDto } from './dto/create-cohort.dto.js';
 import type { UpdateCohortDto } from './dto/update-cohort.dto.js';
 import { cohorts, cohortTracks, type Cohort } from './schema.js';
+
+/** What an admin can edit on a cohort, and so what an update entry compares. */
+const COHORT_AUDITED_FIELDS = [
+  'name',
+  'code',
+  'startDate',
+  'endDate',
+  'status',
+] as const;
 
 /**
  * Creating cohorts and choosing which tracks each one runs — the setup an
@@ -180,7 +193,11 @@ export class CohortsService {
     }
   }
 
-  async update(id: string, dto: UpdateCohortDto): Promise<Cohort> {
+  async update(
+    id: string,
+    dto: UpdateCohortDto,
+    audit: AuditContext,
+  ): Promise<Cohort> {
     try {
       return await this.db.transaction(async (tx) => {
         // Locked, so the range check below and the write it guards see the
@@ -233,6 +250,16 @@ export class CohortsService {
           })
           .where(eq(cohorts.id, id))
           .returning();
+
+        const changes = changedFields(existing, row, COHORT_AUDITED_FIELDS);
+        if (Object.keys(changes).length > 0) {
+          await writeAuditEntry(tx, {
+            ...audit,
+            action: AuditAction.CohortUpdated,
+            subject: { type: AuditSubjectType.Cohort, id },
+            details: { changes },
+          });
+        }
         return row;
       });
     } catch (err) {
@@ -246,17 +273,33 @@ export class CohortsService {
     }
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, audit: AuditContext): Promise<void> {
     try {
-      const [row] = await this.db
-        .delete(cohorts)
-        .where(eq(cohorts.id, id))
-        .returning({ id: cohorts.id });
-      if (!row) {
-        throw new CohortNotFoundException(`Cohort ${id} not found`, {
-          cohortId: id,
+      // One transaction, so a cohort is never deleted without its entry, and
+      // a delete the FKs refuse leaves no entry behind.
+      await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .delete(cohorts)
+          .where(eq(cohorts.id, id))
+          .returning();
+        if (!row) {
+          throw new CohortNotFoundException(`Cohort ${id} not found`, {
+            cohortId: id,
+          });
+        }
+        await writeAuditEntry(tx, {
+          ...audit,
+          action: AuditAction.CohortDeleted,
+          subject: { type: AuditSubjectType.Cohort, id },
+          details: {
+            name: row.name,
+            code: row.code,
+            status: row.status,
+            startDate: row.startDate,
+            endDate: row.endDate,
+          },
         });
-      }
+      });
     } catch (err) {
       // The FKs are restrictive on purpose: a cohort with tracks, members
       // or invites is refused rather than emptied, and there is no detach

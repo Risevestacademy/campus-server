@@ -1768,7 +1768,7 @@ describe('InvitesService admin revoke and list', () => {
       const invite = await makeInvite();
       const at = new Date('2026-03-04T10:00:00.000Z');
 
-      const result = await service.revoke(invite.id, admin, at);
+      const result = await service.revoke(invite.id, admin, undefined, at);
 
       expect(result.status).toBe(InviteStatus.Revoked);
       expect(result.revokedBy).toBe(admin.id);
@@ -1983,7 +1983,12 @@ describe('InvitesService admin revoke and list', () => {
      */
     it('keeps revoked invites visible with their actor', async () => {
       const invite = await makeInvite({ email: 'gone@campus.local' });
-      await service.revoke(invite.id, admin, new Date('2026-03-04T10:00:00Z'));
+      await service.revoke(
+        invite.id,
+        admin,
+        undefined,
+        new Date('2026-03-04T10:00:00Z'),
+      );
 
       const page = await service.list({ page: 1, perPage: 20 });
       const found = page.items.find((i) => i.id === invite.id);

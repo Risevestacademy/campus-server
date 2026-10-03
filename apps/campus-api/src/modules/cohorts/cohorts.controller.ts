@@ -94,14 +94,26 @@ export class CohortsController {
   update(
     @Param() params: CohortIdParamDto,
     @Body() dto: UpdateCohortDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<CohortResponseDto> {
-    return this.cohorts.update(params.id, dto);
+    return this.cohorts.update(params.id, dto, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiDeleteCohort()
-  remove(@Param() params: CohortIdParamDto): Promise<void> {
-    return this.cohorts.remove(params.id);
+  remove(
+    @Param() params: CohortIdParamDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<void> {
+    return this.cohorts.remove(params.id, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 }
