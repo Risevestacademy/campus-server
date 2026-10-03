@@ -13,6 +13,7 @@ NestJS backend for the campus application.
 - [Compile and run](#compile-and-run)
 - [Environment variables](#environment-variables)
 - [Databases & infra](#databases--infra)
+- [Audit log](#audit-log)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
 - [Integration guide](#integration-guide)
@@ -120,6 +121,13 @@ $ pnpm run db:push       # push schema directly (dev only)
 $ pnpm run db:seed       # upsert the DEFAULT_ADMIN_EMAIL admins (needs a build)
 $ pnpm run db:studio     # open Drizzle Studio
 ```
+
+## Audit log
+
+Changes to the admin setup and to people's access are recorded in the
+`audit_log` table, in the same transaction as the change. What is recorded,
+what each field means, the personal-data rules, retention and rollout notes
+are in [src/modules/audit/README.md](src/modules/audit/README.md).
 
 ## Logging
 
