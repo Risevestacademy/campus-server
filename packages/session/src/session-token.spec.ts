@@ -16,9 +16,6 @@ const claims = {
   userId: 'user-1',
   email: 'ada@campus.local',
   scope: SessionScope.FullAccess,
-  systemRole: 'user',
-  role: 'student',
-  cohortId: 'cohort-1',
 };
 
 async function foreign(
@@ -45,9 +42,6 @@ describe('session tokens', () => {
       userId: 'user-1',
       email: 'ada@campus.local',
       scope: SessionScope.FullAccess,
-      systemRole: 'user',
-      role: 'student',
-      cohortId: 'cohort-1',
     });
     // Exactly equal: both sides are whole seconds, so this cannot drift.
     expect(verified.expiresAt.getTime()).toBe(expiresAt.getTime());
@@ -88,7 +82,6 @@ describe('session tokens', () => {
     const token = await foreign({
       email: 'ada@campus.local',
       scope: SessionScope.FullAccess,
-      system_role: 'user',
       sid: 42,
     });
 
@@ -97,15 +90,25 @@ describe('session tokens', () => {
     );
   });
 
-  it('rejects a token without the authoritative system role', async () => {
+  it('ignores the claims older tokens carry', async () => {
     const token = await foreign({
       email: claims.email,
       scope: SessionScope.FullAccess,
+      system_role: 'admin',
+      role: 'student',
+      cohort_id: 'cohort-1',
     });
 
-    await expect(verifySessionToken(token, SECRET)).rejects.toThrow(
-      InvalidSessionTokenError,
-    );
+    const verified = await verifySessionToken(token, SECRET);
+
+    expect(verified).toMatchObject({
+      userId: 'user-1',
+      email: claims.email,
+      scope: SessionScope.FullAccess,
+    });
+    expect(verified).not.toHaveProperty('systemRole');
+    expect(verified).not.toHaveProperty('role');
+    expect(verified).not.toHaveProperty('cohortId');
   });
 
   it('expires on its own schedule', async () => {

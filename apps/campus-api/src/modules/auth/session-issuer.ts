@@ -116,8 +116,7 @@ export class SessionIssuer {
     if (!account) {
       throw new SessionUnauthorizedError('Account is not usable');
     }
-    const membership = await this.members.resolveActiveMembership(user.id, now);
-    return this.mintSession(account, membership, endsAt, now, familyId, tx);
+    return this.mintSession(account, endsAt, now, familyId, tx);
   }
 
   /**
@@ -132,9 +131,6 @@ export class SessionIssuer {
    */
   private async mintSession(
     account: User,
-    membership: Awaited<
-      ReturnType<CohortMembersService['resolveActiveMembership']>
-    >,
     endsAt: Date | null,
     now: Date,
     familyId: string,
@@ -145,10 +141,6 @@ export class SessionIssuer {
         userId: account.id,
         email: account.email,
         scope: SessionScope.FullAccess,
-        systemRole: account.systemRole,
-        ...(membership
-          ? { role: membership.role, cohortId: membership.cohortId }
-          : {}),
         // The refresh family, so world can hold a socket for as long as this
         // login is alive and being refreshed, rather than for one access
         // token's fifteen minutes.
@@ -198,7 +190,6 @@ export class SessionIssuer {
         userId: user.id,
         email: user.email,
         scope: SessionScope.Provisional,
-        systemRole: user.systemRole,
         inviteId: invite.id,
       },
       {
@@ -267,8 +258,6 @@ export class SessionIssuer {
       await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Access has already ended');
     }
-
-    const membership = await this.members.resolveActiveMembership(user.id, now);
 
     // One transaction for the three steps that must not interleave: claim the
     // old token, re-check the family, mint the replacement. The family is
@@ -339,7 +328,6 @@ export class SessionIssuer {
           kind: 'session',
           session: await this.mintSession(
             user,
-            membership,
             grant.endsAt,
             now,
             familyId,
