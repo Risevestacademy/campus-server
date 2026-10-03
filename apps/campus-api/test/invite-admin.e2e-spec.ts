@@ -236,6 +236,108 @@ describe('invite admin routes (e2e)', () => {
       const second = await createInvite('again@campus.local').expect(201);
       expect(second.body.id).not.toBe(first.body.id);
     });
+
+    /**
+     * FORBIDDEN on this route already means "not an admin", so a lapsed invite
+     * answers with its own code rather than one a client would read as that.
+     */
+    it('answers a lapsed invite with INVITE_EXPIRED', async () => {
+      const invite = await createInvite('late@campus.local').expect(201);
+      await db
+        .update(schema.invites)
+        .set({ expiresAt: new Date(Date.now() - 1_000) })
+        .where(sql`${schema.invites.id} = ${invite.body.id}`);
+
+      const res = await as(adminCookie).post(
+        `/v1/invites/${invite.body.id}/revoke`,
+        {},
+      );
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('INVITE_EXPIRED');
+    });
+  });
+
+  /**
+   * Somebody signed in on an invite, part way through onboarding, when an
+   * admin revokes it. Their session names the revoked invite and cannot be
+   * re-issued from here, so the routes it calls have to tell them the truth:
+   * closed if nothing replaced it, the new offer if something did.
+   */
+  describe('an invitee part way through onboarding', () => {
+    const email = 'again@campus.local';
+    let holder: string;
+    let first: string;
+
+    beforeEach(async () => {
+      const [invitee] = await db
+        .insert(users)
+        .values({ email, systemRole: SystemRole.User })
+        .returning();
+      first = (await createInvite(email).expect(201)).body.id;
+      const { token } = await signSessionToken(
+        {
+          userId: invitee.id,
+          email,
+          scope: SessionScope.Provisional,
+          inviteId: first,
+        },
+        { secret: SECRET, ttlMinutes: 30 },
+      );
+      holder = `${SESSION_COOKIE}=${token}`;
+      await as(adminCookie).post(`/v1/invites/${first}/revoke`, {}).expect(200);
+    });
+
+    const validate = () => as(holder).get('/v1/invites/validate-user-invite');
+    const decide = (inviteId?: string) =>
+      as(holder).post('/v1/invites/decision', { decision: 'accept', inviteId });
+
+    it('is told the invite is closed when nothing replaced it', async () => {
+      const read = await validate();
+      expect(read.status).toBe(409);
+      expect(read.body.error.code).toBe('INVITE_REVOKED');
+
+      const answer = await decide();
+      expect(answer.status).toBe(409);
+      expect(answer.body.error.code).toBe('INVITE_REVOKED');
+    });
+
+    describe('once invited again', () => {
+      let second: string;
+
+      beforeEach(async () => {
+        second = (await createInvite(email).expect(201)).body.id;
+      });
+
+      it('is shown the new invite', async () => {
+        const read = await validate();
+        expect(read.status).toBe(200);
+        expect(read.body.id).toBe(second);
+
+        const me = await as(holder).get('/v1/auth/me');
+        expect(me.status).toBe(200);
+        expect(me.body.inviteId).toBe(second);
+      });
+
+      // Unnamed, a decision is about the invite the session was issued for:
+      // the replacement is never accepted unseen.
+      it('does not accept the new invite without naming it', async () => {
+        const answer = await decide();
+        expect(answer.status).toBe(409);
+        expect(answer.body.error.code).toBe('INVITE_REVOKED');
+      });
+
+      it('accepts the new invite when it is named', async () => {
+        const answer = await decide(second);
+        expect(answer.status).toBe(200);
+        expect(answer.body.inviteId).toBe(second);
+      });
+
+      it('refuses an invite that is not the replacement', async () => {
+        const answer = await decide(MISSING);
+        expect(answer.status).toBe(404);
+      });
+    });
   });
 
   describe('list', () => {

@@ -233,7 +233,7 @@ describe('GET /v1/invites/validate-user-invite (e2e)', () => {
     );
 
     expect(response.status).toBe(403);
-    expect(response.body.error.code).toBe('FORBIDDEN');
+    expect(response.body.error.code).toBe('INVITE_EXPIRED');
   });
 
   it('409s an invite that was already resolved', async () => {

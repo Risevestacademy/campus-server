@@ -96,6 +96,15 @@ export const invites = pgTable(
       .on(table.email)
       .where(sql`${table.status} = ${sql.raw(`'${InviteStatus.Pending}'`)}`),
 
+    /**
+     * Who and when travel together, and only on a revoked invite. One way
+     * only: a revoked invite may carry neither, because 0002 revoked invites
+     * on nobody's behalf, and history it wrote stays readable.
+     */
+    check(
+      'invites_revoked_fields',
+      sql`(${table.revokedAt} is null) = (${table.revokedBy} is null) and (${table.revokedAt} is null or ${table.status} = ${sql.raw(`'${InviteStatus.Revoked}'`)})`,
+    ),
     check(
       'invites_email_lowercase',
       sql`${table.email} = lower(${table.email})`,

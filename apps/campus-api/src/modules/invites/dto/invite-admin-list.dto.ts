@@ -62,13 +62,31 @@ export class AdminInviteListItemDto {
   @ApiProperty({ example: 'new.student@campus.local' })
   email: string;
 
-  @ApiProperty({ enum: InviteStatus, enumName: 'InviteStatus' })
+  @ApiProperty({
+    enum: InviteStatus,
+    enumName: 'InviteStatus',
+    description:
+      'Read against expiresAt, not off the stored column: a lapsed invite ' +
+      'is `expired` here even before anything has materialised the flip, so ' +
+      '`pending` always means still redeemable.',
+  })
   status: InviteStatus;
 
-  @ApiPropertyOptional({ example: '11111111-1111-4111-8111-111111111111' })
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    example: '11111111-1111-4111-8111-111111111111',
+    description: 'Null for an invite that grants a system role only.',
+  })
   cohortId: string | null;
 
-  @ApiPropertyOptional({ enum: CohortRole, enumName: 'CohortRole' })
+  @ApiProperty({
+    enum: CohortRole,
+    enumName: 'CohortRole',
+    nullable: true,
+    description: 'Null for an invite that grants a system role only.',
+  })
   cohortRole: CohortRole | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
@@ -76,28 +94,37 @@ export class AdminInviteListItemDto {
 
   @ApiProperty({
     example: '2026-09-29T12:00:00.000Z',
-    description:
-      'When the link stops being redeemable. Compare against status: a ' +
-      '`pending` invite past this is lapsed but not yet flipped, because the ' +
-      'flip is lazy.',
+    description: 'When the link stops being redeemable.',
   })
   expiresAt: string;
 
-  @ApiPropertyOptional({
-    example: '2026-09-22T12:00:00.000Z',
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    example: '22222222-2222-4222-8222-222222222222',
     description: 'Who sent it. Never null — an invite always has an author.',
   })
   invitedBy: string;
 
-  @ApiPropertyOptional({
-    example: '2026-09-25T09:30:00.000Z',
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    example: '33333333-3333-4333-8333-333333333333',
     description:
-      'Who revoked it, and when. Both null unless status is `revoked`: ' +
-      'accepted and declined invites have no actor to name.',
+      'Who revoked it. Null unless status is `revoked`: accepted and ' +
+      'declined invites have no actor to name. Also null on the few invites ' +
+      'a data migration revoked, which nobody did by hand.',
   })
   revokedBy: string | null;
 
-  @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: '2026-09-25T09:30:00.000Z',
+    description: 'When it was revoked. Null unless status is `revoked`.',
+  })
   revokedAt: string | null;
 
   @ApiProperty({ example: '2026-09-22T12:00:00.000Z' })

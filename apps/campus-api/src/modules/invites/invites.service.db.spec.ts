@@ -24,6 +24,7 @@ import {
   InviteAlreadyAcceptedException,
   InviteAlreadyDeclinedException,
   InviteConflictException,
+  InviteExpiredException,
   InviteForbiddenException,
   InviteInternalException,
   InviteInvalidArgumentException,
@@ -665,7 +666,7 @@ describe('getOnboardingInvite', () => {
 
     await expect(
       service.getOnboardingInvite(created.id, invitee),
-    ).rejects.toBeInstanceOf(InviteForbiddenException);
+    ).rejects.toBeInstanceOf(InviteExpiredException);
 
     const [row] = await db
       .select({ status: invites.status })
@@ -734,12 +735,12 @@ describe('getOnboardingInvite', () => {
         .catch((err: { code: string }) => codes.push(err.code));
     }
 
-    expect(codes).toEqual(['FORBIDDEN', 'FORBIDDEN']);
+    expect(codes).toEqual(['INVITE_EXPIRED', 'INVITE_EXPIRED']);
 
     // And the decision route agrees with both of them.
     await expect(
       service.decide(invite.id, InviteDecision.Accept, invitee as never),
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({ code: 'INVITE_EXPIRED' });
   });
 
   describe('expireLazily guards', () => {
@@ -1204,7 +1205,7 @@ describe('decide()', () => {
 
     await expect(
       service.decide(invite.id, InviteDecision.Accept, invitee as never),
-    ).rejects.toBeInstanceOf(InviteForbiddenException);
+    ).rejects.toBeInstanceOf(InviteExpiredException);
 
     // The claim's throw rolls the transaction back, so the lazy flip is left
     // to getOnboardingInvite rather than half-applied here.
@@ -1660,7 +1661,7 @@ describe('InvitesService admin revoke and list', () => {
       });
 
       await expect(service.revoke(invite.id, admin)).rejects.toBeInstanceOf(
-        InviteForbiddenException,
+        InviteExpiredException,
       );
 
       const row = await rowOf(invite.id);
@@ -1872,6 +1873,106 @@ describe('InvitesService admin revoke and list', () => {
       const row = await rowOf(invite.id);
       expect(row.revokedBy).toBeNull();
       expect(row.revokedAt).toBeNull();
+    });
+
+    /**
+     * The flip to expired is lazy, so a lapsed row can still say pending. The
+     * filter reads it the way isInviteLive does: `pending` is what can still
+     * be revoked, and the lapsed row turns up under `expired`, saying so.
+     */
+    it('files a lapsed invite under expired, never pending', async () => {
+      const live = await makeInvite();
+      const lapsed = await makeInvite({
+        expiresAt: new Date(Date.now() - 1_000),
+      });
+      const flipped = await makeInvite({
+        status: InviteStatus.Expired,
+        expiresAt: new Date(Date.now() - 86_400_000),
+      });
+
+      const pending = await service.list({
+        page: 1,
+        perPage: 20,
+        status: InviteStatus.Pending,
+      });
+      expect(pending.items.map((i) => i.id)).toEqual([live.id]);
+      expect(pending.meta.total).toBe(1);
+
+      const expired = await service.list({
+        page: 1,
+        perPage: 20,
+        status: InviteStatus.Expired,
+      });
+      expect(expired.items.map((i) => i.id).sort()).toEqual(
+        [lapsed.id, flipped.id].sort(),
+      );
+      expect(expired.meta.total).toBe(2);
+      expect(
+        expired.items.every((i) => i.status === InviteStatus.Expired),
+      ).toBe(true);
+
+      const all = await service.list({ page: 1, perPage: 20 });
+      expect(all.items.find((i) => i.id === lapsed.id)?.status).toBe(
+        InviteStatus.Expired,
+      );
+    });
+  });
+
+  describe('invites_revoked_fields', () => {
+    it('refuses an actor on an invite that is not revoked', async () => {
+      const invite = await makeInvite();
+
+      await expect(
+        db
+          .update(invites)
+          .set({ revokedAt: new Date(), revokedBy: admin.id })
+          .where(eq(invites.id, invite.id)),
+      ).rejects.toThrow();
+    });
+
+    it('refuses a revoked invite naming who but not when', async () => {
+      await expect(
+        makeInvite({ status: InviteStatus.Revoked, revokedBy: admin.id }),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('currentInviteFor', () => {
+    it('keeps a live invite', async () => {
+      const own = await makeInvite();
+
+      await expect(service.currentInviteFor(own.id, own.email)).resolves.toBe(
+        own.id,
+      );
+    });
+
+    it('follows a revoked invite to the one that replaced it', async () => {
+      const own = await makeInvite({ email: 'again@campus.local' });
+      await service.revoke(own.id, admin);
+      const replacement = await makeInvite({ email: 'again@campus.local' });
+
+      await expect(service.currentInviteFor(own.id, own.email)).resolves.toBe(
+        replacement.id,
+      );
+    });
+
+    it('stays on a dead invite with nothing to replace it', async () => {
+      const own = await makeInvite();
+      await service.revoke(own.id, admin);
+
+      await expect(service.currentInviteFor(own.id, own.email)).resolves.toBe(
+        own.id,
+      );
+    });
+
+    it('never follows to an invite addressed to somebody else', async () => {
+      const own = await makeInvite({ email: 'mine@campus.local' });
+      await service.revoke(own.id, admin);
+      await makeInvite({ email: 'theirs@campus.local' });
+
+      await expect(service.currentInviteFor(own.id, own.email)).resolves.toBe(
+        own.id,
+      );
     });
   });
 });

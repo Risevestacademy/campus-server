@@ -6,10 +6,10 @@ import {
   desc,
   eq,
   gt,
-  isNotNull,
   lte,
   ne,
   or,
+  type SQL,
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
@@ -60,6 +60,7 @@ import {
   InviteAlreadyAcceptedException,
   InviteAlreadyDeclinedException,
   InviteConflictException,
+  InviteExpiredException,
   InviteForbiddenException,
   InviteRevokedException,
   InviteInternalException,
@@ -316,6 +317,33 @@ export class InvitesService {
   }
 
   /**
+   * The invite a provisional session should be answering now.
+   *
+   * Its own while that is still live. Once it is not — revoked and replaced,
+   * typically, which is what revoking is for — the live invite addressed to
+   * the same account, so the invitee is shown the offer that stands instead
+   * of being stuck on a closed one until the session lapses. With no live
+   * replacement it stays the session's own, whose settled state is then the
+   * true answer.
+   */
+  async currentInviteFor(
+    sessionInviteId: string,
+    email: string,
+    now: Date = new Date(),
+  ): Promise<string> {
+    const [own] = await this.db
+      .select({ status: invites.status, expiresAt: invites.expiresAt })
+      .from(invites)
+      .where(eq(invites.id, sessionInviteId))
+      .limit(1);
+    if (own && isInviteLive(own, now)) {
+      return sessionInviteId;
+    }
+    const replacement = await this.findUsableForEmail(email, now);
+    return replacement?.id ?? sessionInviteId;
+  }
+
+  /**
    * The live invite a provisional session was minted against, with everything
    * the onboarding screen needs to render a decision.
    */
@@ -563,7 +591,7 @@ export class InvitesService {
       if (invite.status === InviteStatus.Pending) {
         await this.expireLazily(inviteId, now);
       }
-      throw new InviteForbiddenException('This invite has expired', {
+      throw new InviteExpiredException('This invite has expired', {
         ...ref,
         expiresAt: invite.expiresAt,
       });
@@ -735,7 +763,7 @@ export class InvitesService {
       invite.status === InviteStatus.Pending ||
       invite.status === InviteStatus.Expired
     ) {
-      throw new InviteForbiddenException('This invite has expired', {
+      throw new InviteExpiredException('This invite has expired', {
         inviteId,
         expiresAt: invite.expiresAt,
       });
@@ -1078,28 +1106,27 @@ export class InvitesService {
     actor: AuthenticatedUser,
     now: Date = new Date(),
   ): Promise<AdminInviteListItemDto> {
-    const [revoked] = await this.db.transaction((tx) =>
-      tx
-        .update(invites)
-        .set({
-          status: InviteStatus.Revoked,
-          revokedAt: now,
-          revokedBy: actor.id,
-        })
-        .where(
-          and(
-            eq(invites.id, inviteId),
-            eq(invites.status, InviteStatus.Pending),
-            // Same comparison isInviteLive makes, so a lapsed invite is
-            // refused here exactly as it is on the read path.
-            gt(invites.expiresAt, now),
-          ),
-        )
-        .returning(),
-    );
+    // One statement, so atomic on its own: no transaction needed.
+    const [revoked] = await this.db
+      .update(invites)
+      .set({
+        status: InviteStatus.Revoked,
+        revokedAt: now,
+        revokedBy: actor.id,
+      })
+      .where(
+        and(
+          eq(invites.id, inviteId),
+          eq(invites.status, InviteStatus.Pending),
+          // Same comparison isInviteLive makes, so a lapsed invite is
+          // refused here exactly as it is on the read path.
+          gt(invites.expiresAt, now),
+        ),
+      )
+      .returning();
 
     if (revoked) {
-      return toAdminInviteItem(revoked);
+      return toAdminInviteItem(revoked, now);
     }
 
     // Nothing was claimed. Materialise the lapse on the read side first, so
@@ -1131,7 +1158,7 @@ export class InvitesService {
       invite.status === InviteStatus.Pending ||
       invite.status === InviteStatus.Expired
     ) {
-      throw new InviteForbiddenException('This invite has expired', {
+      throw new InviteExpiredException('This invite has expired', {
         inviteId,
         expiresAt: invite.expiresAt,
       });
@@ -1170,12 +1197,16 @@ export class InvitesService {
    * Rows are projected, never returned whole: the full invite carries
    * token_hash and the raw token is derived from it, so a list must not hand
    * out hashes any more than it hands out tokens.
+   *
+   * Status is read the way isInviteLive reads it, not off the column: the
+   * flip to expired is lazy, so a lapsed row can still say pending. It is
+   * filtered and reported as expired, so `pending` here means redeemable.
    */
   async list(
     query: ListInvitesQueryDto,
+    now: Date = new Date(),
   ): Promise<PaginatedResponseDto<AdminInviteListItemDto>> {
-    const filter =
-      query.status === undefined ? undefined : eq(invites.status, query.status);
+    const filter = statusFilter(query.status, now);
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -1189,7 +1220,7 @@ export class InvitesService {
     ]);
 
     return {
-      items: rows.map(toAdminInviteItem),
+      items: rows.map((row) => toAdminInviteItem(row, now)),
       meta: {
         page: query.page,
         perPage: query.perPage,
@@ -1304,6 +1335,37 @@ function toMembershipDto(row: CohortMember): MembershipGrantedDto {
 }
 
 /**
+ * The list filter for one status, read as isInviteLive reads it. Pending
+ * means still redeemable; expired takes in the lapsed rows whose flip has not
+ * been materialised yet. The settled states are final, so their column is
+ * the truth.
+ */
+function statusFilter(
+  status: InviteStatus | undefined,
+  now: Date,
+): SQL | undefined {
+  switch (status) {
+    case undefined:
+      return undefined;
+    case InviteStatus.Pending:
+      return and(
+        eq(invites.status, InviteStatus.Pending),
+        gt(invites.expiresAt, now),
+      );
+    case InviteStatus.Expired:
+      return or(
+        eq(invites.status, InviteStatus.Expired),
+        and(
+          eq(invites.status, InviteStatus.Pending),
+          lte(invites.expiresAt, now),
+        ),
+      );
+    default:
+      return eq(invites.status, status);
+  }
+}
+
+/**
  * Projects an invite row down to what an admin is allowed to see in a list.
  *
  * Named fields rather than a spread, so a column added to INVITES later is
@@ -1313,12 +1375,16 @@ function toMembershipDto(row: CohortMember): MembershipGrantedDto {
  *
  * Timestamps cross the wire as ISO strings rather than Date, matching
  * InviteResponseDto and the rest of the invites responses.
+ *
+ * A lapsed row still marked pending is reported as expired, matching
+ * statusFilter, so a row listed under `expired` never says `pending`.
  */
-function toAdminInviteItem(row: Invite): AdminInviteListItemDto {
+function toAdminInviteItem(row: Invite, now: Date): AdminInviteListItemDto {
+  const lapsed = row.status === InviteStatus.Pending && !isInviteLive(row, now);
   return {
     id: row.id,
     email: row.email,
-    status: row.status,
+    status: lapsed ? InviteStatus.Expired : row.status,
     cohortId: row.cohortId,
     cohortRole: row.cohortRole,
     systemRole: row.systemRole,

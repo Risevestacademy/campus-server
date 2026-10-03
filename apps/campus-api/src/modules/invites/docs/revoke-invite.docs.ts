@@ -30,11 +30,13 @@ export function ApiRevokeInvite(): MethodDecorator {
         'whichever side asks. Revoking twice is a 409 rather than a silent ' +
         'success.\n\n' +
         'An invite that has lapsed cannot be revoked — it has already stopped ' +
-        'on its own, so there is no cancellation to record. It answers 403, ' +
-        'and its status is materialised as expired.\n\n' +
+        'on its own, so there is no cancellation to record. It answers 403 ' +
+        'INVITE_EXPIRED, and its status is materialised as expired.\n\n' +
         'Afterwards the invitee can no longer sign in with it. Somebody part ' +
         'way through onboarding gets INVITE_REVOKED (409) on their next ' +
-        'call.',
+        'call — unless they have been invited again, in which case ' +
+        'validate-user-invite shows them the new invite and a decision ' +
+        'naming it is accepted.',
     }),
     ApiOkResponse({ type: RevokeInviteResponseDto }),
     ApiAdminOnly(),
@@ -42,10 +44,38 @@ export function ApiRevokeInvite(): MethodDecorator {
       type: ApiErrorResponseDto,
       description: 'No invite with this id.',
     }),
+    // Replaces the 403 ApiAdminOnly documents — one status, one entry — so
+    // both of its causes are listed here, told apart by code.
     ApiForbiddenResponse({
       type: ApiErrorResponseDto,
       description:
-        'FORBIDDEN: the invite has expired, so there is nothing to revoke.',
+        'FORBIDDEN: signed in, but not an admin. INVITE_EXPIRED: the invite ' +
+        'has expired, so there is nothing to revoke.',
+      content: {
+        'application/json': {
+          examples: {
+            notAdmin: {
+              summary: 'Ordinary member',
+              value: {
+                error: { code: 'FORBIDDEN', message: 'Admin role required' },
+              },
+            },
+            expired: {
+              summary: 'The invite lapsed first',
+              value: {
+                error: {
+                  code: 'INVITE_EXPIRED',
+                  message: 'This invite has expired',
+                  details: {
+                    inviteId: '44444444-4444-4444-8444-444444444444',
+                    expiresAt: '2026-09-01T00:00:00.000Z',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,

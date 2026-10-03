@@ -104,9 +104,9 @@ export function ApiValidateUserInvite(): MethodDecorator {
       type: ApiErrorResponseDto,
       description:
         'The invite was still pending but its expiresAt has passed. The status ' +
-        'is materialised to expired before this is thrown, so the same request ' +
-        'replayed a moment later answers 409 rather than 403 — a lapsed invite ' +
-        'is a state that resolves, and the row is left consistent with it.',
+        'is materialised to expired before this is thrown, and a replay ' +
+        'answers the same INVITE_EXPIRED: lapsed and materialised are one ' +
+        'outcome, so the code does not depend on what read the invite first.',
       content: {
         'application/json': {
           examples: {
@@ -114,7 +114,7 @@ export function ApiValidateUserInvite(): MethodDecorator {
               summary: 'Pending, but expiresAt already in the past',
               value: {
                 error: {
-                  code: 'FORBIDDEN',
+                  code: 'INVITE_EXPIRED',
                   message: 'This invite has expired',
                   details: {
                     inviteId: '66666666-6666-4666-8666-666666666666',
