@@ -60,6 +60,12 @@ export enum AuditAction {
    * and what they wrote stays on the invite, not here.
    */
   InviteFlagged = 'invite_flagged',
+  /**
+   * An admin gave an invite a new link, replacing a live one or bringing
+   * back an invite that had lapsed. `details` has the deadline before and
+   * after, and never the address or anything of the token.
+   */
+  InviteResent = 'invite_resent',
 }
 
 export enum AuditSubjectType {
