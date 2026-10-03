@@ -1,0 +1,1 @@
+ALTER TABLE "invites" ADD CONSTRAINT "invites_revoked_fields" CHECK (("invites"."revoked_at" is null) = ("invites"."revoked_by" is null) and ("invites"."revoked_at" is null or "invites"."status" = 'revoked'));
