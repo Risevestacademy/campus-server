@@ -54,6 +54,11 @@ export enum AuditAction {
    * and keeps the revoke in the same history as the create.
    */
   InviteRevoked = 'invite_revoked',
+  /**
+   * The invitee flagged a mistake on their invite. The actor is the invitee,
+   * and what they wrote stays on the invite, not here.
+   */
+  InviteFlagged = 'invite_flagged',
 }
 
 export enum AuditSubjectType {

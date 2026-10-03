@@ -1968,6 +1968,8 @@ describe('InvitesService admin revoke and list', () => {
         'createdAt',
         'email',
         'expiresAt',
+        'flagMessage',
+        'flaggedAt',
         'id',
         'invitedBy',
         'revokedAt',
@@ -2118,6 +2120,187 @@ describe('InvitesService admin revoke and list', () => {
       await expect(
         makeInvite({ status: InviteStatus.Revoked, revokedBy: admin.id }),
       ).rejects.toThrow();
+    });
+  });
+
+  describe('flag', () => {
+    const MESSAGE = 'I applied for Product Design, not Software Engineering.';
+
+    const inviteeOf = async (invite: {
+      email: string;
+    }): Promise<AuthenticatedUser> => {
+      const [row] = await db
+        .insert(users)
+        .values({ email: invite.email })
+        .returning();
+      return { id: row.id, email: row.email, systemRole: SystemRole.User };
+    };
+
+    it('records the message and the moment, and leaves the invite pending', async () => {
+      const invite = await makeInvite();
+      const invitee = await inviteeOf(invite);
+      const at = new Date('2026-03-04T10:00:00.000Z');
+
+      const flagged = await service.flag(
+        invite.id,
+        MESSAGE,
+        invitee,
+        'corr-1',
+        at,
+      );
+
+      expect(flagged.flaggedAt).toEqual(at);
+      const row = await rowOf(invite.id);
+      expect(row.status).toBe(InviteStatus.Pending);
+      expect(row.flagMessage).toBe(MESSAGE);
+      expect(row.flaggedAt).toEqual(at);
+    });
+
+    it('can still be accepted afterwards', async () => {
+      const invite = await makeInvite();
+      const invitee = await inviteeOf(invite);
+      await service.flag(invite.id, MESSAGE, invitee);
+
+      const outcome = await service.decide(
+        invite.id,
+        InviteDecision.Accept,
+        invitee,
+      );
+
+      expect(outcome.kind).toBe('accepted');
+      const row = await rowOf(invite.id);
+      expect(row.status).toBe(InviteStatus.Accepted);
+      // The flag outlives the answer: it is the record of what was said.
+      expect(row.flagMessage).toBe(MESSAGE);
+    });
+
+    it('writes an audit entry naming the invitee, without the message', async () => {
+      const invite = await makeInvite();
+      const invitee = await inviteeOf(invite);
+
+      await service.flag(invite.id, MESSAGE, invitee, 'corr-1');
+
+      const [entry] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.InviteFlagged));
+      expect(entry).toMatchObject({
+        actorUserId: invitee.id,
+        subjectType: AuditSubjectType.Invite,
+        subjectId: invite.id,
+        correlationId: 'corr-1',
+      });
+      expect(JSON.stringify(entry.details)).not.toContain(MESSAGE);
+    });
+
+    it('refuses a second flag and keeps what the first one said', async () => {
+      const invite = await makeInvite();
+      const invitee = await inviteeOf(invite);
+      await service.flag(invite.id, MESSAGE, invitee);
+
+      await expect(
+        service.flag(invite.id, 'something else', invitee),
+      ).rejects.toBeInstanceOf(InviteConflictException);
+      expect((await rowOf(invite.id)).flagMessage).toBe(MESSAGE);
+    });
+
+    it.each([
+      [InviteStatus.Accepted, InviteAlreadyAcceptedException],
+      [InviteStatus.Declined, InviteAlreadyDeclinedException],
+      [InviteStatus.Revoked, InviteRevokedException],
+    ] as const)(
+      'refuses a %s invite with its own code',
+      async (status, exception) => {
+        const invite = await makeInvite({ status });
+        const invitee = await inviteeOf(invite);
+
+        await expect(
+          service.flag(invite.id, MESSAGE, invitee),
+        ).rejects.toBeInstanceOf(exception);
+        expect((await rowOf(invite.id)).flaggedAt).toBeNull();
+      },
+    );
+
+    it('answers a lapsed invite as expired and materialises the flip', async () => {
+      const invite = await makeInvite({
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      const invitee = await inviteeOf(invite);
+
+      await expect(
+        service.flag(invite.id, MESSAGE, invitee),
+      ).rejects.toBeInstanceOf(InviteExpiredException);
+      const row = await rowOf(invite.id);
+      expect(row.status).toBe(InviteStatus.Expired);
+      expect(row.flaggedAt).toBeNull();
+    });
+
+    it('404s an invite that does not exist', async () => {
+      await expect(
+        service.flag('99999999-9999-4999-8999-999999999999', MESSAGE, admin),
+      ).rejects.toBeInstanceOf(InviteNotFoundException);
+    });
+
+    it('leaves nothing behind when the invite is somebody else’s', async () => {
+      const invite = await makeInvite();
+
+      // The admin is signed in, but the invite is not addressed to them.
+      await expect(
+        service.flag(invite.id, MESSAGE, admin),
+      ).rejects.toBeInstanceOf(InviteInternalException);
+      expect((await rowOf(invite.id)).flaggedAt).toBeNull();
+      expect(
+        await db
+          .select()
+          .from(auditLog)
+          .where(eq(auditLog.action, AuditAction.InviteFlagged)),
+      ).toHaveLength(0);
+    });
+
+    it('refuses a message with no moment', async () => {
+      const invite = await makeInvite();
+
+      await expect(
+        db
+          .update(invites)
+          .set({ flagMessage: MESSAGE })
+          .where(eq(invites.id, invite.id)),
+      ).rejects.toThrow();
+    });
+
+    it('lists flagged invites on their own, with what was said', async () => {
+      const flagged = await makeInvite();
+      const quiet = await makeInvite();
+      await service.flag(flagged.id, MESSAGE, await inviteeOf(flagged));
+
+      const only = await service.list({ page: 1, perPage: 20, flagged: true });
+      const rest = await service.list({ page: 1, perPage: 20, flagged: false });
+
+      expect(only.items.map((item) => item.id)).toEqual([flagged.id]);
+      expect(only.items[0].flagMessage).toBe(MESSAGE);
+      expect(only.items[0].flaggedAt).toEqual(expect.any(String));
+      expect(rest.items.map((item) => item.id)).toEqual([quiet.id]);
+      expect(rest.items[0].flaggedAt).toBeNull();
+    });
+
+    it('reads back what the email to the inviter needs', async () => {
+      const invite = await makeInvite();
+      await service.flag(invite.id, MESSAGE, await inviteeOf(invite));
+
+      await expect(service.getFlagNotice(invite.id)).resolves.toMatchObject({
+        inviterEmail: admin.email,
+        inviteeEmail: invite.email,
+        cohortName: 'Cohort 1',
+        trackName: 'Software Engineering',
+        cohortRole: CohortRole.Student,
+        message: MESSAGE,
+      });
+    });
+
+    it('has no notice for an invite nobody flagged', async () => {
+      const invite = await makeInvite();
+
+      await expect(service.getFlagNotice(invite.id)).resolves.toBeNull();
     });
   });
 

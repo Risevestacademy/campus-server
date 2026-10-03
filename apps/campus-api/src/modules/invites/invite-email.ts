@@ -107,7 +107,7 @@ function formatDate(value: Date): string {
   return `${date}, ${time} UTC`;
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')

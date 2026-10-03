@@ -42,6 +42,7 @@ import {
 import { SessionScope } from '@campus/session';
 import { ApiCreateInvite } from './docs/create-invite.docs.js';
 import { ApiDecideInvite } from './docs/decide-invite.docs.js';
+import { ApiFlagInvite } from './docs/flag-invite.docs.js';
 import { ApiListInvites } from './docs/list-invites.docs.js';
 import { ApiPreviewInvite } from './docs/preview-invite.docs.js';
 import { ApiRevokeInvite } from './docs/revoke-invite.docs.js';
@@ -56,12 +57,14 @@ import {
   InviteDecisionDto,
   InviteDecisionResponseDto,
 } from './dto/invite-decision.dto.js';
+import { InviteFlagDto, InviteFlagResponseDto } from './dto/invite-flag.dto.js';
 import { InviteOnboardingResponseDto } from './dto/invite-onboarding-response.dto.js';
 import {
   InvitePreviewRequestDto,
   InvitePreviewResponseDto,
 } from './dto/invite-preview.dto.js';
 import { InviteResponseDto } from './dto/invite-response.dto.js';
+import { InviteFlagNotifier } from './invite-flag-notifier.js';
 import { InviteMailer } from './invite-mailer.js';
 import { InvitesService } from './invites.service.js';
 import {
@@ -75,6 +78,7 @@ export class InvitesController {
   constructor(
     private readonly invites: InvitesService,
     private readonly mailer: InviteMailer,
+    private readonly flagNotifier: InviteFlagNotifier,
     private readonly sessions: SessionIssuer,
     private readonly members: CohortMembersService,
     @Inject(CONFIG) private readonly config: Env,
@@ -157,6 +161,36 @@ export class InvitesController {
   ): Promise<InviteOnboardingResponseDto> {
     const inviteId = await this.inviteToAnswer(session, user);
     return this.invites.getOnboardingInvite(inviteId, user);
+  }
+
+  /**
+   * The invitee saying the offer is wrong. Open to the same sessions as the
+   * decision, and resolved to an invite by the same rule, because it is about
+   * the invite on the same screen. It leaves the session alone: a flag is not
+   * an answer, and the invite can still be accepted afterwards.
+   */
+  @Post('flag')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AnySessionGuard)
+  @ApiBearerAuth()
+  @ApiFlagInvite()
+  async flag(
+    @CurrentSession() session: InviteSession,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: InviteFlagDto,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<InviteFlagResponseDto> {
+    const inviteId = await this.inviteToDecide(session, user, dto.inviteId);
+    const flagged = await this.invites.flag(
+      inviteId,
+      dto.message,
+      user,
+      correlationId,
+    );
+    // After the write, not inside it: a failed send must not undo a flag the
+    // admin can still see on the invite.
+    await this.flagNotifier.notify(flagged.id);
+    return { inviteId: flagged.id, flaggedAt: flagged.flaggedAt ?? new Date() };
   }
 
   @Post('decision')
@@ -252,7 +286,7 @@ export class InvitesController {
   }
 
   /**
-   * The invite a decision answers. Unlike a read, a decision must not be
+   * The invite a decision answers, or a flag is raised on. Unlike a read, a decision must not be
    * resolved afresh for a member: an admin can revoke the invite they were
    * shown and send another between the read and the click, and a fresh
    * lookup would accept the new one unseen. So a member names the invite,
