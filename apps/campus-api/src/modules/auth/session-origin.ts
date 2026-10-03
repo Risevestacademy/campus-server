@@ -11,6 +11,8 @@ export function assertAllowedOrigin(
   }
   const allowed = parseCorsOrigins(config.CORS_ORIGINS);
   if (!allowed.includes(origin)) {
-    throw new SessionUnauthorizedError('Origin is not allowed to use this session');
+    throw new SessionUnauthorizedError(
+      'Origin is not allowed to use this session',
+    );
   }
 }

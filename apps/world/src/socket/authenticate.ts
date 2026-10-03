@@ -32,7 +32,9 @@ export type UpgradeDecision =
 const SESSION_COOKIE = 'campus_session';
 
 /** Same cookie campus-api sets; the browser sends it on the upgrade. */
-export function readSessionCookie(header: string | undefined): string | undefined {
+export function readSessionCookie(
+  header: string | undefined,
+): string | undefined {
   if (!header) return undefined;
 
   for (const part of header.split(';')) {
@@ -133,5 +135,7 @@ export async function decideUpgrade(
 
 /** The oldest refresh that still counts as campus-api vouching for a login. */
 export function sessionRefreshedSince(env: Env, now: Date): Date {
-  return new Date(now.getTime() - env.WORLD_SESSION_REFRESH_WINDOW_SECONDS * 1000);
+  return new Date(
+    now.getTime() - env.WORLD_SESSION_REFRESH_WINDOW_SECONDS * 1000,
+  );
 }

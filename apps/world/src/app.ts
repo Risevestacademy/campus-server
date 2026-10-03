@@ -1,13 +1,14 @@
 import websocket from '@fastify/websocket';
-import Fastify, {
-  type FastifyError,
-  type FastifyInstance,
-} from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 
 import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
-import { CORRELATION_ID_HEADER, correlationId, loggerOptions } from './infra/logger.js';
+import {
+  CORRELATION_ID_HEADER,
+  correlationId,
+  loggerOptions,
+} from './infra/logger.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
 
 export interface World {
@@ -67,7 +68,10 @@ export async function buildWorld(
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: { seconds: process.uptime() },
-    sockets: { connections: gateway.connections.size, users: gateway.connections.users },
+    sockets: {
+      connections: gateway.connections.size,
+      users: gateway.connections.users,
+    },
   }));
 
   return { app, gateway, env, accounts, positions: store };

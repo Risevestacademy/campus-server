@@ -83,7 +83,7 @@ Messages are defined once, in `src/socket/protocol.ts`. From them:
   and commit the result; a test fails CI if you forget.
 - **[docs/world-protocol.md](../../docs/world-protocol.md)** explains to
   client authors what the schema can't: message order, correcting a predicted
-  step, limits and close codes. Update it when what a client should *do*
+  step, limits and close codes. Update it when what a client should _do_
   changes.
 
 ## Tests

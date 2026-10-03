@@ -27,13 +27,18 @@ describe('gracefulShutdown', () => {
     const app = { close: async () => undefined };
     const second = vi.fn(async () => undefined);
 
-    await gracefulShutdown(app, [async () => Promise.reject(new Error('fail')), second]);
+    await gracefulShutdown(app, [
+      async () => Promise.reject(new Error('fail')),
+      second,
+    ]);
 
     expect(second).toHaveBeenCalledTimes(1);
   });
 
   it('still shuts down resources if app.close itself rejects', async () => {
-    const app = { close: async () => Promise.reject(new Error('close failed')) };
+    const app = {
+      close: async () => Promise.reject(new Error('close failed')),
+    };
     const resource = vi.fn(async () => undefined);
 
     await gracefulShutdown(app, [resource]);

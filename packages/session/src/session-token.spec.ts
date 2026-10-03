@@ -70,11 +70,18 @@ describe('session tokens', () => {
   });
 
   it('carries the session a full-access token belongs to, when given one', async () => {
-    const withSession = await signSessionToken({ ...claims, sessionId: 'family-1' }, settings);
+    const withSession = await signSessionToken(
+      { ...claims, sessionId: 'family-1' },
+      settings,
+    );
     const without = await signSessionToken(claims, settings);
 
-    expect((await verifySessionToken(withSession.token, SECRET)).sessionId).toBe('family-1');
-    expect((await verifySessionToken(without.token, SECRET)).sessionId).toBeUndefined();
+    expect(
+      (await verifySessionToken(withSession.token, SECRET)).sessionId,
+    ).toBe('family-1');
+    expect(
+      (await verifySessionToken(without.token, SECRET)).sessionId,
+    ).toBeUndefined();
   });
 
   it('refuses a session id that is not a string', async () => {
@@ -85,7 +92,9 @@ describe('session tokens', () => {
       sid: 42,
     });
 
-    await expect(verifySessionToken(token, SECRET)).rejects.toThrow(InvalidSessionTokenError);
+    await expect(verifySessionToken(token, SECRET)).rejects.toThrow(
+      InvalidSessionTokenError,
+    );
   });
 
   it('rejects a token without the authoritative system role', async () => {

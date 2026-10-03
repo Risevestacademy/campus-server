@@ -17,7 +17,8 @@ const MESSAGES: Record<GoogleSignInFailure, string> = {
   missing_code: 'Google did not return an authorization code.',
   exchange_failed: 'Google sign-in could not be verified.',
   unverified_email: 'This Google account has no verified email address.',
-  incomplete_profile: 'Google did not return an email address for this account.',
+  incomplete_profile:
+    'Google did not return an email address for this account.',
 };
 
 export class GoogleSignInFailedError extends DomainException {

@@ -59,7 +59,13 @@ describe('mintRoomToken', () => {
     });
 
     const { video } = await verify(minted.token);
-    for (const power of ['roomCreate', 'roomAdmin', 'roomList', 'roomRecord', 'hidden']) {
+    for (const power of [
+      'roomCreate',
+      'roomAdmin',
+      'roomList',
+      'roomRecord',
+      'hidden',
+    ]) {
       expect(video?.[power as keyof typeof video]).toBeFalsy();
     }
   });
@@ -115,20 +121,23 @@ describe('mintRoomToken', () => {
 
     it('a url a client cannot connect to', async () => {
       await expect(
-        mintRoomToken({ ...credentials, url: 'https://example.livekit.cloud' }, grant),
+        mintRoomToken(
+          { ...credentials, url: 'https://example.livekit.cloud' },
+          grant,
+        ),
       ).rejects.toThrow(/ws:\/\/ or wss:\/\//);
     });
 
     it('a missing api key', async () => {
-      await expect(mintRoomToken({ ...credentials, apiKey: '' }, grant)).rejects.toThrow(
-        InvalidMediaConfigError,
-      );
+      await expect(
+        mintRoomToken({ ...credentials, apiKey: '' }, grant),
+      ).rejects.toThrow(InvalidMediaConfigError);
     });
 
     it('an empty or overlong room name', async () => {
-      await expect(mintRoomToken(credentials, { ...grant, room: '' })).rejects.toThrow(
-        InvalidMediaConfigError,
-      );
+      await expect(
+        mintRoomToken(credentials, { ...grant, room: '' }),
+      ).rejects.toThrow(InvalidMediaConfigError);
       await expect(
         mintRoomToken(credentials, { ...grant, room: 'x'.repeat(129) }),
       ).rejects.toThrow(InvalidMediaConfigError);
@@ -137,16 +146,16 @@ describe('mintRoomToken', () => {
     /** The SDK would turn 0 into its six-hour default. */
     it('a lifetime that is not a positive whole number of seconds', async () => {
       for (const ttlSeconds of [0, -60, 1.5, Number.NaN]) {
-        await expect(mintRoomToken(credentials, { ...grant, ttlSeconds })).rejects.toThrow(
-          InvalidMediaConfigError,
-        );
+        await expect(
+          mintRoomToken(credentials, { ...grant, ttlSeconds }),
+        ).rejects.toThrow(InvalidMediaConfigError);
       }
     });
 
     it('nobody to join as', async () => {
-      await expect(mintRoomToken(credentials, { ...grant, identity: '' })).rejects.toThrow(
-        InvalidMediaConfigError,
-      );
+      await expect(
+        mintRoomToken(credentials, { ...grant, identity: '' }),
+      ).rejects.toThrow(InvalidMediaConfigError);
     });
   });
 });
@@ -168,6 +177,8 @@ describe('mintConnectionCheckToken', () => {
       room: minted.room,
       canPublish: true,
     });
-    expect(minted.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(120_000);
+    expect(minted.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(
+      120_000,
+    );
   });
 });

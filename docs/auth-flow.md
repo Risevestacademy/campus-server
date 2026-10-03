@@ -8,10 +8,10 @@ no account created for anyone who has not been invited — so "login" and
 
 A completed Google sign-in ends in one of two sessions:
 
-| Session | Who gets it | What it opens |
-| --- | --- | --- |
-| `full_access` | Already on the roster: an admin, or an active cohort member | The campus |
-| `provisional` | Holds an invite they have not accepted yet | Onboarding, and nothing else |
+| Session       | Who gets it                                                 | What it opens                |
+| ------------- | ----------------------------------------------------------- | ---------------------------- |
+| `full_access` | Already on the roster: an admin, or an active cohort member | The campus                   |
+| `provisional` | Holds an invite they have not accepted yet                  | Onboarding, and nothing else |
 
 Everyone else is turned away, and no account is created for them.
 
@@ -192,10 +192,10 @@ everything else behind the guard.
 
 A full-access sign-in sets two cookies:
 
-| Cookie | Holds | Sent to | Lives |
-| --- | --- | --- | --- |
-| `campus_session` | the access token | every route | 15 minutes (`AUTH_SESSION_TTL_MINUTES`) |
-| `campus_refresh` | a refresh token | `/v1/auth` only | 30 days (`AUTH_REFRESH_TTL_DAYS`) |
+| Cookie           | Holds            | Sent to         | Lives                                   |
+| ---------------- | ---------------- | --------------- | --------------------------------------- |
+| `campus_session` | the access token | every route     | 15 minutes (`AUTH_SESSION_TTL_MINUTES`) |
+| `campus_refresh` | a refresh token  | `/v1/auth` only | 30 days (`AUTH_REFRESH_TTL_DAYS`)       |
 
 A provisional session gets the first only: onboarding is short, and repeating
 sign-in is cheap.
@@ -309,12 +309,12 @@ not revoked, not expired, and was minted within
 the account and its access before minting, so a recent token is campus-api
 vouching for the session again.
 
-| What happened | When the socket closes |
-| --- | --- |
-| Signed out | Within a heartbeat (30 s) |
-| Suspended | Within a heartbeat — `world` checks the account itself |
+| What happened                            | When the socket closes                                              |
+| ---------------------------------------- | ------------------------------------------------------------------- |
+| Signed out                               | Within a heartbeat (30 s)                                           |
+| Suspended                                | Within a heartbeat — `world` checks the account itself              |
 | Access ended, or removed from the cohort | When a refresh fails, or at most the window after the last good one |
-| Browser stopped refreshing | The window after the last refresh |
+| Browser stopped refreshing               | The window after the last refresh                                   |
 
 A token with no `sid` — minted before this existed — is followed the old way,
 by its own expiry.

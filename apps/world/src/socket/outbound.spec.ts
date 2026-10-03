@@ -12,7 +12,10 @@ function socket(bufferedAmount: number, readyState = OPEN) {
     bufferedAmount,
     send: vi.fn(),
     terminate: vi.fn(),
-  } as unknown as Outbound & { send: ReturnType<typeof vi.fn>; terminate: ReturnType<typeof vi.fn> };
+  } as unknown as Outbound & {
+    send: ReturnType<typeof vi.fn>;
+    terminate: ReturnType<typeof vi.fn>;
+  };
 }
 
 describe('deliver', () => {

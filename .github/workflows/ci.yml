@@ -41,6 +41,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # The pre-commit hook formats staged files, but a hook can be skipped;
+      # this is what actually keeps unformatted code out.
+      - name: Check formatting
+        run: pnpm format:check
+
       - name: Build
         run: pnpm build
 

@@ -57,7 +57,11 @@ describe('RedisPositionStore', () => {
 
     await store.save([{ userId: 'ada', x: 3, y: 4, facing: 'left' }]);
 
-    await expect(store.load('ada')).resolves.toEqual({ x: 3, y: 4, facing: 'left' });
+    await expect(store.load('ada')).resolves.toEqual({
+      x: 3,
+      y: 4,
+      facing: 'left',
+    });
   });
 
   it('keeps each position for the TTL, refreshed on every save', async () => {
@@ -70,7 +74,11 @@ describe('RedisPositionStore', () => {
   });
 
   it('has nothing for somebody never saved', async () => {
-    const store = new RedisPositionStore(fakeRedis().redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(
+      fakeRedis().redis,
+      PLACEHOLDER_MAP_ID,
+      90,
+    );
 
     await expect(store.load('nobody')).resolves.toBeUndefined();
   });
@@ -89,8 +97,19 @@ describe('RedisPositionStore', () => {
 
   it.each([
     ['not JSON', '{nope'],
-    ['the wrong shape', JSON.stringify({ mapId: PLACEHOLDER_MAP_ID, x: 'far' })],
-    ['an unknown facing', JSON.stringify({ mapId: PLACEHOLDER_MAP_ID, x: 1, y: 1, facing: 'north' })],
+    [
+      'the wrong shape',
+      JSON.stringify({ mapId: PLACEHOLDER_MAP_ID, x: 'far' }),
+    ],
+    [
+      'an unknown facing',
+      JSON.stringify({
+        mapId: PLACEHOLDER_MAP_ID,
+        x: 1,
+        y: 1,
+        facing: 'north',
+      }),
+    ],
   ])('treats %s as nothing saved', async (_label, raw) => {
     const { redis, values } = fakeRedis();
     values.set(positionKey('ada'), raw);
@@ -127,8 +146,10 @@ describe('RedisPositionStore', () => {
       const redis = {
         ...fakeRedis().redis,
         status: 'connecting',
-        once: (_event: 'ready', listener: () => void) => listeners.add(listener),
-        off: (_event: 'ready', listener: () => void) => listeners.delete(listener),
+        once: (_event: 'ready', listener: () => void) =>
+          listeners.add(listener),
+        off: (_event: 'ready', listener: () => void) =>
+          listeners.delete(listener),
       };
       return {
         redis,
@@ -141,7 +162,11 @@ describe('RedisPositionStore', () => {
     }
 
     it('answers at once when already connected', async () => {
-      const store = new RedisPositionStore(fakeRedis().redis, PLACEHOLDER_MAP_ID, 90);
+      const store = new RedisPositionStore(
+        fakeRedis().redis,
+        PLACEHOLDER_MAP_ID,
+        90,
+      );
 
       await expect(store.ready(10)).resolves.toBe(true);
     });
@@ -258,7 +283,9 @@ describe('createPositionStore with Redis connected but not answering', () => {
         read: () => undefined,
         write(chunk: Buffer, _encoding, done) {
           // Each command is an array whose first bulk string is its name.
-          const names = [...chunk.toString().matchAll(/\*\d+\r\n\$\d+\r\n(\w+)/g)];
+          const names = [
+            ...chunk.toString().matchAll(/\*\d+\r\n\$\d+\r\n(\w+)/g),
+          ];
           for (const [, name] of names) {
             const command = name.toLowerCase();
             if (command === 'hello') {
@@ -320,4 +347,3 @@ describe('createPositionStore with Redis connected but not answering', () => {
     await store.close();
   });
 });
-

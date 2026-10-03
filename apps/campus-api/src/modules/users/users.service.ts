@@ -72,7 +72,10 @@ export class UsersService {
         avatarUrl: coalesce(users.avatarUrl, identity.avatarUrl),
       })
       .where(
-        and(eq(users.email, normalize(identity.email)), isNull(users.providerId)),
+        and(
+          eq(users.email, normalize(identity.email)),
+          isNull(users.providerId),
+        ),
       )
       .returning();
 

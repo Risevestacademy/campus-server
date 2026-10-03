@@ -19,7 +19,11 @@ import {
   cohorts,
 } from './../src/modules/cohorts/schema.js';
 import { invites } from './../src/modules/invites/schema.js';
-import { SystemRole, UserStatus, users } from './../src/modules/users/schema.js';
+import {
+  SystemRole,
+  UserStatus,
+  users,
+} from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
   DomainExceptionFilter,

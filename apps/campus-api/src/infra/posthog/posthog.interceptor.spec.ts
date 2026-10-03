@@ -31,17 +31,26 @@ function makeHandler(exception: unknown): CallHandler {
   return { handle: () => throwError(() => exception) };
 }
 
-async function run(posthog: PostHog, exception: unknown, headers?: Record<string, string>) {
+async function run(
+  posthog: PostHog,
+  exception: unknown,
+  headers?: Record<string, string>,
+) {
   const interceptor = new PostHogExceptionInterceptor(posthog);
-  await expect(firstValueFrom(interceptor.intercept(makeContext(headers), makeHandler(exception)))).rejects.toBe(
-    exception,
-  );
+  await expect(
+    firstValueFrom(
+      interceptor.intercept(makeContext(headers), makeHandler(exception)),
+    ),
+  ).rejects.toBe(exception);
 }
 
 describe('PostHogExceptionInterceptor', () => {
   it('captures an HttpException with status >= 500', async () => {
     const posthog = { captureException: vi.fn() } as unknown as PostHog;
-    await run(posthog, new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR));
+    await run(
+      posthog,
+      new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR),
+    );
     expect(posthog.captureException).toHaveBeenCalledTimes(1);
   });
 
@@ -60,40 +69,59 @@ describe('PostHogExceptionInterceptor', () => {
     [ExceptionCode.SpaceAtCapacity, false],
     [ExceptionCode.RateLimited, false],
     [ExceptionCode.InternalError, true],
-  ])('DomainException with code %s is captured: %s', async (code, shouldCapture) => {
-    const posthog = { captureException: vi.fn() } as unknown as PostHog;
-    await run(posthog, new TestDomainException(code));
-    expect(posthog.captureException).toHaveBeenCalledTimes(shouldCapture ? 1 : 0);
-  });
+  ])(
+    'DomainException with code %s is captured: %s',
+    async (code, shouldCapture) => {
+      const posthog = { captureException: vi.fn() } as unknown as PostHog;
+      await run(posthog, new TestDomainException(code));
+      expect(posthog.captureException).toHaveBeenCalledTimes(
+        shouldCapture ? 1 : 0,
+      );
+    },
+  );
 
   it('sends the request path without the query string even though the URL has one', async () => {
     const posthog = { captureException: vi.fn() } as unknown as PostHog;
-    await run(posthog, new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR));
+    await run(
+      posthog,
+      new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR),
+    );
     expect(posthog.captureException).toHaveBeenCalledWith(
       expect.anything(),
       undefined,
       expect.objectContaining({ path: '/reset-password' }),
     );
-    const properties = (posthog.captureException as ReturnType<typeof vi.fn>).mock.calls[0][2];
+    const properties = (posthog.captureException as ReturnType<typeof vi.fn>)
+      .mock.calls[0][2];
     expect(JSON.stringify(properties)).not.toContain('super-secret');
   });
 
   it('sends $ip and $user_agent', async () => {
     const posthog = { captureException: vi.fn() } as unknown as PostHog;
-    await run(posthog, new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR), {
-      'user-agent': 'test-agent',
-      'x-forwarded-for': '203.0.113.5, 10.0.0.1',
-    });
+    await run(
+      posthog,
+      new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR),
+      {
+        'user-agent': 'test-agent',
+        'x-forwarded-for': '203.0.113.5, 10.0.0.1',
+      },
+    );
     expect(posthog.captureException).toHaveBeenCalledWith(
       expect.anything(),
       undefined,
-      expect.objectContaining({ $ip: '203.0.113.5', $user_agent: 'test-agent' }),
+      expect.objectContaining({
+        $ip: '203.0.113.5',
+        $user_agent: 'test-agent',
+      }),
     );
   });
 
   it('falls back to the socket address when there is no x-forwarded-for header', async () => {
     const posthog = { captureException: vi.fn() } as unknown as PostHog;
-    await run(posthog, new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR));
+    await run(
+      posthog,
+      new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR),
+    );
     expect(posthog.captureException).toHaveBeenCalledWith(
       expect.anything(),
       undefined,
@@ -103,14 +131,29 @@ describe('PostHogExceptionInterceptor', () => {
 
   it('uses the distinct-id header when present, leaving it undefined otherwise', async () => {
     const posthog = { captureException: vi.fn() } as unknown as PostHog;
-    await run(posthog, new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR), {
-      'x-posthog-distinct-id': 'user-123',
-    });
-    expect(posthog.captureException).toHaveBeenCalledWith(expect.anything(), 'user-123', expect.anything());
+    await run(
+      posthog,
+      new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR),
+      {
+        'x-posthog-distinct-id': 'user-123',
+      },
+    );
+    expect(posthog.captureException).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-123',
+      expect.anything(),
+    );
 
     const posthogNoHeader = { captureException: vi.fn() } as unknown as PostHog;
-    await run(posthogNoHeader, new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR));
-    expect(posthogNoHeader.captureException).toHaveBeenCalledWith(expect.anything(), undefined, expect.anything());
+    await run(
+      posthogNoHeader,
+      new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR),
+    );
+    expect(posthogNoHeader.captureException).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.anything(),
+    );
   });
 
   it('never throws when the PostHog client itself throws', async () => {
@@ -119,6 +162,9 @@ describe('PostHogExceptionInterceptor', () => {
         throw new Error('network error');
       }),
     } as unknown as PostHog;
-    await run(posthog, new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR));
+    await run(
+      posthog,
+      new HttpException('boom', HttpStatus.INTERNAL_SERVER_ERROR),
+    );
   });
 });

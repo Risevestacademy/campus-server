@@ -18,7 +18,11 @@ export class SessionUserDto {
   @ApiPropertyOptional({ type: String, example: 'Lovelace', nullable: true })
   lastName: string | null;
 
-  @ApiPropertyOptional({ type: String, example: 'Ada Lovelace', nullable: true })
+  @ApiPropertyOptional({
+    type: String,
+    example: 'Ada Lovelace',
+    nullable: true,
+  })
   displayName: string | null;
 
   @ApiPropertyOptional({

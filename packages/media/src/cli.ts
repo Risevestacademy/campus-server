@@ -9,7 +9,11 @@
  */
 import { parseArgs } from 'node:util';
 
-import { InvalidMediaConfigError, mintRoomToken, type MediaCredentials } from './room-token.js';
+import {
+  InvalidMediaConfigError,
+  mintRoomToken,
+  type MediaCredentials,
+} from './room-token.js';
 
 const LOCAL: MediaCredentials = {
   url: 'ws://localhost:7880',
@@ -44,7 +48,8 @@ if (!values.identity) {
  * unset, which is what an unfilled line in an env file gives.
  */
 function credentialsFromEnv(): MediaCredentials {
-  const read = (name: string): string | undefined => process.env[name]?.trim() || undefined;
+  const read = (name: string): string | undefined =>
+    process.env[name]?.trim() || undefined;
   const url = read('LIVEKIT_URL');
   const apiKey = read('LIVEKIT_API_KEY');
   const apiSecret = read('LIVEKIT_API_SECRET');
@@ -85,7 +90,9 @@ console.log(`room:    ${minted.room}`);
 console.log(`expires: ${minted.expiresAt.toISOString()}`);
 console.log(`token:   ${minted.token}`);
 console.log('');
-console.log('Join from any LiveKit client with the url and token, for example:');
+console.log(
+  'Join from any LiveKit client with the url and token, for example:',
+);
 console.log(
   `https://meet.livekit.io/custom?liveKitUrl=${encodeURIComponent(minted.url)}&token=${minted.token}`,
 );

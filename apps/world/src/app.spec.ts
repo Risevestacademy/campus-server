@@ -91,12 +91,19 @@ describe('with the position store failing', () => {
     await world.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = world.app.server.address() as AddressInfo;
     const { token } = await signSessionToken(
-      { userId: 'ada', email: 'ada@campus.local', scope: SessionScope.FullAccess },
+      {
+        userId: 'ada',
+        email: 'ada@campus.local',
+        scope: SessionScope.FullAccess,
+      },
       { secret, ttlMinutes: 30 },
     );
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
-      headers: { origin: 'https://campus.example.com', cookie: `campus_session=${token}` },
+      headers: {
+        origin: 'https://campus.example.com',
+        cookie: `campus_session=${token}`,
+      },
     });
     const snapshot = await new Promise<Record<string, unknown>>((resolve) => {
       ws.on('message', (raw) => {
@@ -105,7 +112,9 @@ describe('with the position store failing', () => {
       });
     });
 
-    expect(snapshot.players).toEqual([{ userId: 'ada', x: 20, y: 15, facing: 'down' }]);
+    expect(snapshot.players).toEqual([
+      { userId: 'ada', x: 20, y: 15, facing: 'down' },
+    ]);
 
     const closed = new Promise((resolve) => ws.on('close', resolve));
     // The save on shutdown fails; stop() must still finish and close sockets.
