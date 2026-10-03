@@ -333,6 +333,26 @@ describe('UserDirectoryService', () => {
       expect(page.items[0].memberships).toEqual([]);
     });
 
+    // The roster, not access: a suspended account cannot sign in, but it
+    // still holds its places, and `status` is what says it is suspended.
+    it('lists a suspended account with the memberships it still holds', async () => {
+      await db
+        .update(users)
+        .set({ status: UserStatus.Suspended })
+        .where(sql`${users.id} = ${c1seStudent}`);
+
+      const page = await service.list({ page: 1, perPage: 20, cohortId: c1 });
+      const found = page.items.find(
+        (item) => item.email === 'c1se@campus.local',
+      );
+
+      expect(found?.status).toBe(UserStatus.Suspended);
+      expect(found?.memberships).toHaveLength(1);
+      expect(
+        await emails({ cohortId: c1, status: UserStatus.Active }),
+      ).not.toContain('c1se@campus.local');
+    });
+
     it('shows every membership of somebody a filter found by one', async () => {
       await staff(c1seStudent, c2, CohortRole.Mentor);
 

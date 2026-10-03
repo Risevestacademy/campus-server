@@ -25,7 +25,13 @@ export class UserMembershipTrackDto {
   code: string;
 }
 
-/** One live place on a roster, labelled so a table can show it as it is. */
+/**
+ * One live place on a roster, labelled so a table can show it as it is.
+ *
+ * Live is a fact about the membership alone: not left, not dismissed, a
+ * guest visit not yet over. Whether the account behind it may sign in is the
+ * account's `status`, which this says nothing about.
+ */
 export class UserMembershipDto {
   @ApiProperty({ type: () => UserMembershipCohortDto })
   cohort: UserMembershipCohortDto;
@@ -116,10 +122,14 @@ export class UserListItemDto {
   @ApiProperty({
     type: () => [UserMembershipDto],
     description:
-      'Every cohort this person may enter now, most recently joined first. ' +
-      'All of them, whatever the filters: a filter chooses who is listed, ' +
-      'not how much of them is shown. Empty for somebody with no live ' +
-      'membership — an admin with no cohort, or a member who has left.',
+      'Every live place this person holds on a roster, most recently ' +
+      'joined first. All of them, whatever the filters: a filter chooses ' +
+      'who is listed, not how much of them is shown. Empty for somebody ' +
+      'with no live membership — an admin with no cohort, or a member who ' +
+      'has left.\n\n' +
+      'This is the roster, not access. A suspended account keeps its ' +
+      'memberships and is listed with them, so an admin can see where the ' +
+      'person belongs, but it cannot sign in: read `status` for that.',
   })
   memberships: UserMembershipDto[];
 }

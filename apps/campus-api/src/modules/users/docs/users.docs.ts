@@ -11,8 +11,8 @@ export function ApiListUsers(): MethodDecorator {
     ApiOperation({
       summary: 'List users (admin only)',
       description:
-        'Every account, newest first, paginated, each with the cohorts it ' +
-        'may enter now.\n\n' +
+        'Every account, newest first, paginated, each with its live roster ' +
+        'memberships.\n\n' +
         'Filters are all optional and combine with AND. `search` matches ' +
         'the address and the names; `systemRole` and `status` are about the ' +
         'account. `cohortId`, `trackId` and `cohortRole` are about a ' +
@@ -23,7 +23,11 @@ export function ApiListUsers(): MethodDecorator {
         'Membership filters read live memberships only, the same rule ' +
         'sign-in uses: somebody who left, was dismissed, or whose guest ' +
         'visit ended is not in the cohort for this purpose. An id that ' +
-        'names no cohort or track is an empty page, not a 404.',
+        'names no cohort or track is an empty page, not a 404.\n\n' +
+        'Memberships describe the roster, not access. A suspended account ' +
+        'is listed with its memberships and matches the membership filters, ' +
+        'but cannot sign in. `status=active` narrows a list to the people ' +
+        'who can.',
     }),
     ApiPaginatedResponse(UserListItemDto),
     ApiBadRequestResponse({

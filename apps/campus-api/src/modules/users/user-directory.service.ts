@@ -38,6 +38,11 @@ export class UserDirectoryService {
   /**
    * One page of users, newest first, each with their live memberships.
    *
+   * Memberships are reported as the roster has them, whatever the account's
+   * status. A suspended account cannot sign in — SessionGuard refuses it —
+   * but it still holds its places, and an admin deciding what to do about a
+   * suspension needs to see them. Access is `status`; this is the roster.
+   *
    * Two reads rather than a join: a person can hold several memberships, so
    * joining would repeat them once per cohort and make `perPage` count rows
    * instead of people.
@@ -100,7 +105,8 @@ export class UserDirectoryService {
    * mentors another.
    *
    * Live memberships only, by the definition sign-in uses — a person who
-   * left a cohort is not in it.
+   * left a cohort is not in it. A suspended account's memberships count:
+   * combine with `status` to leave those people out.
    */
   private membershipFilter(
     query: ListUsersQueryDto,
