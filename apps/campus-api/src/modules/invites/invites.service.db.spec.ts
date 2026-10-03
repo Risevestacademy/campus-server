@@ -2297,6 +2297,22 @@ describe('InvitesService admin revoke and list', () => {
       });
     });
 
+    it('reads back when a guest visit ends, for the email', async () => {
+      const visitEnds = new Date(Date.now() + 2 * 86_400_000);
+      const invite = await makeInvite({
+        cohortRole: CohortRole.Guest,
+        cohortTrackId: null,
+        guestAccessExpiresAt: visitEnds,
+      });
+      await service.flag(invite.id, MESSAGE, await inviteeOf(invite));
+
+      await expect(service.getFlagNotice(invite.id)).resolves.toMatchObject({
+        cohortRole: CohortRole.Guest,
+        trackName: null,
+        guestAccessExpiresAt: visitEnds,
+      });
+    });
+
     it('has no notice for an invite nobody flagged', async () => {
       const invite = await makeInvite();
 

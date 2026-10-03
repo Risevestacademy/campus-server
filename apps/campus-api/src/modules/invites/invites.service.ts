@@ -1254,6 +1254,7 @@ export class InvitesService {
         trackName: tracks.name,
         cohortRole: invites.cohortRole,
         systemRole: invites.systemRole,
+        guestAccessExpiresAt: invites.guestAccessExpiresAt,
         message: invites.flagMessage,
         flaggedAt: invites.flaggedAt,
       })
