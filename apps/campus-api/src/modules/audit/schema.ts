@@ -7,6 +7,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
+import { CORRELATION_ID_MAX_LENGTH } from '../../shared/http/correlation-id.js';
 import { users } from '../users/schema.js';
 
 /**
@@ -70,9 +71,6 @@ export enum AuditSubjectType {
   Track = 'track',
 }
 
-/** How much of a correlation id the column keeps. */
-export const CORRELATION_ID_MAX_LENGTH = 64;
-
 /**
  * Append-only: nothing updates or deletes a row. Written in the same
  * transaction as the change it records, so a change is never committed
@@ -90,7 +88,10 @@ export const auditLog = pgTable(
     /** No FK yet: spaces does not exist. */
     spaceId: uuid('space_id'),
     details: jsonb('details'),
-    /** The request's x-correlation-id, so an entry leads to its log lines. */
+    /**
+     * The request's correlation id, so an entry leads to its log lines. As
+     * wide as the longest id a request may bring, so it is stored whole.
+     */
     correlationId: varchar('correlation_id', {
       length: CORRELATION_ID_MAX_LENGTH,
     }),

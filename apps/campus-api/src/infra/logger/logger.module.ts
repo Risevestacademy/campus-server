@@ -1,13 +1,16 @@
-import { randomUUID } from 'node:crypto';
 import { context, trace } from '@opentelemetry/api';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Global, Module } from '@nestjs/common';
 import { LoggerModule } from 'nestjs-pino';
 
+import {
+  CORRELATION_ID_HEADER,
+  resolveCorrelationId,
+} from '../../shared/http/correlation-id.js';
 import { CONFIG, type Env } from '../config/config.module.js';
 
-export const CORRELATION_ID_HEADER = 'x-correlation-id';
+export { CORRELATION_ID_HEADER };
 
 const UNLOGGED_PATHS = ['/v1/health', '/docs', '/docs-json'];
 
@@ -27,11 +30,9 @@ export function isUnloggedRoute(url: string | undefined): boolean {
         pinoHttp: {
           level: config.FF_LOG_LEVEL,
           genReqId: (req: IncomingMessage, res: ServerResponse) => {
-            const incoming = req.headers[CORRELATION_ID_HEADER];
-            const id =
-              typeof incoming === 'string' && incoming.length > 0
-                ? incoming
-                : randomUUID();
+            // The one place the id is decided. What is returned here is
+            // what the logs, the response header and any audit entry carry.
+            const id = resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
             res.setHeader(CORRELATION_ID_HEADER, id);
             return id;
           },

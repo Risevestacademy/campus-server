@@ -1,10 +1,5 @@
 import type { DbExecutor } from '../../infra/database/database.constants.js';
-import {
-  CORRELATION_ID_MAX_LENGTH,
-  auditLog,
-  type AuditAction,
-  type AuditSubjectType,
-} from './schema.js';
+import { auditLog, type AuditAction, type AuditSubjectType } from './schema.js';
 
 /** Who did it and which request — the parts every entry from one call shares. */
 export interface AuditContext {
@@ -189,11 +184,9 @@ export async function writeAuditEntry(
     subjectType: entry.subject.type,
     subjectId: entry.subject.id,
     details: entry.details,
-    // The id is whatever the caller sent in x-correlation-id. One too long
-    // for the column would fail this insert and, sharing its transaction,
-    // undo the change being recorded — so it is cut to fit instead. The
-    // start of it still finds the request's log lines.
-    correlationId:
-      entry.correlationId?.slice(0, CORRELATION_ID_MAX_LENGTH) ?? null,
+    // Stored as given, never trimmed: the request's id is settled as it
+    // arrives (resolveCorrelationId) and already fits the column, so the
+    // entry carries the same id as the log lines and the response header.
+    correlationId: entry.correlationId ?? null,
   });
 }
