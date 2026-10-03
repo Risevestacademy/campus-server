@@ -1215,7 +1215,10 @@ export class InvitesService {
             .returning();
 
           if (updated) {
-            const inviteLink = buildInviteLink(this.config.APP_PUBLIC_URL, token);
+            const inviteLink = buildInviteLink(
+              this.config.APP_PUBLIC_URL,
+              token,
+            );
             return {
               id: updated.id,
               email: updated.email,
@@ -1226,7 +1229,8 @@ export class InvitesService {
               systemRole: updated.systemRole,
               status: updated.status,
               expiresAt: updated.expiresAt.toISOString(),
-              guestAccessExpiresAt: updated.guestAccessExpiresAt?.toISOString() ?? null,
+              guestAccessExpiresAt:
+                updated.guestAccessExpiresAt?.toISOString() ?? null,
               inviteLink,
               token,
               createdAt: updated.createdAt.toISOString(),

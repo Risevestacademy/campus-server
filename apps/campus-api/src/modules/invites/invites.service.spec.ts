@@ -410,8 +410,14 @@ describe('InvitesService.resend', () => {
                 }
                 // Re-read after expireLazily - return expired status if it was lapsed pending
                 const invite = state.pendingInvite;
-                if (invite && invite.status === InviteStatus.Pending && invite.expiresAt.getTime() <= Date.now()) {
-                  return Promise.resolve([{ ...invite, status: InviteStatus.Expired }]);
+                if (
+                  invite &&
+                  invite.status === InviteStatus.Pending &&
+                  invite.expiresAt.getTime() <= Date.now()
+                ) {
+                  return Promise.resolve([
+                    { ...invite, status: InviteStatus.Expired },
+                  ]);
                 }
                 return Promise.resolve(invite ? [invite] : []);
               },
@@ -440,7 +446,8 @@ describe('InvitesService.resend', () => {
                       cohortTrackId: state.pendingInvite?.cohortTrackId ?? null,
                       mentorshipGroupId:
                         state.pendingInvite?.mentorshipGroupId ?? null,
-                      systemRole: state.pendingInvite?.systemRole ?? SystemRole.User,
+                      systemRole:
+                        state.pendingInvite?.systemRole ?? SystemRole.User,
                       status: InviteStatus.Pending,
                       expiresAt: state.pendingInvite?.expiresAt,
                       createdAt: new Date('2026-09-22T12:00:00.000Z'),
@@ -477,7 +484,9 @@ describe('InvitesService.resend', () => {
       'http://localhost:3000/invitation?token=new-token-abc',
     );
     expect(state.lastUpdateValues).toEqual({
-      tokenHash: createHash('sha256').update('new-token-abc', 'utf8').digest('hex'),
+      tokenHash: createHash('sha256')
+        .update('new-token-abc', 'utf8')
+        .digest('hex'),
     });
     expect(state.updateCalls).toBe(1);
   });

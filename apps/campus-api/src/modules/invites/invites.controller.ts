@@ -157,7 +157,10 @@ export class InvitesController {
     // Use a new idempotency key derived from the new token hash so each
     // resend gets its own key and isn't dropped by Resend.
     const newTokenHash = hashInviteToken(receipt.token);
-    return { ...receipt, emailStatus: await this.mailer.send(receipt, `invite/${newTokenHash}`) };
+    return {
+      ...receipt,
+      emailStatus: await this.mailer.send(receipt, `invite/${newTokenHash}`),
+    };
   }
 
   // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The

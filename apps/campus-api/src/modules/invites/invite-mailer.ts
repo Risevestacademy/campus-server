@@ -26,11 +26,14 @@ export class InviteMailer {
     this.logger.setContext(InviteMailer.name);
   }
 
-  async send(invite: {
-    id: string;
-    token: string;
-    inviteLink: string;
-  }, idempotencyKey?: string): Promise<InviteEmailStatus> {
+  async send(
+    invite: {
+      id: string;
+      token: string;
+      inviteLink: string;
+    },
+    idempotencyKey?: string,
+  ): Promise<InviteEmailStatus> {
     if (!this.sender.enabled) {
       return InviteEmailStatus.Disabled;
     }
