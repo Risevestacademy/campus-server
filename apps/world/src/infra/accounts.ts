@@ -26,6 +26,12 @@ export interface AccountLookup {
 export interface Account {
   id: string;
   suspended: boolean;
+  /**
+   * USERS.session_epoch: how many times this account's sessions have been
+   * ended on purpose. A token signed with any other value is one of those
+   * ended sessions.
+   */
+  sessionEpoch: number;
 }
 
 /**
@@ -35,7 +41,7 @@ export interface Account {
  * perfectly good session.
  */
 export const ACCOUNT_QUERY =
-  'select id, status from users where id = $1 limit 1';
+  'select id, status, session_epoch from users where id = $1 limit 1';
 
 /**
  * A login is live while its refresh family holds a token that is neither
@@ -81,12 +87,17 @@ export function createAccountLookup(env: Env): AccountLookup {
 
   return {
     async find(userId: string): Promise<Account | null> {
-      const rows = await sql.unsafe<{ id: string; status: string }[]>(
-        ACCOUNT_QUERY,
-        [userId],
-      );
+      const rows = await sql.unsafe<
+        { id: string; status: string; session_epoch: number }[]
+      >(ACCOUNT_QUERY, [userId]);
       const row = rows[0];
-      return row ? { id: row.id, suspended: row.status === 'suspended' } : null;
+      return row
+        ? {
+            id: row.id,
+            suspended: row.status === 'suspended',
+            sessionEpoch: row.session_epoch,
+          }
+        : null;
     },
     async liveSessions(sessionIds, refreshedSince, now): Promise<Set<string>> {
       const ids = [...new Set(sessionIds)].filter((id) => UUID.test(id));

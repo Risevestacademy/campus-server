@@ -231,6 +231,7 @@ export function registerGateway(
         continue;
       }
       if (account && !account.suspended) {
+        dropRevokedSessions(held, account.sessionEpoch);
         continue;
       }
 
@@ -243,6 +244,31 @@ export function registerGateway(
         drop(connection, false);
         connection.socket.close(POLICY_VIOLATION, reason);
       }
+    }
+  }
+
+  /**
+   * Closes the sockets an account opened before its sessions were revoked.
+   * The upgrade refuses a revoked token; this is what reaches the sockets
+   * already open, which would otherwise stay until the login stopped being
+   * refreshed.
+   *
+   * Only the ones behind the account's epoch. A tab that signed in again
+   * after the bump opened on the new epoch, and is as current as it gets.
+   */
+  function dropRevokedSessions(held: Connection[], sessionEpoch: number): void {
+    for (const connection of held) {
+      if (connection.epoch === sessionEpoch) {
+        continue;
+      }
+      app.log.info(
+        { connectionId: connection.id, userId: connection.userId },
+        'session revoked, closing socket',
+      );
+      // Remembered, like a sign-out: the account is still welcome, and
+      // signing back in may resume where they stood.
+      drop(connection);
+      connection.socket.close(POLICY_VIOLATION, 'session_revoked');
     }
   }
 
@@ -464,6 +490,7 @@ export function registerGateway(
       email: decision.claims.email,
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
+      epoch: decision.claims.epoch,
       socket: ws,
       alive: true,
     };

@@ -85,13 +85,21 @@ describe('with the position store failing', () => {
         CORS_ORIGINS: 'https://campus.example.com',
         FF_LOG_LEVEL: 'fatal',
       } as NodeJS.ProcessEnv),
-      { ...accounts, find: async (id: string) => ({ id, suspended: false }) },
+      {
+        ...accounts,
+        find: async (id: string) => ({
+          id,
+          suspended: false,
+          sessionEpoch: 0,
+        }),
+      },
       failing,
     );
     await world.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = world.app.server.address() as AddressInfo;
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId: 'ada',
         email: 'ada@campus.local',
         scope: SessionScope.FullAccess,

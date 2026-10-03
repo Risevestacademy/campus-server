@@ -20,6 +20,15 @@ export interface SessionClaims {
   userId: string;
   email: string;
   scope: SessionScope;
+  /**
+   * The account's session epoch when the token was signed: USERS.session_epoch.
+   * Taking somebody's access away bumps the column, and every consumer
+   * refuses a token whose epoch is not the row's — so a session ends on its
+   * next request, not whenever the token happens to run out.
+   *
+   * Compared by the consumer, not here: this package has no database.
+   */
+  epoch: number;
   systemRole?: string;
   role?: string;
   cohortId?: string;
@@ -66,6 +75,7 @@ export async function signSessionToken(
   const token = await new SignJWT({
     email: claims.email,
     scope: claims.scope,
+    epoch: claims.epoch,
     system_role: claims.systemRole ?? 'user',
     ...(claims.role ? { role: claims.role } : {}),
     ...(claims.cohortId ? { cohort_id: claims.cohortId } : {}),
@@ -111,6 +121,7 @@ export async function verifySessionToken(
 
   const scope = payload['scope'];
   const email = payload['email'];
+  const epoch = payload['epoch'];
   const systemRole = payload['system_role'];
   const role = payload['role'];
   const cohortId = payload['cohort_id'];
@@ -120,6 +131,12 @@ export async function verifySessionToken(
   if (
     !payload.sub ||
     typeof email !== 'string' ||
+    // Required, never defaulted. A token with no epoch cannot be told apart
+    // from one whose epoch was since bumped, and guessing in the holder's
+    // favour would make every revocation skippable by an older token.
+    typeof epoch !== 'number' ||
+    !Number.isSafeInteger(epoch) ||
+    epoch < 0 ||
     typeof systemRole !== 'string' ||
     (scope !== SessionScope.Provisional && scope !== SessionScope.FullAccess) ||
     (role !== undefined && typeof role !== 'string') ||
@@ -135,6 +152,7 @@ export async function verifySessionToken(
     userId: payload.sub,
     email,
     scope,
+    epoch,
     systemRole,
     role,
     cohortId,

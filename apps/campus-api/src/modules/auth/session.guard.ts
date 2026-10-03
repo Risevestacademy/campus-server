@@ -102,6 +102,14 @@ abstract class SessionGuardBase implements CanActivate {
     if (isSuspended(user)) {
       throw new SessionUnauthorizedError('Account is suspended');
     }
+    // The epoch the token was signed with against the one on the row. They
+    // differ once the account's sessions have been ended on purpose, and
+    // this is where that takes effect: on the next request, whatever the
+    // token's own expiry says. The row is already in hand for the checks
+    // above, so the comparison costs nothing.
+    if (claims.epoch !== user.sessionEpoch) {
+      throw new SessionUnauthorizedError('Session has been revoked');
+    }
 
     req.session = claims;
     req.sessionTransport = fromCookie ? 'cookie' : 'bearer';
