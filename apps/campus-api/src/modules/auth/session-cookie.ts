@@ -4,6 +4,7 @@ import type { Response } from 'express';
 import type { Env } from '../../infra/config/config.module.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import type { IssuedSession } from './session-issuer.js';
+import { SessionScope } from '@campus/session';
 
 export const SESSION_COOKIE = 'campus_session';
 export const REFRESH_COOKIE = 'campus_refresh';
@@ -86,7 +87,7 @@ export function setSessionCookies(
     session.token,
     sessionOptions(site, session.expiresAt),
   );
-  if (session.scope === 'full_access') {
+  if (session.scope === SessionScope.FullAccess) {
     res.cookie(
       REFRESH_COOKIE,
       session.refreshToken,
