@@ -99,4 +99,23 @@ describe('InviteMailer', () => {
     expect(logged).not.toContain('raw-token');
     expect(logged).toContain('refused');
   });
+
+  it('uses custom idempotency key when provided (for resend)', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, id: 'em_2' });
+    const { subject, previewByToken } = mailer(
+      { enabled: true, send },
+      vi.fn().mockResolvedValue(PREVIEW),
+    );
+
+    await expect(subject.send(INVITE, 'invite/custom-key')).resolves.toBe(
+      InviteEmailStatus.Sent,
+    );
+    expect(previewByToken).toHaveBeenCalledWith('raw-token');
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'ada@campus.local',
+        idempotencyKey: 'invite/custom-key',
+      }),
+    );
+  });
 });

@@ -30,7 +30,7 @@ export class InviteMailer {
     id: string;
     token: string;
     inviteLink: string;
-  }): Promise<InviteEmailStatus> {
+  }, idempotencyKey?: string): Promise<InviteEmailStatus> {
     if (!this.sender.enabled) {
       return InviteEmailStatus.Disabled;
     }
@@ -45,7 +45,9 @@ export class InviteMailer {
         ...rendered,
         // A retried create is a new invite with a new id, so this only
         // guards the send itself against being repeated.
-        idempotencyKey: `invite/${invite.id}`,
+        // For resend, we pass a key derived from the new token hash so each
+        // resend gets its own key and isn't dropped by Resend.
+        idempotencyKey: idempotencyKey ?? `invite/${invite.id}`,
       });
 
       // Neither line carries the link, which opens the invite's preview, and

@@ -1168,6 +1168,109 @@ export class InvitesService {
   }
 
   /**
+   * Resends a pending, unexpired invite by generating a new token, saving its
+   * hash, and returning the new link. The old link stops working immediately.
+   *
+   * Only a live pending invite can be resent: status = 'pending' AND
+   * expires_at > now. A lapsed pending invite is materialised to 'expired'
+   * and reported as such. Settled invites (accepted/declined/revoked/expired)
+   * are refused with the same codes the decision routes use.
+   *
+   * Returns the same receipt shape as create() so the admin can share the new
+   * link by hand if the email fails again.
+   */
+  async resend(
+    inviteId: string,
+    now: Date = new Date(),
+  ): Promise<Omit<InviteResponseDto, 'emailStatus'>> {
+    let [invite] = await this.db
+      .select()
+      .from(invites)
+      .where(eq(invites.id, inviteId))
+      .limit(1);
+
+    if (!invite) {
+      throw new InviteNotFoundException('No invite matches this id', {
+        inviteId,
+      });
+    }
+
+    if (isInviteLive(invite, now)) {
+      // Generate new token with collision retry (same pattern as create)
+      for (let attempt = 0; ; attempt++) {
+        const token = generateInviteToken();
+        const tokenHash = hashInviteToken(token);
+
+        try {
+          const [updated] = await this.db
+            .update(invites)
+            .set({ tokenHash })
+            .where(
+              and(
+                eq(invites.id, inviteId),
+                eq(invites.status, InviteStatus.Pending),
+                gt(invites.expiresAt, now),
+              ),
+            )
+            .returning();
+
+          if (updated) {
+            const inviteLink = buildInviteLink(this.config.APP_PUBLIC_URL, token);
+            return {
+              id: updated.id,
+              email: updated.email,
+              cohortId: updated.cohortId,
+              cohortRole: updated.cohortRole,
+              cohortTrackId: updated.cohortTrackId,
+              mentorshipGroupId: updated.mentorshipGroupId,
+              systemRole: updated.systemRole,
+              status: updated.status,
+              expiresAt: updated.expiresAt.toISOString(),
+              guestAccessExpiresAt: updated.guestAccessExpiresAt?.toISOString() ?? null,
+              inviteLink,
+              token,
+              createdAt: updated.createdAt.toISOString(),
+            };
+          }
+        } catch (err) {
+          const kind = classifyInviteWriteError(err);
+          if (kind === 'token-collision' && attempt === 0) {
+            continue;
+          }
+          throw err;
+        }
+
+        // Second collision - give up
+        throw new InviteInternalException('Token collision on resend', {
+          inviteId,
+        });
+      }
+    }
+
+    // Not live: materialize lapse if still pending, then explain
+    if (invite.status === InviteStatus.Pending) {
+      await this.expireLazily(inviteId, now);
+      // Re-read to get the updated status after materialising the lapse
+      const [updatedInvite] = await this.db
+        .select()
+        .from(invites)
+        .where(eq(invites.id, inviteId))
+        .limit(1);
+      if (updatedInvite) {
+        invite = updatedInvite;
+      }
+    }
+    // Explicitly handle Expired status (not covered by terminalInviteException)
+    if (invite.status === InviteStatus.Expired) {
+      throw new InviteExpiredException('This invite has expired', {
+        inviteId,
+        expiresAt: invite.expiresAt,
+      });
+    }
+    throw terminalInviteException(invite, { inviteId });
+  }
+
+  /**
    * The row for this id, or nothing. A missing invite is a 404 rather than an
    * empty result: the caller named an invite that does not exist, which is a
    * different mistake from naming one that has already settled.

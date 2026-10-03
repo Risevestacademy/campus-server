@@ -44,6 +44,7 @@ import { ApiDecideInvite } from './docs/decide-invite.docs.js';
 import { ApiListInvites } from './docs/list-invites.docs.js';
 import { ApiPreviewInvite } from './docs/preview-invite.docs.js';
 import { ApiRevokeInvite } from './docs/revoke-invite.docs.js';
+import { ApiResendInvite } from './docs/resend-invite.docs.js';
 import { ApiValidateUserInvite } from './docs/validate-invite.docs.js';
 import { CreateInviteDto } from './dto/create-invite.dto.js';
 import {
@@ -67,6 +68,7 @@ import {
   InviteInvalidArgumentException,
   InviteNotFoundException,
 } from './invites.exceptions.js';
+import { hashInviteToken } from './invite-token.js';
 
 @ApiTags('invites')
 @Controller('invites')
@@ -127,6 +129,35 @@ export class InvitesController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<AdminInviteListItemDto> {
     return this.invites.revoke(params.id, actor);
+  }
+
+  /**
+   * Resends a pending, unexpired invite by generating a new token and emailing
+   * the new link. The old link stops working immediately.
+   *
+   * Only live pending invites (status=pending, expires_at > now) can be resent.
+   * A lapsed invite is reported as expired. Settled invites (accepted/declined/
+   * revoked/expired) are refused with the same codes the decision routes use.
+   *
+   * Returns the same receipt as create (inviteLink, emailStatus), so the admin
+   * can share the link by hand if the email fails again.
+   */
+  @Post(':id/resend')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(SessionGuard, AdminGuard)
+  @ApiBearerAuth()
+  @ApiResendInvite()
+  async resend(
+    @Param() params: InviteIdParamDto,
+    @CurrentUser() _inviter: AuthenticatedUser,
+  ): Promise<InviteResponseDto> {
+    const receipt = await this.invites.resend(params.id);
+    // After the write, not inside it: a failed send must not undo an invite
+    // the admin can still share by hand.
+    // Use a new idempotency key derived from the new token hash so each
+    // resend gets its own key and isn't dropped by Resend.
+    const newTokenHash = hashInviteToken(receipt.token);
+    return { ...receipt, emailStatus: await this.mailer.send(receipt, `invite/${newTokenHash}`) };
   }
 
   // No guard, and no @ApiBearerAuth: the invitee has not signed in yet. The
