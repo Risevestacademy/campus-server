@@ -91,7 +91,10 @@ describe('GET /v1/invites/validate-user-invite (e2e)', () => {
       new DomainExceptionFilter(),
       new ValidationExceptionFilter(),
     );
-    await app.init();
+    // Listening once, rather than app.init(): supertest otherwise opens a
+    // server on a new port for every request, and files running in parallel
+    // collide on them.
+    await app.listen(0);
   });
 
   beforeEach(async () => {

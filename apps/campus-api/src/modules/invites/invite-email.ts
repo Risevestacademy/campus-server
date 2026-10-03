@@ -95,7 +95,7 @@ function describeOffer(invite: InvitePreviewResponseDto): string {
 }
 
 /** UTC and says so: the reader's timezone is unknown here. */
-function formatDate(value: Date): string {
+export function formatDate(value: Date): string {
   const date = new Intl.DateTimeFormat('en-GB', {
     dateStyle: 'long',
     timeZone: 'UTC',

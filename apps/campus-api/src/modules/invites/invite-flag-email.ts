@@ -1,6 +1,6 @@
 import { CohortRole } from '../cohorts/schema.js';
 import { SystemRole } from '../users/schema.js';
-import { escapeHtml, type RenderedEmail } from './invite-email.js';
+import { escapeHtml, formatDate, type RenderedEmail } from './invite-email.js';
 
 /** What a flag email says, read from the invite that was flagged. */
 export interface InviteFlagNotice {
@@ -11,6 +11,11 @@ export interface InviteFlagNotice {
   trackName: string | null;
   cohortRole: CohortRole | null;
   systemRole: SystemRole;
+  /**
+   * Guests only: when the visit on offer ends. Part of the offer, and a
+   * likely thing for a guest to flag.
+   */
+  guestAccessExpiresAt: Date | null;
   message: string;
   flaggedAt: Date;
 }
@@ -31,6 +36,12 @@ export function renderInviteFlagEmail(notice: InviteFlagNotice): RenderedEmail {
     ['Cohort', notice.cohortName],
     ['Track', notice.trackName],
     ['Cohort role', notice.cohortRole],
+    [
+      'Guest access ends',
+      notice.guestAccessExpiresAt
+        ? formatDate(notice.guestAccessExpiresAt)
+        : null,
+    ],
     [
       'System role',
       notice.systemRole === SystemRole.Admin ? notice.systemRole : null,

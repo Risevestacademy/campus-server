@@ -1,14 +1,5 @@
 import type { DbExecutor } from '../../infra/database/database.constants.js';
-import type { Cohort, CohortMember } from '../cohorts/schema.js';
-import type { Invite } from '../invites/schema.js';
-import type { Track } from '../tracks/schema.js';
-import type { SystemRole } from '../users/schema.js';
-import {
-  CORRELATION_ID_MAX_LENGTH,
-  auditLog,
-  type AuditAction,
-  type AuditSubjectType,
-} from './schema.js';
+import { auditLog, type AuditAction, type AuditSubjectType } from './schema.js';
 
 /** Who did it and which request — the parts every entry from one call shares. */
 export interface AuditContext {
@@ -18,12 +9,52 @@ export interface AuditContext {
 
 /**
  * The fields an edit moved, each with the value it had and the value it has
- * now. Keyed by the fields the caller audits, so an entry cannot name one
- * its action does not cover.
+ * now. Typed by the snapshot the action records, so an entry can name only
+ * the fields its action covers, and each `from` and `to` has that field's
+ * own type.
  */
-export type FieldChanges<K extends string = string> = Partial<
-  Record<K, { from: unknown; to: unknown }>
->;
+export type FieldChanges<T> = {
+  [K in keyof T]?: { from: T[K]; to: T[K] };
+};
+
+/**
+ * What an entry records about a cohort: the fields an admin can set.
+ *
+ * This and every payload below is the audit log's own contract, written out
+ * here rather than picked off the cohorts, tracks or invites row types. The
+ * modules that write entries depend on this one; it does not depend back on
+ * them. So a role or a status is a `string` here: the vocabularies belong to
+ * the modules that own them, and the log records the value it was given.
+ *
+ * A caller's row still has to fit. Passing a column whose type has drifted
+ * from what is written here fails at the call site.
+ */
+export interface CohortSnapshot {
+  name: string;
+  code: string;
+  status: string;
+  /** A calendar date, `YYYY-MM-DD`. */
+  startDate: string | null;
+  endDate: string | null;
+}
+
+/** The same for a track. */
+export interface TrackSnapshot {
+  name: string;
+  code: string;
+  description: string | null;
+}
+
+/** A membership as it stood before a revive overwrote it. */
+export interface MembershipSnapshot {
+  role: string;
+  cohortTrackId: string | null;
+  status: string | null;
+  dismissalReason: string | null;
+  joinedAt: Date;
+  leftAt: Date | null;
+  accessExpiresAt: Date | null;
+}
 
 /**
  * What each action is about and what it records — the one place that says
@@ -32,9 +63,6 @@ export type FieldChanges<K extends string = string> = Partial<
  * left out or misspelt, does not compile.
  *
  * Adding an action means adding it here, and to the table in README.md.
- *
- * Details are picked off the row types where they are a row's own columns,
- * so a column that changes type changes the entry with it.
  */
 interface AuditEntryShapes {
   [AuditAction.MembershipRevived]: {
@@ -42,25 +70,15 @@ interface AuditEntryShapes {
     details: {
       inviteId: string;
       invitedBy: string;
-      /** The membership as it stood before the revive overwrote it. */
-      previous: Pick<
-        CohortMember,
-        | 'role'
-        | 'cohortTrackId'
-        | 'status'
-        | 'dismissalReason'
-        | 'joinedAt'
-        | 'leftAt'
-        | 'accessExpiresAt'
-      >;
+      previous: MembershipSnapshot;
     };
   };
   [AuditAction.SystemRoleChanged]: {
     subject: AuditSubjectType.User;
     details: {
       /** Null for an account created with the role it now has. */
-      from: SystemRole | null;
-      to: SystemRole;
+      from: string | null;
+      to: string;
     } & (
       | { inviteId: string; invitedBy: string } // an accepted invite granted it
       | { source: 'seed' } // the seed did, on nobody's behalf
@@ -68,23 +86,22 @@ interface AuditEntryShapes {
   };
   [AuditAction.InviteCreated]: {
     subject: AuditSubjectType.Invite;
-    details: Pick<
-      Invite,
-      | 'cohortId'
-      | 'cohortRole'
-      | 'cohortTrackId'
-      | 'systemRole'
-      | 'expiresAt'
-      | 'guestAccessExpiresAt'
-    >;
+    details: {
+      cohortId: string | null;
+      cohortRole: string | null;
+      cohortTrackId: string | null;
+      systemRole: string;
+      expiresAt: Date;
+      guestAccessExpiresAt: Date | null;
+    };
   };
   [AuditAction.InviteRevoked]: {
     subject: AuditSubjectType.Invite;
-    details: Pick<Invite, 'cohortId' | 'expiresAt'>;
+    details: { cohortId: string | null; expiresAt: Date };
   };
   [AuditAction.InviteFlagged]: {
     subject: AuditSubjectType.Invite;
-    details: Pick<Invite, 'cohortId' | 'invitedBy'>;
+    details: { cohortId: string | null; invitedBy: string };
   };
   [AuditAction.CohortCreated]: {
     subject: AuditSubjectType.Cohort;
@@ -92,7 +109,7 @@ interface AuditEntryShapes {
   };
   [AuditAction.CohortUpdated]: {
     subject: AuditSubjectType.Cohort;
-    details: { changes: FieldChanges<keyof CohortSnapshot> };
+    details: { changes: FieldChanges<CohortSnapshot> };
   };
   [AuditAction.CohortDeleted]: {
     subject: AuditSubjectType.Cohort;
@@ -104,26 +121,17 @@ interface AuditEntryShapes {
   };
   [AuditAction.TrackCreated]: {
     subject: AuditSubjectType.Track;
-    details: Pick<Track, 'name' | 'code'>;
+    details: Pick<TrackSnapshot, 'name' | 'code'>;
   };
   [AuditAction.TrackUpdated]: {
     subject: AuditSubjectType.Track;
-    details: { changes: FieldChanges<keyof TrackSnapshot> };
+    details: { changes: FieldChanges<TrackSnapshot> };
   };
   [AuditAction.TrackDeleted]: {
     subject: AuditSubjectType.Track;
     details: TrackSnapshot;
   };
 }
-
-/** What an admin can set on a cohort, and so what its entries record. */
-type CohortSnapshot = Pick<
-  Cohort,
-  'name' | 'code' | 'status' | 'startDate' | 'endDate'
->;
-
-/** The same for a track. */
-type TrackSnapshot = Pick<Track, 'name' | 'code' | 'description'>;
 
 /**
  * One entry, as a union discriminated by `action`: naming the action fixes
@@ -146,12 +154,12 @@ export type AuditEntry = {
  * after it, each with both values — what an update entry records, rather than
  * the request body, which may name fields it left as they were.
  */
-export function changedFields<T extends object, K extends keyof T & string>(
+export function changedFields<T extends object, K extends keyof T>(
   before: T,
   after: T,
   fields: readonly K[],
-): FieldChanges<K> {
-  const changes: FieldChanges<K> = {};
+): FieldChanges<Pick<T, K>> {
+  const changes: FieldChanges<Pick<T, K>> = {};
   for (const field of fields) {
     if (!Object.is(before[field], after[field])) {
       changes[field] = { from: before[field], to: after[field] };
@@ -176,11 +184,9 @@ export async function writeAuditEntry(
     subjectType: entry.subject.type,
     subjectId: entry.subject.id,
     details: entry.details,
-    // The id is whatever the caller sent in x-correlation-id. One too long
-    // for the column would fail this insert and, sharing its transaction,
-    // undo the change being recorded — so it is cut to fit instead. The
-    // start of it still finds the request's log lines.
-    correlationId:
-      entry.correlationId?.slice(0, CORRELATION_ID_MAX_LENGTH) ?? null,
+    // Stored as given, never trimmed: the request's id is settled as it
+    // arrives (resolveCorrelationId) and already fits the column, so the
+    // entry carries the same id as the log lines and the response header.
+    correlationId: entry.correlationId ?? null,
   });
 }

@@ -137,8 +137,11 @@ Key behaviors:
 
 - **Structured JSON** by default; pretty single-line output when `FF_LOG_PRETTY=true`.
 - **Correlation IDs**: every request gets an `x-correlation-id`. If the caller
-  provides one, it is honored and echoed back on the response; otherwise a UUID
-  is generated. All log lines for that request carry it under `req.id`.
+  provides one of up to 64 characters, it is honored and echoed back on the
+  response; otherwise — none sent, or one longer than that — a UUID is
+  generated and returned instead. All log lines for that request carry it
+  under `req.id`, and audit entries written by the request carry the same
+  value.
 - **Trace correlation**: when OpenTelemetry is enabled, every log line also
   carries `trace_id` and `span_id` extracted from the active span, so logs and
   traces can be joined in an observability backend.

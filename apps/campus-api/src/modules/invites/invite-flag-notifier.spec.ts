@@ -13,6 +13,7 @@ const NOTICE = {
   trackName: null,
   cohortRole: CohortRole.Mentor,
   systemRole: SystemRole.User,
+  guestAccessExpiresAt: null,
   message: 'I am a professor, not a mentor.',
   flaggedAt: new Date('2026-10-03T12:00:00.000Z'),
 };

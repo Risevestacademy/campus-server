@@ -13,6 +13,7 @@ an entry's `correlationId` leads to it).
 - [Actions](#actions)
 - [Personal data](#personal-data)
 - [Retention](#retention)
+  - [Deleting an account](#deleting-an-account)
 - [Rollout](#rollout)
 - [Adding an action](#adding-an-action)
 
@@ -41,35 +42,52 @@ Two rules, both carried by the code:
   `action`. Each action has one subject type and one set of details, declared
   in `AuditEntryShapes` in [`audit-log.ts`](./audit-log.ts). The wrong subject
   for an action, a detail left out, or one that is not part of the shape does
-  not compile.
+  not compile. An update entry's `changes` are typed field by field, so a
+  `from` or `to` of the wrong type for its field does not compile either.
+
+The payload types are this module's own. They are written out in
+`audit-log.ts`, not picked off the cohorts, tracks or invites row types, so
+the modules that write entries depend on this one and it does not depend back
+on them. A role or a status is therefore a `string` here: those vocabularies
+belong to their own modules, and the log records the value it is given. The
+one import that remains is the `users` table in `schema.ts`, which the
+`actor_user_id` foreign key needs.
 
 There is no Nest module and nothing to inject: `writeAuditEntry` is a plain
 function, called by the service that makes the change.
 
-Entries are append-only by convention. Nothing in the codebase updates or
-deletes one. The database does not enforce this: there is no trigger and no
-separate role, so anything with write access to the table could.
+Entries are append-only, and the database enforces it. A trigger on
+`audit_log` (`audit_log_append_only`, migration `0008`) rejects every row
+`UPDATE` and `DELETE`, for every role including the table's owner. The only
+thing a row can do is be inserted.
+
+`TRUNCATE` is not covered: it is not a row operation and needs ownership of
+the table. The test suites use it to reset between tests.
 
 ## Fields
 
-| Column           | Meaning                                                                                                                                           |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`             | The entry's own id.                                                                                                                               |
-| `actor_user_id`  | The account that did it. Null when no person did: the seed, a migration, a sweep. A foreign key to `users`.                                       |
-| `action`         | What happened: one of `AuditAction`. A `varchar`, not a Postgres enum, so a new action is a code change and not a migration.                      |
-| `subject_type`   | The kind of thing it happened to: one of `AuditSubjectType`.                                                                                      |
-| `subject_id`     | That thing's id. Not a foreign key, on purpose: an entry outlives the row it is about, which is the point of recording a delete.                  |
-| `space_id`       | Reserved for entries about a space. Nothing writes it yet, and it has no foreign key because `spaces` does not exist.                             |
-| `details`        | What the action needs beyond its subject, as JSON. The shape is fixed per action (see [Actions](#actions)). Dates are stored as ISO 8601 strings. |
-| `correlation_id` | The request's `x-correlation-id`, so an entry leads to its log lines. Cut to 64 characters. Null for entries written outside a request.           |
-| `created_at`     | When the entry was written, which is when the change committed.                                                                                   |
+| Column           | Meaning                                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | The entry's own id.                                                                                                                                                                       |
+| `actor_user_id`  | The account that did it. Null when no person did: the seed, a migration, a sweep. A foreign key to `users`.                                                                               |
+| `action`         | What happened: one of `AuditAction`. A `varchar`, not a Postgres enum, so a new action is a code change and not a migration.                                                              |
+| `subject_type`   | The kind of thing it happened to: one of `AuditSubjectType`.                                                                                                                              |
+| `subject_id`     | That thing's id. Not a foreign key, on purpose: an entry outlives the row it is about, which is the point of recording a delete.                                                          |
+| `space_id`       | Reserved for entries about a space. Nothing writes it yet, and it has no foreign key because `spaces` does not exist.                                                                     |
+| `details`        | What the action needs beyond its subject, as JSON. The shape is fixed per action (see [Actions](#actions)). Dates are stored as ISO 8601 strings.                                         |
+| `correlation_id` | The request's correlation id, so an entry leads to its log lines. The same value as the log lines and the `x-correlation-id` response header. Null for entries written outside a request. |
+| `created_at`     | When the entry was written, which is when the change committed.                                                                                                                           |
 
 The actor is whoever made the request, which is not always an admin: for
 `membership_revived`, `system_role_changed` and `invite_flagged` it is the
 invitee.
 
-`correlation_id` is supplied by the caller when they send the header, so
-treat it as a pointer to logs and never as proof of anything.
+`correlation_id` is the caller's `x-correlation-id` when they sent one of up
+to 64 characters, and a generated UUID otherwise. That is decided once, as
+the request arrives (`resolveCorrelationId` in `shared/http`), so the entry
+never holds a shortened or different id from the one in the logs. It is
+still caller-supplied text: treat it as a pointer to logs and never as proof
+of anything.
 
 Indexes cover the three ways the table is read: by time (`created_at`), by
 actor (`actor_user_id, created_at`) and by subject
@@ -140,26 +158,49 @@ reads it today; it is reachable only with database access.
 
 ## Retention
 
-**Not decided.** Entries are kept indefinitely: nothing deletes or archives
-them, and there is no sweep job. Before real members' data accumulates here,
-someone needs to decide how long entries are kept and what happens to them on
-an account deletion request.
+**How long entries are kept is not decided.** They are kept indefinitely:
+nothing deletes or archives them, and there is no sweep job. Before real
+members' data accumulates here, someone needs to decide a retention period.
 
-Two things that decision has to account for:
+Whatever is decided has to work with the trigger: entries cannot be deleted
+by an ordinary query. A retention sweep would be a deliberate, reviewed
+operation that lifts the trigger for its own transaction
+(`ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only`).
 
-- `actor_user_id` is a foreign key to `users` with no `ON DELETE` action.
-  A `users` row that has acted cannot be hard-deleted while its entries
-  exist; the delete fails. Deleting an account therefore means first deleting
-  its entries, nulling their actor, or changing the constraint.
+### Deleting an account
+
+Decided: **an account that has to go is stripped, not removed, and the audit
+log is not touched.**
+
+The `users` row stays, so the entries it wrote still have an actor to point
+to. Its personal fields are wiped — the address, names, avatar, phone, bio
+and Google identity — and it is marked as deleted so it cannot sign in. What
+remains in the log is an id that no longer leads to a person.
+
+This is forced as much as chosen. `actor_user_id` is a foreign key to
+`users` with no `ON DELETE` action, so removing the row of somebody who has
+acted fails while their entries exist, and the trigger means those entries
+can be neither removed nor have their actor nulled.
+
+Not built yet: there is no route or script that does the stripping, and
+`users` has no deleted state. Until there is, do not hard-delete a `users`
+row by hand.
+
+Two things the stripping has to cover when it is built:
+
+- `membership_revived` entries about the person keep
+  `previous.dismissalReason`, free text that may identify them. It lives in
+  the log, so stripping the `users` row does not reach it.
 - A user who is only the _subject_ of entries (`subject_id`, or `invitedBy`
-  inside `details`) is not protected by any constraint. Those entries survive
-  the user and keep the id.
+  inside `details`) is referenced by id with no foreign key. Those entries
+  keep the id either way.
 
 ## Rollout
 
-- **Migration.** `0006_audit_log` creates the table and its indexes. It is
-  additive and touches no existing table. There is no feature flag and no
-  environment variable.
+- **Migrations.** `0006_audit_log` creates the table and its indexes.
+  `0008_audit_log_append_only` adds the trigger that refuses updates and
+  deletes. Both are additive and touch no other table. There is no feature
+  flag and no environment variable.
 - **Order.** Migrate before seeding. The seed writes a
   `system_role_changed` entry when it creates or promotes an admin, so it
   fails without the table. The deploy command already runs `db:migrate` then

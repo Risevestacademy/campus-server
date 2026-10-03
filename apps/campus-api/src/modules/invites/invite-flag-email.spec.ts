@@ -12,6 +12,7 @@ const NOTICE: InviteFlagNotice = {
   trackName: 'Software Engineering',
   cohortRole: CohortRole.Student,
   systemRole: SystemRole.User,
+  guestAccessExpiresAt: null,
   message: 'I applied for Product Design.',
   flaggedAt: new Date('2026-10-03T12:00:00.000Z'),
 };
@@ -49,6 +50,28 @@ describe('renderInviteFlagEmail', () => {
     expect(email.text).not.toContain('Cohort:');
     expect(email.text).not.toContain('Track:');
     expect(email.text).toContain('System role: admin');
+  });
+
+  // When the visit ends is part of what a guest was offered, and the part
+  // they are most likely to be flagging.
+  it('says when a guest visit ends, in both parts', () => {
+    const email = renderInviteFlagEmail({
+      ...NOTICE,
+      trackName: null,
+      cohortRole: CohortRole.Guest,
+      guestAccessExpiresAt: new Date('2026-10-10T17:00:00.000Z'),
+    });
+
+    for (const part of [email.text, email.html]) {
+      expect(part).toContain('Cohort role: guest');
+      expect(part).toContain('Guest access ends: 10 October 2026, 17:00 UTC');
+    }
+  });
+
+  it('says nothing about a visit for anybody who is not a guest', () => {
+    expect(renderInviteFlagEmail(NOTICE).text).not.toContain(
+      'Guest access ends',
+    );
   });
 
   // The message is the one part of this email a stranger wrote.
