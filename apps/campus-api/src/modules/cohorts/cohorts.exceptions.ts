@@ -5,6 +5,10 @@ export class CohortConflictException extends DomainException {
   readonly code = ExceptionCode.Conflict;
 }
 
+export class CohortInvalidArgumentException extends DomainException {
+  readonly code = ExceptionCode.InvalidArgument;
+}
+
 export class CohortNotFoundException extends DomainException {
   readonly code = ExceptionCode.NotFound;
 }

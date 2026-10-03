@@ -1,9 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -16,8 +19,14 @@ import {
   PaginationQueryDto,
 } from '../../shared/dto/index.js';
 import { SessionGuard } from '../auth/session.guard.js';
-import { ApiCreateTrack, ApiListTracks } from './docs/tracks.docs.js';
+import {
+  ApiCreateTrack,
+  ApiDeleteTrack,
+  ApiListTracks,
+  ApiUpdateTrack,
+} from './docs/tracks.docs.js';
 import { CreateTrackDto } from './dto/create-track.dto.js';
+import { TrackIdParamDto, UpdateTrackDto } from './dto/update-track.dto.js';
 import { TrackResponseDto } from './dto/track-response.dto.js';
 import { TracksService } from './tracks.service.js';
 
@@ -43,5 +52,21 @@ export class TracksController {
     @Query() query: PaginationQueryDto,
   ): Promise<PaginatedResponseDto<TrackResponseDto>> {
     return this.tracks.list(query);
+  }
+
+  @Patch(':id')
+  @ApiUpdateTrack()
+  update(
+    @Param() params: TrackIdParamDto,
+    @Body() dto: UpdateTrackDto,
+  ): Promise<TrackResponseDto> {
+    return this.tracks.update(params.id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiDeleteTrack()
+  remove(@Param() params: TrackIdParamDto): Promise<void> {
+    return this.tracks.remove(params.id);
   }
 }
