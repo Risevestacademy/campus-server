@@ -233,6 +233,11 @@ sequenceDiagram
 - **Rotation, with a grace window.** Each refresh token works once. A second
   use within 60 seconds is accepted — two tabs refreshing at the same moment
   is not theft — and a use after that revokes the family.
+- **Refreshes and revocations of one family take turns.** Each locks the
+  family's rows first. A refresh mints its replacement under that lock, and a
+  revocation — reuse detected, sign-out, suspension, access ended — waits
+  for it and then revokes the replacement too. Without the lock, a sign-out
+  landing mid-refresh could leave the new token alive.
 - **Refresh before the access token runs out**, not only after a 401. The
   refresh answers `{ expiresAt, refreshExpiresAt }` and `GET /v1/auth/me`
   carries `expiresAt`, so schedule each refresh from the real deadline — a
