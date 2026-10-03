@@ -16,6 +16,12 @@ export interface Connection {
    * access tokens the browser goes through meanwhile.
    */
   sessionId?: string;
+  /**
+   * The account's session epoch when this socket opened. Once the account's
+   * moves past it, this socket belongs to a session that has been revoked —
+   * while one opened after the bump carries the new epoch and stays.
+   */
+  epoch: number;
   /** Set false on every heartbeat, true by the client's pong. */
   alive: boolean;
 }

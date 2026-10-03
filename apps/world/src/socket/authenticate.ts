@@ -15,6 +15,7 @@ export type Refusal =
   | 'wrong_scope'
   | 'account_gone'
   | 'account_suspended'
+  | 'session_revoked'
   | 'session_ended';
 
 export type UpgradeDecision =
@@ -113,6 +114,13 @@ export async function decideUpgrade(
   }
   if (account.suspended) {
     return { ok: false, refusal: 'account_suspended', userId: claims.userId };
+  }
+
+  // The account's sessions were ended on purpose after this token was
+  // signed: access taken away, not a sign-out. campus-api refuses the same
+  // token on the same comparison.
+  if (claims.epoch !== account.sessionEpoch) {
+    return { ok: false, refusal: 'session_revoked' };
   }
 
   // An access token outlives a sign-out by up to its fifteen minutes. The

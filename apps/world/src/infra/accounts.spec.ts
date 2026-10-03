@@ -17,9 +17,11 @@ const MIGRATIONS = fileURLToPath(
 const db = new PGlite();
 
 async function accountRow(userId: string) {
-  const result = await db.query<{ id: string; status: string }>(ACCOUNT_QUERY, [
-    userId,
-  ]);
+  const result = await db.query<{
+    id: string;
+    status: string;
+    session_epoch: number;
+  }>(ACCOUNT_QUERY, [userId]);
   return result.rows[0];
 }
 
@@ -62,6 +64,22 @@ describe("world's account lookup, against campus-api's schema", () => {
     ).toMatchObject({
       status: 'suspended',
     });
+  });
+
+  // The number world compares a token's epoch against. Read as a number,
+  // not a string: the comparison is strict.
+  it('reads the session epoch, starting at zero and following a bump', async () => {
+    const id = '55555555-5555-4555-8555-555555555555';
+    await db.exec(
+      `insert into users (id, email) values ('${id}', 'epoch@campus.local')`,
+    );
+    expect((await accountRow(id))?.session_epoch).toBe(0);
+
+    await db.exec(
+      `update users set session_epoch = session_epoch + 1 where id = '${id}'`,
+    );
+
+    expect((await accountRow(id))?.session_epoch).toBe(1);
   });
 
   it('returns nothing for an id that is not there', async () => {

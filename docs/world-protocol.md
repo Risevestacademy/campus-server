@@ -187,6 +187,7 @@ When the socket closes:
 | ---- | ------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
 | 1008 | `no_token`, `token_not_usable`, `session_expired` | No usable session                                               | Send them to sign in                               |
 | 1008 | `session_ended`                                   | Signed out, or the sign-in stopped being refreshed              | Try a refresh; if that fails, send them to sign in |
+| 1008 | `session_revoked`                                 | The account's sessions were ended on purpose                    | Send them to sign in; a refresh will not work      |
 | 1008 | `wrong_scope`                                     | Still in onboarding                                             | Send them to onboarding                            |
 | 1008 | `account_suspended`, `account_gone`               | Not welcome any more                                            | Sign them out; do not reconnect                    |
 | 1008 | `origin_not_allowed`                              | This page's origin is not on world's list                       | Configuration — do not retry                       |
@@ -198,15 +199,14 @@ When the socket closes:
 
 When the connection is refused at the start, an `error` frame with the same
 reason as its `message` arrives just before the close. A socket closed later
-— `session_ended`, `session_expired`, or a suspension that reaches an open
-socket — gets the
-close alone, so read the reason from the close event, not from an `error`.
+— `session_ended`, `session_expired`, `session_revoked`, or a suspension
+that reaches an open socket — gets the close alone, so read the reason from the close event, not from an `error`.
 
 **A reconnect resumes where you stood** if it comes within
 `WORLD_RECONNECT_GRACE_SECONDS` (30 by default) of your last tab closing.
 That covers a network blip, the server's own cut-offs — `rate_limited`, a
-missed heartbeat, not reading fast enough — and `session_ended` or
-`session_expired`: signing straight back in resumes too, since a sign-in
+missed heartbeat, not reading fast enough — and `session_ended`,
+`session_expired` or `session_revoked`: signing straight back in resumes too, since a sign-in
 ending is routine rather than access being taken away. Past the grace, or
 after a server restart, you start where you last stood on an earlier visit —
 world keeps that between visits — or at the spawn if nothing is kept, the

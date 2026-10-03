@@ -207,11 +207,186 @@ describe('SessionIssuer refresh persistence', () => {
   });
 });
 
-function sessionIdOf(token: string): unknown {
-  const payload = token.split('.')[1] ?? '';
-  return (
-    JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
-      sid?: unknown;
+describe('SessionIssuer.revokeAllSessions', () => {
+  // Decoded rather than verified, as above: `now` is pinned.
+  const epochOf = async (token: string) => claimsOf(token).epoch;
+  const rowEpoch = async () => {
+    const [row] = await db
+      .select({ sessionEpoch: users.sessionEpoch })
+      .from(users)
+      .where(eq(users.id, user.id));
+    return row.sessionEpoch;
+  };
+
+  it('signs a session with the epoch the account has', async () => {
+    const first = await issuer.issueFullAccess(user, { endsAt: null }, now);
+    expect(await epochOf(first.token)).toBe(0);
+
+    await db
+      .update(users)
+      .set({ sessionEpoch: 7 })
+      .where(eq(users.id, user.id));
+    const second = await issuer.issueFullAccess(user, { endsAt: null }, now);
+
+    // Read from the row at minting, not from the object the caller held.
+    expect(await epochOf(second.token)).toBe(7);
+  });
+
+  it('bumps the epoch and revokes every family the account holds', async () => {
+    const laptop = await issuer.issueFullAccess(user, { endsAt: null }, now);
+    const phone = await issuer.issueFullAccess(user, { endsAt: null }, now);
+
+    await expect(issuer.revokeAllSessions(user.id, now)).resolves.toBe(1);
+
+    expect(await rowEpoch()).toBe(1);
+    const rows = await db.select().from(refreshTokens);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.revokedAt !== null)).toBe(true);
+    // Neither device can swap its way back in.
+    for (const session of [laptop, phone]) {
+      await expect(
+        issuer.refreshSession(session.refreshToken, now),
+      ).rejects.toBeInstanceOf(SessionUnauthorizedError);
     }
-  ).sid;
+  });
+
+  it('leaves the tokens already out carrying the old epoch', async () => {
+    const before = await issuer.issueFullAccess(user, { endsAt: null }, now);
+
+    await issuer.revokeAllSessions(user.id, now);
+
+    // Which is what the guard refuses: 0 on the token, 1 on the row.
+    expect(await epochOf(before.token)).toBe(0);
+    expect(await rowEpoch()).toBe(1);
+  });
+
+  it('lets the account sign in again afterwards, on the new epoch', async () => {
+    await issuer.revokeAllSessions(user.id, now);
+
+    const fresh = await issuer.issueFullAccess(user, { endsAt: null }, now);
+
+    expect(await epochOf(fresh.token)).toBe(1);
+    await expect(
+      issuer.refreshSession(fresh.refreshToken, now),
+    ).resolves.toMatchObject({ scope: 'full_access' });
+  });
+
+  it('counts up each time, and never touches another account', async () => {
+    const [other] = await db
+      .insert(users)
+      .values({ email: 'other@campus.local', systemRole: SystemRole.Admin })
+      .returning();
+    const theirs = await issuer.issueFullAccess(other, { endsAt: null }, now);
+
+    await issuer.revokeAllSessions(user.id, now);
+    await expect(issuer.revokeAllSessions(user.id, now)).resolves.toBe(2);
+
+    const [row] = await db
+      .select({ sessionEpoch: users.sessionEpoch })
+      .from(users)
+      .where(eq(users.id, other.id));
+    expect(row.sessionEpoch).toBe(0);
+    await expect(
+      issuer.refreshSession(theirs.refreshToken, now),
+    ).resolves.toMatchObject({ scope: 'full_access' });
+  });
+
+  it('answers null for an account that does not exist', async () => {
+    await expect(
+      issuer.revokeAllSessions('99999999-9999-4999-8999-999999999999', now),
+    ).resolves.toBeNull();
+  });
+
+  // Whatever takes the access away passes its own transaction, so the two
+  // commit together — or neither does.
+  it('rolls back with the transaction it was given', async () => {
+    const session = await issuer.issueFullAccess(user, { endsAt: null }, now);
+
+    await expect(
+      db.transaction(async (tx) => {
+        await issuer.revokeAllSessions(user.id, now, tx as never);
+        throw new Error('the removal failed');
+      }),
+    ).rejects.toThrow('the removal failed');
+
+    expect(await rowEpoch()).toBe(0);
+    await expect(
+      issuer.refreshSession(session.refreshToken, now),
+    ).resolves.toMatchObject({ scope: 'full_access' });
+  });
+
+  /**
+   * The gap a sign-in leaves: it reads the account, then mints. A revoke
+   * landing between the two has already swept the account's families, so the
+   * family minted a moment later would be the one it missed — an access
+   * token on the old epoch, refused, beside a refresh token that still works.
+   *
+   * Timed the way the family race above is: the wrapped findById revokes in
+   * the gap, which is the single-connection equivalent of the two
+   * overlapping.
+   */
+  const revokingInTheGap = () => {
+    const realUsers = new UsersService(db as never);
+    return new SessionIssuer(
+      config,
+      db as never,
+      {
+        findById: async (id: string) => {
+          const account = await realUsers.findById(id);
+          await issuer.revokeAllSessions(id, now);
+          return account;
+        },
+      } as never,
+      new CohortMembersService(db as never),
+    );
+  };
+
+  it('mints nothing for a sign-in the revoke overtook', async () => {
+    await expect(
+      revokingInTheGap().issueFullAccess(user, { endsAt: null }, now),
+    ).rejects.toBeInstanceOf(SessionUnauthorizedError);
+
+    expect(await db.select().from(refreshTokens)).toHaveLength(0);
+  });
+
+  it('mints nothing for a refresh the revoke overtook', async () => {
+    const session = await issuer.issueFullAccess(user, { endsAt: null }, now);
+
+    await expect(
+      revokingInTheGap().refreshSession(session.refreshToken, now),
+    ).rejects.toBeInstanceOf(SessionUnauthorizedError);
+
+    const rows = await db.select().from(refreshTokens);
+    expect(rows).toHaveLength(1);
+    expect(rows.every((row) => row.revokedAt !== null)).toBe(true);
+  });
+
+  it('carries the epoch onto a provisional session too', async () => {
+    await db
+      .update(users)
+      .set({ sessionEpoch: 3 })
+      .where(eq(users.id, user.id));
+    const [account] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, user.id));
+
+    const session = await issuer.issueProvisional(account, {
+      id: '44444444-4444-4444-8444-444444444444',
+    } as never);
+
+    expect(await epochOf(session.token)).toBe(3);
+  });
+});
+
+function claimsOf(token: string): { sid?: unknown; epoch?: unknown } {
+  const payload = token.split('.')[1] ?? '';
+  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+    sid?: unknown;
+    epoch?: unknown;
+  };
+}
+
+function sessionIdOf(token: string): unknown {
+  return claimsOf(token).sid;
 }
