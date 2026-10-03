@@ -6,6 +6,7 @@ import {
   desc,
   eq,
   gt,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -1378,110 +1379,195 @@ export class InvitesService {
   }
 
   /**
-   * Resends a pending, unexpired invite by generating a new token, saving its
-   * hash, and returning the new link. The old link stops working immediately.
+   * Gives an invite a new link, for when the email never arrived or the link
+   * ran out before anybody used it.
    *
-   * Only a live pending invite can be resent: status = 'pending' AND
-   * expires_at > now. A lapsed pending invite is materialised to 'expired'
-   * and reported as such. Settled invites (accepted/declined/revoked/expired)
-   * are refused with the same codes the decision routes use.
+   * A new token rather than the old one sent again: only the hash is stored,
+   * so the original link cannot be reproduced. The old link stops working the
+   * moment the new hash is written.
    *
-   * Returns the same receipt shape as create() so the admin can share the new
-   * link by hand if the email fails again.
+   * Works on an invite that is still open — pending, or expired — and puts
+   * it back to pending with the window it was created with ahead of it again
+   * (see resentExpiry). An answer is final: accepted, declined and revoked invites
+   * are refused with the codes every other route gives them.
+   *
+   * Bringing an expired invite back is offering it again, so it passes the
+   * checks a new invite would: the address must not hold another pending
+   * invite, the person must not have joined the cohort since, and a guest
+   * visit must not already be over.
+   *
+   * The write is conditional on the invite still being open, like every
+   * other claim here. One accepted or revoked between the read and the write
+   * matches nothing, and is explained from the row as it then stands rather
+   * than having its answer overwritten.
+   *
+   * `correlationId` is the request's, carried onto the audit entry.
    */
   async resend(
     inviteId: string,
+    actor: AuthenticatedUser,
+    correlationId?: string,
     now: Date = new Date(),
   ): Promise<Omit<InviteResponseDto, 'emailStatus'>> {
-    let [invite] = await this.db
-      .select()
-      .from(invites)
-      .where(eq(invites.id, inviteId))
-      .limit(1);
-
-    if (!invite) {
-      throw new InviteNotFoundException('No invite matches this id', {
-        inviteId,
-      });
+    const invite = await this.findInvite(inviteId);
+    if (!isResendable(invite)) {
+      throw terminalInviteException(invite, { inviteId });
+    }
+    if (!isInviteLive(invite, now)) {
+      await this.assertCanBeOfferedAgain(invite, now);
     }
 
-    if (isInviteLive(invite, now)) {
-      // Generate new token with collision retry (same pattern as create)
-      for (let attempt = 0; ; attempt++) {
-        const token = generateInviteToken();
-        const tokenHash = hashInviteToken(token);
+    const expiresAt = this.resentExpiry(invite, now);
 
-        try {
-          const [updated] = await this.db
+    // A token collision (23505 on the hash index) means regenerating, not
+    // failing. Bounded to one retry, as create is.
+    for (let attempt = 0; ; attempt++) {
+      const token = generateInviteToken();
+
+      try {
+        // One transaction, so a link is never replaced without its entry. A
+        // retry after a token collision starts a new one.
+        const updated = await this.db.transaction(async (tx) => {
+          const [row] = await tx
             .update(invites)
-            .set({ tokenHash })
+            .set({
+              tokenHash: hashInviteToken(token),
+              status: InviteStatus.Pending,
+              expiresAt,
+            })
             .where(
               and(
                 eq(invites.id, inviteId),
-                eq(invites.status, InviteStatus.Pending),
-                gt(invites.expiresAt, now),
+                inArray(invites.status, RESENDABLE_STATUSES),
               ),
             )
             .returning();
 
-          if (updated) {
-            const inviteLink = buildInviteLink(
-              this.config.APP_PUBLIC_URL,
-              token,
-            );
-            return {
-              id: updated.id,
-              email: updated.email,
-              cohortId: updated.cohortId,
-              cohortRole: updated.cohortRole,
-              cohortTrackId: updated.cohortTrackId,
-              mentorshipGroupId: updated.mentorshipGroupId,
-              systemRole: updated.systemRole,
-              status: updated.status,
-              expiresAt: updated.expiresAt.toISOString(),
-              guestAccessExpiresAt:
-                updated.guestAccessExpiresAt?.toISOString() ?? null,
-              inviteLink,
-              token,
-              createdAt: updated.createdAt.toISOString(),
-            };
+          if (row) {
+            await writeAuditEntry(tx, {
+              actorUserId: actor.id,
+              correlationId,
+              action: AuditAction.InviteResent,
+              subject: { type: AuditSubjectType.Invite, id: row.id },
+              details: {
+                cohortId: row.cohortId,
+                expiresAt: row.expiresAt,
+                // What the deadline was, so the entry shows whether this
+                // replaced a live link or brought back a lapsed invite.
+                previousExpiresAt: invite.expiresAt,
+              },
+            });
           }
-        } catch (err) {
-          const kind = classifyInviteWriteError(err);
-          if (kind === 'token-collision' && attempt === 0) {
-            continue;
-          }
-          throw err;
+          return row;
+        });
+
+        if (!updated) {
+          // Settled since the read above. Whatever it became is the answer.
+          throw terminalInviteException(await this.findInvite(inviteId), {
+            inviteId,
+          });
         }
 
-        // Second collision - give up
-        throw new InviteInternalException('Token collision on resend', {
-          inviteId,
-        });
+        return {
+          id: updated.id,
+          email: updated.email,
+          cohortId: updated.cohortId,
+          cohortRole: updated.cohortRole,
+          cohortTrackId: updated.cohortTrackId,
+          mentorshipGroupId: updated.mentorshipGroupId,
+          systemRole: updated.systemRole,
+          status: updated.status,
+          expiresAt: updated.expiresAt.toISOString(),
+          guestAccessExpiresAt:
+            updated.guestAccessExpiresAt?.toISOString() ?? null,
+          inviteLink: buildInviteLink(this.config.APP_PUBLIC_URL, token),
+          token,
+          createdAt: updated.createdAt.toISOString(),
+        };
+      } catch (err) {
+        const kind = classifyInviteWriteError(err);
+        if (kind === 'pending-duplicate') {
+          // Somebody invited the address again between the check and the
+          // write; the index is what decides it.
+          throw new InviteConflictException(
+            `A pending invite already exists for ${invite.email}: revoke it before resending this one`,
+            { inviteId, email: invite.email },
+          );
+        }
+        if (kind === 'token-collision' && attempt === 0) {
+          continue;
+        }
+        throw err;
       }
+    }
+  }
+
+  /**
+   * When a resent invite stops being redeemable: as long from now as the
+   * admin gave it to begin with. An invite written to last a day is good for
+   * another day, not the default week — the admin chose that window, and a
+   * resend takes no window of its own to choose a different one.
+   *
+   * Capped like any invite: never longer than INVITE_TTL_DAYS, and never
+   * past the visit it grants.
+   *
+   * The window is read off the row, as expires_at less created_at, and a
+   * resend moves expires_at. So a second resend measures from the invite's
+   * creation to the first resend's deadline, which is longer than the
+   * original. It can only grow as far as the cap; holding it exact would
+   * take a column recording when the current link was issued.
+   */
+  private resentExpiry(invite: Invite, now: Date): Date {
+    const window = invite.expiresAt.getTime() - invite.createdAt.getTime();
+    // A row whose deadline is not after its creation has no window to
+    // repeat, so it gets the default.
+    const requested =
+      window > 0 ? new Date(now.getTime() + window).toISOString() : undefined;
+    return earliest(
+      this.resolveExpiresAt(requested),
+      invite.guestAccessExpiresAt,
+    );
+  }
+
+  /**
+   * What create checks before offering a place, asked again of an invite
+   * that lapsed: time has passed, and what was true when it was written may
+   * not be now.
+   */
+  private async assertCanBeOfferedAgain(
+    invite: Invite,
+    now: Date,
+  ): Promise<void> {
+    // invites_cohortless_is_admin holds for pending rows only, so an expired
+    // invite of the old cohort-less shape is still on record. Putting it back
+    // to pending would break the constraint; it is refused here instead.
+    if (invite.cohortId === null && invite.systemRole !== SystemRole.Admin) {
+      throw new InviteConflictException(
+        'This invite names no cohort and cannot be resent: create a new one',
+        { inviteId: invite.id },
+      );
+    }
+    if (
+      invite.guestAccessExpiresAt !== null &&
+      invite.guestAccessExpiresAt <= now
+    ) {
+      throw new InviteConflictException(
+        'The guest visit this invite offered has already ended: create a new one',
+        {
+          inviteId: invite.id,
+          guestAccessExpiresAt: invite.guestAccessExpiresAt,
+        },
+      );
     }
 
-    // Not live: materialize lapse if still pending, then explain
-    if (invite.status === InviteStatus.Pending) {
-      await this.expireLazily(inviteId, now);
-      // Re-read to get the updated status after materialising the lapse
-      const [updatedInvite] = await this.db
-        .select()
-        .from(invites)
-        .where(eq(invites.id, inviteId))
-        .limit(1);
-      if (updatedInvite) {
-        invite = updatedInvite;
-      }
-    }
-    // Explicitly handle Expired status (not covered by terminalInviteException)
-    if (invite.status === InviteStatus.Expired) {
-      throw new InviteExpiredException('This invite has expired', {
-        inviteId,
-        expiresAt: invite.expiresAt,
-      });
-    }
-    throw terminalInviteException(invite, { inviteId });
+    // Materialise this invite's own lapse first, so the one-pending-per-
+    // address check below is about other invites and cannot find this one.
+    await this.expireLazily(invite.id, now);
+    await this.assertNoLiveInvite(invite.email);
+    await this.assertNotAlreadyMember(
+      invite.email,
+      invite.cohortId ?? undefined,
+    );
   }
 
   /**
@@ -1637,6 +1723,16 @@ export class InvitesService {
 }
 
 type InviteWriteErrorKind = 'pending-duplicate' | 'token-collision' | null;
+
+/**
+ * The statuses a resend may start from. Expired is in, pending-but-lapsed
+ * being the same thing not yet written down; the three answers are out.
+ */
+const RESENDABLE_STATUSES = [InviteStatus.Pending, InviteStatus.Expired];
+
+function isResendable(invite: { status: InviteStatus }): boolean {
+  return RESENDABLE_STATUSES.includes(invite.status);
+}
 
 /** The earlier of two moments, ignoring a null second one. */
 function earliest(a: Date, b: Date | null): Date {

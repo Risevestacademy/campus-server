@@ -485,15 +485,36 @@ describe('invite admin routes (e2e)', () => {
       expect(res.body.error.code).toBe('FORBIDDEN');
     });
 
-    it('answers a lapsed invite with INVITE_EXPIRED', async () => {
+    it('brings a lapsed invite back with a working link', async () => {
       const invite = await createInvite('lapsed@campus.local').expect(201);
       await db
         .update(schema.invites)
         .set({ expiresAt: new Date(Date.now() - 1_000) })
         .where(sql`${schema.invites.id} = ${invite.body.id}`);
 
-      const res = await resendInvite(invite.body.id).expect(403);
-      expect(res.body.error.code).toBe('INVITE_EXPIRED');
+      const res = await resendInvite(invite.body.id).expect(200);
+
+      expect(res.body.status).toBe('pending');
+      expect(new Date(res.body.expiresAt).getTime()).toBeGreaterThan(
+        Date.now(),
+      );
+      await request(app.getHttpServer())
+        .post('/v1/invites/preview')
+        .send({ token: res.body.token })
+        .expect(200);
+    });
+
+    it('refuses a lapsed invite whose address has been invited again', async () => {
+      const invite = await createInvite('lapsed@campus.local').expect(201);
+      await db
+        .update(schema.invites)
+        .set({ expiresAt: new Date(Date.now() - 1_000) })
+        .where(sql`${schema.invites.id} = ${invite.body.id}`);
+      await createInvite('lapsed@campus.local').expect(201);
+
+      const res = await resendInvite(invite.body.id).expect(409);
+
+      expect(res.body.error.code).toBe('CONFLICT');
     });
 
     it.each([

@@ -47,9 +47,8 @@ export class InviteMailer {
         to: details.email,
         ...rendered,
         // A retried create is a new invite with a new id, so this only
-        // guards the send itself against being repeated.
-        // For resend, we pass a key derived from the new token hash so each
-        // resend gets its own key and isn't dropped by Resend.
+        // guards the send itself against being repeated. A resend is the
+        // same invite sent again on purpose, so it brings a key of its own.
         idempotencyKey: idempotencyKey ?? `invite/${invite.id}`,
       });
 

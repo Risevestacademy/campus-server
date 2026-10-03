@@ -2320,6 +2320,309 @@ describe('InvitesService admin revoke and list', () => {
     });
   });
 
+  /**
+   * Against the engine rather than a mocked query builder: what matters
+   * about a resend is which rows its conditional UPDATE matches, and a mock
+   * answers that with whatever the test told it to.
+   */
+  describe('resend', () => {
+    const DAY = 86_400_000;
+    const lapsed = () => new Date(Date.now() - 1000);
+
+    it('gives a live invite a new token and stops the old one working', async () => {
+      const created = await service.create(
+        {
+          email: 'again@campus.local',
+          cohortId,
+          cohortRole: CohortRole.Student,
+          cohortTrackId,
+        },
+        admin,
+      );
+
+      const resent = await service.resend(created.id, admin);
+
+      expect(resent.id).toBe(created.id);
+      expect(resent.token).not.toBe(created.token);
+      expect(resent.inviteLink).toContain(encodeURIComponent(resent.token));
+      expect((await rowOf(created.id)).tokenHash).toBe(
+        hashInviteToken(resent.token),
+      );
+      await expect(
+        service.previewByToken(created.token),
+      ).rejects.toBeInstanceOf(InviteNotFoundException);
+      await expect(service.previewByToken(resent.token)).resolves.toMatchObject(
+        { email: 'again@campus.local' },
+      );
+    });
+
+    it('repeats a shorter window the admin chose, not the default', async () => {
+      const now = new Date();
+      // Written to last a day, with an hour of it left.
+      const invite = await makeInvite({
+        createdAt: new Date(now.getTime() - 23 * 3_600_000),
+        expiresAt: new Date(now.getTime() + 3_600_000),
+      });
+
+      const resent = await service.resend(invite.id, admin, undefined, now);
+
+      expect(new Date(resent.expiresAt).getTime() - now.getTime()).toBe(DAY);
+    });
+
+    it('opens the default window again, however little was left', async () => {
+      const invite = await makeInvite({
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const now = new Date();
+
+      const resent = await service.resend(invite.id, admin, undefined, now);
+
+      const left = new Date(resent.expiresAt).getTime() - now.getTime();
+      expect(left).toBeGreaterThan(7 * DAY - 60_000);
+      expect(left).toBeLessThanOrEqual(7 * DAY + 60_000);
+    });
+
+    it('never opens a guest invite past the end of the visit', async () => {
+      const visitEnds = new Date(Date.now() + 2 * DAY);
+      const invite = await makeInvite({
+        cohortRole: CohortRole.Guest,
+        cohortTrackId: null,
+        guestAccessExpiresAt: visitEnds,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      const resent = await service.resend(invite.id, admin);
+
+      expect(resent.expiresAt).toBe(visitEnds.toISOString());
+    });
+
+    it.each([
+      ['lapsed but still marked pending', InviteStatus.Pending],
+      ['already marked expired', InviteStatus.Expired],
+    ])('brings back an invite that is %s', async (_label, status) => {
+      const invite = await makeInvite({ status, expiresAt: lapsed() });
+
+      const resent = await service.resend(invite.id, admin);
+
+      expect(resent.status).toBe(InviteStatus.Pending);
+      const row = await rowOf(invite.id);
+      expect(row.status).toBe(InviteStatus.Pending);
+      expect(row.expiresAt.getTime()).toBeGreaterThan(Date.now());
+      await expect(service.previewByToken(resent.token)).resolves.toBeDefined();
+    });
+
+    it('lets the invitee accept an invite that was brought back', async () => {
+      const invite = await makeInvite({
+        status: InviteStatus.Expired,
+        expiresAt: lapsed(),
+      });
+      const [account] = await db
+        .insert(users)
+        .values({ email: invite.email })
+        .returning();
+      await service.resend(invite.id, admin);
+
+      const outcome = await service.decide(invite.id, InviteDecision.Accept, {
+        id: account.id,
+        email: account.email,
+        systemRole: SystemRole.User,
+      });
+
+      expect(outcome.kind).toBe('accepted');
+    });
+
+    it.each([
+      [InviteStatus.Accepted, InviteAlreadyAcceptedException],
+      [InviteStatus.Declined, InviteAlreadyDeclinedException],
+      [InviteStatus.Revoked, InviteRevokedException],
+    ] as const)(
+      'refuses a %s invite and leaves its token alone',
+      async (status, exception) => {
+        const invite = await makeInvite({ status });
+
+        await expect(service.resend(invite.id, admin)).rejects.toBeInstanceOf(
+          exception,
+        );
+        expect((await rowOf(invite.id)).tokenHash).toBe(invite.tokenHash);
+      },
+    );
+
+    it('404s an invite that does not exist', async () => {
+      await expect(
+        service.resend('99999999-9999-4999-8999-999999999999', admin),
+      ).rejects.toBeInstanceOf(InviteNotFoundException);
+    });
+
+    // generateInviteToken runs between resend's read and its write, so
+    // settling the invite from inside it is the race itself: an admin
+    // revoking while another resends.
+    it('answers an invite revoked mid-resend as revoked, not as a fault', async () => {
+      const invite = await makeInvite();
+      const { generateInviteToken: real } =
+        await vi.importActual<typeof import('./invite-token.js')>(
+          './invite-token.js',
+        );
+      let revoke: Promise<unknown> | undefined;
+      vi.mocked(generateInviteToken).mockImplementationOnce(() => {
+        revoke = service.revoke(invite.id, admin);
+        return real();
+      });
+
+      await expect(service.resend(invite.id, admin)).rejects.toBeInstanceOf(
+        InviteRevokedException,
+      );
+      await revoke;
+      const row = await rowOf(invite.id);
+      expect(row.status).toBe(InviteStatus.Revoked);
+      expect(row.tokenHash).toBe(invite.tokenHash);
+    });
+
+    // A new link is not a new offer: what the invitee said about it stands.
+    it('keeps a flag the invitee raised', async () => {
+      const invite = await makeInvite();
+      const [account] = await db
+        .insert(users)
+        .values({ email: invite.email })
+        .returning();
+      await service.flag(invite.id, 'Wrong track.', {
+        id: account.id,
+        email: account.email,
+        systemRole: SystemRole.User,
+      });
+
+      await service.resend(invite.id, admin);
+
+      const row = await rowOf(invite.id);
+      expect(row.flagMessage).toBe('Wrong track.');
+      expect(row.flaggedAt).not.toBeNull();
+    });
+
+    it('records who resent it, with the deadline before and after', async () => {
+      const invite = await makeInvite({
+        status: InviteStatus.Expired,
+        expiresAt: lapsed(),
+      });
+
+      const resent = await service.resend(invite.id, admin, 'corr-1');
+
+      const [entry] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.InviteResent));
+      expect(entry).toMatchObject({
+        actorUserId: admin.id,
+        subjectType: AuditSubjectType.Invite,
+        subjectId: invite.id,
+        correlationId: 'corr-1',
+        details: {
+          cohortId,
+          expiresAt: resent.expiresAt,
+          previousExpiresAt: invite.expiresAt.toISOString(),
+        },
+      });
+      // Never the address, the token or its hash.
+      const logged = JSON.stringify(entry);
+      expect(logged).not.toContain(invite.email);
+      expect(logged).not.toContain(resent.token);
+      expect(logged).not.toContain(hashInviteToken(resent.token));
+    });
+
+    it('records nothing for a resend that was refused', async () => {
+      const invite = await makeInvite({ status: InviteStatus.Accepted });
+
+      await expect(service.resend(invite.id, admin)).rejects.toThrow();
+
+      expect(
+        await db
+          .select()
+          .from(auditLog)
+          .where(eq(auditLog.action, AuditAction.InviteResent)),
+      ).toHaveLength(0);
+    });
+
+    describe('an expired invite that can no longer be offered', () => {
+      it('is refused when the address has been invited again since', async () => {
+        const old = await makeInvite({
+          email: 'twice@campus.local',
+          status: InviteStatus.Expired,
+          expiresAt: lapsed(),
+        });
+        await makeInvite({ email: 'twice@campus.local' });
+
+        await expect(service.resend(old.id, admin)).rejects.toBeInstanceOf(
+          InviteConflictException,
+        );
+        expect((await rowOf(old.id)).status).toBe(InviteStatus.Expired);
+      });
+
+      it('is not blocked by another invite that has itself lapsed', async () => {
+        const old = await makeInvite({
+          email: 'twice@campus.local',
+          status: InviteStatus.Expired,
+          expiresAt: lapsed(),
+        });
+        const stale = await makeInvite({
+          email: 'twice@campus.local',
+          expiresAt: lapsed(),
+        });
+
+        await service.resend(old.id, admin);
+
+        expect((await rowOf(old.id)).status).toBe(InviteStatus.Pending);
+        expect((await rowOf(stale.id)).status).toBe(InviteStatus.Expired);
+      });
+
+      it('is refused when the person has joined the cohort since', async () => {
+        const invite = await makeInvite({
+          status: InviteStatus.Expired,
+          expiresAt: lapsed(),
+        });
+        const [account] = await db
+          .insert(users)
+          .values({ email: invite.email })
+          .returning();
+        await db.insert(cohortMembers).values({
+          cohortId,
+          userId: account.id,
+          role: CohortRole.Mentor,
+        });
+
+        await expect(service.resend(invite.id, admin)).rejects.toBeInstanceOf(
+          InviteConflictException,
+        );
+        expect((await rowOf(invite.id)).status).toBe(InviteStatus.Expired);
+      });
+
+      it('is refused when the guest visit it offered is over', async () => {
+        const invite = await makeInvite({
+          cohortRole: CohortRole.Guest,
+          cohortTrackId: null,
+          guestAccessExpiresAt: lapsed(),
+          status: InviteStatus.Expired,
+          expiresAt: lapsed(),
+        });
+
+        await expect(service.resend(invite.id, admin)).rejects.toBeInstanceOf(
+          InviteConflictException,
+        );
+      });
+
+      it('is refused when it names no cohort and grants no admin role', async () => {
+        const invite = await makeInvite({
+          cohortId: null,
+          cohortRole: null,
+          cohortTrackId: null,
+          status: InviteStatus.Expired,
+          expiresAt: lapsed(),
+        });
+
+        await expect(service.resend(invite.id, admin)).rejects.toBeInstanceOf(
+          InviteConflictException,
+        );
+      });
+    });
+  });
+
   describe('currentInviteFor', () => {
     it('keeps a live invite', async () => {
       const own = await makeInvite();

@@ -100,6 +100,8 @@ describe('InviteMailer', () => {
     expect(logged).toContain('refused');
   });
 
+  // A resend is the same invite sent again on purpose: under the invite's
+  // own key the provider would drop it as a repeat of the first email.
   it('uses custom idempotency key when provided (for resend)', async () => {
     const send = vi.fn().mockResolvedValue({ ok: true, id: 'em_2' });
     const { subject, previewByToken } = mailer(

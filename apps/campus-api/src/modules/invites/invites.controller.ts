@@ -12,6 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -72,7 +73,6 @@ import {
   InviteInvalidArgumentException,
   InviteNotFoundException,
 } from './invites.exceptions.js';
-import { hashInviteToken } from './invite-token.js';
 
 @ApiTags('invites')
 @Controller('invites')
@@ -139,15 +139,10 @@ export class InvitesController {
   }
 
   /**
-   * Resends a pending, unexpired invite by generating a new token and emailing
-   * the new link. The old link stops working immediately.
-   *
-   * Only live pending invites (status=pending, expires_at > now) can be resent.
-   * A lapsed invite is reported as expired. Settled invites (accepted/declined/
-   * revoked/expired) are refused with the same codes the decision routes use.
-   *
-   * Returns the same receipt as create (inviteLink, emailStatus), so the admin
-   * can share the link by hand if the email fails again.
+   * A new link for an invite whose email never arrived or whose link ran
+   * out. Guarded like create, needing the actor for the audit entry like
+   * revoke, and answered like create: the receipt carries the
+   * link, so the admin can share it by hand if the email fails again.
    */
   @Post(':id/resend')
   @HttpCode(HttpStatus.OK)
@@ -156,17 +151,23 @@ export class InvitesController {
   @ApiResendInvite()
   async resend(
     @Param() params: InviteIdParamDto,
-    @CurrentUser() _inviter: AuthenticatedUser,
+    @CurrentUser() actor: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<InviteResponseDto> {
-    const receipt = await this.invites.resend(params.id);
-    // After the write, not inside it: a failed send must not undo an invite
-    // the admin can still share by hand.
-    // Use a new idempotency key derived from the new token hash so each
-    // resend gets its own key and isn't dropped by Resend.
-    const newTokenHash = hashInviteToken(receipt.token);
+    const receipt = await this.invites.resend(params.id, actor, correlationId);
+    // After the write, not inside it: a failed send must not undo a link the
+    // admin can still share by hand.
+    //
+    // A key of its own per resend. Under create's key, which is the invite
+    // id, the provider would take this for a repeat of the first email and
+    // drop it. Random rather than derived from the token: nothing about the
+    // token, its hash included, leaves this service except in the link.
     return {
       ...receipt,
-      emailStatus: await this.mailer.send(receipt, `invite/${newTokenHash}`),
+      emailStatus: await this.mailer.send(
+        receipt,
+        `invite/${receipt.id}/resend/${randomUUID()}`,
+      ),
     };
   }
 

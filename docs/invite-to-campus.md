@@ -89,6 +89,15 @@ invite expires (and, for a guest, when the visit ends). The response's
 
 Either way the invite exists: a failed email never undoes it.
 
+`POST /v1/invites/{id}/resend` gives an invite a new link and emails it —
+for an email that never arrived, or a link that ran out. It answers like
+create, with a new `inviteLink` and `emailStatus`. The old link stops
+working at once, and the invite is open for as long again as it was created
+to last: `INVITE_TTL_DAYS`, or the shorter window its `expiresAt` set. It
+works on a pending or an expired invite; one that was accepted, declined or
+revoked is refused, and so is an expired one whose address has been invited
+again since.
+
 An admin sees every invite with `GET /v1/invites` (paginated, filterable by
 `status`; a lapsed invite is listed as `expired`), and cancels a pending one
 with `POST /v1/invites/{id}/revoke`, which records who revoked it and when.
@@ -247,8 +256,6 @@ Every `?error=` code is listed in the API guide
 
 ## Not built yet
 
-- **Resending the email.** A failed send is reported once, in the create
-  response; there is no route to send it again.
 - **Decline.** campus-api supports declining; the designs have no button
   for it.
 - **Correcting a flagged invite.** A flag tells the admin; fixing the offer
