@@ -57,6 +57,13 @@
       "when": 1791000903853,
       "tag": "0007_invite_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791038821930,
+      "tag": "0008_audit_log_append_only",
+      "breakpoints": true
     }
   ]
 }
