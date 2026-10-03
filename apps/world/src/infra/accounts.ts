@@ -93,11 +93,10 @@ export function createAccountLookup(env: Env): AccountLookup {
       if (ids.length === 0) {
         return new Set();
       }
-      const rows = await sql.unsafe<{ family_id: string }[]>(LIVE_SESSIONS_QUERY, [
-        ids,
-        refreshedSince,
-        now,
-      ]);
+      const rows = await sql.unsafe<{ family_id: string }[]>(
+        LIVE_SESSIONS_QUERY,
+        [ids, refreshedSince, now],
+      );
       return new Set(rows.map((row) => row.family_id));
     },
     async close(): Promise<void> {

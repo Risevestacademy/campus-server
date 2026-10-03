@@ -3,9 +3,15 @@ import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node';
 import type { Instrumentation } from '@opentelemetry/instrumentation';
-import { defaultResource, resourceFromAttributes } from '@opentelemetry/resources';
+import {
+  defaultResource,
+  resourceFromAttributes,
+} from '@opentelemetry/resources';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
+import {
+  ATTR_SERVICE_NAME,
+  ATTR_SERVICE_VERSION,
+} from '@opentelemetry/semantic-conventions';
 
 export interface TelemetryOptions {
   serviceName: string;
@@ -16,7 +22,10 @@ export interface TelemetryOptions {
 }
 
 export function initTelemetry(options: TelemetryOptions): NodeSDK {
-  const instrumentations: Instrumentation[] = [new HttpInstrumentation(), new ExpressInstrumentation()];
+  const instrumentations: Instrumentation[] = [
+    new HttpInstrumentation(),
+    new ExpressInstrumentation(),
+  ];
   if (options.metricsEnabled) {
     instrumentations.push(new RuntimeNodeInstrumentation());
   }

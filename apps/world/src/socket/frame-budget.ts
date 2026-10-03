@@ -30,7 +30,10 @@ export class FrameBudget {
     // Date.now() can step backwards when the clock is corrected; that must
     // not count against the client.
     const elapsed = Math.max(0, now - this.refilledAt);
-    this.frames = Math.min(this.perSecond, this.frames + (elapsed * this.perSecond) / 1000);
+    this.frames = Math.min(
+      this.perSecond,
+      this.frames + (elapsed * this.perSecond) / 1000,
+    );
     this.refilledAt = Math.max(this.refilledAt, now);
 
     if (this.frames < 1) return 'close';

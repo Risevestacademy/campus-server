@@ -25,7 +25,9 @@ describe('invite-token helpers', () => {
 
   it('embeds the raw token in a shareable link', () => {
     const link = buildInviteLink('http://localhost:3000/', 'abc 123/xyz');
-    expect(link.startsWith('http://localhost:3000/invitation?token=')).toBe(true);
+    expect(link.startsWith('http://localhost:3000/invitation?token=')).toBe(
+      true,
+    );
     expect(link).toContain(encodeURIComponent('abc 123/xyz'));
   });
 });

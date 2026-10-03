@@ -97,12 +97,19 @@ export function createPositionStore(
   });
   redis.on('error', (err: Error) => {
     if (healthy !== false) {
-      log.warn({ err }, 'redis unavailable: positions will not be kept until it is back');
+      log.warn(
+        { err },
+        'redis unavailable: positions will not be kept until it is back',
+      );
     }
     healthy = false;
   });
 
-  return new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, env.WORLD_POSITION_TTL_DAYS);
+  return new RedisPositionStore(
+    redis,
+    PLACEHOLDER_MAP_ID,
+    env.WORLD_POSITION_TTL_DAYS,
+  );
 }
 
 /** The subset of the ioredis client the store uses. */

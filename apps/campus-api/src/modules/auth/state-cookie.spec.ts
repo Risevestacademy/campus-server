@@ -29,11 +29,13 @@ describe('readStateCookie', () => {
 describe('stateCookieOptions', () => {
   it('marks the cookie secure only where the callback is itself secure', () => {
     expect(
-      stateCookieOptions('https://api.campus.example.com/v1/auth/google/callback')
-        .secure,
+      stateCookieOptions(
+        'https://api.campus.example.com/v1/auth/google/callback',
+      ).secure,
     ).toBe(true);
     expect(
-      stateCookieOptions('http://localhost:3000/v1/auth/google/callback').secure,
+      stateCookieOptions('http://localhost:3000/v1/auth/google/callback')
+        .secure,
     ).toBe(false);
   });
 

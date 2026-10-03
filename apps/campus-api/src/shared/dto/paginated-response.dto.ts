@@ -1,5 +1,10 @@
 import { applyDecorators } from '@nestjs/common';
-import { ApiExtraModels, ApiOkResponse, ApiProperty, getSchemaPath } from '@nestjs/swagger';
+import {
+  ApiExtraModels,
+  ApiOkResponse,
+  ApiProperty,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import type { SchemaObject } from '@nestjs/swagger';
 
 export class PaginationMetaDto {
@@ -9,7 +14,10 @@ export class PaginationMetaDto {
   @ApiProperty({ description: 'Number of items per page.', example: 20 })
   perPage: number;
 
-  @ApiProperty({ description: 'Total number of items across all pages.', example: 152 })
+  @ApiProperty({
+    description: 'Total number of items across all pages.',
+    example: 152,
+  })
   total: number;
 
   @ApiProperty({ description: 'Total number of pages.', example: 8 })

@@ -51,7 +51,9 @@ export class InvalidMediaConfigError extends Error {}
  */
 export function assertMediaCredentials(credentials: MediaCredentials): void {
   if (!/^wss?:\/\//.test(credentials.url)) {
-    throw new InvalidMediaConfigError('media url must start with ws:// or wss://');
+    throw new InvalidMediaConfigError(
+      'media url must start with ws:// or wss://',
+    );
   }
   if (credentials.apiKey.length === 0) {
     throw new InvalidMediaConfigError('media api key is empty');
@@ -80,7 +82,9 @@ export async function mintRoomToken(
 ): Promise<RoomToken> {
   assertMediaCredentials(credentials);
   if (grant.room.length === 0 || grant.room.length > MAX_ROOM_NAME) {
-    throw new InvalidMediaConfigError(`room name must be 1–${MAX_ROOM_NAME} characters`);
+    throw new InvalidMediaConfigError(
+      `room name must be 1–${MAX_ROOM_NAME} characters`,
+    );
   }
   if (grant.identity.length === 0) {
     throw new InvalidMediaConfigError('identity is empty');
@@ -120,7 +124,9 @@ export async function mintRoomToken(
 
 function expiryOf(jwt: string): number {
   const payload = jwt.split('.')[1] ?? '';
-  const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+  const { exp } = JSON.parse(
+    Buffer.from(payload, 'base64url').toString('utf8'),
+  ) as {
     exp?: unknown;
   };
   if (typeof exp !== 'number') {

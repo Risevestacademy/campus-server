@@ -17,7 +17,9 @@ export function stateCookieOptions(callbackUrl: string): CookieOptions {
   };
 }
 
-export function readStateCookie(header: string | undefined): string | undefined {
+export function readStateCookie(
+  header: string | undefined,
+): string | undefined {
   if (!header) {
     return undefined;
   }

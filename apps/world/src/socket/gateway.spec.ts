@@ -1,6 +1,14 @@
 import { signSessionToken, SessionScope } from '@campus/session';
 import type { AddressInfo } from 'node:net';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'vitest';
 import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
@@ -37,7 +45,14 @@ const store = {
       | { x: number; y: number; facing: 'up' | 'down' | 'left' | 'right' }
       | undefined;
   },
-  save: async (players: readonly { userId: string; x: number; y: number; facing: string }[]) => {
+  save: async (
+    players: readonly {
+      userId: string;
+      x: number;
+      y: number;
+      facing: string;
+    }[],
+  ) => {
     for (const { userId, x, y, facing } of players) {
       store.positions.set(userId, { x, y, facing });
     }
@@ -87,15 +102,17 @@ function connect(headers: Record<string, string>) {
   const ws = new WebSocket(url, { headers });
   const messages: Record<string, unknown>[] = [];
 
-  const settled = new Promise<{ closeCode?: number; closeReason?: string }>((resolve) => {
-    ws.on('message', (raw) => {
-      messages.push(JSON.parse(raw.toString()) as Record<string, unknown>);
-    });
-    ws.on('close', (code, reason) =>
-      resolve({ closeCode: code, closeReason: reason.toString() }),
-    );
-    ws.on('error', () => undefined);
-  });
+  const settled = new Promise<{ closeCode?: number; closeReason?: string }>(
+    (resolve) => {
+      ws.on('message', (raw) => {
+        messages.push(JSON.parse(raw.toString()) as Record<string, unknown>);
+      });
+      ws.on('close', (code, reason) =>
+        resolve({ closeCode: code, closeReason: reason.toString() }),
+      );
+      ws.on('error', () => undefined);
+    },
+  );
 
   const first = new Promise<Record<string, unknown>>((resolve) => {
     ws.on('message', (raw) =>
@@ -140,7 +157,9 @@ afterEach(async () => {
   const deadline = Date.now() + 5_000;
   while (world.gateway.connections.size > 0) {
     if (Date.now() > deadline) {
-      throw new Error(`test left ${world.gateway.connections.size} socket(s) open`);
+      throw new Error(
+        `test left ${world.gateway.connections.size} socket(s) open`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -197,7 +216,9 @@ describe('socket upgrade', () => {
   it('refuses a cookie sent with no origin at all', async () => {
     const { first } = connect({ cookie: `campus_session=${await token()}` });
 
-    await expect(first).resolves.toMatchObject({ message: 'origin_not_allowed' });
+    await expect(first).resolves.toMatchObject({
+      message: 'origin_not_allowed',
+    });
   });
 
   /** Not a browser, so no cookie to hijack — a bearer token stands alone. */
@@ -219,7 +240,10 @@ describe('socket upgrade', () => {
       SessionScope.FullAccess,
       'a-different-secret-of-at-least-32-characters',
     );
-    const { first } = connect({ origin: ORIGIN, cookie: `campus_session=${foreign}` });
+    const { first } = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${foreign}`,
+    });
 
     await expect(first).resolves.toMatchObject({ message: 'token_not_usable' });
   });
@@ -231,7 +255,9 @@ describe('socket upgrade', () => {
       cookie: `campus_session=${await token()}`,
     });
 
-    await expect(first).resolves.toMatchObject({ message: 'account_suspended' });
+    await expect(first).resolves.toMatchObject({
+      message: 'account_suspended',
+    });
   });
 
   it('refuses a session whose account no longer exists', async () => {
@@ -281,11 +307,10 @@ describe('sockets that go wrong', () => {
 
     // Every frame answered, and in the order it was sent — whatever each
     // one's outcome, since five at once is past the walking speed.
-    expect(replies.filter((r) => r.type === 'moveResult').map((r) => r.seq)).toEqual([
-      0, 1, 2, 3, 4,
-    ]);
+    expect(
+      replies.filter((r) => r.type === 'moveResult').map((r) => r.seq),
+    ).toEqual([0, 1, 2, 3, 4]);
   });
-
 
   /**
    * Authentication is asynchronous, so a client can be gone before it
@@ -362,7 +387,11 @@ describe('sockets that go wrong', () => {
 
   it('closes a socket once its session expires', async () => {
     const almostExpired = await signSessionToken(
-      { userId: 'user-2', email: 'grace@campus.local', scope: SessionScope.FullAccess },
+      {
+        userId: 'user-2',
+        email: 'grace@campus.local',
+        scope: SessionScope.FullAccess,
+      },
       { secret: SECRET, ttlMinutes: 30 },
       new Date(Date.now() - 29.97 * 60_000),
     );
@@ -401,7 +430,10 @@ describe('a socket following its login', () => {
 
   it('outlives the access token it opened with while the login is live', async () => {
     // Expires a couple of seconds in, then the heartbeat runs twice more.
-    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(29.97)}` });
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await signed(29.97)}`,
+    });
     await conn.first;
 
     await new Promise((resolve) => setTimeout(resolve, 3_500));
@@ -413,7 +445,10 @@ describe('a socket following its login', () => {
 
   /** Signing out revokes the login; the socket must not wait out a token. */
   it('closes once the login ends, and keeps the position for signing back in', async () => {
-    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await signed(0)}`,
+    });
     await conn.first;
 
     accounts.endedSessions.add(SESSION);
@@ -422,19 +457,27 @@ describe('a socket following its login', () => {
       closeCode: 1008,
       closeReason: 'session_ended',
     });
-    await expect.poll(() => world.gateway.players.isRemembered('user-3')).toBe(true);
+    await expect
+      .poll(() => world.gateway.players.isRemembered('user-3'))
+      .toBe(true);
   }, 15_000);
 
   /** A token lifted from a browser that has since signed out. */
   it('refuses an upgrade whose login has ended', async () => {
     accounts.endedSessions.add(SESSION);
-    const { first } = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+    const { first } = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await signed(0)}`,
+    });
 
     await expect(first).resolves.toMatchObject({ message: 'session_ended' });
   });
 
   it('leaves sockets alone when the session check fails', async () => {
-    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await signed(0)}` });
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await signed(0)}`,
+    });
     await conn.first;
 
     const working = accounts.liveSessions;
@@ -464,11 +507,14 @@ function deferred<T>() {
 describe('oneAtATime', () => {
   it('does not start a task again while the last run is still going', async () => {
     const runs: ReturnType<typeof deferred<void>>[] = [];
-    const run = oneAtATime(() => {
-      const next = deferred<void>();
-      runs.push(next);
-      return next.promise;
-    }, () => undefined);
+    const run = oneAtATime(
+      () => {
+        const next = deferred<void>();
+        runs.push(next);
+        return next.promise;
+      },
+      () => undefined,
+    );
 
     run();
     run();
@@ -485,10 +531,13 @@ describe('oneAtATime', () => {
   it('hands a failure to onError and runs again afterwards', async () => {
     const errors: unknown[] = [];
     let calls = 0;
-    const run = oneAtATime(async () => {
-      calls += 1;
-      if (calls === 1) throw new Error('database unavailable');
-    }, (err) => errors.push(err));
+    const run = oneAtATime(
+      async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('database unavailable');
+      },
+      (err) => errors.push(err),
+    );
 
     run();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -509,7 +558,12 @@ describe('a slow session check', () => {
   it('stays the only one in flight until it answers', async () => {
     const SESSION = 'aaaaaaaa-0000-4000-8000-00000000beef';
     const { token } = await signSessionToken(
-      { userId: 'user-4', email: 'kay@campus.local', scope: SessionScope.FullAccess, sessionId: SESSION },
+      {
+        userId: 'user-4',
+        email: 'kay@campus.local',
+        scope: SessionScope.FullAccess,
+        sessionId: SESSION,
+      },
       { secret: SECRET, ttlMinutes: 30 },
     );
     const conn = connect({ origin: ORIGIN, cookie: `campus_session=${token}` });
@@ -545,7 +599,10 @@ describe('a slow session check', () => {
 
 describe('an open socket', () => {
   async function open() {
-    const conn = connect({ origin: ORIGIN, cookie: `campus_session=${await token()}` });
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token()}`,
+    });
     // The snapshot, not merely the first frame: welcome and snapshot are sent
     // together, and a reply() started between them would catch the snapshot.
     await waitFor(conn, (m) => m.type === 'snapshot');
@@ -563,7 +620,9 @@ describe('an open socket', () => {
   it('answers a ping', async () => {
     const conn = await open();
 
-    await expect(reply(conn, { type: 'ping' })).resolves.toEqual({ type: 'pong' });
+    await expect(reply(conn, { type: 'ping' })).resolves.toEqual({
+      type: 'pong',
+    });
     conn.ws.close();
   });
 
@@ -581,9 +640,9 @@ describe('an open socket', () => {
   it('rejects a message type it does not know', async () => {
     const conn = await open();
 
-    await expect(reply(conn, { type: 'teleport', to: 'anywhere' })).resolves.toMatchObject(
-      { code: 'BAD_MESSAGE' },
-    );
+    await expect(
+      reply(conn, { type: 'teleport', to: 'anywhere' }),
+    ).resolves.toMatchObject({ code: 'BAD_MESSAGE' });
     conn.ws.close();
   });
 
@@ -681,7 +740,9 @@ describe('movement', () => {
 
     move(walker, 'right', 7);
 
-    await expect(waitFor(walker, (m) => m.type === 'moveResult')).resolves.toEqual({
+    await expect(
+      waitFor(walker, (m) => m.type === 'moveResult'),
+    ).resolves.toEqual({
       type: 'moveResult',
       seq: 7,
       outcome: 'moved',
@@ -704,7 +765,9 @@ describe('movement', () => {
 
     move(walker, 'up', 1);
 
-    await expect(waitFor(walker, (m) => m.type === 'moveResult')).resolves.toMatchObject({
+    await expect(
+      waitFor(walker, (m) => m.type === 'moveResult'),
+    ).resolves.toMatchObject({
       seq: 1,
       outcome: 'blocked',
       player: { x: 0, y: 0, facing: 'up' },
@@ -797,7 +860,8 @@ describe('movement', () => {
   it('closes a socket that exceeds its message budget', async () => {
     const flooder = await arrive(person());
 
-    for (let i = 0; i < 200; i++) flooder.ws.send(JSON.stringify({ type: 'ping' }));
+    for (let i = 0; i < 200; i++)
+      flooder.ws.send(JSON.stringify({ type: 'ping' }));
 
     await expect(flooder.settled).resolves.toMatchObject({
       closeCode: 1008,
@@ -814,7 +878,9 @@ describe('movement', () => {
 
     move(walker, 'northeast', 1);
 
-    await expect(waitFor(walker, (m) => m.type === 'error')).resolves.toMatchObject({
+    await expect(
+      waitFor(walker, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({
       code: 'BAD_MESSAGE',
     });
     await leave(walker);
@@ -848,8 +914,12 @@ describe('movement', () => {
       const tabTwo = await arrive(ada);
 
       await quiet();
-      expect(watcher.messages.filter((m) => m.type === 'joined')).toHaveLength(1);
-      expect(world.gateway.players.all().filter((p) => p.userId === ada)).toHaveLength(1);
+      expect(watcher.messages.filter((m) => m.type === 'joined')).toHaveLength(
+        1,
+      );
+      expect(
+        world.gateway.players.all().filter((p) => p.userId === ada),
+      ).toHaveLength(1);
 
       await leave(tabOne);
       await leave(tabTwo);
@@ -863,12 +933,16 @@ describe('movement', () => {
 
       move(tabOne, 'right', 1);
 
-      await expect(waitFor(tabTwo, (m) => m.type === 'moved')).resolves.toMatchObject({
+      await expect(
+        waitFor(tabTwo, (m) => m.type === 'moved'),
+      ).resolves.toMatchObject({
         players: [{ userId: ada, x: 1, y: 0 }],
       });
 
       move(tabTwo, 'down', 1);
-      await expect(waitFor(tabTwo, (m) => m.type === 'moveResult')).resolves.toMatchObject({
+      await expect(
+        waitFor(tabTwo, (m) => m.type === 'moveResult'),
+      ).resolves.toMatchObject({
         player: { x: 1, y: 1 },
       });
 
@@ -917,10 +991,12 @@ describe('movement', () => {
       expect(world.gateway.players.has(ada)).toBe(true);
 
       await leave(tabTwo);
-      await expect(waitFor(watcher, (m) => m.type === 'left')).resolves.toEqual({
-        type: 'left',
-        userId: ada,
-      });
+      await expect(waitFor(watcher, (m) => m.type === 'left')).resolves.toEqual(
+        {
+          type: 'left',
+          userId: ada,
+        },
+      );
 
       await leave(watcher);
     });
@@ -942,7 +1018,12 @@ describe('movement', () => {
       const again = await arrive(ada);
 
       const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({ userId: ada, x: 1, y: 1, facing: 'down' });
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 1,
+        y: 1,
+        facing: 'down',
+      });
       await leave(again);
     });
 
@@ -958,14 +1039,18 @@ describe('movement', () => {
       await waitFor(first, (m) => m.type === 'moveResult');
       await leave(first);
       // The client sees its close before the server has handled it.
-      await expect.poll(() => world.gateway.players.isRemembered(ada)).toBe(true);
+      await expect
+        .poll(() => world.gateway.players.isRemembered(ada))
+        .toBe(true);
 
       accounts.suspended.add(ada);
       const refused = connect({
         origin: ORIGIN,
         cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
       });
-      await expect(refused.first).resolves.toMatchObject({ message: 'account_suspended' });
+      await expect(refused.first).resolves.toMatchObject({
+        message: 'account_suspended',
+      });
       await refused.settled;
       expect(world.gateway.players.isRemembered(ada)).toBe(false);
 
@@ -973,7 +1058,12 @@ describe('movement', () => {
       accounts.suspended.delete(ada);
       const again = await arrive(ada);
       const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({ userId: ada, x: 0, y: 0, facing: 'down' });
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
       await leave(again);
     });
 
@@ -1023,7 +1113,9 @@ describe('movement', () => {
       closeCode: 1008,
       closeReason: 'account_suspended',
     });
-    await expect(waitFor(watcher, (m) => m.type === 'left')).resolves.toMatchObject({
+    await expect(
+      waitFor(watcher, (m) => m.type === 'left'),
+    ).resolves.toMatchObject({
       userId: ada,
     });
     expect(world.gateway.players.has(ada)).toBe(false);
@@ -1041,7 +1133,9 @@ describe('movement', () => {
     accounts.suspended.add(ada);
 
     await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
-    await expect(waitFor(watcher, (m) => m.type === 'left')).resolves.toMatchObject({
+    await expect(
+      waitFor(watcher, (m) => m.type === 'left'),
+    ).resolves.toMatchObject({
       userId: ada,
     });
     expect(world.gateway.players.has(ada)).toBe(false);
@@ -1063,7 +1157,12 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({ userId: ada, x: 2, y: 3, facing: 'left' });
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 2,
+        y: 3,
+        facing: 'left',
+      });
       await leave(conn);
     });
 
@@ -1074,7 +1173,12 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({ userId: ada, x: 0, y: 0, facing: 'down' });
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
       await leave(conn);
     });
 
@@ -1085,7 +1189,12 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({ userId: ada, x: 0, y: 0, facing: 'down' });
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
       await leave(conn);
     });
 
@@ -1118,7 +1227,9 @@ describe('movement', () => {
     it('does not ask the store when reconnecting within the grace', async () => {
       const ada = person();
       await leave(await arrive(ada));
-      await expect.poll(() => world.gateway.players.isRemembered(ada)).toBe(true);
+      await expect
+        .poll(() => world.gateway.players.isRemembered(ada))
+        .toBe(true);
       const loadsBefore = store.loads;
 
       const again = await arrive(ada);
@@ -1132,7 +1243,9 @@ describe('movement', () => {
       const conn = await arrive(ada);
       move(conn, 'right', 1);
       await waitFor(conn, (m) => m.type === 'moveResult');
-      await expect.poll(() => store.positions.has(ada), { timeout: 3_000 }).toBe(true);
+      await expect
+        .poll(() => store.positions.has(ada), { timeout: 3_000 })
+        .toBe(true);
 
       accounts.suspended.add(ada);
 
@@ -1149,7 +1262,8 @@ describe('shutdown', () => {
     const own = await buildWorld(env, accounts, {
       ...store,
       save: async (players) => {
-        for (const { userId, x, y, facing } of players) saved.set(userId, { x, y, facing });
+        for (const { userId, x, y, facing } of players)
+          saved.set(userId, { x, y, facing });
       },
     });
     await own.app.listen({ port: 0, host: '127.0.0.1' });

@@ -30,7 +30,9 @@ function user(overrides: Partial<User> = {}): User {
 }
 
 function users(found: User | null = user()): UsersService {
-  return { findById: vi.fn().mockResolvedValue(found) } as unknown as UsersService;
+  return {
+    findById: vi.fn().mockResolvedValue(found),
+  } as unknown as UsersService;
 }
 
 function context(headers: Record<string, string>, method = 'GET') {
@@ -57,7 +59,10 @@ describe('SessionGuard', () => {
     const { req, ctx } = context({ cookie: `${SESSION_COOKIE}=${token}` });
 
     await expect(
-      new SessionGuard(config, users(user({ systemRole: SystemRole.Admin }))).canActivate(ctx),
+      new SessionGuard(
+        config,
+        users(user({ systemRole: SystemRole.Admin })),
+      ).canActivate(ctx),
     ).resolves.toBe(true);
 
     expect(req.user).toMatchObject({
@@ -71,9 +76,9 @@ describe('SessionGuard', () => {
     const token = await tokenFor(SessionScope.FullAccess);
     const { ctx } = context({ authorization: `Bearer ${token}` });
 
-    await expect(new SessionGuard(config, users()).canActivate(ctx)).resolves.toBe(
-      true,
-    );
+    await expect(
+      new SessionGuard(config, users()).canActivate(ctx),
+    ).resolves.toBe(true);
   });
 
   /**
@@ -89,7 +94,9 @@ describe('SessionGuard', () => {
       users(user({ systemRole: SystemRole.User })),
     ).canActivate(ctx);
 
-    expect((req.user as { systemRole: string }).systemRole).toBe(SystemRole.User);
+    expect((req.user as { systemRole: string }).systemRole).toBe(
+      SystemRole.User,
+    );
   });
 
   it('turns away a provisional session', async () => {
@@ -165,7 +172,10 @@ describe('SessionGuard', () => {
   it('turns everything away when sign-in is switched off', async () => {
     const token = await tokenFor(SessionScope.FullAccess);
     const { ctx } = context({ cookie: `${SESSION_COOKIE}=${token}` });
-    const off = { ...(config as object), FF_GOOGLE_AUTH_ENABLED: false } as never;
+    const off = {
+      ...(config as object),
+      FF_GOOGLE_AUTH_ENABLED: false,
+    } as never;
 
     await expect(
       new SessionGuard(off, users()).canActivate(ctx),

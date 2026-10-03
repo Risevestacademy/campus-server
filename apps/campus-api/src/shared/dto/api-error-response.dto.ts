@@ -16,7 +16,8 @@ export class ApiErrorBodyDto {
     enum: ExceptionCode,
     enumName: 'ExceptionCode',
     example: ExceptionCode.NotFound,
-    description: 'Machine-readable error code. Always one of the ExceptionCode enum.',
+    description:
+      'Machine-readable error code. Always one of the ExceptionCode enum.',
   })
   code: ExceptionCode;
 
@@ -29,7 +30,8 @@ export class ApiErrorBodyDto {
   @ApiPropertyOptional({
     type: 'object',
     additionalProperties: true,
-    description: 'Optional structured context about the error (e.g. offending field).',
+    description:
+      'Optional structured context about the error (e.g. offending field).',
   })
   details?: Record<string, unknown>;
 }

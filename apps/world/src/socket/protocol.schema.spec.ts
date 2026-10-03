@@ -16,7 +16,9 @@ describe('protocol.schema.json', () => {
   });
 
   it('names every message and shared type, so generated types get real names', () => {
-    const { definitions } = protocolJsonSchema() as { definitions: Record<string, unknown> };
+    const { definitions } = protocolJsonSchema() as {
+      definitions: Record<string, unknown>;
+    };
 
     expect(Object.keys(definitions).sort()).toEqual(
       [

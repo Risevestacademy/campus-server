@@ -91,11 +91,11 @@ The client says which way, never where to. The server decides every position.
 3. **Every admitted move is answered with a `moveResult`**, in the order sent,
    carrying your `seq` and where the server has you:
 
-   | `outcome` | Meaning | What to draw |
-   | --- | --- | --- |
-   | `moved` | One tile, as you predicted | Nothing changes |
-   | `blocked` | Not walkable; you turn to face it without moving | Snap back, facing the new way |
-   | `too_fast` | Over walking speed; nothing happened, not even the turn | Snap back |
+   | `outcome`  | Meaning                                                 | What to draw                  |
+   | ---------- | ------------------------------------------------------- | ----------------------------- |
+   | `moved`    | One tile, as you predicted                              | Nothing changes               |
+   | `blocked`  | Not walkable; you turn to face it without moving        | Snap back, facing the new way |
+   | `too_fast` | Over walking speed; nothing happened, not even the turn | Snap back                     |
 
 4. **Correct against the server, then replay what it has not answered yet.**
    By the time a `moveResult` arrives you may have predicted further steps.
@@ -118,11 +118,11 @@ The client says which way, never where to. The server decides every position.
 
 ## Everybody else
 
-| Message | When | What to do |
-| --- | --- | --- |
-| `joined` | Somebody arrived | Add their avatar |
-| `left` | Somebody's last tab closed | Remove their avatar |
-| `moved` | Once per tick, if anybody moved or turned | Move each listed player |
+| Message  | When                                      | What to do              |
+| -------- | ----------------------------------------- | ----------------------- |
+| `joined` | Somebody arrived                          | Add their avatar        |
+| `left`   | Somebody's last tab closed                | Remove their avatar     |
+| `moved`  | Once per tick, if anybody moved or turned | Move each listed player |
 
 About `moved`:
 
@@ -183,18 +183,18 @@ bug, so log it.
 
 When the socket closes:
 
-| Code | Reason | Meaning | What to do |
-| --- | --- | --- | --- |
-| 1008 | `no_token`, `token_not_usable`, `session_expired` | No usable session | Send them to sign in |
-| 1008 | `session_ended` | Signed out, or the sign-in stopped being refreshed | Try a refresh; if that fails, send them to sign in |
-| 1008 | `wrong_scope` | Still in onboarding | Send them to onboarding |
-| 1008 | `account_suspended`, `account_gone` | Not welcome any more | Sign them out; do not reconnect |
-| 1008 | `origin_not_allowed` | This page's origin is not on world's list | Configuration — do not retry |
-| 1008 | `rate_limited` | Sustained sending over the message budget | Client bug; reconnect with backoff |
-| 1001 | `server shutting down` | A deploy or restart | Reconnect |
-| 1009 | — | A frame over the size limit (16 KB by default) | Client bug; reconnect |
-| 1011 | `internal_error` | The server could not check the session | Reconnect with backoff |
-| 1006 | — | Connection lost, a missed heartbeat, or not reading fast enough | Reconnect with backoff |
+| Code | Reason                                            | Meaning                                                         | What to do                                         |
+| ---- | ------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
+| 1008 | `no_token`, `token_not_usable`, `session_expired` | No usable session                                               | Send them to sign in                               |
+| 1008 | `session_ended`                                   | Signed out, or the sign-in stopped being refreshed              | Try a refresh; if that fails, send them to sign in |
+| 1008 | `wrong_scope`                                     | Still in onboarding                                             | Send them to onboarding                            |
+| 1008 | `account_suspended`, `account_gone`               | Not welcome any more                                            | Sign them out; do not reconnect                    |
+| 1008 | `origin_not_allowed`                              | This page's origin is not on world's list                       | Configuration — do not retry                       |
+| 1008 | `rate_limited`                                    | Sustained sending over the message budget                       | Client bug; reconnect with backoff                 |
+| 1001 | `server shutting down`                            | A deploy or restart                                             | Reconnect                                          |
+| 1009 | —                                                 | A frame over the size limit (16 KB by default)                  | Client bug; reconnect                              |
+| 1011 | `internal_error`                                  | The server could not check the session                          | Reconnect with backoff                             |
+| 1006 | —                                                 | Connection lost, a missed heartbeat, or not reading fast enough | Reconnect with backoff                             |
 
 When the connection is refused at the start, an `error` frame with the same
 reason as its `message` arrives just before the close. A socket closed later
@@ -234,5 +234,5 @@ For whoever edits the server:
    description on anything new.
 2. Run `pnpm --filter world protocol:schema` and commit the regenerated
    `protocol.schema.json`. CI fails if you forget.
-3. Update this document if what a client should *do* changed.
+3. Update this document if what a client should _do_ changed.
 4. Tell the frontend: they regenerate their types from the new file.

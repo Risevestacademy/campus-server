@@ -57,9 +57,9 @@ describe('verify', () => {
       'utf8',
     ).toString('base64url');
 
-    expect(reasonOf(() => service.verify(`${forged}.${signature}`, nonce))).toBe(
-      'invalid_state',
-    );
+    expect(
+      reasonOf(() => service.verify(`${forged}.${signature}`, nonce)),
+    ).toBe('invalid_state');
   });
 
   it('rejects a signature from a different secret', () => {

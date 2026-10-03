@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
 import { Direction } from '../movement/grid.js';
-import type { MoveOutcome as MovementOutcome, Player as MovementPlayer } from '../movement/players.js';
+import type {
+  MoveOutcome as MovementOutcome,
+  Player as MovementPlayer,
+} from '../movement/players.js';
 
 /*
  * The wire contract, both directions, as zod schemas. Client frames are
@@ -19,7 +22,11 @@ export const DirectionSchema = z.enum(Direction).meta({
 export const Player = z
   .object({
     userId: z.string(),
-    x: z.number().int().min(0).describe('Tile column, from 0 at the left edge.'),
+    x: z
+      .number()
+      .int()
+      .min(0)
+      .describe('Tile column, from 0 at the left edge.'),
     y: z.number().int().min(0).describe('Tile row, from 0 at the top edge.'),
     facing: DirectionSchema,
   })
@@ -128,7 +135,8 @@ export const ServerMessage = z
       }),
     z.object({ type: z.literal('joined'), player: Player }).meta({
       id: 'JoinedMessage',
-      description: 'Somebody arrived. Not sent for a second tab of somebody already here.',
+      description:
+        'Somebody arrived. Not sent for a second tab of somebody already here.',
     }),
     z.object({ type: z.literal('left'), userId: z.string() }).meta({
       id: 'LeftMessage',
@@ -142,7 +150,7 @@ export const ServerMessage = z
         'than one tile from where they were. Sent once per tick, and not at all when ' +
         'nobody moved. A tab is left out of its own entry when it made the latest ' +
         'change, since its `moveResult` already says where it ended up; every other ' +
-        "tab of the same person gets it, so they follow along.",
+        'tab of the same person gets it, so they follow along.',
     }),
     z
       .object({
@@ -170,7 +178,10 @@ export const ServerMessage = z
           'being the reason. BAD_MESSAGE leaves the socket open.',
       }),
   ])
-  .meta({ id: 'ServerMessage', description: 'Every frame the server may send.' });
+  .meta({
+    id: 'ServerMessage',
+    description: 'Every frame the server may send.',
+  });
 
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
@@ -181,16 +192,19 @@ export type ServerMessage = z.infer<typeof ServerMessage>;
  */
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type Assert<T extends true> = T;
-export type PlayerMatchesMovement = Assert<Same<z.infer<typeof Player>, MovementPlayer>>;
-export type OutcomeMatchesMovement = Assert<Same<z.infer<typeof MoveOutcome>, MovementOutcome>>;
+export type PlayerMatchesMovement = Assert<
+  Same<z.infer<typeof Player>, MovementPlayer>
+>;
+export type OutcomeMatchesMovement = Assert<
+  Same<z.infer<typeof MoveOutcome>, MovementOutcome>
+>;
 
 export function encode(message: ServerMessage): string {
   return JSON.stringify(message);
 }
 
 export type DecodeResult =
-  | { ok: true; message: ClientMessage }
-  | { ok: false; reason: string };
+  { ok: true; message: ClientMessage } | { ok: false; reason: string };
 
 export function decode(raw: string): DecodeResult {
   let json: unknown;
@@ -202,7 +216,10 @@ export function decode(raw: string): DecodeResult {
 
   const parsed = ClientMessage.safeParse(json);
   if (!parsed.success) {
-    return { ok: false, reason: parsed.error.issues[0]?.message ?? 'unrecognised message' };
+    return {
+      ok: false,
+      reason: parsed.error.issues[0]?.message ?? 'unrecognised message',
+    };
   }
   return { ok: true, message: parsed.data };
 }

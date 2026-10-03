@@ -14,7 +14,6 @@ export interface VerifiedGoogleIdentity extends GoogleIdentity {
   emailVerified: boolean;
 }
 
-
 @Injectable()
 export class GoogleOAuthService {
   private cached?: { client: OAuth2Client; clientId: string };

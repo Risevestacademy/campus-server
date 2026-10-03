@@ -11,7 +11,12 @@ function players() {
 
 describe('Players', () => {
   it('places an arrival on the spawn tile, facing down', () => {
-    expect(players().join('ada', 0)).toEqual({ userId: 'ada', x: 0, y: 0, facing: 'down' });
+    expect(players().join('ada', 0)).toEqual({
+      userId: 'ada',
+      x: 0,
+      y: 0,
+      facing: 'down',
+    });
   });
 
   /** Two tabs are one person: the second must not reset where the first walked to. */
@@ -78,7 +83,10 @@ describe('Players', () => {
     const world = players();
     world.join('ada', 0);
 
-    const outcomes = Array.from({ length: STEP_BURST }, () => world.move('ada', 'right', 0).outcome);
+    const outcomes = Array.from(
+      { length: STEP_BURST },
+      () => world.move('ada', 'right', 0).outcome,
+    );
 
     expect(outcomes).toEqual(Array(STEP_BURST).fill('moved'));
   });
@@ -101,7 +109,10 @@ describe('Players', () => {
   });
 
   it('walks indefinitely at exactly the step rate', () => {
-    const world = new Players({ width: 1_000, height: 1, spawn: { x: 0, y: 0 } }, STEP_MS);
+    const world = new Players(
+      { width: 1_000, height: 1, spawn: { x: 0, y: 0 } },
+      STEP_MS,
+    );
     world.join('ada', 0);
 
     const outcomes = new Set<string>();
@@ -115,12 +126,16 @@ describe('Players', () => {
 
   /** A long pause must not bank a run of instant steps beyond the burst. */
   it('does not save up steps beyond the burst', () => {
-    const world = new Players({ width: 100, height: 1, spawn: { x: 0, y: 0 } }, STEP_MS);
+    const world = new Players(
+      { width: 100, height: 1, spawn: { x: 0, y: 0 } },
+      STEP_MS,
+    );
     world.join('ada', 0);
 
     const later = 60_000;
-    const outcomes = Array.from({ length: STEP_BURST + 1 }, () =>
-      world.move('ada', 'right', later).outcome,
+    const outcomes = Array.from(
+      { length: STEP_BURST + 1 },
+      () => world.move('ada', 'right', later).outcome,
     );
 
     expect(outcomes.at(-1)).toBe('too_fast');
@@ -158,7 +173,11 @@ describe('Players', () => {
   describe('reconnecting', () => {
     const GRACE_MS = 30_000;
     const withGrace = () =>
-      new Players({ width: 5, height: 4, spawn: { x: 0, y: 0 } }, STEP_MS, GRACE_MS);
+      new Players(
+        { width: 5, height: 4, spawn: { x: 0, y: 0 } },
+        STEP_MS,
+        GRACE_MS,
+      );
 
     it('puts somebody back where they stood if they return within the grace', () => {
       const world = withGrace();
@@ -240,7 +259,10 @@ describe('Players', () => {
 
       // ada's and grace's grace ran out; lin's has not.
       expect(world.remembered).toBe(1);
-      expect(world.join('lin', GRACE_MS + 10_000)).toMatchObject({ x: 1, y: 0 });
+      expect(world.join('lin', GRACE_MS + 10_000)).toMatchObject({
+        x: 1,
+        y: 0,
+      });
     });
   });
 
@@ -269,7 +291,9 @@ describe('Players', () => {
     });
 
     it('starts at the spawn when the tile is off the map', () => {
-      expect(players().join('ada', 0, { x: 9, y: 2, facing: 'left' })).toMatchObject({
+      expect(
+        players().join('ada', 0, { x: 9, y: 2, facing: 'left' }),
+      ).toMatchObject({
         x: 0,
         y: 0,
         facing: 'down',
@@ -280,17 +304,25 @@ describe('Players', () => {
       const world = players();
       world.join('ada', 0);
 
-      expect(world.join('ada', 0, { x: 3, y: 2, facing: 'left' })).toMatchObject({ x: 0, y: 0 });
+      expect(
+        world.join('ada', 0, { x: 3, y: 2, facing: 'left' }),
+      ).toMatchObject({ x: 0, y: 0 });
     });
 
     /** What this process remembers is fresher than what the store kept. */
     it('is ignored for somebody returning within the grace', () => {
-      const world = new Players({ width: 5, height: 4, spawn: { x: 0, y: 0 } }, STEP_MS, 1_000);
+      const world = new Players(
+        { width: 5, height: 4, spawn: { x: 0, y: 0 } },
+        STEP_MS,
+        1_000,
+      );
       world.join('ada', 0);
       world.move('ada', 'right', 0);
       world.leave('ada', 0, true);
 
-      expect(world.join('ada', 10, { x: 3, y: 2, facing: 'left' })).toMatchObject({ x: 1, y: 0 });
+      expect(
+        world.join('ada', 10, { x: 3, y: 2, facing: 'left' }),
+      ).toMatchObject({ x: 1, y: 0 });
     });
   });
 });

@@ -145,12 +145,12 @@ and `campus-api.up.railway.app` are as unrelated to a browser as two
 different companies. campus-api detects this and marks the cookie
 `SameSite=None`, which gives:
 
-| Browser | Cookie on the frontend's calls | Result |
-| --- | --- | --- |
-| Chrome | Sent (third-party cookies still allowed) | Works |
-| Safari | Blocked outright | Every call 401s after a "successful" sign-in |
-| Firefox | Partitioned away, never sent | Same as Safari |
-| Any, private window | Usually blocked | Same as Safari |
+| Browser             | Cookie on the frontend's calls           | Result                                       |
+| ------------------- | ---------------------------------------- | -------------------------------------------- |
+| Chrome              | Sent (third-party cookies still allowed) | Works                                        |
+| Safari              | Blocked outright                         | Every call 401s after a "successful" sign-in |
+| Firefox             | Partitioned away, never sent             | Same as Safari                               |
+| Any, private window | Usually blocked                          | Same as Safari                               |
 
 So the browser must never call campus-api on its own Railway domain. It
 doesn't: campus-web proxies every call through its own host.
@@ -165,12 +165,12 @@ cookies are first-party, and it works on Railway's domains today.
 
 campus-api's settings for this:
 
-| Variable | Value |
-| --- | --- |
-| `APP_PUBLIC_URL` | `https://<web>.up.railway.app` |
+| Variable              | Value                                                                                                                                                                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_PUBLIC_URL`      | `https://<web>.up.railway.app`                                                                                                                                                                                                                 |
 | `GOOGLE_CALLBACK_URL` | `https://<web>.up.railway.app/api/v1/auth/google/callback` — through the proxy, not campus-api's own host. Register the same URI on the Google client. Because this host matches `APP_PUBLIC_URL`, campus-api picks `SameSite=Lax` on its own. |
-| `CORS_ORIGINS` | `https://<web>.up.railway.app` |
-| `TRUST_PROXY_HOPS` | `1`, provided the proxy forwards `X-Forwarded-For` — see below. |
+| `CORS_ORIGINS`        | `https://<web>.up.railway.app`                                                                                                                                                                                                                 |
+| `TRUST_PROXY_HOPS`    | `1`, provided the proxy forwards `X-Forwarded-For` — see below.                                                                                                                                                                                |
 
 campus-api's public domain is then only needed for `/docs`.
 

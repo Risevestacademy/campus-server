@@ -3,7 +3,10 @@ import { loadEnv, parseCorsOrigins } from './env.js';
 // APP_PUBLIC_URL is required, so every loadEnv call in these tests carries
 // it via testEnv — the cases below exercise the other variables.
 function testEnv(overrides: Record<string, unknown> = {}) {
-  return loadEnv({ APP_PUBLIC_URL: 'https://api.campus.example.com', ...overrides });
+  return loadEnv({
+    APP_PUBLIC_URL: 'https://api.campus.example.com',
+    ...overrides,
+  });
 }
 
 describe('loadEnv PostHog validation', () => {
@@ -187,10 +190,14 @@ describe('loadEnv AUTH_COOKIE_DOMAIN', () => {
   });
 
   it('refuses anything that is not a bare domain', () => {
-    for (const value of ['https://campus.example.com', 'campus', '.campus.example.com']) {
-      expect(() => testEnv({ ...ON_DOMAIN, AUTH_COOKIE_DOMAIN: value })).toThrow(
-        /AUTH_COOKIE_DOMAIN/,
-      );
+    for (const value of [
+      'https://campus.example.com',
+      'campus',
+      '.campus.example.com',
+    ]) {
+      expect(() =>
+        testEnv({ ...ON_DOMAIN, AUTH_COOKIE_DOMAIN: value }),
+      ).toThrow(/AUTH_COOKIE_DOMAIN/);
     }
   });
 });

@@ -7,7 +7,11 @@ import { DomainExceptionFilter } from './domain-exception.filter.js';
 class TestException extends DomainException {
   readonly code: ExceptionCode;
 
-  constructor(code: ExceptionCode, message: string, details?: Record<string, unknown>) {
+  constructor(
+    code: ExceptionCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
     super(message, details);
     this.code = code;
   }
@@ -92,7 +96,9 @@ describe('DomainExceptionFilter', () => {
   it('logs the withheld diagnostic on a 5xx', () => {
     const logger = { error: vi.fn() };
     run(
-      new TestException(ExceptionCode.InternalError, 'boom', { inviteId: 'abc' }),
+      new TestException(ExceptionCode.InternalError, 'boom', {
+        inviteId: 'abc',
+      }),
       logger,
     );
 
@@ -132,7 +138,11 @@ describe('DomainExceptionFilter', () => {
         getResponse: () => ({
           status: (code: number) => {
             response.statusCode = code;
-            return { json: (b: unknown) => { response.body = b; } };
+            return {
+              json: (b: unknown) => {
+                response.body = b;
+              },
+            };
           },
         }),
         getRequest: () => ({}),

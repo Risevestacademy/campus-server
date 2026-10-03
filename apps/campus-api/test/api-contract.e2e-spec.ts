@@ -8,7 +8,11 @@ import { App } from 'supertest/types';
 
 import { PaginationQueryDto } from './../src/shared/dto/index.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
-import { DomainExceptionFilter, GlobalExceptionFilter, ValidationExceptionFilter } from './../src/shared/filters/index.js';
+import {
+  DomainExceptionFilter,
+  GlobalExceptionFilter,
+  ValidationExceptionFilter,
+} from './../src/shared/filters/index.js';
 
 @Controller('list')
 class ListController {
@@ -45,7 +49,11 @@ describe('API contract (e2e)', () => {
         exceptionFactory: (errors) => new ValidationException(errors),
       }),
     );
-    app.useGlobalFilters(new GlobalExceptionFilter(), new DomainExceptionFilter(), new ValidationExceptionFilter());
+    app.useGlobalFilters(
+      new GlobalExceptionFilter(),
+      new DomainExceptionFilter(),
+      new ValidationExceptionFilter(),
+    );
     await app.init();
   });
 
