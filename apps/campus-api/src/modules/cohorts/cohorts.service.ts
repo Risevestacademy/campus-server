@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { asc, count, desc, eq } from 'drizzle-orm';
+import { and, asc, count, desc, eq } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
@@ -193,6 +193,62 @@ export class CohortsService {
     }
   }
 
+  /**
+   * Stops a cohort running a track. The reverse of attachTrack, and what a
+   * cohort needs before it can be deleted.
+   *
+   * Refused while anything in the cohort is still on the track: a student
+   * placed on it, or an invite that names it, pending or settled. The FKs
+   * are restrictive on purpose — detaching must not quietly leave a student
+   * with no track, or an invite pointing at nothing — so those have to be
+   * moved or removed first.
+   */
+  async detachTrack(
+    cohortId: string,
+    trackId: string,
+    audit: AuditContext,
+  ): Promise<void> {
+    // Read first, so a missing cohort and a track that is simply not
+    // attached get different answers.
+    await this.findCohort(cohortId);
+
+    try {
+      // One transaction, so a track is never detached without its entry, and
+      // a detach the FKs refuse leaves no entry behind.
+      await this.db.transaction(async (tx) => {
+        const [row] = await tx
+          .delete(cohortTracks)
+          .where(
+            and(
+              eq(cohortTracks.cohortId, cohortId),
+              eq(cohortTracks.trackId, trackId),
+            ),
+          )
+          .returning();
+        if (!row) {
+          throw new TrackNotFoundException(
+            `Track ${trackId} is not attached to this cohort`,
+            { cohortId, trackId },
+          );
+        }
+        await writeAuditEntry(tx, {
+          ...audit,
+          action: AuditAction.CohortTrackDetached,
+          subject: { type: AuditSubjectType.CohortTrack, id: row.id },
+          details: { cohortId, trackId },
+        });
+      });
+    } catch (err) {
+      if (isForeignKeyViolation(err)) {
+        throw new CohortConflictException(
+          'Track cannot be detached while students or invites in this cohort are still on it',
+          { cohortId, trackId },
+        );
+      }
+      throw err;
+    }
+  }
+
   async update(
     id: string,
     dto: UpdateCohortDto,
@@ -302,8 +358,8 @@ export class CohortsService {
       });
     } catch (err) {
       // The FKs are restrictive on purpose: a cohort with tracks, members
-      // or invites is refused rather than emptied, and there is no detach
-      // route yet, so the message says what has to go first.
+      // or invites is refused rather than emptied, so the message says what
+      // has to go first. Tracks come off with detachTrack.
       if (isForeignKeyViolation(err)) {
         throw new CohortConflictException(
           'Cohort cannot be deleted while it still has tracks, members or invites',

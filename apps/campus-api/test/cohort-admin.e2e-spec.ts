@@ -714,6 +714,200 @@ describe('cohort and track admin routes (e2e)', () => {
    * only record of which admin set a cohort up — and the correlation id on
    * it is what leads from the entry back to the request's log lines.
    */
+  describe('detaching tracks', () => {
+    const MISSING = '99999999-9999-4999-8999-999999999999';
+
+    /** A cohort running one track, as the two routes above leave it. */
+    const running = async () => {
+      const track = (await createTrack().expect(201)).body;
+      const cohort = (await createCohort().expect(201)).body;
+      const link = (
+        await as(adminCookie)
+          .post(`/v1/cohorts/${cohort.id}/tracks`, { trackId: track.id })
+          .expect(201)
+      ).body;
+      return { track, cohort, link };
+    };
+    const detach = (cohortId: string, trackId: string, cookie = adminCookie) =>
+      as(cookie).del(`/v1/cohorts/${cohortId}/tracks/${trackId}`);
+
+    it('detaches a track, and leaves the track in the catalogue', async () => {
+      const { track, cohort } = await running();
+
+      await detach(cohort.id, track.id).expect(204);
+
+      const detail = (
+        await as(adminCookie).get(`/v1/cohorts/${cohort.id}`).expect(200)
+      ).body;
+      expect(detail.tracks).toEqual([]);
+      const listed = (await as(adminCookie).get('/v1/tracks').expect(200)).body;
+      expect(listed.items).toEqual([expect.objectContaining({ id: track.id })]);
+    });
+
+    // The reason the route exists: a cohort that runs a track cannot be
+    // deleted, and until now nothing could take the track off.
+    it('lets the cohort be deleted afterwards', async () => {
+      const { track, cohort } = await running();
+      await as(adminCookie).del(`/v1/cohorts/${cohort.id}`).expect(409);
+
+      await detach(cohort.id, track.id).expect(204);
+
+      await as(adminCookie).del(`/v1/cohorts/${cohort.id}`).expect(204);
+    });
+
+    it('lets the same track be attached again', async () => {
+      const { track, cohort } = await running();
+      await detach(cohort.id, track.id).expect(204);
+
+      await as(adminCookie)
+        .post(`/v1/cohorts/${cohort.id}/tracks`, { trackId: track.id })
+        .expect(201);
+    });
+
+    it('only detaches from the cohort it names', async () => {
+      const { track, cohort } = await running();
+      const other = (
+        await createCohort({ name: 'Cohort 2', code: 'c2' }).expect(201)
+      ).body;
+      await as(adminCookie)
+        .post(`/v1/cohorts/${other.id}/tracks`, { trackId: track.id })
+        .expect(201);
+
+      await detach(cohort.id, track.id).expect(204);
+
+      const detail = (
+        await as(adminCookie).get(`/v1/cohorts/${other.id}`).expect(200)
+      ).body;
+      expect(detail.tracks).toHaveLength(1);
+    });
+
+    it('refuses while a student in the cohort is on the track', async () => {
+      const { track, cohort, link } = await running();
+      const [member] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, 'member@campus.local'));
+      await db.insert(schema.cohortMembers).values({
+        cohortId: cohort.id,
+        userId: member.id,
+        cohortTrackId: link.id,
+        role: CohortRole.Student,
+        status: 'active',
+      });
+
+      const res = await detach(cohort.id, track.id).expect(409);
+
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        details: { cohortId: cohort.id, trackId: track.id },
+      });
+      const detail = (
+        await as(adminCookie).get(`/v1/cohorts/${cohort.id}`).expect(200)
+      ).body;
+      expect(detail.tracks).toHaveLength(1);
+    });
+
+    it('refuses while an invite to the cohort names the track', async () => {
+      const { track, cohort, link } = await running();
+      await as(adminCookie)
+        .post('/v1/invites', {
+          email: 'student@campus.local',
+          cohortId: cohort.id,
+          cohortRole: CohortRole.Student,
+          cohortTrackId: link.id,
+        })
+        .expect(201);
+
+      await detach(cohort.id, track.id).expect(409);
+    });
+
+    // Staff carry no track, so they are no obstacle to taking one off.
+    it('is not held up by a member who is not on the track', async () => {
+      const { track, cohort } = await running();
+      const [member] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, 'member@campus.local'));
+      await db.insert(schema.cohortMembers).values({
+        cohortId: cohort.id,
+        userId: member.id,
+        role: CohortRole.Professor,
+      });
+
+      await detach(cohort.id, track.id).expect(204);
+    });
+
+    it('answers 404 for a missing cohort, and for a track the cohort does not run', async () => {
+      const { track, cohort } = await running();
+      const unattached = (
+        await createTrack({ name: 'Product Design', code: 'pd' }).expect(201)
+      ).body;
+
+      const noCohort = await detach(MISSING, track.id).expect(404);
+      expect(noCohort.body.error.details).toEqual({ cohortId: MISSING });
+
+      const notAttached = await detach(cohort.id, unattached.id).expect(404);
+      expect(notAttached.body.error.message).toContain(
+        'is not attached to this cohort',
+      );
+    });
+
+    it('answers a second detach with 404', async () => {
+      const { track, cohort } = await running();
+      await detach(cohort.id, track.id).expect(204);
+
+      await detach(cohort.id, track.id).expect(404);
+    });
+
+    it('answers 400 for an id that is not a UUID', async () => {
+      const { track, cohort } = await running();
+
+      await detach('not-a-uuid', track.id).expect(400);
+      await detach(cohort.id, 'not-a-uuid').expect(400);
+    });
+
+    it('is for admins only', async () => {
+      const { track, cohort } = await running();
+
+      await detach(cohort.id, track.id, memberCookie).expect(403);
+      await request(app.getHttpServer())
+        .delete(`/v1/cohorts/${cohort.id}/tracks/${track.id}`)
+        .expect(401);
+    });
+
+    it('records who detached it, and nothing when the detach is refused', async () => {
+      const { track, cohort, link } = await running();
+      await as(adminCookie)
+        .post('/v1/invites', {
+          email: 'student@campus.local',
+          cohortId: cohort.id,
+          cohortRole: CohortRole.Student,
+          cohortTrackId: link.id,
+        })
+        .expect(201);
+      const detached = () =>
+        db
+          .select()
+          .from(auditLog)
+          .where(eq(auditLog.action, AuditAction.CohortTrackDetached));
+
+      await detach(cohort.id, track.id).expect(409);
+      expect(await detached()).toHaveLength(0);
+
+      await db.execute(sql`delete from invites`);
+      await detach(cohort.id, track.id).expect(204);
+
+      expect(await detached()).toEqual([
+        expect.objectContaining({
+          actorUserId: adminId,
+          subjectType: AuditSubjectType.CohortTrack,
+          subjectId: link.id,
+          details: { cohortId: cohort.id, trackId: track.id },
+        }),
+      ]);
+    });
+  });
+
   describe('audit log', () => {
     const entries = () =>
       db.select().from(auditLog).orderBy(auditLog.createdAt);

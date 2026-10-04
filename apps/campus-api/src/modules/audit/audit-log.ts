@@ -128,6 +128,10 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.CohortTrack;
     details: { cohortId: string; trackId: string };
   };
+  [AuditAction.CohortTrackDetached]: {
+    subject: AuditSubjectType.CohortTrack;
+    details: { cohortId: string; trackId: string };
+  };
   [AuditAction.TrackCreated]: {
     subject: AuditSubjectType.Track;
     details: Pick<TrackSnapshot, 'name' | 'code'>;
