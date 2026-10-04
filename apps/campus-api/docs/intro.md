@@ -259,6 +259,7 @@ in the docs:
 | `health`  | Service health and performance data (`GET /v1/health`) |
 | `cohorts` | Cohort management                                      |
 | `users`   | The admin's list of accounts, with filters             |
+| `profile` | A member's own profile, and other members' cards       |
 | `spaces`  | Physical spaces and occupancy                          |
 
 Each operation documents its path, expected request body/query parameters, and
