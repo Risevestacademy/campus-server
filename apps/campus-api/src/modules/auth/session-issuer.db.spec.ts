@@ -218,7 +218,13 @@ describe('SessionIssuer.revokeAllSessions', () => {
     return row.sessionEpoch;
   };
 
-  it('signs a session with the epoch the account has', async () => {
+  /** The row as it is now: what a sign-in starts from. */
+  const fresh = async () => {
+    const [row] = await db.select().from(users).where(eq(users.id, user.id));
+    return row;
+  };
+
+  it('signs a session with the epoch of the row the grant was decided on', async () => {
     const first = await issuer.issueFullAccess(user, { endsAt: null }, now);
     expect(await epochOf(first.token)).toBe(0);
 
@@ -226,10 +232,35 @@ describe('SessionIssuer.revokeAllSessions', () => {
       .update(users)
       .set({ sessionEpoch: 7 })
       .where(eq(users.id, user.id));
-    const second = await issuer.issueFullAccess(user, { endsAt: null }, now);
+    const second = await issuer.issueFullAccess(
+      await fresh(),
+      { endsAt: null },
+      now,
+    );
 
-    // Read from the row at minting, not from the object the caller held.
     expect(await epochOf(second.token)).toBe(7);
+  });
+
+  /**
+   * The interleaving that matters most: a sign-in reads the account and
+   * decides it may come in; the member is then removed, which revokes their
+   * sessions; and only then is the session minted.
+   *
+   * The issuer reads the account again as it mints, and that read agrees
+   * with the row. If the mint were held to that read, it would pass, and a
+   * removed member would walk away with a full session that nothing checks
+   * again until it expires. It is held to the row the decision was made on.
+   */
+  it('mints nothing when the account was revoked after the grant was decided', async () => {
+    const decidedOn = await fresh();
+    const grant = { endsAt: null };
+
+    await issuer.revokeAllSessions(user.id, now);
+
+    await expect(
+      issuer.issueFullAccess(decidedOn, grant, now),
+    ).rejects.toBeInstanceOf(SessionUnauthorizedError);
+    expect(await db.select().from(refreshTokens)).toHaveLength(0);
   });
 
   it('bumps the epoch and revokes every family the account holds', async () => {
@@ -263,11 +294,16 @@ describe('SessionIssuer.revokeAllSessions', () => {
   it('lets the account sign in again afterwards, on the new epoch', async () => {
     await issuer.revokeAllSessions(user.id, now);
 
-    const fresh = await issuer.issueFullAccess(user, { endsAt: null }, now);
+    // A new sign-in reads the account afresh, and is decided on that.
+    const again = await issuer.issueFullAccess(
+      await fresh(),
+      { endsAt: null },
+      now,
+    );
 
-    expect(await epochOf(fresh.token)).toBe(1);
+    expect(await epochOf(again.token)).toBe(1);
     await expect(
-      issuer.refreshSession(fresh.refreshToken, now),
+      issuer.refreshSession(again.refreshToken, now),
     ).resolves.toMatchObject({ scope: 'full_access' });
   });
 

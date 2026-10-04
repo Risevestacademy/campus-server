@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
@@ -145,10 +145,25 @@ describe('session revocation (e2e)', () => {
 
   // Revoking ends sessions; it does not close the account. Whatever took the
   // access away decides whether they may come back.
+  // A sign-in decided before the revoke, and only minted after it, is held
+  // to the account as it was when it was decided.
+  it('refuses to issue a session decided on before the revoke', async () => {
+    await issuer.revokeAllSessions(account.id);
+
+    await expect(
+      issuer.issueFullAccess(account, { endsAt: null }),
+    ).rejects.toThrow('Session has been revoked');
+  });
+
   it('accepts a session issued after the revoke', async () => {
     await issuer.revokeAllSessions(account.id);
 
-    const fresh = await issuer.issueFullAccess(account, { endsAt: null });
+    // A new sign-in starts from the account as it is now.
+    const [current] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, account.id));
+    const fresh = await issuer.issueFullAccess(current, { endsAt: null });
 
     await me(fresh.token).expect(200);
     await me(session.token).expect(401);

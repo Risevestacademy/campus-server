@@ -100,6 +100,14 @@ export class SessionIssuer {
    *
    * A grant that has already ended is refused outright. By the time we are
    * minting, its holder is somebody the sign-in gate would now turn away.
+   *
+   * `user` has to be the row the grant was decided against, read before the
+   * decision. Its session epoch is what the mint is held to: if the account's
+   * sessions have been revoked since — which is what removing a member does
+   * — the row has moved on and nothing is minted. The account is read again
+   * below for its current details, but never for its epoch: a fresh read
+   * taken after a revoke would agree with the row, and wave through a grant
+   * that the revoke had just made untrue.
    */
   async issueFullAccess(
     user: User,
@@ -112,16 +120,18 @@ export class SessionIssuer {
     if (endsAt !== null && endsAt.getTime() <= now.getTime()) {
       throw new SessionUnauthorizedError('Access has already ended');
     }
-    const account = await this.users.findById(user.id);
-    if (!account) {
+    const current = await this.users.findById(user.id);
+    if (!current) {
       throw new SessionUnauthorizedError('Account is not usable');
     }
+    // The current row, on the epoch the grant was decided at.
+    const account: User = { ...current, sessionEpoch: user.sessionEpoch };
     const membership = await this.members.resolveActiveMembership(user.id, now);
 
     // Checked and minted in one transaction, so a revoke cannot land between
-    // reading the account above and inserting the family below. Without it
-    // the revoke would sweep the families that existed, miss the one minted
-    // a moment later, and leave a working refresh token behind.
+    // the grant being decided and the family being inserted below. Without
+    // it the revoke would sweep the families that existed, miss the one
+    // minted a moment later, and leave a working refresh token behind.
     const mint = async (tx: Tx) => {
       await this.assertEpochCurrent(tx, account);
       return this.mintSession(account, membership, endsAt, now, familyId, tx);
@@ -131,8 +141,8 @@ export class SessionIssuer {
 
   /**
    * Holds the account's row against a revoke for the rest of the
-   * transaction, and refuses if one has already landed since the account was
-   * read.
+   * transaction, and refuses if one has already landed since `account` was
+   * read — which has to be before whatever decided it may have a session.
    *
    * A shared lock is enough: sign-ins and refreshes do not block one
    * another, only revokeAllSessions, whose UPDATE of the same row waits for

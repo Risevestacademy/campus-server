@@ -88,7 +88,13 @@ export class AuthService {
     const grant = existing ? await this.resolveAccess(existing) : null;
     const invite = await this.invites.findUsableForEmail(email);
     if (existing && grant) {
-      const user = await this.linkIfUnbound(existing, normalized);
+      const linked = await this.linkIfUnbound(existing, normalized);
+      // The grant was decided against `existing`, and the session is held
+      // to the epoch it had then. Linking can hand back a newer read of the
+      // row; if the account's sessions were revoked in between, that read
+      // carries the new epoch, and minting against it would admit somebody
+      // the revoke had just removed.
+      const user = { ...linked, sessionEpoch: existing.sessionEpoch };
       await this.users.recordLogin(user.id);
       this.logger.info(
         {
