@@ -4,6 +4,7 @@ import {
   foreignKey,
   pgEnum,
   pgTable,
+  text,
   timestamp,
   uniqueIndex,
   uuid,
@@ -74,6 +75,14 @@ export const invites = pgTable(
      */
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     revokedBy: uuid('revoked_by').references(() => users.id),
+    /**
+     * The invitee telling the admin something on the offer is wrong — the
+     * role, the track, the cohort. It is a note, not a state: a flagged invite
+     * stays pending and can still be accepted, so it sits beside status
+     * rather than inside it.
+     */
+    flaggedAt: timestamp('flagged_at', { withTimezone: true }),
+    flagMessage: text('flag_message'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -104,6 +113,11 @@ export const invites = pgTable(
     check(
       'invites_revoked_fields',
       sql`(${table.revokedAt} is null) = (${table.revokedBy} is null) and (${table.revokedAt} is null or ${table.status} = ${sql.raw(`'${InviteStatus.Revoked}'`)})`,
+    ),
+    // A flag is its moment and what it said, together or not at all.
+    check(
+      'invites_flag_fields',
+      sql`(${table.flaggedAt} is null) = (${table.flagMessage} is null)`,
     ),
     check(
       'invites_email_lowercase',

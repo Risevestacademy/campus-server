@@ -24,12 +24,21 @@ const accounts = {
   gone: new Set<string>(),
   /** Logins signed out, revoked or no longer refreshed. Every other one is live. */
   endedSessions: new Set<string>(),
+  /** `userId:cohortId` pairs with no live membership. Everything else has one. */
+  notMembers: new Set<string>(),
+  admins: new Set<string>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
       ? null
-      : { id: userId, suspended: accounts.suspended.has(userId) },
+      : {
+          id: userId,
+          suspended: accounts.suspended.has(userId),
+          admin: accounts.admins.has(userId),
+        },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
+  liveMembership: async (userId: string, cohortId: string): Promise<boolean> =>
+    !accounts.notMembers.has(`${userId}:${cohortId}`),
   close: async () => undefined,
 };
 
@@ -97,9 +106,16 @@ async function token(
   return token;
 }
 
-/** Opens a socket and collects what the server says, until it closes or settles. */
-function connect(headers: Record<string, string>) {
-  const ws = new WebSocket(url, { headers });
+const COHORT = 'cohort-1';
+
+/**
+ * Opens a socket and collects what the server says, until it closes or
+ * settles. Pass '' as the cohort to leave the parameter off entirely.
+ */
+function connect(headers: Record<string, string>, cohortId = COHORT) {
+  const target =
+    cohortId === '' ? url : `${url}?cohortId=${encodeURIComponent(cohortId)}`;
+  const ws = new WebSocket(target, { headers });
   const messages: Record<string, unknown>[] = [];
 
   const settled = new Promise<{ closeCode?: number; closeReason?: string }>(
@@ -141,6 +157,8 @@ beforeEach(() => {
   accounts.suspended.clear();
   accounts.gone.clear();
   accounts.endedSessions.clear();
+  accounts.notMembers.clear();
+  accounts.admins.clear();
   store.positions.clear();
   store.failLoad = false;
   store.loads = 0;
@@ -211,6 +229,53 @@ describe('socket upgrade', () => {
       message: 'origin_not_allowed',
     });
     await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+  });
+
+  it('refuses a socket that names no cohort', async () => {
+    const { first, settled } = connect(
+      { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      '',
+    );
+
+    await expect(first).resolves.toMatchObject({
+      type: 'error',
+      code: 'UNAUTHORIZED',
+      message: 'no_cohort',
+    });
+    await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+  });
+
+  it('refuses a cohort the account has no live membership in', async () => {
+    accounts.notMembers.add('user-1:cohort-elsewhere');
+
+    const { first, settled } = connect(
+      { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      'cohort-elsewhere',
+    );
+
+    await expect(first).resolves.toMatchObject({
+      type: 'error',
+      code: 'UNAUTHORIZED',
+      message: 'not_a_member',
+    });
+    await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+  });
+
+  /** Campus-api's sign-in gate admits an admin on their role alone. */
+  it('lets an admin into a cohort they hold no membership in', async () => {
+    accounts.admins.add('user-1');
+    accounts.notMembers.add('user-1:cohort-elsewhere');
+
+    const { ws, first } = connect(
+      { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      'cohort-elsewhere',
+    );
+
+    await expect(first).resolves.toMatchObject({
+      type: 'welcome',
+      userId: 'user-1',
+    });
+    ws.close();
   });
 
   it('refuses a cookie sent with no origin at all', async () => {
@@ -289,7 +354,7 @@ describe('sockets that go wrong', () => {
    * is simply gone.
    */
   it('does not lose a frame sent the instant the socket opens', async () => {
-    const ws = new WebSocket(url, {
+    const ws = new WebSocket(`${url}?cohortId=${COHORT}`, {
       headers: { origin: ORIGIN, cookie: `campus_session=${await token()}` },
     });
     const replies: Record<string, unknown>[] = [];
@@ -649,7 +714,7 @@ describe('an open socket', () => {
   it('counts the connection while it is open, and forgets it after', async () => {
     const conn = await open();
     expect(world.gateway.connections.size).toBe(1);
-    expect(world.gateway.connections.forUser('user-1')).toHaveLength(1);
+    expect(world.gateway.connections.forUser('user-1')).toBeDefined();
 
     conn.ws.close();
     await conn.settled;
@@ -658,11 +723,13 @@ describe('an open socket', () => {
     expect(world.gateway.connections.size).toBe(0);
   });
 
-  it('holds both tabs a person has open', async () => {
+  it('replaces the socket a person already had open', async () => {
     const one = await open();
     const two = await open();
 
-    expect(world.gateway.connections.forUser('user-1')).toHaveLength(2);
+    await one.settled;
+    expect(world.gateway.connections.forUser('user-1')).toBeDefined();
+    expect(world.gateway.connections.size).toBe(1);
     expect(world.gateway.connections.users).toBe(1);
 
     one.ws.close();
@@ -676,11 +743,14 @@ describe('movement', () => {
   /** A fresh person per test, so nobody starts where an earlier test left them. */
   const person = () => `walker-${++nextUser}`;
 
-  async function arrive(userId: string) {
-    const conn = connect({
-      origin: ORIGIN,
-      cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
-    });
+  async function arrive(userId: string, cohortId = COHORT) {
+    const conn = connect(
+      {
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
+      },
+      cohortId,
+    );
     await waitFor(conn, (m) => m.type === 'snapshot');
     return conn;
   }
@@ -902,103 +972,142 @@ describe('movement', () => {
     await leave(staying);
   });
 
-  /**
-   * Two tabs are one person in one place: the second must not announce a
-   * second arrival, and closing one must not make them vanish.
-   */
-  describe('somebody with two tabs', () => {
-    it('is one player, not two', async () => {
-      const ada = person();
-      const watcher = await arrive(person());
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
+  /** One cohort, one device, one tab: the newest connection wins. */
+  describe('one place at a time', () => {
+    const entryOf = (message: Record<string, unknown>) =>
+      message.player as { userId: string; x: number; y: number };
 
-      await quiet();
-      expect(watcher.messages.filter((m) => m.type === 'joined')).toHaveLength(
-        1,
-      );
+    it('holds one socket for the account, however many were opened', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      const third = await arrive(ada);
+      await first.settled;
+      await second.settled;
+
+      expect(
+        world.gateway.connections.all().filter((c) => c.userId === ada),
+      ).toHaveLength(1);
+      expect(world.gateway.connections.forUser(ada)).toBeDefined();
       expect(
         world.gateway.players.all().filter((p) => p.userId === ada),
       ).toHaveLength(1);
 
-      await leave(tabOne);
-      await leave(tabTwo);
-      await leave(watcher);
+      await leave(third);
     });
 
-    it('walks the same avatar from either tab, and both follow along', async () => {
+    it('tells the socket it displaced, then closes it with 4000', async () => {
       const ada = person();
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
-
-      move(tabOne, 'right', 1);
+      const first = await arrive(ada);
+      const second = await arrive(ada);
 
       await expect(
-        waitFor(tabTwo, (m) => m.type === 'moved'),
-      ).resolves.toMatchObject({
-        players: [{ userId: ada, x: 1, y: 0 }],
+        waitFor(first, (m) => m.type === 'replaced'),
+      ).resolves.toEqual({ type: 'replaced' });
+      await expect(first.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
       });
 
-      move(tabTwo, 'down', 1);
-      await expect(
-        waitFor(tabTwo, (m) => m.type === 'moveResult'),
-      ).resolves.toMatchObject({
-        player: { x: 1, y: 1 },
-      });
-
-      await leave(tabOne);
-      await leave(tabTwo);
+      await leave(second);
     });
 
-    /**
-     * Tab one's last answer is its own step; tab two's step came after it.
-     * If the tick leaves out every tab that moved, tab one never learns
-     * where the avatar ended up.
-     */
-    it('brings both tabs to the final position when both step inside one tick', async () => {
-      const ada = person();
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
-
-      move(tabOne, 'right', 1);
-      move(tabTwo, 'down', 1);
-      await waitFor(tabTwo, (m) => m.type === 'moveResult');
-
-      await expect(
-        waitFor(
-          tabOne,
-          (m) =>
-            m.type === 'moved' &&
-            (m.players as { userId: string; x: number; y: number }[]).some(
-              (p) => p.userId === ada && p.x === 1 && p.y === 1,
-            ),
-        ),
-      ).resolves.toBeDefined();
-
-      await leave(tabOne);
-      await leave(tabTwo);
-    });
-
-    it('stays while either tab is open, and leaves with the last', async () => {
+    /** The avatar must not blink out and back for everybody watching. */
+    it('leaves the avatar where it stood, replacing within one cohort', async () => {
       const ada = person();
       const watcher = await arrive(person());
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
 
-      await leave(tabOne);
+      const second = await arrive(ada);
+
+      const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
+
       await quiet();
-      expect(watcher.messages.some((m) => m.type === 'left')).toBe(false);
-      expect(world.gateway.players.has(ada)).toBe(true);
+      expect(
+        watcher.messages.filter((m) => m.type === 'left' && m.userId === ada),
+      ).toHaveLength(0);
+      // The one from their original arrival, and no second one.
+      expect(
+        watcher.messages.filter(
+          (m) => m.type === 'joined' && entryOf(m).userId === ada,
+        ),
+      ).toHaveLength(1);
 
-      await leave(tabTwo);
-      await expect(waitFor(watcher, (m) => m.type === 'left')).resolves.toEqual(
-        {
-          type: 'left',
-          userId: ada,
-        },
+      await leave(second);
+      await leave(watcher);
+    });
+
+    it('leaves the old cohort and joins the new, keeping the position', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      await expect(
+        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+      await expect(
+        waitFor(
+          watcher,
+          (m) =>
+            m.type === 'joined' &&
+            entryOf(m).userId === ada &&
+            entryOf(m).x === 1,
+        ),
+      ).resolves.toMatchObject({ player: { userId: ada, x: 1, y: 0 } });
+
+      expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
+        'cohort-backend',
       );
 
+      await leave(inBackend);
       await leave(watcher);
+    });
+
+    it('keeps the avatar until the surviving socket closes', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      await first.settled;
+
+      await quiet();
+      expect(world.gateway.players.has(ada)).toBe(true);
+      expect(
+        watcher.messages.some((m) => m.type === 'left' && m.userId === ada),
+      ).toBe(false);
+
+      await leave(second);
+      await expect(
+        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+
+      await leave(watcher);
+    });
+
+    it('leaves the newest socket in charge of the avatar', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      await first.settled;
+
+      move(second, 'down', 1);
+      await expect(
+        waitFor(second, (m) => m.type === 'moveResult'),
+      ).resolves.toMatchObject({ outcome: 'moved', player: { x: 0, y: 1 } });
+
+      await leave(second);
     });
   });
 
@@ -1119,7 +1228,7 @@ describe('movement', () => {
       userId: ada,
     });
     expect(world.gateway.players.has(ada)).toBe(false);
-    expect(world.gateway.connections.forUser(ada)).toHaveLength(0);
+    expect(world.gateway.connections.forUser(ada)).toBeUndefined();
 
     await leave(watcher);
   }, 15_000);
@@ -1268,12 +1377,15 @@ describe('shutdown', () => {
     });
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = own.app.server.address() as AddressInfo;
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
-      headers: {
-        origin: ORIGIN,
-        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, 'leaving-1')}`,
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`,
+      {
+        headers: {
+          origin: ORIGIN,
+          cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, 'leaving-1')}`,
+        },
       },
-    });
+    );
     const closed = new Promise((resolve) => ws.on('close', resolve));
     await new Promise((resolve) => ws.on('message', resolve));
 

@@ -6,6 +6,9 @@ import {
   desc,
   eq,
   gt,
+  inArray,
+  isNotNull,
+  isNull,
   lte,
   ne,
   or,
@@ -56,6 +59,7 @@ import type {
   InviteTrackDto,
 } from './dto/invite-onboarding-response.dto.js';
 import type { InvitePreviewResponseDto } from './dto/invite-preview.dto.js';
+import type { InviteFlagNotice } from './invite-flag-email.js';
 import type { InviteResponseDto } from './dto/invite-response.dto.js';
 import {
   buildInviteLink,
@@ -392,6 +396,7 @@ export class InvitesService {
           status: invites.status,
           expiresAt: invites.expiresAt,
           guestAccessExpiresAt: invites.guestAccessExpiresAt,
+          flaggedAt: invites.flaggedAt,
           createdAt: invites.createdAt,
         },
         cohort: {
@@ -526,6 +531,7 @@ export class InvitesService {
       status: row.invite.status,
       expiresAt: row.invite.expiresAt,
       guestAccessExpiresAt: row.invite.guestAccessExpiresAt,
+      flaggedAt: row.invite.flaggedAt,
       invitedBy,
       createdAt: row.invite.createdAt,
       user: account,
@@ -1169,6 +1175,105 @@ export class InvitesService {
   }
 
   /**
+   * The invitee telling the admin something on the offer is wrong.
+   *
+   * A note on the invite and nothing more: the status is not touched, so the
+   * invite stays pending and accepting it works exactly as before. What the
+   * admin does about it — revoke and re-invite, or nothing — is theirs to
+   * decide.
+   *
+   * Only a live invite can be flagged, by the same conditional UPDATE accept,
+   * decline and revoke claim with, so a settled or lapsed one answers with
+   * the code every other route gives it. One flag per invite: the admin has
+   * been told, and a second note would only be a second email, so a repeat
+   * is a 409 rather than an overwrite of what the first one said.
+   */
+  async flag(
+    inviteId: string,
+    message: string,
+    user: AuthenticatedUser,
+    correlationId?: string,
+    now: Date = new Date(),
+  ): Promise<Invite> {
+    // One transaction, so a flag is never recorded without its entry, and a
+    // session pointed at somebody else's invite leaves nothing behind.
+    const flagged = await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(invites)
+        .set({ flaggedAt: now, flagMessage: message })
+        .where(
+          and(
+            eq(invites.id, inviteId),
+            eq(invites.status, InviteStatus.Pending),
+            // Same comparison isInviteLive makes, so a lapsed invite is
+            // refused here exactly as it is on the read path.
+            gt(invites.expiresAt, now),
+            isNull(invites.flaggedAt),
+          ),
+        )
+        .returning();
+
+      if (row) {
+        checkEmailMatch(row, user);
+        await writeAuditEntry(tx, {
+          actorUserId: user.id,
+          correlationId,
+          action: AuditAction.InviteFlagged,
+          subject: { type: AuditSubjectType.Invite, id: row.id },
+          details: { cohortId: row.cohortId, invitedBy: row.invitedBy },
+        });
+      }
+      return row;
+    });
+
+    if (flagged) {
+      return flagged;
+    }
+
+    const existing = await this.findInvite(inviteId);
+    if (isInviteLive(existing, now)) {
+      // Live, so the only condition left to have failed is the flag itself.
+      throw new InviteConflictException('This invite is already flagged', {
+        inviteId,
+        flaggedAt: existing.flaggedAt,
+      });
+    }
+    await this.expireLazily(inviteId, now);
+    return this.throwUnclaimable(existing, inviteId);
+  }
+
+  /**
+   * What the email about a flag says: who to tell, whose invite, what it
+   * offered and what they wrote. Null for an invite nobody has flagged.
+   */
+  async getFlagNotice(inviteId: string): Promise<InviteFlagNotice | null> {
+    const [row] = await this.db
+      .select({
+        inviterEmail: users.email,
+        inviteeEmail: invites.email,
+        cohortName: cohorts.name,
+        trackName: tracks.name,
+        cohortRole: invites.cohortRole,
+        systemRole: invites.systemRole,
+        guestAccessExpiresAt: invites.guestAccessExpiresAt,
+        message: invites.flagMessage,
+        flaggedAt: invites.flaggedAt,
+      })
+      .from(invites)
+      .innerJoin(users, eq(users.id, invites.invitedBy))
+      .leftJoin(cohorts, eq(cohorts.id, invites.cohortId))
+      .leftJoin(cohortTracks, eq(cohortTracks.id, invites.cohortTrackId))
+      .leftJoin(tracks, eq(tracks.id, cohortTracks.trackId))
+      .where(eq(invites.id, inviteId))
+      .limit(1);
+
+    if (!row || row.message === null || row.flaggedAt === null) {
+      return null;
+    }
+    return { ...row, message: row.message, flaggedAt: row.flaggedAt };
+  }
+
+  /**
    * An admin cancelling an offer they no longer want to honour.
    *
    * Revoked, not expired: the invite did not run out of time, somebody pulled
@@ -1274,6 +1379,198 @@ export class InvitesService {
   }
 
   /**
+   * Gives an invite a new link, for when the email never arrived or the link
+   * ran out before anybody used it.
+   *
+   * A new token rather than the old one sent again: only the hash is stored,
+   * so the original link cannot be reproduced. The old link stops working the
+   * moment the new hash is written.
+   *
+   * Works on an invite that is still open — pending, or expired — and puts
+   * it back to pending with the window it was created with ahead of it again
+   * (see resentExpiry). An answer is final: accepted, declined and revoked invites
+   * are refused with the codes every other route gives them.
+   *
+   * Bringing an expired invite back is offering it again, so it passes the
+   * checks a new invite would: the address must not hold another pending
+   * invite, the person must not have joined the cohort since, and a guest
+   * visit must not already be over.
+   *
+   * The write is conditional on the invite still being open, like every
+   * other claim here. One accepted or revoked between the read and the write
+   * matches nothing, and is explained from the row as it then stands rather
+   * than having its answer overwritten.
+   *
+   * `correlationId` is the request's, carried onto the audit entry.
+   */
+  async resend(
+    inviteId: string,
+    actor: AuthenticatedUser,
+    correlationId?: string,
+    now: Date = new Date(),
+  ): Promise<Omit<InviteResponseDto, 'emailStatus'>> {
+    const invite = await this.findInvite(inviteId);
+    if (!isResendable(invite)) {
+      throw terminalInviteException(invite, { inviteId });
+    }
+    if (!isInviteLive(invite, now)) {
+      await this.assertCanBeOfferedAgain(invite, now);
+    }
+
+    const expiresAt = this.resentExpiry(invite, now);
+
+    // A token collision (23505 on the hash index) means regenerating, not
+    // failing. Bounded to one retry, as create is.
+    for (let attempt = 0; ; attempt++) {
+      const token = generateInviteToken();
+
+      try {
+        // One transaction, so a link is never replaced without its entry. A
+        // retry after a token collision starts a new one.
+        const updated = await this.db.transaction(async (tx) => {
+          const [row] = await tx
+            .update(invites)
+            .set({
+              tokenHash: hashInviteToken(token),
+              status: InviteStatus.Pending,
+              expiresAt,
+            })
+            .where(
+              and(
+                eq(invites.id, inviteId),
+                inArray(invites.status, RESENDABLE_STATUSES),
+              ),
+            )
+            .returning();
+
+          if (row) {
+            await writeAuditEntry(tx, {
+              actorUserId: actor.id,
+              correlationId,
+              action: AuditAction.InviteResent,
+              subject: { type: AuditSubjectType.Invite, id: row.id },
+              details: {
+                cohortId: row.cohortId,
+                expiresAt: row.expiresAt,
+                // What the deadline was, so the entry shows whether this
+                // replaced a live link or brought back a lapsed invite.
+                previousExpiresAt: invite.expiresAt,
+              },
+            });
+          }
+          return row;
+        });
+
+        if (!updated) {
+          // Settled since the read above. Whatever it became is the answer.
+          throw terminalInviteException(await this.findInvite(inviteId), {
+            inviteId,
+          });
+        }
+
+        return {
+          id: updated.id,
+          email: updated.email,
+          cohortId: updated.cohortId,
+          cohortRole: updated.cohortRole,
+          cohortTrackId: updated.cohortTrackId,
+          mentorshipGroupId: updated.mentorshipGroupId,
+          systemRole: updated.systemRole,
+          status: updated.status,
+          expiresAt: updated.expiresAt.toISOString(),
+          guestAccessExpiresAt:
+            updated.guestAccessExpiresAt?.toISOString() ?? null,
+          inviteLink: buildInviteLink(this.config.APP_PUBLIC_URL, token),
+          token,
+          createdAt: updated.createdAt.toISOString(),
+        };
+      } catch (err) {
+        const kind = classifyInviteWriteError(err);
+        if (kind === 'pending-duplicate') {
+          // Somebody invited the address again between the check and the
+          // write; the index is what decides it.
+          throw new InviteConflictException(
+            `A pending invite already exists for ${invite.email}: revoke it before resending this one`,
+            { inviteId, email: invite.email },
+          );
+        }
+        if (kind === 'token-collision' && attempt === 0) {
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * When a resent invite stops being redeemable: as long from now as the
+   * admin gave it to begin with. An invite written to last a day is good for
+   * another day, not the default week — the admin chose that window, and a
+   * resend takes no window of its own to choose a different one.
+   *
+   * Capped like any invite: never longer than INVITE_TTL_DAYS, and never
+   * past the visit it grants.
+   *
+   * The window is read off the row, as expires_at less created_at, and a
+   * resend moves expires_at. So a second resend measures from the invite's
+   * creation to the first resend's deadline, which is longer than the
+   * original. It can only grow as far as the cap; holding it exact would
+   * take a column recording when the current link was issued.
+   */
+  private resentExpiry(invite: Invite, now: Date): Date {
+    const window = invite.expiresAt.getTime() - invite.createdAt.getTime();
+    // A row whose deadline is not after its creation has no window to
+    // repeat, so it gets the default.
+    const requested =
+      window > 0 ? new Date(now.getTime() + window).toISOString() : undefined;
+    return earliest(
+      this.resolveExpiresAt(requested),
+      invite.guestAccessExpiresAt,
+    );
+  }
+
+  /**
+   * What create checks before offering a place, asked again of an invite
+   * that lapsed: time has passed, and what was true when it was written may
+   * not be now.
+   */
+  private async assertCanBeOfferedAgain(
+    invite: Invite,
+    now: Date,
+  ): Promise<void> {
+    // invites_cohortless_is_admin holds for pending rows only, so an expired
+    // invite of the old cohort-less shape is still on record. Putting it back
+    // to pending would break the constraint; it is refused here instead.
+    if (invite.cohortId === null && invite.systemRole !== SystemRole.Admin) {
+      throw new InviteConflictException(
+        'This invite names no cohort and cannot be resent: create a new one',
+        { inviteId: invite.id },
+      );
+    }
+    if (
+      invite.guestAccessExpiresAt !== null &&
+      invite.guestAccessExpiresAt <= now
+    ) {
+      throw new InviteConflictException(
+        'The guest visit this invite offered has already ended: create a new one',
+        {
+          inviteId: invite.id,
+          guestAccessExpiresAt: invite.guestAccessExpiresAt,
+        },
+      );
+    }
+
+    // Materialise this invite's own lapse first, so the one-pending-per-
+    // address check below is about other invites and cannot find this one.
+    await this.expireLazily(invite.id, now);
+    await this.assertNoLiveInvite(invite.email);
+    await this.assertNotAlreadyMember(
+      invite.email,
+      invite.cohortId ?? undefined,
+    );
+  }
+
+  /**
    * The row for this id, or nothing. A missing invite is a 404 rather than an
    * empty result: the caller named an invite that does not exist, which is a
    * different mistake from naming one that has already settled.
@@ -1312,7 +1609,10 @@ export class InvitesService {
     query: ListInvitesQueryDto,
     now: Date = new Date(),
   ): Promise<PaginatedResponseDto<AdminInviteListItemDto>> {
-    const filter = statusFilter(query.status, now);
+    const filter = and(
+      statusFilter(query.status, now),
+      flaggedFilter(query.flagged),
+    );
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -1424,6 +1724,16 @@ export class InvitesService {
 
 type InviteWriteErrorKind = 'pending-duplicate' | 'token-collision' | null;
 
+/**
+ * The statuses a resend may start from. Expired is in, pending-but-lapsed
+ * being the same thing not yet written down; the three answers are out.
+ */
+const RESENDABLE_STATUSES = [InviteStatus.Pending, InviteStatus.Expired];
+
+function isResendable(invite: { status: InviteStatus }): boolean {
+  return RESENDABLE_STATUSES.includes(invite.status);
+}
+
 /** The earlier of two moments, ignoring a null second one. */
 function earliest(a: Date, b: Date | null): Date {
   return b !== null && b < a ? b : a;
@@ -1471,6 +1781,14 @@ function statusFilter(
   }
 }
 
+/** Flagged invites only, unflagged only, or — left out — both. */
+function flaggedFilter(flagged: boolean | undefined): SQL | undefined {
+  if (flagged === undefined) {
+    return undefined;
+  }
+  return flagged ? isNotNull(invites.flaggedAt) : isNull(invites.flaggedAt);
+}
+
 /**
  * Projects an invite row down to what an admin is allowed to see in a list.
  *
@@ -1498,6 +1816,8 @@ function toAdminInviteItem(row: Invite, now: Date): AdminInviteListItemDto {
     invitedBy: row.invitedBy,
     revokedBy: row.revokedBy,
     revokedAt: row.revokedAt?.toISOString() ?? null,
+    flaggedAt: row.flaggedAt?.toISOString() ?? null,
+    flagMessage: row.flagMessage,
     createdAt: row.createdAt.toISOString(),
   };
 }

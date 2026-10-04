@@ -13,6 +13,8 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { CohortAdminModule } from './modules/cohorts/cohort-admin.module.js';
 import { InvitesModule } from './modules/invites/invites.module.js';
 import { TracksModule } from './modules/tracks/tracks.module.js';
+import { ProfileModule } from './modules/users/profile/profile.module.js';
+import { UserAdminModule } from './modules/users/user-admin.module.js';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { TracksModule } from './modules/tracks/tracks.module.js';
     InvitesModule,
     TracksModule,
     CohortAdminModule,
+    UserAdminModule,
+    ProfileModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],
   controllers: [AppController],

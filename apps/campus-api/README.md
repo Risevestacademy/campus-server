@@ -13,6 +13,7 @@ NestJS backend for the campus application.
 - [Compile and run](#compile-and-run)
 - [Environment variables](#environment-variables)
 - [Databases & infra](#databases--infra)
+- [Audit log](#audit-log)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
 - [Integration guide](#integration-guide)
@@ -121,6 +122,13 @@ $ pnpm run db:seed       # upsert the DEFAULT_ADMIN_EMAIL admins (needs a build)
 $ pnpm run db:studio     # open Drizzle Studio
 ```
 
+## Audit log
+
+Changes to the admin setup and to people's access are recorded in the
+`audit_log` table, in the same transaction as the change. What is recorded,
+what each field means, the personal-data rules, retention and rollout notes
+are in [src/modules/audit/README.md](src/modules/audit/README.md).
+
 ## Logging
 
 Logging uses **pino** through **nestjs-pino** (`src/infra/logger/logger.module.ts`).
@@ -129,8 +137,11 @@ Key behaviors:
 
 - **Structured JSON** by default; pretty single-line output when `FF_LOG_PRETTY=true`.
 - **Correlation IDs**: every request gets an `x-correlation-id`. If the caller
-  provides one, it is honored and echoed back on the response; otherwise a UUID
-  is generated. All log lines for that request carry it under `req.id`.
+  provides one of up to 64 characters, it is honored and echoed back on the
+  response; otherwise — none sent, or one longer than that — a UUID is
+  generated and returned instead. All log lines for that request carry it
+  under `req.id`, and audit entries written by the request carry the same
+  value.
 - **Trace correlation**: when OpenTelemetry is enabled, every log line also
   carries `trace_id` and `span_id` extracted from the active span, so logs and
   traces can be joined in an observability backend.

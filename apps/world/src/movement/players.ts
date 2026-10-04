@@ -46,8 +46,8 @@ interface Held {
  * change many times a second and are worthless a moment later, which is why
  * the TRD keeps them out of Postgres.
  *
- * Keyed by user rather than by socket: somebody with two tabs is one person
- * standing in one place, and either tab walks the same avatar.
+ * Keyed by user rather than by socket: an account stands in one place, and
+ * the socket standing for it may be replaced without the avatar moving.
  *
  * The server decides every position. A client says which way it wants to go,
  * never where it is, so there is no destination to validate and no way to

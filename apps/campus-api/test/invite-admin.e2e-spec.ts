@@ -94,7 +94,10 @@ describe('invite admin routes (e2e)', () => {
       new DomainExceptionFilter(),
       new ValidationExceptionFilter(),
     );
-    await app.init();
+    // Listening once, rather than app.init(): supertest otherwise opens a
+    // server on a new port for every request, and files running in parallel
+    // collide on them.
+    await app.listen(0);
   });
 
   afterAll(async () => {
@@ -412,6 +415,121 @@ describe('invite admin routes (e2e)', () => {
       expect(body).not.toContain(invite.body.token);
       expect(res.body.items[0]).not.toHaveProperty('token');
       expect(res.body.items[0]).not.toHaveProperty('inviteLink');
+    });
+  });
+
+  describe('resend', () => {
+    const createInvite = (email: string) =>
+      as(adminCookie).post('/v1/invites', {
+        email,
+        cohortId,
+        cohortRole: CohortRole.Student,
+        cohortTrackId,
+      });
+
+    const resendInvite = (id: string) =>
+      as(adminCookie).post(`/v1/invites/${id}/resend`, {});
+
+    it('resends a pending invite with a new token and link', async () => {
+      const invite = await createInvite('resend@campus.local').expect(201);
+      const oldToken = invite.body.token;
+      const oldLink = invite.body.inviteLink;
+
+      const res = await resendInvite(invite.body.id).expect(200);
+
+      expect(res.body.token).not.toBe(oldToken);
+      expect(res.body.inviteLink).not.toBe(oldLink);
+      expect(res.body.inviteLink).toContain(res.body.token);
+      expect(res.body.emailStatus).toBe('disabled'); // email is disabled in test
+      expect(res.body.id).toBe(invite.body.id); // same invite id
+      expect(res.body.status).toBe('pending');
+    });
+
+    it('invalidates the old link (preview by old token fails)', async () => {
+      const invite = await createInvite('oldlink@campus.local').expect(201);
+      const oldToken = invite.body.token;
+
+      const resend = await resendInvite(invite.body.id).expect(200);
+      const newToken = resend.body.token;
+
+      // Old token should no longer work
+      const preview = await request(app.getHttpServer())
+        .post('/v1/invites/preview')
+        .send({ token: oldToken });
+      expect(preview.status).toBe(404);
+      expect(preview.body.error.code).toBe('NOT_FOUND');
+
+      // New token should work
+      const previewNew = await request(app.getHttpServer())
+        .post('/v1/invites/preview')
+        .send({ token: newToken });
+      expect(previewNew.status).toBe(200);
+    });
+
+    it('returns 404 for unknown invite id', async () => {
+      const res = await resendInvite(MISSING).expect(404);
+      expect(res.body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('returns 400 for non-uuid id', async () => {
+      await resendInvite('not-a-uuid').expect(400);
+    });
+
+    it('returns 403 for non-admin', async () => {
+      const invite = await createInvite('someone@campus.local').expect(201);
+
+      const res = await as(memberCookie)
+        .post(`/v1/invites/${invite.body.id}/resend`, {})
+        .expect(403);
+
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it('brings a lapsed invite back with a working link', async () => {
+      const invite = await createInvite('lapsed@campus.local').expect(201);
+      await db
+        .update(schema.invites)
+        .set({ expiresAt: new Date(Date.now() - 1_000) })
+        .where(sql`${schema.invites.id} = ${invite.body.id}`);
+
+      const res = await resendInvite(invite.body.id).expect(200);
+
+      expect(res.body.status).toBe('pending');
+      expect(new Date(res.body.expiresAt).getTime()).toBeGreaterThan(
+        Date.now(),
+      );
+      await request(app.getHttpServer())
+        .post('/v1/invites/preview')
+        .send({ token: res.body.token })
+        .expect(200);
+    });
+
+    it('refuses a lapsed invite whose address has been invited again', async () => {
+      const invite = await createInvite('lapsed@campus.local').expect(201);
+      await db
+        .update(schema.invites)
+        .set({ expiresAt: new Date(Date.now() - 1_000) })
+        .where(sql`${schema.invites.id} = ${invite.body.id}`);
+      await createInvite('lapsed@campus.local').expect(201);
+
+      const res = await resendInvite(invite.body.id).expect(409);
+
+      expect(res.body.error.code).toBe('CONFLICT');
+    });
+
+    it.each([
+      ['accepted', 'INVITE_ALREADY_ACCEPTED'],
+      ['declined', 'INVITE_ALREADY_DECLINED'],
+      ['revoked', 'INVITE_REVOKED'],
+    ])('returns %s for %s invite', async (status, expectedCode) => {
+      const invite = await createInvite(`${status}@campus.local`).expect(201);
+      await db
+        .update(schema.invites)
+        .set({ status })
+        .where(sql`${schema.invites.id} = ${invite.body.id}`);
+
+      const res = await resendInvite(invite.body.id).expect(409);
+      expect(res.body.error.code).toBe(expectedCode);
     });
   });
 });

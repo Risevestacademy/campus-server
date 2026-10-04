@@ -103,7 +103,10 @@ describe('cohort and track admin routes (e2e)', () => {
       new DomainExceptionFilter(),
       new ValidationExceptionFilter(),
     );
-    await app.init();
+    // Listening once, rather than app.init(): supertest otherwise opens a
+    // server on a new port for every request, and files running in parallel
+    // collide on them.
+    await app.listen(0);
   });
 
   afterAll(async () => {
@@ -965,16 +968,33 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(await entries()).toHaveLength(before);
     });
 
-    // The id is whatever the caller put in x-correlation-id, and the column
-    // holds 64 characters. An over-long one must not fail the insert, which
-    // would take the change down with it.
-    it('keeps the start of a correlation id too long to store', async () => {
+    // An id too long to store is replaced as the request arrives, not cut
+    // down when the entry is written — so the caller, the logs and the entry
+    // all end up holding the same one.
+    it('gives a request with an over-long correlation id a new one, everywhere', async () => {
       const long = 'c'.repeat(200);
 
-      await createTrack().set('x-correlation-id', long).expect(201);
+      const response = await createTrack()
+        .set('x-correlation-id', long)
+        .expect(201);
 
+      const returned = response.headers['x-correlation-id'];
+      expect(returned).not.toContain('c'.repeat(64));
+      expect(returned.length).toBeLessThanOrEqual(64);
       const [entry] = await entries();
-      expect(entry.correlationId).toBe('c'.repeat(64));
+      expect(entry.correlationId).toBe(returned);
+    });
+
+    it('stores a correlation id of the longest allowed length whole', async () => {
+      const longest = 'c'.repeat(64);
+
+      const response = await createTrack()
+        .set('x-correlation-id', longest)
+        .expect(201);
+
+      expect(response.headers['x-correlation-id']).toBe(longest);
+      const [entry] = await entries();
+      expect(entry.correlationId).toBe(longest);
     });
 
     // The entry and the change share a transaction, so a refusal leaves

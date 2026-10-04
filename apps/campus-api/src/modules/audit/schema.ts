@@ -7,6 +7,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
+import { CORRELATION_ID_MAX_LENGTH } from '../../shared/http/correlation-id.js';
 import { users } from '../users/schema.js';
 
 /**
@@ -54,6 +55,17 @@ export enum AuditAction {
    * and keeps the revoke in the same history as the create.
    */
   InviteRevoked = 'invite_revoked',
+  /**
+   * The invitee flagged a mistake on their invite. The actor is the invitee,
+   * and what they wrote stays on the invite, not here.
+   */
+  InviteFlagged = 'invite_flagged',
+  /**
+   * An admin gave an invite a new link, replacing a live one or bringing
+   * back an invite that had lapsed. `details` has the deadline before and
+   * after, and never the address or anything of the token.
+   */
+  InviteResent = 'invite_resent',
 }
 
 export enum AuditSubjectType {
@@ -64,9 +76,6 @@ export enum AuditSubjectType {
   CohortTrack = 'cohort_track',
   Track = 'track',
 }
-
-/** How much of a correlation id the column keeps. */
-export const CORRELATION_ID_MAX_LENGTH = 64;
 
 /**
  * Append-only: nothing updates or deletes a row. Written in the same
@@ -85,7 +94,10 @@ export const auditLog = pgTable(
     /** No FK yet: spaces does not exist. */
     spaceId: uuid('space_id'),
     details: jsonb('details'),
-    /** The request's x-correlation-id, so an entry leads to its log lines. */
+    /**
+     * The request's correlation id, so an entry leads to its log lines. As
+     * wide as the longest id a request may bring, so it is stored whole.
+     */
     correlationId: varchar('correlation_id', {
       length: CORRELATION_ID_MAX_LENGTH,
     }),

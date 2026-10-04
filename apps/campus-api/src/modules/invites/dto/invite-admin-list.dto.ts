@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsEnum, IsOptional, IsUUID } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../shared/dto/pagination-query.dto.js';
 import { CohortRole } from '../../cohorts/schema.js';
@@ -40,6 +41,21 @@ export class ListInvitesQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(InviteStatus)
   status?: InviteStatus;
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      '`true` for the invites an invitee has flagged as wrong, `false` for ' +
+      'the ones nobody has. Omit for both. Combine with `status=pending` ' +
+      'for the flags still worth acting on.',
+  })
+  @IsOptional()
+  // A query string has no booleans, only the words for them.
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  flagged?: boolean;
 }
 
 /**
@@ -126,6 +142,25 @@ export class AdminInviteListItemDto {
     description: 'When it was revoked. Null unless status is `revoked`.',
   })
   revokedAt: string | null;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: null,
+    description:
+      'When the invitee flagged a mistake on it. Null if they never did. A ' +
+      'flag changes nothing else: the invite can still be accepted.',
+  })
+  flaggedAt: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: null,
+    description: 'What the invitee said is wrong. Null unless flagged.',
+  })
+  flagMessage: string | null;
 
   @ApiProperty({ example: '2026-09-22T12:00:00.000Z' })
   createdAt: string;
