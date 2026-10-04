@@ -50,7 +50,7 @@ describe('seedAdmin', () => {
     expect(await rows()).toEqual([
       expect.objectContaining({
         email: EMAIL,
-        systemRole: SystemRole.Admin,
+        systemRole: SystemRole.SuperAdmin,
         status: UserStatus.Active,
       }),
     ]);
@@ -75,7 +75,7 @@ describe('seedAdmin', () => {
     expect(await seedAdmin(db, EMAIL, makeLogger())).toBe('promoted');
 
     const [row] = await rows();
-    expect(row.systemRole).toBe(SystemRole.Admin);
+    expect(row.systemRole).toBe(SystemRole.SuperAdmin);
     expect(row.updatedAt.getTime()).toBeGreaterThan(row.createdAt.getTime());
   });
 
@@ -107,7 +107,7 @@ describe('seedAdmin', () => {
   it('leaves a suspended admin suspended', async () => {
     await pglite.insert(users).values({
       email: EMAIL,
-      systemRole: SystemRole.Admin,
+      systemRole: SystemRole.SuperAdmin,
       status: UserStatus.Suspended,
     });
 
@@ -131,8 +131,8 @@ describe('seedAdmins', () => {
       'grace@campus.local': 'created',
     });
     expect((await rows()).map((row) => row.systemRole)).toEqual([
-      SystemRole.Admin,
-      SystemRole.Admin,
+      SystemRole.SuperAdmin,
+      SystemRole.SuperAdmin,
     ]);
   });
 });
@@ -154,7 +154,7 @@ describe('seedAdmin audit log', () => {
       {
         actorUserId: null,
         action: AuditAction.SystemRoleChanged,
-        details: { from: null, to: SystemRole.Admin, source: 'seed' },
+        details: { from: null, to: SystemRole.SuperAdmin, source: 'seed' },
       },
     ]);
   });
@@ -171,11 +171,27 @@ describe('seedAdmin audit log', () => {
       expect.objectContaining({
         details: {
           from: SystemRole.User,
-          to: SystemRole.Admin,
+          to: SystemRole.SuperAdmin,
           source: 'seed',
         },
       }),
     ]);
+  });
+
+  // An account seeded before the role existed: an admin, to be raised.
+  it('raises an existing admin, and records what they were', async () => {
+    await db
+      .insert(users)
+      .values({ email: EMAIL, systemRole: 'admin' as never });
+
+    expect(await seedAdmin(db, EMAIL, makeLogger())).toBe('promoted');
+
+    const [entry] = await pglite.select().from(auditLog);
+    expect(entry.details).toEqual({
+      from: 'admin',
+      to: SystemRole.SuperAdmin,
+      source: 'seed',
+    });
   });
 
   it('records nothing on a re-run', async () => {

@@ -13,6 +13,24 @@ import {
 export enum SystemRole {
   User = 'user',
   Admin = 'admin',
+  /**
+   * An admin nobody can demote. Set only by the seed, from
+   * DEFAULT_ADMIN_EMAIL: no route grants it and no route takes it away, so
+   * there is always somebody who can make and unmake the other admins.
+   */
+  SuperAdmin = 'super_admin',
+}
+
+/**
+ * Whether a role may do what admins do. Both admin roles may; what sets a
+ * super admin apart is only that the role cannot be changed through the API.
+ *
+ * Asked of the role rather than compared against `admin` at each call site,
+ * so a check written before the second role existed cannot quietly lock the
+ * super admins out.
+ */
+export function hasAdminPowers(role: SystemRole): boolean {
+  return role === SystemRole.Admin || role === SystemRole.SuperAdmin;
 }
 
 export enum UserStatus {

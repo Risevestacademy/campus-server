@@ -1,9 +1,16 @@
 import { applyDecorators } from '@nestjs/common';
-import { ApiBadRequestResponse, ApiOperation } from '@nestjs/swagger';
+import {
+  ApiBadRequestResponse,
+  ApiConflictResponse,
+  ApiNotFoundResponse,
+  ApiOkResponse,
+  ApiOperation,
+} from '@nestjs/swagger';
 
 import { ApiAdminOnly } from '../../../shared/dto/admin-route.docs.js';
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
 import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
+import { UserSystemRoleDto } from '../dto/system-role.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
 
 export function ApiListUsers(): MethodDecorator {
@@ -35,5 +42,66 @@ export function ApiListUsers(): MethodDecorator {
       description: 'A filter is malformed: not a UUID, or not one of the enum.',
     }),
     ApiAdminOnly(),
+  );
+}
+
+export function ApiSetSystemRole(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Grant or revoke the admin role (admin only)',
+      description:
+        'Send `admin` to make somebody an admin, `user` to make them an ' +
+        'ordinary user again. Any admin may do either. It takes effect on ' +
+        'the person’s next request.\n\n' +
+        'Two people are off limits, both answered with a 409:\n\n' +
+        '- **A super admin.** Their role cannot be changed through the API ' +
+        'in either direction. Super admins are the accounts in ' +
+        '`DEFAULT_ADMIN_EMAIL`, set by the seed.\n' +
+        '- **Yourself.** Ask another admin, so nobody locks themselves out ' +
+        'by a slip.\n\n' +
+        'Setting the role somebody already has succeeds and changes ' +
+        'nothing. `super_admin` is not an accepted value.',
+    }),
+    ApiOkResponse({ type: UserSystemRoleDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The id is not a UUID, or systemRole is not `user` or `admin`.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No user has this id.',
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description: 'The target is a super admin, or is the caller.',
+      content: {
+        'application/json': {
+          examples: {
+            superAdmin: {
+              summary: 'The target is a super admin',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: "A super admin's role cannot be changed",
+                  details: { userId: '22222222-2222-4222-8222-222222222222' },
+                },
+              },
+            },
+            self: {
+              summary: 'The target is the caller',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'You cannot change your own role: ask another admin',
+                  details: { userId: '22222222-2222-4222-8222-222222222222' },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
   );
 }
