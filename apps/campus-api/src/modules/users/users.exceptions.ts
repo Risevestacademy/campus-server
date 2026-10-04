@@ -15,3 +15,12 @@ export class GoogleIdentityMismatchError extends DomainException {
     });
   }
 }
+
+/**
+ * No such profile for this caller: the account does not exist, or it does and
+ * they may not see it. One answer for both, so a card cannot be used to find
+ * out who has an account.
+ */
+export class ProfileNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
