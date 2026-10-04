@@ -126,7 +126,6 @@ export class SessionIssuer {
     }
     // The current row, on the epoch the grant was decided at.
     const account: User = { ...current, sessionEpoch: user.sessionEpoch };
-    const membership = await this.members.resolveActiveMembership(user.id, now);
 
     // Checked and minted in one transaction, so a revoke cannot land between
     // the grant being decided and the family being inserted below. Without
@@ -134,7 +133,7 @@ export class SessionIssuer {
     // minted a moment later, and leave a working refresh token behind.
     const mint = async (tx: Tx) => {
       await this.assertEpochCurrent(tx, account);
-      return this.mintSession(account, membership, endsAt, now, familyId, tx);
+      return this.mintSession(account, endsAt, now, familyId, tx);
     };
     return tx ? mint(tx) : this.db.transaction(mint);
   }
@@ -175,9 +174,6 @@ export class SessionIssuer {
    */
   private async mintSession(
     account: User,
-    membership: Awaited<
-      ReturnType<CohortMembersService['resolveActiveMembership']>
-    >,
     endsAt: Date | null,
     now: Date,
     familyId: string,
@@ -189,10 +185,6 @@ export class SessionIssuer {
         email: account.email,
         scope: SessionScope.FullAccess,
         epoch: account.sessionEpoch,
-        systemRole: account.systemRole,
-        ...(membership
-          ? { role: membership.role, cohortId: membership.cohortId }
-          : {}),
         // The refresh family, so world can hold a socket for as long as this
         // login is alive and being refreshed, rather than for one access
         // token's fifteen minutes.
@@ -243,7 +235,6 @@ export class SessionIssuer {
         email: user.email,
         scope: SessionScope.Provisional,
         epoch: user.sessionEpoch,
-        systemRole: user.systemRole,
         inviteId: invite.id,
       },
       {
@@ -375,8 +366,6 @@ export class SessionIssuer {
       throw new SessionUnauthorizedError('Access has already ended');
     }
 
-    const membership = await this.members.resolveActiveMembership(user.id, now);
-
     // One transaction for the three steps that must not interleave: claim the
     // old token, re-check the family, mint the replacement. The family is
     // locked first so that a replayed token revoking it, and this refresh
@@ -451,7 +440,6 @@ export class SessionIssuer {
           kind: 'session',
           session: await this.mintSession(
             user,
-            membership,
             grant.endsAt,
             now,
             familyId,

@@ -29,9 +29,6 @@ export interface SessionClaims {
    * Compared by the consumer, not here: this package has no database.
    */
   epoch: number;
-  systemRole?: string;
-  role?: string;
-  cohortId?: string;
   /** Present on provisional sessions: the invite still to be accepted. */
   inviteId?: string;
   /**
@@ -59,9 +56,7 @@ function key(secret: string): Uint8Array {
 }
 
 export async function signSessionToken(
-  claims: Omit<SessionClaims, 'expiresAt' | 'systemRole'> & {
-    systemRole?: string;
-  },
+  claims: Omit<SessionClaims, 'expiresAt'>,
   settings: SessionTokenSettings,
   now: Date = new Date(),
 ): Promise<{ token: string; expiresAt: Date }> {
@@ -72,13 +67,12 @@ export async function signSessionToken(
     Math.floor((now.getTime() + settings.ttlMinutes * 60_000) / 1000) * 1000,
   );
 
+  // No system role, cohort role or cohort id: they go stale the moment the
+  // account changes, and every reader re-reads them from the database anyway.
   const token = await new SignJWT({
     email: claims.email,
     scope: claims.scope,
     epoch: claims.epoch,
-    system_role: claims.systemRole ?? 'user',
-    ...(claims.role ? { role: claims.role } : {}),
-    ...(claims.cohortId ? { cohort_id: claims.cohortId } : {}),
     ...(claims.inviteId ? { inviteId: claims.inviteId } : {}),
     ...(claims.sessionId ? { sid: claims.sessionId } : {}),
   })
@@ -122,9 +116,6 @@ export async function verifySessionToken(
   const scope = payload['scope'];
   const email = payload['email'];
   const epoch = payload['epoch'];
-  const systemRole = payload['system_role'];
-  const role = payload['role'];
-  const cohortId = payload['cohort_id'];
   const inviteId = payload['inviteId'];
   const sessionId = payload['sid'];
 
@@ -137,10 +128,7 @@ export async function verifySessionToken(
     typeof epoch !== 'number' ||
     !Number.isSafeInteger(epoch) ||
     epoch < 0 ||
-    typeof systemRole !== 'string' ||
     (scope !== SessionScope.Provisional && scope !== SessionScope.FullAccess) ||
-    (role !== undefined && typeof role !== 'string') ||
-    (cohortId !== undefined && typeof cohortId !== 'string') ||
     (inviteId !== undefined && typeof inviteId !== 'string') ||
     (sessionId !== undefined && typeof sessionId !== 'string') ||
     payload.exp === undefined
@@ -148,14 +136,14 @@ export async function verifySessionToken(
     throw new InvalidSessionTokenError('session token is missing claims');
   }
 
+  // Claims from before this build — system_role, role, cohort_id — are
+  // carried in the signature but never read, so tokens issued before the
+  // change keep working.
   return {
     userId: payload.sub,
     email,
     scope,
     epoch,
-    systemRole,
-    role,
-    cohortId,
     inviteId,
     sessionId,
     expiresAt: new Date(payload.exp * 1000),

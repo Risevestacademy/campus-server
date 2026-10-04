@@ -16,10 +16,12 @@ export type Refusal =
   | 'account_gone'
   | 'account_suspended'
   | 'session_revoked'
-  | 'session_ended';
+  | 'session_ended'
+  | 'no_cohort'
+  | 'not_a_member';
 
 export type UpgradeDecision =
-  | { ok: true; claims: SessionClaims }
+  | { ok: true; claims: SessionClaims; cohortId: string }
   | {
       ok: false;
       refusal: Refusal;
@@ -73,11 +75,15 @@ function bearer(header: string | undefined): string | undefined {
  * who somebody was when they signed in and cannot say whether they still
  * belong here — and, when it names one, against the login it came from,
  * which may have been signed out since.
+ *
+ * The cohort comes last, so a refusal tells somebody who is not signed in
+ * nothing about who belongs where.
  */
 export async function decideUpgrade(
   env: Env,
   accounts: AccountLookup,
   headers: { origin?: string; cookie?: string; authorization?: string },
+  cohortId: string | undefined,
 ): Promise<UpgradeDecision> {
   const cookieToken = readSessionCookie(headers.cookie);
 
@@ -138,7 +144,26 @@ export async function decideUpgrade(
     }
   }
 
-  return { ok: true, claims };
+  // No default: somebody may belong to several, and guessing would put them
+  // somewhere they did not ask to be.
+  if (cohortId === undefined || cohortId === '') {
+    return { ok: false, refusal: 'no_cohort' };
+  }
+
+  // Admins bypass cohort gating, as they do at campus-api's sign-in gate,
+  // where the role alone is a grant. From the row, never the token, so a
+  // demotion takes effect on the next socket.
+  //
+  // For everybody else: without this a Backend student enters the Frontend
+  // floor by editing a query string.
+  if (
+    !account.admin &&
+    !(await accounts.liveMembership(claims.userId, cohortId, new Date()))
+  ) {
+    return { ok: false, refusal: 'not_a_member' };
+  }
+
+  return { ok: true, claims, cohortId };
 }
 
 /** The oldest refresh that still counts as campus-api vouching for a login. */

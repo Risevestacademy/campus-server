@@ -136,11 +136,22 @@ export const ServerMessage = z
     z.object({ type: z.literal('joined'), player: Player }).meta({
       id: 'JoinedMessage',
       description:
-        'Somebody arrived. Not sent for a second tab of somebody already here.',
+        'Somebody arrived. Not sent when a socket is replaced within the same cohort, ' +
+        'because the avatar never left.',
     }),
     z.object({ type: z.literal('left'), userId: z.string() }).meta({
       id: 'LeftMessage',
-      description: "Somebody's last socket closed.",
+      description:
+        "Somebody's socket closed, or they entered a different cohort.",
+    }),
+    z.object({ type: z.literal('replaced') }).meta({
+      id: 'ReplacedMessage',
+      description:
+        'This account opened the campus somewhere else — another cohort, device or tab — ' +
+        'and that connection has taken its place. The socket closes immediately ' +
+        'afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections ' +
+        'would replace each other for as long as both stayed open. Show that they are ' +
+        'in the campus elsewhere, and reconnect only when they ask to come back here.',
     }),
     z.object({ type: z.literal('moved'), players: z.array(Player) }).meta({
       id: 'MovedMessage',
@@ -148,9 +159,8 @@ export const ServerMessage = z
         'Everybody who moved or turned since the last tick, once each, as they stand ' +
         'now: two steps inside one tick arrive as the second, so an entry can be more ' +
         'than one tile from where they were. Sent once per tick, and not at all when ' +
-        'nobody moved. A tab is left out of its own entry when it made the latest ' +
-        'change, since its `moveResult` already says where it ended up; every other ' +
-        'tab of the same person gets it, so they follow along.',
+        'nobody moved. You are never in your own `moved` frame — your `moveResult` ' +
+        'already says where you ended up.',
     }),
     z
       .object({

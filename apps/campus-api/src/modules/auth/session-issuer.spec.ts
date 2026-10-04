@@ -28,7 +28,6 @@ const users = {
   findById: vi.fn(async () => ({ ...user, systemRole: 'user' })),
 };
 const members = {
-  resolveActiveMembership: vi.fn(async () => null),
   resolveActiveAccess: vi.fn(async () => ({ endsAt: null })),
 };
 const storedRefresh = {
@@ -95,8 +94,8 @@ describe('SessionIssuer', () => {
     const session = await issuer.issueFullAccess(user, unbounded, now);
 
     expect(minutesBetween(now, session.expiresAt)).toBe(720);
-    expect((await verifySessionToken(session.token, SECRET)).systemRole).toBe(
-      'user',
+    expect((await verifySessionToken(session.token, SECRET)).scope).toBe(
+      SessionScope.FullAccess,
     );
     expect(session.refreshToken).toEqual(expect.any(String));
   });
