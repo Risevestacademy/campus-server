@@ -1,3 +1,4 @@
+import type { EmailTemplate } from '../../infra/email/email-sender.js';
 import { CohortRole } from '../cohorts/schema.js';
 import { SystemRole } from '../users/schema.js';
 import type { InvitePreviewResponseDto } from './dto/invite-preview.dto.js';
@@ -9,6 +10,8 @@ export interface RenderedEmail {
 }
 
 const PRODUCT = 'Campus by Rise';
+/** Shown in a template tile the invite has nothing for. */
+const NOT_SET = '—';
 
 const ROLE_LABELS: Record<CohortRole, string> = {
   [CohortRole.Student]: 'student',
@@ -29,24 +32,12 @@ export function renderInviteEmail(
   invite: InvitePreviewResponseDto,
   link: string,
 ): RenderedEmail {
-  const inviter = [invite.invitedBy.firstName, invite.invitedBy.lastName]
-    .filter(Boolean)
-    .join(' ');
-  const who = inviter || 'Someone at Rise Academy';
-  const where = invite.cohort ? `${invite.cohort.name} on ${PRODUCT}` : PRODUCT;
-
-  const subject = inviter
-    ? `${inviter} invited you to ${where}`
-    : `You're invited to ${where}`;
-
-  const offer = describeOffer(invite);
+  const { subject, who, offer, expiry, guest } = describeInvite(invite);
   const lines = {
     intro: `${who} has invited you to join ${offer}.`,
     signIn: `Sign in with the Google account for ${invite.email}. The invitation is tied to that address, so other accounts are turned away.`,
-    expiry: `This invitation expires on ${formatDate(invite.expiresAt)}.`,
-    guest: invite.guestAccessExpiresAt
-      ? `As a guest, your access ends on ${formatDate(invite.guestAccessExpiresAt)}.`
-      : null,
+    expiry,
+    guest,
     ignore: `If you weren't expecting this, you can ignore this email.`,
   };
 
@@ -84,6 +75,107 @@ export function renderInviteEmail(
   return { subject, html, text };
 }
 
+/**
+ * The Resend templates an invite can be sent with, by id or alias. An admin
+ * and a guest are offered something a cohort member is not, so each can have
+ * a template of its own; one left unset falls back to the standard one.
+ */
+export interface InviteTemplateIds {
+  standard: string;
+  admin?: string;
+  guest?: string;
+}
+
+/**
+ * The same invite, as the values for a template kept in Resend.
+ *
+ * A template has no conditions and every value has to be there, which is
+ * why there are three: an admin invite has no cohort to show, and a guest's
+ * has an end date nobody else's has. The standard one still takes either,
+ * filling in what the invite lacks, so it works alone. The names are the
+ * contract with whoever edits a template — renaming one here means renaming
+ * it there.
+ */
+export function renderInviteTemplateEmail(
+  invite: InvitePreviewResponseDto,
+  link: string,
+  templates: InviteTemplateIds,
+): { subject: string; template: EmailTemplate } {
+  const { subject } = describeInvite(invite);
+  const common = {
+    // Not EMAIL: Resend keeps that name for itself.
+    INVITEE_EMAIL: invite.email,
+    INVITE_LINK: link,
+    EXPIRES_AT: formatDate(invite.expiresAt),
+    // The footer's link home, which differs per environment.
+    SITE_URL: new URL(link).origin,
+  };
+
+  if (templates.admin && !invite.cohort && isAdmin(invite)) {
+    return { subject, template: { id: templates.admin, variables: common } };
+  }
+
+  // Only a guest's invite carries an end date, and a guest's always does.
+  if (templates.guest && invite.cohort && invite.guestAccessExpiresAt) {
+    return {
+      subject,
+      template: {
+        id: templates.guest,
+        variables: {
+          ...common,
+          COHORT: invite.cohort.name,
+          ACCESS_ENDS: formatDate(invite.guestAccessExpiresAt),
+        },
+      },
+    };
+  }
+
+  const role = invite.cohortRole
+    ? capitalise(ROLE_LABELS[invite.cohortRole])
+    : isAdmin(invite)
+      ? 'Admin'
+      : 'Member';
+
+  return {
+    subject,
+    template: {
+      id: templates.standard,
+      variables: {
+        ...common,
+        JOINING: invite.cohort?.name ?? PRODUCT,
+        COHORT: invite.cohort?.name ?? NOT_SET,
+        ROLE: invite.guestAccessExpiresAt
+          ? `${role} (access ends ${formatDate(invite.guestAccessExpiresAt)})`
+          : role,
+        TRACK: invite.track?.name ?? NOT_SET,
+      },
+    },
+  };
+}
+
+function isAdmin(invite: InvitePreviewResponseDto): boolean {
+  return invite.systemRole === SystemRole.Admin;
+}
+
+function describeInvite(invite: InvitePreviewResponseDto) {
+  const inviter = [invite.invitedBy.firstName, invite.invitedBy.lastName]
+    .filter(Boolean)
+    .join(' ');
+  const where = invite.cohort ? `${invite.cohort.name} on ${PRODUCT}` : PRODUCT;
+
+  return {
+    subject: inviter
+      ? `${inviter} invited you to ${where}`
+      : `You're invited to ${where}`,
+    who: inviter || 'Someone at Rise Academy',
+    offer: describeOffer(invite),
+    expiry: `This invitation expires on ${formatDate(invite.expiresAt)}.`,
+    guest: invite.guestAccessExpiresAt
+      ? `As a guest, your access ends on ${formatDate(invite.guestAccessExpiresAt)}.`
+      : null,
+  };
+}
+
 function describeOffer(invite: InvitePreviewResponseDto): string {
   if (!invite.cohort || !invite.cohortRole) {
     return invite.systemRole === SystemRole.Admin
@@ -92,6 +184,10 @@ function describeOffer(invite: InvitePreviewResponseDto): string {
   }
   const track = invite.track ? ` on the ${invite.track.name} track` : '';
   return `${invite.cohort.name} as a ${ROLE_LABELS[invite.cohortRole]}${track}`;
+}
+
+function capitalise(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 /** UTC and says so: the reader's timezone is unknown here. */

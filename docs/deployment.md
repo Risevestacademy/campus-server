@@ -94,7 +94,11 @@ change to either reaches both apps:
   the frontend origin for that environment; required, boot fails without it),
   `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7),
   `FF_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM` (the invite
-  email, e.g. `Campus by Rise <invites@campusbyrise.com>`).
+  email, e.g. `Campus by Rise <invites@campusbyrise.com>`),
+  `RESEND_INVITE_TEMPLATE_ID`, `RESEND_INVITE_ADMIN_TEMPLATE_ID` and
+  `RESEND_INVITE_GUEST_TEMPLATE_ID` (the Resend templates the invite email is
+  sent with, by id or alias; optional, unset sends the email built into the
+  API).
   `PORT` is injected by Railway, not set manually.
 - Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`

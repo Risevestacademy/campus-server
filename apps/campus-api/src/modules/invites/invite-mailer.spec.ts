@@ -24,7 +24,15 @@ const PREVIEW = {
   guestAccessExpiresAt: null,
 };
 
-function mailer(sender: EmailSender, previewByToken = vi.fn()) {
+function mailer(
+  sender: EmailSender,
+  previewByToken = vi.fn(),
+  config: {
+    RESEND_INVITE_TEMPLATE_ID?: string;
+    RESEND_INVITE_ADMIN_TEMPLATE_ID?: string;
+    RESEND_INVITE_GUEST_TEMPLATE_ID?: string;
+  } = {},
+) {
   const logger = {
     setContext: vi.fn(),
     info: vi.fn(),
@@ -35,7 +43,12 @@ function mailer(sender: EmailSender, previewByToken = vi.fn()) {
   return {
     logger,
     previewByToken,
-    subject: new InviteMailer(invites, sender, logger as unknown as PinoLogger),
+    subject: new InviteMailer(
+      invites,
+      sender,
+      logger as unknown as PinoLogger,
+      config,
+    ),
   };
 }
 
@@ -66,6 +79,71 @@ describe('InviteMailer', () => {
         idempotencyKey: 'invite/invite-1',
       }),
     );
+  });
+
+  it('writes the email itself when no template is configured', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, id: 'em_1' });
+    const { subject } = mailer(
+      { enabled: true, send },
+      vi.fn().mockResolvedValue(PREVIEW),
+    );
+
+    await subject.send(INVITE);
+
+    const [email] = send.mock.calls[0];
+    expect(email.html).toContain(INVITE.inviteLink);
+    expect(email.template).toBeUndefined();
+  });
+
+  it('fills the Resend template when one is configured', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, id: 'em_1' });
+    const { subject } = mailer(
+      { enabled: true, send },
+      vi.fn().mockResolvedValue(PREVIEW),
+      { RESEND_INVITE_TEMPLATE_ID: 'campus-invite' },
+    );
+
+    await expect(subject.send(INVITE)).resolves.toBe(InviteEmailStatus.Sent);
+
+    const [email] = send.mock.calls[0];
+    expect(email).toEqual({
+      to: 'ada@campus.local',
+      subject: 'Jerry invited you to PD 2026 on Campus by Rise',
+      template: {
+        id: 'campus-invite',
+        variables: {
+          JOINING: 'PD 2026',
+          COHORT: 'PD 2026',
+          ROLE: 'Mentor',
+          TRACK: '—',
+          INVITEE_EMAIL: 'ada@campus.local',
+          INVITE_LINK: INVITE.inviteLink,
+          EXPIRES_AT: '7 October 2026, 12:00 UTC',
+          SITE_URL: 'https://dev.campusbyrise.com',
+        },
+      },
+      idempotencyKey: 'invite/invite-1',
+    });
+  });
+
+  it('picks the guest template for a guest when one is configured', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, id: 'em_1' });
+    const { subject } = mailer(
+      { enabled: true, send },
+      vi.fn().mockResolvedValue({
+        ...PREVIEW,
+        cohortRole: CohortRole.Guest,
+        guestAccessExpiresAt: new Date('2026-10-05T17:00:00.000Z'),
+      }),
+      {
+        RESEND_INVITE_TEMPLATE_ID: 'campus-invite',
+        RESEND_INVITE_GUEST_TEMPLATE_ID: 'campus-invite-guest',
+      },
+    );
+
+    await subject.send(INVITE);
+
+    expect(send.mock.calls[0][0].template.id).toBe('campus-invite-guest');
   });
 
   // The invite was written a moment ago, so this is a fault — but the

@@ -32,6 +32,12 @@ export default defineConfig({
       AUTH_STATE_SECRET: 'an-e2e-state-secret-of-at-least-32-chars',
       AUTH_SESSION_SECRET: 'an-e2e-session-secret-of-at-least-32-chars',
       CORS_ORIGINS: 'http://localhost:3000',
+      // Pinned empty, which reads as unset: the suite asserts on the email
+      // built into the API, and a developer's own .env naming a Resend
+      // template would otherwise switch what these tests send.
+      RESEND_INVITE_TEMPLATE_ID: '',
+      RESEND_INVITE_ADMIN_TEMPLATE_ID: '',
+      RESEND_INVITE_GUEST_TEMPLATE_ID: '',
     },
   },
 });
