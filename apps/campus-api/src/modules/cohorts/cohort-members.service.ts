@@ -122,8 +122,8 @@ export class CohortMembersService {
       .from(cohortMembers)
       .innerJoin(cohorts, eq(cohorts.id, cohortMembers.cohortId))
       .where(and(eq(cohortMembers.userId, userId), isLiveMembership(now)))
-      // Same order resolveActiveMembership picks its one from, so the first
-      // entry here is the membership a single-membership caller sees.
+      // Most recently joined first, `cohortId` breaking ties on the same
+      // instant so the order is stable between reads.
       .orderBy(sql`${cohortMembers.joinedAt} desc`, cohortMembers.cohortId);
 
     return rows.map(({ cohortId, role, name, code }) => ({
@@ -131,19 +131,5 @@ export class CohortMembersService {
       role,
       cohort: { name, code },
     }));
-  }
-
-  async resolveActiveMembership(
-    userId: string,
-    now: Date = new Date(),
-  ): Promise<SessionMembership | null> {
-    const [row] = await this.db
-      .select({ role: cohortMembers.role, cohortId: cohortMembers.cohortId })
-      .from(cohortMembers)
-      .where(and(eq(cohortMembers.userId, userId), isLiveMembership(now)))
-      .orderBy(sql`${cohortMembers.joinedAt} desc`)
-      .limit(1);
-
-    return row ?? null;
   }
 }
