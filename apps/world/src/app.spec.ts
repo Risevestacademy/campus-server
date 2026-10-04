@@ -86,7 +86,10 @@ describe('with the position store failing', () => {
         CORS_ORIGINS: 'https://campus.example.com',
         FF_LOG_LEVEL: 'fatal',
       } as NodeJS.ProcessEnv),
-      { ...accounts, find: async (id: string) => ({ id, suspended: false }) },
+      {
+        ...accounts,
+        find: async (id: string) => ({ id, suspended: false, admin: false }),
+      },
       failing,
     );
     await world.app.listen({ port: 0, host: '127.0.0.1' });

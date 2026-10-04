@@ -26,7 +26,9 @@ frame, both ways, is one JSON object with a `type`.
   default: somebody may belong to several, and world will not pick for them.
   Take it from the one the person chose in the picker — `/v1/auth/me` lists
   every cohort they may enter. Leaving it off is refused with `no_cohort`, and
-  a cohort they hold no live membership in with `not_a_member`.
+  a cohort they hold no live membership in with `not_a_member`. Admins are the
+  exception: their role alone admits them to any cohort, as it does at
+  campus-api's sign-in gate.
 - **Authentication is the session cookie.** The browser sends
   `campus_session` on the upgrade by itself; the page does nothing. Only a
   `full_access` session gets in — somebody still in onboarding is refused.
@@ -210,7 +212,7 @@ When the socket closes:
 | 1008 | `account_suspended`, `account_gone`               | Not welcome any more                                            | Sign them out; do not reconnect                                        |
 | 1008 | `origin_not_allowed`                              | This page's origin is not on world's list                       | Configuration — do not retry                                           |
 | 1008 | `no_cohort`                                       | The upgrade named no `cohortId`                                 | Client bug; do not retry without one                                   |
-| 1008 | `not_a_member`                                    | No live membership in the cohort named                          | Back to the cohort picker; do not retry                                |
+| 1008 | `not_a_member`                                    | No live membership in the cohort named; admins excepted         | Back to the cohort picker; do not retry                                |
 | 1008 | `rate_limited`                                    | Sustained sending over the message budget                       | Client bug; reconnect with backoff                                     |
 | 4000 | `entered_elsewhere`                               | This account opened the campus somewhere else                   | **Do not reconnect** — see [One place at a time](#one-place-at-a-time) |
 | 1001 | `server shutting down`                            | A deploy or restart                                             | Reconnect                                                              |

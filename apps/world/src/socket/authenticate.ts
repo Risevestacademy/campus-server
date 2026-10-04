@@ -142,9 +142,16 @@ export async function decideUpgrade(
     return { ok: false, refusal: 'no_cohort' };
   }
 
-  // Without this a Backend student enters the Frontend floor by editing a
-  // query string.
-  if (!(await accounts.liveMembership(claims.userId, cohortId, new Date()))) {
+  // Admins bypass cohort gating, as they do at campus-api's sign-in gate,
+  // where the role alone is a grant. From the row, never the token, so a
+  // demotion takes effect on the next socket.
+  //
+  // For everybody else: without this a Backend student enters the Frontend
+  // floor by editing a query string.
+  if (
+    !account.admin &&
+    !(await accounts.liveMembership(claims.userId, cohortId, new Date()))
+  ) {
     return { ok: false, refusal: 'not_a_member' };
   }
 

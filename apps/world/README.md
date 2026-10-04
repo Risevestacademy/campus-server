@@ -15,7 +15,7 @@ server decides every position.
   not be suspended, then the sign-in it came from, which must still be live,
   and last the cohort the socket names (`/socket?cohortId=…`), which the
   account must hold a live membership in — the same rule campus-api applies
-  at sign-in.
+  at sign-in, admins included: their role alone admits them anywhere.
 - **One place at a time:** an account is in the world in one cohort, on one
   device, in one tab. A new connection displaces the old one, which is sent
   `{ "type": "replaced" }` and closed with 4000 `entered_elsewhere`. Entering

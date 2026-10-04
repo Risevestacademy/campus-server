@@ -26,10 +26,15 @@ const accounts = {
   endedSessions: new Set<string>(),
   /** `userId:cohortId` pairs with no live membership. Everything else has one. */
   notMembers: new Set<string>(),
+  admins: new Set<string>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
       ? null
-      : { id: userId, suspended: accounts.suspended.has(userId) },
+      : {
+          id: userId,
+          suspended: accounts.suspended.has(userId),
+          admin: accounts.admins.has(userId),
+        },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
   liveMembership: async (userId: string, cohortId: string): Promise<boolean> =>
@@ -153,6 +158,7 @@ beforeEach(() => {
   accounts.gone.clear();
   accounts.endedSessions.clear();
   accounts.notMembers.clear();
+  accounts.admins.clear();
   store.positions.clear();
   store.failLoad = false;
   store.loads = 0;
@@ -253,6 +259,23 @@ describe('socket upgrade', () => {
       message: 'not_a_member',
     });
     await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+  });
+
+  /** Campus-api's sign-in gate admits an admin on their role alone. */
+  it('lets an admin into a cohort they hold no membership in', async () => {
+    accounts.admins.add('user-1');
+    accounts.notMembers.add('user-1:cohort-elsewhere');
+
+    const { ws, first } = connect(
+      { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      'cohort-elsewhere',
+    );
+
+    await expect(first).resolves.toMatchObject({
+      type: 'welcome',
+      userId: 'user-1',
+    });
+    ws.close();
   });
 
   it('refuses a cookie sent with no origin at all', async () => {

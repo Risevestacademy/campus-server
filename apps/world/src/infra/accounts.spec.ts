@@ -22,9 +22,11 @@ const MIGRATIONS = fileURLToPath(
 const db = new PGlite();
 
 async function accountRow(userId: string) {
-  const result = await db.query<{ id: string; status: string }>(ACCOUNT_QUERY, [
-    userId,
-  ]);
+  const result = await db.query<{
+    id: string;
+    status: string;
+    system_role: string;
+  }>(ACCOUNT_QUERY, [userId]);
   return result.rows[0];
 }
 
@@ -53,7 +55,19 @@ describe("world's account lookup, against campus-api's schema", () => {
 
     const row = await accountRow('11111111-1111-4111-8111-111111111111');
 
-    expect(row).toMatchObject({ status: 'active' });
+    expect(row).toMatchObject({ status: 'active', system_role: 'user' });
+  });
+
+  /** The role decides whether the cohort gate applies, so it has to come back. */
+  it('reads the system role, which is what lets an admin past the gate', async () => {
+    await db.exec(
+      `insert into users (id, email, status, system_role) values
+        ('55555555-5555-4555-8555-555555555555', 'admin@campus.local', 'active', 'admin')`,
+    );
+
+    expect(
+      await accountRow('55555555-5555-4555-8555-555555555555'),
+    ).toMatchObject({ system_role: 'admin' });
   });
 
   it('reads a suspended one, which is what a ban looks like', async () => {
