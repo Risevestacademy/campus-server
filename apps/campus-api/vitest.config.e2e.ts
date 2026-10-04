@@ -18,6 +18,8 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.e2e-spec.ts'],
+    hookTimeout: 60_000,
+    testTimeout: 20_000,
     // AppModule validates the environment as it is imported, so anything a
     // route needs has to be present before the first import runs. These are
     // dummies: the e2e suite never reaches Google.

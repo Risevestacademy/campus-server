@@ -16,6 +16,7 @@ const env = loadEnv({
 const accounts = {
   find: async () => null,
   liveSessions: async () => new Set<string>(),
+  liveMembership: async () => true,
   close: async () => undefined,
 };
 
@@ -85,7 +86,10 @@ describe('with the position store failing', () => {
         CORS_ORIGINS: 'https://campus.example.com',
         FF_LOG_LEVEL: 'fatal',
       } as NodeJS.ProcessEnv),
-      { ...accounts, find: async (id: string) => ({ id, suspended: false }) },
+      {
+        ...accounts,
+        find: async (id: string) => ({ id, suspended: false, admin: false }),
+      },
       failing,
     );
     await world.app.listen({ port: 0, host: '127.0.0.1' });
@@ -99,7 +103,7 @@ describe('with the position store failing', () => {
       { secret, ttlMinutes: 30 },
     );
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket?cohortId=c-1`, {
       headers: {
         origin: 'https://campus.example.com',
         cookie: `campus_session=${token}`,

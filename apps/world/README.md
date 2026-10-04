@@ -1,6 +1,6 @@
 # world
 
-The realtime service: one WebSocket per open tab, carrying who is on the map
+The realtime service: one WebSocket per account, carrying who is on the map
 and where they stand. Fastify 5 with `@fastify/websocket`, config validated
 with zod at boot.
 
@@ -12,7 +12,15 @@ server decides every position.
 
 - **Authenticates the upgrade:** the origin allowlist, then the session
   token (full-access sessions only), then the account, which must exist and
-  not be suspended, then the sign-in it came from, which must still be live.
+  not be suspended, then the sign-in it came from, which must still be live,
+  and last the cohort the socket names (`/socket?cohortId=…`), which the
+  account must hold a live membership in — the same rule campus-api applies
+  at sign-in, admins included: their role alone admits them anywhere.
+- **One place at a time:** an account is in the world in one cohort, on one
+  device, in one tab. A new connection displaces the old one, which is sent
+  `{ "type": "replaced" }` and closed with 4000 `entered_elsewhere`. Entering
+  the same cohort leaves the avatar untouched; entering a different one moves
+  it across. See [the protocol doc](../../docs/world-protocol.md#one-place-at-a-time).
 - **Keeps sockets honest:**
   - a heartbeat drops sockets that stopped answering
   - follows the sign-in behind each socket rather than its fifteen-minute
@@ -22,7 +30,7 @@ server decides every position.
     within one heartbeat
 - **Movement on a tile grid:**
   - the server enforces walking speed
-  - one avatar per person, however many tabs they have open
+  - one avatar per account, walked by whichever socket holds its place
   - other players' moves are sent once per tick
   - a reconnect within a grace period resumes where the player stood
   - between visits, players start where they last stood, kept in Redis
