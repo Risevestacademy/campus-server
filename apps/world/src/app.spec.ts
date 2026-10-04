@@ -16,6 +16,7 @@ const env = loadEnv({
 const accounts = {
   find: async () => null,
   liveSessions: async () => new Set<string>(),
+  liveMembership: async () => true,
   close: async () => undefined,
 };
 
@@ -99,7 +100,7 @@ describe('with the position store failing', () => {
       { secret, ttlMinutes: 30 },
     );
 
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket?cohortId=c-1`, {
       headers: {
         origin: 'https://campus.example.com',
         cookie: `campus_session=${token}`,

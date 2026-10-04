@@ -20,6 +20,7 @@ export interface AccountLookup {
     refreshedSince: Date,
     now: Date,
   ): Promise<Set<string>>;
+  liveMembership(userId: string, cohortId: string, now: Date): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -54,11 +55,26 @@ export const LIVE_SESSIONS_QUERY = `select distinct family_id from refresh_token
     and created_at >= $2`;
 
 /**
- * Family ids come from tokens campus-api signed, so they are UUIDs. Anything
- * else is dropped before it reaches the query, where one malformed value
- * would fail the cast and the check for every socket with it.
+ * Must stay the same question campus-api's `isLiveMembership` asks, or the two
+ * disagree about who belongs. $1 user, $2 cohort, $3 now.
+ */
+export const LIVE_MEMBERSHIP_QUERY = `select 1 from cohort_members
+  where user_id = $1
+    and cohort_id = $2
+    and left_at is null
+    and (role <> 'student' or status is not distinct from 'active')
+    and (access_expires_at is null or access_expires_at > $3)
+  limit 1`;
+
+/**
+ * Ids come from campus-api, so they are UUIDs. Anything else is dropped before
+ * it reaches a query, where it would fail the cast rather than return nothing.
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function looksLikeId(value: string): boolean {
+  return UUID.test(value);
+}
 
 /**
  * A session token says who someone was when they signed in; it cannot say
@@ -98,6 +114,17 @@ export function createAccountLookup(env: Env): AccountLookup {
         [ids, refreshedSince, now],
       );
       return new Set(rows.map((row) => row.family_id));
+    },
+    async liveMembership(userId, cohortId, now): Promise<boolean> {
+      if (!looksLikeId(cohortId)) {
+        return false;
+      }
+      const rows = await sql.unsafe<unknown[]>(LIVE_MEMBERSHIP_QUERY, [
+        userId,
+        cohortId,
+        now,
+      ]);
+      return rows.length > 0;
     },
     async close(): Promise<void> {
       await sql.end();
