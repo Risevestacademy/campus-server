@@ -103,8 +103,8 @@ export class SessionIssuer {
    *
    * `user` has to be the row the grant was decided against, read before the
    * decision. Its session epoch is what the mint is held to: if the account's
-   * sessions have been revoked since — which is what removing a member does
-   * — the row has moved on and nothing is minted. The account is read again
+   * sessions have been revoked since — which is what removing a member will
+   * do — the row has moved on and nothing is minted. The account is read again
    * below for its current details, but never for its epoch: a fresh read
    * taken after a revoke would agree with the row, and wave through a grant
    * that the revoke had just made untrue.
