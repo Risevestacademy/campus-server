@@ -89,6 +89,14 @@ invite expires (and, for a guest, when the visit ends). The response's
 
 Either way the invite exists: a failed email never undoes it.
 
+For a whole intake, `POST /v1/invites/import` takes a CSV file and a
+`cohortId` (as `multipart/form-data`) and creates one invite per row, each
+held to the same rules and emailed the same way. The file has a header row
+with `email` and `role`, plus `track` (a track code, for students) and
+`visit_ends` (for guests). It answers with one entry per row — invited, with
+its `inviteLink` and `emailStatus`, or failed, with the reason — and a row
+that fails does not stop the others. Up to 500 rows a file.
+
 `POST /v1/invites/{id}/resend` gives an invite a new link and emails it —
 for an email that never arrived, or a link that ran out. It answers like
 create, with a new `inviteLink` and `emailStatus`. The old link stops
