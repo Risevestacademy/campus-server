@@ -16,6 +16,7 @@ const claims = {
   userId: 'user-1',
   email: 'ada@campus.local',
   scope: SessionScope.FullAccess,
+  epoch: 3,
 };
 
 async function foreign(
@@ -42,6 +43,7 @@ describe('session tokens', () => {
       userId: 'user-1',
       email: 'ada@campus.local',
       scope: SessionScope.FullAccess,
+      epoch: 3,
     });
     // Exactly equal: both sides are whole seconds, so this cannot drift.
     expect(verified.expiresAt.getTime()).toBe(expiresAt.getTime());
@@ -82,6 +84,7 @@ describe('session tokens', () => {
     const token = await foreign({
       email: 'ada@campus.local',
       scope: SessionScope.FullAccess,
+      epoch: 0,
       sid: 42,
     });
 
@@ -94,6 +97,7 @@ describe('session tokens', () => {
     const token = await foreign({
       email: claims.email,
       scope: SessionScope.FullAccess,
+      epoch: 0,
       system_role: 'admin',
       role: 'student',
       cohort_id: 'cohort-1',
@@ -109,6 +113,44 @@ describe('session tokens', () => {
     expect(verified).not.toHaveProperty('systemRole');
     expect(verified).not.toHaveProperty('role');
     expect(verified).not.toHaveProperty('cohortId');
+  });
+
+  // Never defaulted to zero: a token from before the claim existed would
+  // then pass for one that no revocation has touched.
+  it('rejects a token that carries no epoch', async () => {
+    const token = await foreign({
+      email: claims.email,
+      scope: SessionScope.FullAccess,
+      system_role: 'user',
+    });
+
+    await expect(verifySessionToken(token, SECRET)).rejects.toThrow(
+      InvalidSessionTokenError,
+    );
+  });
+
+  it.each([
+    ['a string', '3'],
+    ['a fraction', 1.5],
+    ['negative', -1],
+    ['null', null],
+  ])('rejects an epoch that is %s', async (_label, epoch) => {
+    const token = await foreign({
+      email: claims.email,
+      scope: SessionScope.FullAccess,
+      system_role: 'user',
+      epoch,
+    });
+
+    await expect(verifySessionToken(token, SECRET)).rejects.toThrow(
+      InvalidSessionTokenError,
+    );
+  });
+
+  it('carries an epoch of zero, which is where every account starts', async () => {
+    const { token } = await signSessionToken({ ...claims, epoch: 0 }, settings);
+
+    expect((await verifySessionToken(token, SECRET)).epoch).toBe(0);
   });
 
   it('expires on its own schedule', async () => {

@@ -25,6 +25,7 @@ function user(overrides: Partial<User> = {}): User {
     email: 'ada@campus.local',
     systemRole: SystemRole.User,
     status: UserStatus.Active,
+    sessionEpoch: 0,
     ...overrides,
   } as User;
 }
@@ -45,9 +46,9 @@ function context(headers: Record<string, string>, method = 'GET') {
   };
 }
 
-async function tokenFor(scope: SessionScope, inviteId?: string) {
+async function tokenFor(scope: SessionScope, inviteId?: string, epoch = 0) {
   const { token } = await signSessionToken(
-    { userId: 'user-1', email: 'ada@campus.local', scope, inviteId },
+    { epoch, userId: 'user-1', email: 'ada@campus.local', scope, inviteId },
     { secret: SECRET, ttlMinutes: 30 },
   );
   return token;
@@ -211,5 +212,51 @@ describe('ProvisionalSessionGuard', () => {
     await expect(
       new ProvisionalSessionGuard(config, users()).canActivate(ctx),
     ).rejects.toThrow(SessionUnauthorizedError);
+  });
+
+  describe('session epoch', () => {
+    const attempt = async (tokenEpoch: number, rowEpoch: number) => {
+      const token = await tokenFor(
+        SessionScope.FullAccess,
+        undefined,
+        tokenEpoch,
+      );
+      const { ctx } = context({ authorization: `Bearer ${token}` });
+      return new SessionGuard(
+        config,
+        users(user({ sessionEpoch: rowEpoch })),
+      ).canActivate(ctx);
+    };
+
+    it('accepts a token signed with the epoch the account has now', async () => {
+      await expect(attempt(4, 4)).resolves.toBe(true);
+    });
+
+    // The whole point: the token is well signed and unexpired, and is still
+    // refused, because the account's sessions were ended after it was minted.
+    it('refuses a token from before the account sessions were revoked', async () => {
+      await expect(attempt(4, 5)).rejects.toThrow('Session has been revoked');
+      await expect(attempt(4, 5)).rejects.toBeInstanceOf(
+        SessionUnauthorizedError,
+      );
+    });
+
+    // An epoch only goes up, so a token ahead of the row is not one this
+    // account was issued. Equality, not "at least", refuses it too.
+    it('refuses a token whose epoch is ahead of the account', async () => {
+      await expect(attempt(6, 5)).rejects.toThrow('Session has been revoked');
+    });
+
+    it('holds a provisional session to the same rule', async () => {
+      const token = await tokenFor(SessionScope.Provisional, 'invite-1', 0);
+      const { ctx } = context({ authorization: `Bearer ${token}` });
+
+      await expect(
+        new ProvisionalSessionGuard(
+          config,
+          users(user({ sessionEpoch: 1 })),
+        ).canActivate(ctx),
+      ).rejects.toThrow('Session has been revoked');
+    });
   });
 });

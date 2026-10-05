@@ -27,6 +27,12 @@ export interface AccountLookup {
 export interface Account {
   id: string;
   suspended: boolean;
+  /**
+   * USERS.session_epoch: how many times this account's sessions have been
+   * ended on purpose. A token signed with any other value is one of those
+   * ended sessions.
+   */
+  sessionEpoch: number;
   /** Admins bypass cohort gating, as they do at campus-api's sign-in gate. */
   admin: boolean;
 }
@@ -38,7 +44,7 @@ export interface Account {
  * perfectly good session.
  */
 export const ACCOUNT_QUERY =
-  'select id, status, system_role from users where id = $1 limit 1';
+  'select id, status, system_role, session_epoch from users where id = $1 limit 1';
 
 /**
  * A login is live while its refresh family holds a token that is neither
@@ -100,13 +106,19 @@ export function createAccountLookup(env: Env): AccountLookup {
   return {
     async find(userId: string): Promise<Account | null> {
       const rows = await sql.unsafe<
-        { id: string; status: string; system_role: string }[]
+        {
+          id: string;
+          status: string;
+          system_role: string;
+          session_epoch: number;
+        }[]
       >(ACCOUNT_QUERY, [userId]);
       const row = rows[0];
       return row
         ? {
             id: row.id,
             suspended: row.status === 'suspended',
+            sessionEpoch: row.session_epoch,
             admin: row.system_role === 'admin',
           }
         : null;
