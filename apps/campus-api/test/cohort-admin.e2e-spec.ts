@@ -20,7 +20,11 @@ import {
   AuditSubjectType,
   auditLog,
 } from './../src/modules/audit/schema.js';
-import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
+import { SessionIssuer } from './../src/modules/auth/session-issuer.js';
+import {
+  REFRESH_COOKIE,
+  SESSION_COOKIE,
+} from './../src/modules/auth/session-cookie.js';
 import { SessionScope, signSessionToken } from '@campus/session';
 import { CohortRole } from './../src/modules/cohorts/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
@@ -36,6 +40,7 @@ const MIGRATIONS = fileURLToPath(
 );
 const SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
 const MISSING = '99999999-9999-4999-8999-999999999999';
+const ORIGIN = 'http://localhost:3000';
 const db = drizzle(new PGlite(), { schema });
 
 /**
@@ -148,6 +153,7 @@ describe('cohort and track admin routes (e2e)', () => {
       ['patch', `/v1/cohorts/${MISSING}`],
       ['delete', `/v1/cohorts/${MISSING}`],
       ['post', `/v1/cohorts/${MISSING}/tracks`],
+      ['patch', `/v1/cohorts/${MISSING}/members/${MISSING}`],
     ] as const)('refuses %s %s without a session', async (method, path) => {
       await request(app.getHttpServer())[method](path).expect(401);
     });
@@ -161,6 +167,7 @@ describe('cohort and track admin routes (e2e)', () => {
       ['get', '/v1/cohorts'],
       ['patch', `/v1/cohorts/${MISSING}`],
       ['delete', `/v1/cohorts/${MISSING}`],
+      ['patch', `/v1/cohorts/${MISSING}/members/${MISSING}`],
     ] as const)('refuses %s %s to a non-admin', async (method, path) => {
       const res =
         method === 'get'
@@ -706,6 +713,259 @@ describe('cohort and track admin routes (e2e)', () => {
 
     it('answers 400 for an id that is not a UUID', async () => {
       await as(adminCookie).get('/v1/cohorts/not-a-uuid').expect(400);
+    });
+  });
+
+  /**
+   * A guest's visit ends on the deadline they accepted with the invite. An
+   * admin moving it forward is the one extension that needs no sign-in: the
+   * route writes the new end, and the session layer reads it from the
+   * membership at the guest's next refresh.
+   */
+  describe('guest visits', () => {
+    const HOUR = 3_600_000;
+    let cohortId: string;
+
+    beforeEach(async () => {
+      const cohort = (await createCohort().expect(201)).body;
+      cohortId = cohort.id;
+    });
+
+    const guestWithVisit = async (accessExpiresAt: Date) => {
+      const [guest] = await db
+        .insert(users)
+        .values({ email: 'guest@campus.local', systemRole: SystemRole.User })
+        .returning();
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: guest.id,
+        role: CohortRole.Guest,
+        accessExpiresAt,
+      });
+      return guest;
+    };
+
+    const extend = (userId: string, accessExpiresAt: string) =>
+      as(adminCookie).patch(`/v1/cohorts/${cohortId}/members/${userId}`, {
+        accessExpiresAt,
+      });
+
+    const visitOf = async (userId: string) => {
+      const [row] = await db
+        .select({ accessExpiresAt: schema.cohortMembers.accessExpiresAt })
+        .from(schema.cohortMembers)
+        .where(eq(schema.cohortMembers.userId, userId));
+      return row.accessExpiresAt;
+    };
+
+    // Creating the cohort in beforeEach writes an entry of its own, so what
+    // these tests ask is whether one about the visit exists.
+    const visitEntries = () =>
+      db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.GuestVisitExtended));
+
+    it("moves a guest's visit end forward, and records who moved it", async () => {
+      const previous = new Date(Date.now() + 60_000);
+      const guest = await guestWithVisit(previous);
+      const accessExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+
+      const res = await extend(guest.id, accessExpiresAt).expect(200);
+
+      expect(res.body).toEqual({
+        id: expect.any(String),
+        cohortId,
+        userId: guest.id,
+        role: CohortRole.Guest,
+        accessExpiresAt,
+      });
+      expect(await visitOf(guest.id)).toEqual(new Date(accessExpiresAt));
+
+      expect(await visitEntries()).toEqual([
+        expect.objectContaining({
+          actorUserId: adminId,
+          action: AuditAction.GuestVisitExtended,
+          subjectType: AuditSubjectType.CohortMember,
+          subjectId: res.body.id,
+          details: {
+            cohortId,
+            accessExpiresAt,
+            previousAccessExpiresAt: previous.toISOString(),
+          },
+        }),
+      ]);
+    });
+
+    /**
+     * The guest accepted a deadline, and a visit that ran out is brought
+     * back by an invite — which records that they were asked again, where
+     * moving the date here would not.
+     */
+    it('refuses a visit that has already ended, and records nothing', async () => {
+      const previous = new Date(Date.now() - 60_000);
+      const guest = await guestWithVisit(previous);
+
+      const res = await extend(
+        guest.id,
+        new Date(Date.now() + HOUR).toISOString(),
+      ).expect(409);
+
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message: 'The visit has already ended; send a new invite',
+        details: { cohortId, userId: guest.id },
+      });
+      expect(await visitOf(guest.id)).toEqual(previous);
+      expect(await visitEntries()).toHaveLength(0);
+    });
+
+    it('refuses a membership that has left', async () => {
+      const guest = await guestWithVisit(new Date(Date.now() + HOUR));
+      await db
+        .update(schema.cohortMembers)
+        .set({ leftAt: new Date(Date.now() - 60_000) })
+        .where(eq(schema.cohortMembers.userId, guest.id));
+
+      const res = await extend(
+        guest.id,
+        new Date(Date.now() + 2 * HOUR).toISOString(),
+      ).expect(409);
+
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message: 'That membership has already ended',
+      });
+      expect(await visitEntries()).toHaveLength(0);
+    });
+
+    it('refuses a member whose place is not a visit', async () => {
+      const [member] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, 'member@campus.local'));
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: member.id,
+        role: CohortRole.Professor,
+      });
+
+      const res = await extend(
+        member.id,
+        new Date(Date.now() + HOUR).toISOString(),
+      ).expect(409);
+
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message: 'Only a guest has a visit to extend',
+        details: { role: CohortRole.Professor },
+      });
+      expect(await visitEntries()).toHaveLength(0);
+    });
+
+    it('refuses an end date that is not in the future', async () => {
+      const previous = new Date(Date.now() + HOUR);
+      const guest = await guestWithVisit(previous);
+
+      const res = await extend(
+        guest.id,
+        new Date(Date.now() - 60_000).toISOString(),
+      ).expect(400);
+
+      expect(res.body.error).toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        details: {
+          fields: { accessExpiresAt: expect.stringMatching(/in the future/) },
+        },
+      });
+      expect(await visitOf(guest.id)).toEqual(previous);
+      expect(await visitEntries()).toHaveLength(0);
+    });
+
+    it('refuses an end date no later than the one the visit already has', async () => {
+      const previous = new Date(Date.now() + HOUR);
+      const guest = await guestWithVisit(previous);
+
+      const res = await extend(guest.id, previous.toISOString()).expect(400);
+
+      expect(res.body.error).toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        details: {
+          fields: {
+            accessExpiresAt: expect.stringMatching(/later than the visit end/),
+          },
+        },
+      });
+      expect(await visitOf(guest.id)).toEqual(previous);
+    });
+
+    it('answers 404 for a user with no membership in the cohort', async () => {
+      const res = await extend(
+        MISSING,
+        new Date(Date.now() + HOUR).toISOString(),
+      ).expect(404);
+
+      expect(res.body.error).toMatchObject({
+        code: 'NOT_FOUND',
+        details: { cohortId, userId: MISSING },
+      });
+      expect(await visitEntries()).toHaveLength(0);
+    });
+
+    it('answers 400 for an id that is not a UUID', async () => {
+      await as(adminCookie)
+        .patch(`/v1/cohorts/not-a-uuid/members/${MISSING}`, {
+          accessExpiresAt: new Date(Date.now() + HOUR).toISOString(),
+        })
+        .expect(400);
+    });
+
+    // SessionGuard checks the origin of any cookie-carrying mutation, so a
+    // cross-site form cannot move a visit even with an admin's cookie.
+    it('refuses a cross-site request to move the visit', async () => {
+      const previous = new Date(Date.now() + HOUR);
+      const guest = await guestWithVisit(previous);
+
+      await request(app.getHttpServer())
+        .patch(`/v1/cohorts/${cohortId}/members/${guest.id}`)
+        .set('Cookie', adminCookie)
+        .set('Origin', 'https://attacker.example')
+        .send({
+          accessExpiresAt: new Date(Date.now() + 2 * HOUR).toISOString(),
+        })
+        .expect(401);
+
+      expect(await visitOf(guest.id)).toEqual(previous);
+      expect(await visitEntries()).toHaveLength(0);
+    });
+
+    /**
+     * Why the guest does not have to sign in again: the token they hold was
+     * minted against the old end, and the refresh after an extension mints
+     * the next one against the new one.
+     */
+    it("carries the new end onto the guest's next refresh", async () => {
+      const visitEnd = new Date(Date.now() + 4 * 60_000);
+      const extended = new Date(Date.now() + 8 * 60_000);
+      const guest = await guestWithVisit(visitEnd);
+      const issued = await app
+        .get(SessionIssuer)
+        .issueFullAccess(guest, { endsAt: visitEnd });
+      expect(issued.expiresAt.getTime()).toBeLessThanOrEqual(
+        visitEnd.getTime(),
+      );
+
+      await extend(guest.id, extended.toISOString()).expect(200);
+
+      const response = await request(app.getHttpServer())
+        .post('/v1/auth/refresh')
+        .set('Cookie', `${REFRESH_COOKIE}=${issued.refreshToken}`)
+        .set('Origin', ORIGIN)
+        .expect(200);
+
+      const expiresAt = new Date(response.body.expiresAt).getTime();
+      expect(expiresAt).toBeGreaterThan(visitEnd.getTime());
+      expect(expiresAt).toBeLessThanOrEqual(extended.getTime());
     });
   });
 
