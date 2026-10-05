@@ -17,6 +17,8 @@ export interface Connection {
    * access tokens the browser goes through meanwhile.
    */
   sessionId?: string;
+  /** In ms. Across instances, the newest connection holds the account. */
+  openedAt: number;
   /** Set false on every heartbeat, true by the client's pong. */
   alive: boolean;
 }

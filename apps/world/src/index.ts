@@ -1,6 +1,6 @@
 import { buildWorld } from './app.js';
 
-const { app, gateway, env, accounts, positions } = await buildWorld();
+const { app, gateway, env, accounts, positions, presence } = await buildWorld();
 
 /**
  * Sockets first, then the HTTP server: a client that is told to go away can
@@ -10,11 +10,12 @@ const { app, gateway, env, accounts, positions } = await buildWorld();
 async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, 'shutting down');
   try {
-    // stop() writes everybody's position, so Redis closes after it.
+    // stop() writes everybody's position and presence, so Redis closes after it.
     await gateway.stop();
     await app.close();
     await accounts.close();
     await positions.close();
+    await presence.close();
     process.exit(0);
   } catch (err) {
     app.log.error({ err }, 'error during shutdown');

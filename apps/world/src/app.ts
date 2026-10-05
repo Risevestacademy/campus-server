@@ -4,6 +4,7 @@ import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
+import { createPresenceStore, type PresenceStore } from './infra/presence.js';
 import {
   CORRELATION_ID_HEADER,
   correlationId,
@@ -17,6 +18,7 @@ export interface World {
   env: Env;
   accounts: AccountLookup;
   positions: PositionStore;
+  presence: PresenceStore;
 }
 
 export async function buildWorld(
@@ -25,6 +27,8 @@ export async function buildWorld(
   accounts: AccountLookup = createAccountLookup(env),
   // Also injectable; defaults to Redis when REDIS_URL is set, nothing if not.
   positions?: PositionStore,
+  // Redis when REDIS_URL is set, memory if not.
+  presence?: PresenceStore,
 ): Promise<World> {
   const app = Fastify({
     logger: loggerOptions(env),
@@ -62,7 +66,8 @@ export async function buildWorld(
   });
 
   const store = positions ?? createPositionStore(env, app.log);
-  const gateway = registerGateway(app, env, accounts, store);
+  const present = presence ?? createPresenceStore(env, app.log);
+  const gateway = registerGateway(app, env, accounts, store, present);
 
   app.get('/health', async () => ({
     status: 'ok',
@@ -74,5 +79,5 @@ export async function buildWorld(
     },
   }));
 
-  return { app, gateway, env, accounts, positions: store };
+  return { app, gateway, env, accounts, positions: store, presence: present };
 }
