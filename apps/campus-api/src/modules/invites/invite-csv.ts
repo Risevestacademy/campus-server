@@ -162,48 +162,66 @@ export function parseCsv(text: string): { cells: string[]; line: number }[] {
   const rows: { cells: string[]; line: number }[] = [];
   let cells: string[] = [];
   let cell = '';
-  let quoted = false;
   let line = 1;
   let startedOn = 1;
+  let i = 0;
 
-  const endRow = () => {
+  const endCell = () => {
     cells.push(cell);
-    rows.push({ cells, line: startedOn });
-    cells = [];
     cell = '';
   };
-
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (quoted) {
-      if (char === '"' && text[i + 1] === '"') {
-        cell += '"';
+  const endRow = () => {
+    endCell();
+    rows.push({ cells, line: startedOn });
+    cells = [];
+    line += 1;
+    startedOn = line;
+  };
+  /** From just after an opening quote to the quote that closes it. */
+  const readQuoted = () => {
+    for (; i < text.length; i += 1) {
+      const char = text[i];
+      if (char === '"') {
+        if (text[i + 1] !== '"') return;
+        // A quote written twice is one quote.
         i += 1;
-      } else if (char === '"') {
-        quoted = false;
-      } else {
-        if (char === '\n') line += 1;
-        cell += char;
       }
-      continue;
-    }
-    if (char === '"' && cell === '') {
-      quoted = true;
-    } else if (char === ',') {
-      cells.push(cell);
-      cell = '';
-    } else if (char === '\n' || char === '\r') {
-      if (char === '\r' && text[i + 1] === '\n') i += 1;
-      endRow();
-      line += 1;
-      startedOn = line;
-    } else {
+      // A line break here belongs to the cell, not to the row.
+      if (char === '\n') line += 1;
       cell += char;
+    }
+  };
+
+  for (; i < text.length; i += 1) {
+    const char = text[i];
+    switch (char) {
+      case '"':
+        // Only a quote that opens the cell quotes it.
+        if (cell === '') {
+          i += 1;
+          readQuoted();
+        } else {
+          cell += char;
+        }
+        break;
+      case ',':
+        endCell();
+        break;
+      case '\r':
+        if (text[i + 1] === '\n') i += 1;
+        endRow();
+        break;
+      case '\n':
+        endRow();
+        break;
+      default:
+        cell += char;
     }
   }
   // The last line, when the file does not end with a line break.
   if (cell !== '' || cells.length > 0) {
-    endRow();
+    endCell();
+    rows.push({ cells, line: startedOn });
   }
   return rows;
 }

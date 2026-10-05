@@ -20,6 +20,7 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import {
   DRIZZLE,
   type Db,
+  type DbExecutor,
   type Tx,
 } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
@@ -197,20 +198,26 @@ export class InvitesService {
    * The receipt without emailStatus, which InviteMailer adds after.
    *
    * `correlationId` is the request's, carried onto the audit entry.
+   *
+   * `db` lets a caller making several invites hold them in one transaction
+   * of its own: the checks then read what its earlier invites wrote, and
+   * this invite's write becomes a savepoint inside it, so a refusal undoes
+   * this invite alone.
    */
   async create(
     dto: CreateInviteDto,
     inviter: AuthenticatedUser,
     correlationId?: string,
+    db: DbExecutor = this.db,
   ): Promise<Omit<InviteResponseDto, 'emailStatus'>> {
     const email = dto.email.trim().toLowerCase();
     const systemRole = dto.systemRole ?? SystemRole.User;
 
     this.assertValidShape(dto);
 
-    await this.assertNoLiveInvite(email);
-    await this.assertReferencesExist(dto);
-    await this.assertNotAlreadyMember(email, dto.cohortId);
+    await this.assertNoLiveInvite(email, db);
+    await this.assertReferencesExist(dto, db);
+    await this.assertNotAlreadyMember(email, dto.cohortId, db);
 
     const guestAccessExpiresAt = this.resolveGuestExpiry(dto);
     // An invite must not stay redeemable past the visit it grants. Without
@@ -233,7 +240,7 @@ export class InvitesService {
       try {
         // One transaction, so an invite is never created without its entry. A
         // retry after a token collision starts a new one.
-        const row = await this.db.transaction(async (tx) => {
+        const row = await db.transaction(async (tx) => {
           const [row] = await tx
             .insert(invites)
             .values({
@@ -1081,8 +1088,9 @@ export class InvitesService {
   private async expireLazily(
     id: string,
     now: Date = new Date(),
+    db: DbExecutor = this.db,
   ): Promise<void> {
-    await this.db
+    await db
       .update(invites)
       .set({ status: InviteStatus.Expired })
       .where(
@@ -1154,8 +1162,11 @@ export class InvitesService {
     }
   }
 
-  private async assertNoLiveInvite(email: string): Promise<void> {
-    const existing = await this.db.query.invites.findFirst({
+  private async assertNoLiveInvite(
+    email: string,
+    db: DbExecutor = this.db,
+  ): Promise<void> {
+    const existing = await db.query.invites.findFirst({
       where: and(
         eq(invites.email, email),
         eq(invites.status, InviteStatus.Pending),
@@ -1164,7 +1175,7 @@ export class InvitesService {
     if (!existing) return;
 
     if (!isInviteLive(existing)) {
-      await this.expireLazily(existing.id);
+      await this.expireLazily(existing.id, undefined, db);
       return;
     }
 
@@ -1648,9 +1659,10 @@ export class InvitesService {
   private async assertNotAlreadyMember(
     email: string,
     cohortId: string | undefined,
+    db: DbExecutor = this.db,
   ): Promise<void> {
     if (!cohortId) return;
-    const [live] = await this.db
+    const [live] = await db
       .select({ userId: cohortMembers.userId })
       .from(cohortMembers)
       .innerJoin(users, eq(users.id, cohortMembers.userId))
@@ -1671,9 +1683,12 @@ export class InvitesService {
   }
 
   /** Friendly 404s for bad FKs instead of raw FK violations. */
-  private async assertReferencesExist(dto: CreateInviteDto): Promise<void> {
+  private async assertReferencesExist(
+    dto: CreateInviteDto,
+    db: DbExecutor = this.db,
+  ): Promise<void> {
     if (dto.cohortId) {
-      const cohort = await this.db.query.cohorts.findFirst({
+      const cohort = await db.query.cohorts.findFirst({
         where: eq(cohorts.id, dto.cohortId),
       });
       if (!cohort) {
@@ -1684,7 +1699,7 @@ export class InvitesService {
     }
 
     if (dto.cohortTrackId) {
-      const track = await this.db.query.cohortTracks.findFirst({
+      const track = await db.query.cohortTracks.findFirst({
         where: eq(cohortTracks.id, dto.cohortTrackId),
       });
       if (!track) {

@@ -276,6 +276,13 @@ describe('InviteImportService', () => {
         'next week',
         'visit_ends is not a date: use a form like 2026-11-30T17:00:00Z',
       ],
+      // What the single-invite route refuses, a file must not let through.
+      [
+        'a visit end written the American way',
+        'guest',
+        '12/31/2030',
+        'visit_ends is not a date: use a form like 2026-11-30T17:00:00Z',
+      ],
       [
         'a visit that has already ended',
         'guest',
@@ -347,5 +354,39 @@ describe('InviteImportService', () => {
         inviter,
       ),
     ).rejects.toBeInstanceOf(InviteInternalException);
+  });
+
+  // The links of the rows before it were never shown and their emails never
+  // sent, so left in place they could only be refused as duplicates next
+  // time. The whole file is undone and can be uploaded again.
+  it('invites nobody when a fault strikes partway through the file', async () => {
+    const create = invitesService.create.bind(invitesService);
+    let calls = 0;
+    const breaksOnThird = new InviteImportService(
+      db as never,
+      {
+        create: (...args: Parameters<typeof create>) => {
+          calls += 1;
+          if (calls === 3) throw new Error('connection lost');
+          return create(...args);
+        },
+      } as never,
+      mailer as unknown as InviteMailer,
+    );
+    const file = Buffer.from(
+      'email,role\nada@campus.local,mentor\ngrace@campus.local,mentor\nlin@campus.local,mentor\n',
+    );
+
+    await expect(breaksOnThird.import(cohortId, file, inviter)).rejects.toThrow(
+      'connection lost',
+    );
+
+    expect(await stored()).toHaveLength(0);
+    expect(await db.select().from(auditLog)).toHaveLength(0);
+    expect(mailer.send).not.toHaveBeenCalled();
+
+    // And the same file goes through whole once the fault has passed.
+    const retry = await upload(file.toString('utf8'));
+    expect(retry).toMatchObject({ total: 3, invited: 3, failed: 0 });
   });
 });

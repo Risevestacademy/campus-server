@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { isDateString } from 'class-validator';
 import { eq } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
@@ -34,6 +35,11 @@ const EMAIL_CONCURRENCY = 5;
  * intake of two hundred should not be refused for one mistyped address, and
  * the admin can fix that row and upload it again without re-inviting the
  * others, who are refused the second time as already invited.
+ *
+ * A fault is different: it invites nobody. Every row is written in one
+ * transaction, so an import that breaks partway leaves no invites behind
+ * whose links were never shown and whose emails were never sent, and the
+ * same file can be uploaded again.
  */
 @Injectable()
 export class InviteImportService {
@@ -64,40 +70,47 @@ export class InviteImportService {
       });
     }
 
-    // One at a time, in file order. Two rows for the same address then
-    // resolve the same way every time: the first is invited and the second
-    // is refused as a duplicate.
-    const created: { line: number; receipt: InviteReceipt }[] = [];
-    for (const row of parsed.rows) {
-      try {
-        const receipt = await this.invites.create(
-          this.toDto(cohortId, row, trackIds),
-          inviter,
-          correlationId,
-        );
-        created.push({ line: row.line, receipt });
-      } catch (err) {
-        // A refusal is this row's answer. Anything else is a fault — an
-        // unexpected error, or one of the service's own invariants failing —
-        // and carrying on past it would report a broken import as a partial
-        // one.
-        if (
-          !(err instanceof DomainException) ||
-          err.code === ExceptionCode.InternalError
-        ) {
-          throw err;
+    // One transaction for the file. Each row's write is a savepoint inside
+    // it, so a refused row undoes only itself, while a fault undoes them
+    // all: no invite is left pending with a link nobody was shown.
+    const created = await this.db.transaction(async (tx) => {
+      const created: { line: number; receipt: InviteReceipt }[] = [];
+      // One at a time, in file order. Two rows for the same address then
+      // resolve the same way every time: the first is invited and the
+      // second is refused as a duplicate.
+      for (const row of parsed.rows) {
+        try {
+          const receipt = await this.invites.create(
+            this.toDto(cohortId, row, trackIds),
+            inviter,
+            correlationId,
+            tx,
+          );
+          created.push({ line: row.line, receipt });
+        } catch (err) {
+          // A refusal is this row's answer. Anything else is a fault — an
+          // unexpected error, or one of the service's own invariants
+          // failing — and carrying on past it would report a broken import
+          // as a partial one.
+          if (
+            !(err instanceof DomainException) ||
+            err.code === ExceptionCode.InternalError
+          ) {
+            throw err;
+          }
+          results.set(row.line, {
+            line: row.line,
+            email: row.email,
+            outcome: InviteImportOutcome.Failed,
+            reason: err.message,
+          });
         }
-        results.set(row.line, {
-          line: row.line,
-          email: row.email,
-          outcome: InviteImportOutcome.Failed,
-          reason: err.message,
-        });
       }
-    }
+      return created;
+    });
 
-    // Emails after every write, and a few at a time: sent one by one, a full
-    // file would hold the request open for minutes.
+    // Emails only once every write is committed, and a few at a time: sent
+    // one by one, a full file would hold the request open for minutes.
     await inBatches(created, EMAIL_CONCURRENCY, async ({ line, receipt }) => {
       results.set(line, {
         line,
@@ -164,7 +177,11 @@ export class InviteImportService {
       if (row.visitEnds === null) {
         throw new RowRefused('visit_ends is required for a guest');
       }
-      const ends = Date.parse(row.visitEnds);
+      // The form the single-invite route asks for, and no other: Date.parse
+      // alone would also take 12/31/2030, and read it by the server's locale.
+      const ends = isDateString(row.visitEnds)
+        ? Date.parse(row.visitEnds)
+        : Number.NaN;
       if (Number.isNaN(ends)) {
         throw new RowRefused(
           'visit_ends is not a date: use a form like 2026-11-30T17:00:00Z',
