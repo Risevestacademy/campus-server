@@ -323,6 +323,17 @@ describe('InviteImportService', () => {
     expect(await stored()).toHaveLength(0);
   });
 
+  // The rows that are fine are not invited either: a file whose quoting is
+  // broken cannot be trusted to mean what it appears to.
+  it('invites nobody from a file with a broken quote', async () => {
+    await expect(
+      upload(
+        'email,role\nada@campus.local,mentor\n"grace@campus.local"x,mentor\n',
+      ),
+    ).rejects.toBeInstanceOf(InviteInvalidArgumentException);
+    expect(await stored()).toHaveLength(0);
+  });
+
   it('404s a cohort that does not exist, and invites nobody', async () => {
     await expect(
       service.import(

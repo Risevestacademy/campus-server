@@ -179,10 +179,20 @@ export function parseCsv(text: string): { cells: string[]; line: number }[] {
   };
   /** From just after an opening quote to the quote that closes it. */
   const readQuoted = () => {
+    const openedOn = line;
     for (; i < text.length; i += 1) {
       const char = text[i];
       if (char === '"') {
-        if (text[i + 1] !== '"') return;
+        const next = text[i + 1];
+        if (next !== '"') {
+          if (next !== undefined && !',\r\n'.includes(next)) {
+            throw invalid(
+              `Line ${line} has text straight after a closing quote: a quoted value must end at a comma or the end of the line`,
+              { line },
+            );
+          }
+          return;
+        }
         // A quote written twice is one quote.
         i += 1;
       }
@@ -190,6 +200,10 @@ export function parseCsv(text: string): { cells: string[]; line: number }[] {
       if (char === '\n') line += 1;
       cell += char;
     }
+    throw invalid(
+      `The quoted value that starts on line ${openedOn} is never closed`,
+      { line: openedOn },
+    );
   };
 
   for (; i < text.length; i += 1) {

@@ -34,6 +34,29 @@ describe('parseCsv', () => {
     ]);
   });
 
+  it('refuses a quoted cell that is never closed, naming where it starts', () => {
+    expect(() => parseCsv('h\n"ada,mentor\ngrace,mentor\n')).toThrow(
+      /quoted value that starts on line 2 is never closed/,
+    );
+  });
+
+  it.each([
+    ['a letter', 'h\n"ada@campus.local"x,mentor\n'],
+    ['a space', 'h\n"ada@campus.local" ,mentor\n'],
+    ['in a column nobody reads', 'a,b\nada,"fine"oops\n'],
+  ])('refuses text straight after a closing quote: %s', (_label, text) => {
+    expect(() => parseCsv(text)).toThrow(
+      /Line 2 has text straight after a closing quote/,
+    );
+  });
+
+  it('takes a comma, a line end or the end of the file after a closing quote', () => {
+    expect(cells('"a","b"\r\n"c","d"')).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+    ]);
+  });
+
   it('keeps empty cells, so columns stay in place', () => {
     expect(cells('a,,c\n,,\n')).toEqual([
       ['a', '', 'c'],
