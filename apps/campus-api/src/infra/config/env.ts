@@ -354,8 +354,8 @@ export class Env {
 
   /**
    * Templates of their own for an admin's invite and a guest's, which offer
-   * something a cohort member's does not. Either one unset, or the standard
-   * one unset, and that invite goes out as the standard one would.
+   * something a cohort member's does not. Either one unset and that invite
+   * uses the standard template; the standard one unset and both are ignored.
    */
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>

@@ -46,7 +46,7 @@ describe('ResendEmailSender', () => {
 
   it('sends a template by id with its variables, and no body of its own', async () => {
     const send = vi.fn().mockResolvedValue(SENT);
-    const template = { id: 'campus-invite', variables: { INVITER: 'Jerry' } };
+    const template = { id: 'campus-invite', variables: { ROLE: 'Mentor' } };
 
     await senderWith(send).send({
       to: 'ada@campus.local',
