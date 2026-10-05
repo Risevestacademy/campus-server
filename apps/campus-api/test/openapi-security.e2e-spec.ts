@@ -66,6 +66,9 @@ describe('OpenAPI security (e2e)', () => {
     ['/v1/invites/decision', 'post'],
     ['/v1/invites/flag', 'post'],
     ['/v1/users', 'get'],
+    ['/v1/users/me', 'get'],
+    ['/v1/users/me', 'patch'],
+    ['/v1/users/{id}/profile', 'get'],
     ['/v1/auth/me', 'get'],
   ])('still marks %s (%s) as needing a session', (path, method) => {
     expect(security(path, method)).toEqual([{ bearer: [] }]);
