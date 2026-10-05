@@ -49,7 +49,12 @@ describe('GET /v1/users (e2e)', () => {
 
   const cookieFor = async (user: { id: string; email: string }) => {
     const { token } = await signSessionToken(
-      { userId: user.id, email: user.email, scope: SessionScope.FullAccess },
+      {
+        epoch: 0,
+        userId: user.id,
+        email: user.email,
+        scope: SessionScope.FullAccess,
+      },
       { secret: SECRET, ttlMinutes: 15 },
     );
     return `${SESSION_COOKIE}=${token}`;

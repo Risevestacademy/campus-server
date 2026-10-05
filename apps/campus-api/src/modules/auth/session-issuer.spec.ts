@@ -19,7 +19,11 @@ const config = {
   AUTH_SESSION_SECRET: SECRET,
 } as never;
 
-const user = { id: 'user-1', email: 'guest@campus.local' } as User;
+const user = {
+  id: 'user-1',
+  email: 'guest@campus.local',
+  sessionEpoch: 0,
+} as User;
 const users = {
   findById: vi.fn(async () => ({ ...user, systemRole: 'user' })),
 };
@@ -42,7 +46,9 @@ const db = {
     from: () => ({
       where: () => ({
         limit: vi.fn(async () => [storedRefresh]),
-        for: vi.fn(async () => [storedRefresh]),
+        // Also answers the lock on the account's row, which reads back
+        // the epoch the account was signed in on.
+        for: vi.fn(async () => [{ ...storedRefresh, sessionEpoch: 0 }]),
       }),
     }),
   }),
