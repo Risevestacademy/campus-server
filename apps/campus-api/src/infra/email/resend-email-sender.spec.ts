@@ -44,6 +44,27 @@ describe('ResendEmailSender', () => {
     );
   });
 
+  it('sends a template by id with its variables, and no body of its own', async () => {
+    const send = vi.fn().mockResolvedValue(SENT);
+    const template = { id: 'campus-invite', variables: { ROLE: 'Mentor' } };
+
+    await senderWith(send).send({
+      to: 'ada@campus.local',
+      subject: 'Hello',
+      template,
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      {
+        from: 'Campus <invites@campus.example>',
+        to: ['ada@campus.local'],
+        subject: 'Hello',
+        template,
+      },
+      undefined,
+    );
+  });
+
   // The SDK reports a refusal in the body rather than throwing, and the same
   // request would only be refused again.
   it('reports a refusal once, without retrying', async () => {

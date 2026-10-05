@@ -52,7 +52,7 @@ describe('GET /v1/auth/me (e2e)', () => {
     inviteId?: string,
   ) => {
     const { token } = await signSessionToken(
-      { userId: user.id, email: user.email, scope, inviteId },
+      { epoch: 0, userId: user.id, email: user.email, scope, inviteId },
       { secret: SECRET, ttlMinutes: 15 },
     );
     return `${SESSION_COOKIE}=${token}`;

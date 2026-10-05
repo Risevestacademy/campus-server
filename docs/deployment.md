@@ -94,7 +94,11 @@ change to either reaches both apps:
   the frontend origin for that environment; required, boot fails without it),
   `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7),
   `FF_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM` (the invite
-  email, e.g. `Campus by Rise <invites@campusbyrise.com>`).
+  email, e.g. `Campus by Rise <invites@campusbyrise.com>`),
+  `RESEND_INVITE_TEMPLATE_ID`, `RESEND_INVITE_ADMIN_TEMPLATE_ID` and
+  `RESEND_INVITE_GUEST_TEMPLATE_ID` (the Resend templates the invite email is
+  sent with, by id or alias; optional, unset sends the email built into the
+  API).
   `PORT` is injected by Railway, not set manually.
 - Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
@@ -246,6 +250,12 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   open, and a sleep would drop everybody.
 - Healthcheck path: `/health` (no `/v1`). It answers while the process is
   up; it does not check the database.
+- Reads campus-api's tables with its own SQL (`users`, `refresh_tokens`), so
+  a campus-api migration that adds a column world selects has to be applied
+  before the world build that selects it starts. campus-api's pre-deploy
+  step runs the migrations; when a change touches both, let campus-api
+  finish deploying first. `users.session_epoch` was the first such column:
+  world's account lookup fails on every socket without it.
 - Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
   no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
   from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:

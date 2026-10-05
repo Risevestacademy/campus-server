@@ -57,8 +57,9 @@ export class ResendEmailSender implements EmailSender {
             from: this.from,
             to: [email.to],
             subject: email.subject,
-            html: email.html,
-            text: email.text,
+            ...(email.template
+              ? { template: email.template }
+              : { html: email.html, text: email.text }),
           },
           email.idempotencyKey
             ? { idempotencyKey: email.idempotencyKey }
