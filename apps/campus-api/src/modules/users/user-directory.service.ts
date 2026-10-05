@@ -7,7 +7,6 @@ import {
   eq,
   exists,
   ilike,
-  inArray,
   or,
   sql,
   type SQL,
@@ -16,13 +15,10 @@ import {
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
-import { cohortMembers, cohorts, cohortTracks } from '../cohorts/schema.js';
-import { tracks } from '../tracks/schema.js';
+import { cohortMembers, cohortTracks } from '../cohorts/schema.js';
 import type { ListUsersQueryDto } from './dto/list-users.dto.js';
-import type {
-  UserListItemDto,
-  UserMembershipDto,
-} from './dto/user-list-item.dto.js';
+import { loadLiveMemberships } from './live-memberships.js';
+import type { UserListItemDto } from './dto/user-list-item.dto.js';
 import { users } from './schema.js';
 
 /**
@@ -80,7 +76,8 @@ export class UserDirectoryService {
       this.db.select({ total: count() }).from(users).where(filter),
     ]);
 
-    const memberships = await this.liveMemberships(
+    const memberships = await loadLiveMemberships(
+      this.db,
       rows.map((row) => row.id),
       now,
     );
@@ -140,42 +137,6 @@ export class UserDirectoryService {
           ),
         ),
     );
-  }
-
-  /** Each listed person's live memberships, most recently joined first. */
-  private async liveMemberships(
-    userIds: string[],
-    now: Date,
-  ): Promise<Map<string, UserMembershipDto[]>> {
-    const byUser = new Map<string, UserMembershipDto[]>();
-    if (userIds.length === 0) {
-      return byUser;
-    }
-
-    const rows = await this.db
-      .select({
-        userId: cohortMembers.userId,
-        cohort: { id: cohorts.id, name: cohorts.name, code: cohorts.code },
-        track: { id: tracks.id, name: tracks.name, code: tracks.code },
-        role: cohortMembers.role,
-        status: cohortMembers.status,
-        joinedAt: cohortMembers.joinedAt,
-        accessExpiresAt: cohortMembers.accessExpiresAt,
-      })
-      .from(cohortMembers)
-      .innerJoin(cohorts, eq(cohorts.id, cohortMembers.cohortId))
-      .leftJoin(cohortTracks, eq(cohortTracks.id, cohortMembers.cohortTrackId))
-      .leftJoin(tracks, eq(tracks.id, cohortTracks.trackId))
-      .where(and(inArray(cohortMembers.userId, userIds), isLiveMembership(now)))
-      // The order CohortMembersService lists a person's cohorts in.
-      .orderBy(desc(cohortMembers.joinedAt), asc(cohortMembers.cohortId));
-
-    for (const { userId, ...membership } of rows) {
-      const list = byUser.get(userId) ?? [];
-      list.push(membership);
-      byUser.set(userId, list);
-    }
-    return byUser;
   }
 }
 
