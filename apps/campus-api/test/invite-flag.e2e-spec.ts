@@ -63,7 +63,7 @@ describe('POST /v1/invites/flag (e2e)', () => {
     inviteId?: string,
   ) => {
     const { token } = await signSessionToken(
-      { userId, email, scope, inviteId },
+      { epoch: 0, userId, email, scope, inviteId },
       { secret: SECRET, ttlMinutes: 30 },
     );
     return `${SESSION_COOKIE}=${token}`;
