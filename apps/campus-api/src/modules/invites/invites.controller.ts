@@ -9,9 +9,13 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 
@@ -43,6 +47,7 @@ import {
 import { SessionScope } from '@campus/session';
 import { ApiCreateInvite } from './docs/create-invite.docs.js';
 import { ApiDecideInvite } from './docs/decide-invite.docs.js';
+import { ApiImportInvites } from './docs/import-invites.docs.js';
 import { ApiFlagInvite } from './docs/flag-invite.docs.js';
 import { ApiListInvites } from './docs/list-invites.docs.js';
 import { ApiPreviewInvite } from './docs/preview-invite.docs.js';
@@ -60,6 +65,10 @@ import {
   InviteDecisionResponseDto,
 } from './dto/invite-decision.dto.js';
 import { InviteFlagDto, InviteFlagResponseDto } from './dto/invite-flag.dto.js';
+import {
+  ImportInvitesDto,
+  InviteImportResponseDto,
+} from './dto/invite-import.dto.js';
 import { InviteOnboardingResponseDto } from './dto/invite-onboarding-response.dto.js';
 import {
   InvitePreviewRequestDto,
@@ -67,6 +76,8 @@ import {
 } from './dto/invite-preview.dto.js';
 import { InviteResponseDto } from './dto/invite-response.dto.js';
 import { InviteFlagNotifier } from './invite-flag-notifier.js';
+import { INVITE_CSV_MAX_BYTES } from './invite-csv.js';
+import { InviteImportService } from './invite-import.service.js';
 import { InviteMailer } from './invite-mailer.js';
 import { InvitesService } from './invites.service.js';
 import {
@@ -80,6 +91,7 @@ export class InvitesController {
   constructor(
     private readonly invites: InvitesService,
     private readonly mailer: InviteMailer,
+    private readonly importer: InviteImportService,
     private readonly flagNotifier: InviteFlagNotifier,
     private readonly sessions: SessionIssuer,
     private readonly members: CohortMembersService,
@@ -102,6 +114,46 @@ export class InvitesController {
     // After the write, not inside it: a failed send must not undo an invite
     // the admin can still share by hand.
     return { ...receipt, emailStatus: await this.mailer.send(receipt) };
+  }
+
+  /**
+   * A cohort's intake from one file: one invite per row, each made the way
+   * a single invite is. Guarded like create.
+   *
+   * Declared before the `:id` routes so `import` is never read as an id.
+   */
+  @Post('import')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(SessionGuard, AdminGuard)
+  // Held in memory, never written to disk, and capped before it is read: a
+  // file of invites is small, and anything larger is not one.
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: INVITE_CSV_MAX_BYTES, files: 1 },
+    }),
+  )
+  // One call can send hundreds of emails, so it is held well below the
+  // general limit.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiBearerAuth()
+  @ApiImportInvites()
+  importCsv(
+    @Body() dto: ImportInvitesDto,
+    @UploadedFile() file: { buffer: Buffer } | undefined,
+    @CurrentUser() inviter: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<InviteImportResponseDto> {
+    if (!file) {
+      throw new InviteInvalidArgumentException('Request validation failed', {
+        fields: { file: 'file is required: attach the CSV as `file`' },
+      });
+    }
+    return this.importer.import(
+      dto.cohortId,
+      file.buffer,
+      inviter,
+      correlationId,
+    );
   }
 
   /**
