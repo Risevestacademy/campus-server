@@ -147,6 +147,9 @@ export default defineRailway((ctx) => {
       POSTHOG_HOST: preserve(),
       POSTHOG_PROJECT_TOKEN: preserve(),
       RESEND_API_KEY: preserve(),
+      RESEND_INVITE_ADMIN_TEMPLATE_ID: preserve(),
+      RESEND_INVITE_GUEST_TEMPLATE_ID: preserve(),
+      RESEND_INVITE_TEMPLATE_ID: preserve(),
       TRUST_PROXY_HOPS: preserve(),
     },
   });
