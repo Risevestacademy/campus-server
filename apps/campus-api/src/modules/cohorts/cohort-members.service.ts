@@ -2,6 +2,14 @@ import { Inject, Injectable } from '@nestjs/common';
 import { type SQL, and, eq, gt, isNull, ne, not, or, sql } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
+import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import {
+  CohortConflictException,
+  CohortInvalidArgumentException,
+  CohortMemberNotFoundException,
+} from './cohorts.exceptions.js';
+import type { CohortMemberResponseDto } from './dto/cohort-response.dto.js';
 import { CohortRole, StudentStatus, cohortMembers, cohorts } from './schema.js';
 
 /**
@@ -131,5 +139,126 @@ export class CohortMembersService {
       role,
       cohort: { name, code },
     }));
+  }
+
+  /**
+   * Moves the end of a guest's visit forward, so the session they already
+   * hold runs to the new deadline from their next refresh — no sign-in, no
+   * new link, and nothing for them to do.
+   *
+   * A visit that has already ended is refused with a 409 rather than moved.
+   * The guest accepted a link with a deadline on it, and bringing them back
+   * is what an invite records (`invite_created`, `invite_resent`); reopening
+   * it here would hand back access the deadline had closed, with no entry
+   * saying they were asked back.
+   *
+   * The row is read under a lock: two extensions racing must not both judge
+   * themselves against the same deadline and store the earlier of the two.
+   * The entry is written in the same transaction, so a visit is never
+   * extended without its record.
+   */
+  async extendGuestVisit(
+    cohortId: string,
+    userId: string,
+    accessExpiresAt: Date,
+    audit: AuditContext,
+    now: Date = new Date(),
+  ): Promise<CohortMemberResponseDto> {
+    // The route's check passes ISO forms Date cannot read — a week date
+    // like 2026-W43-2, or 20261020 — and an invalid Date compares false
+    // against everything below, so it would reach the UPDATE and fail there.
+    if (Number.isNaN(accessExpiresAt.getTime())) {
+      throw new CohortInvalidArgumentException('Request validation failed', {
+        fields: {
+          accessExpiresAt:
+            'accessExpiresAt is not a date: use a form like 2026-11-30T17:00:00Z',
+        },
+      });
+    }
+
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(cohortMembers)
+        .where(
+          and(
+            eq(cohortMembers.cohortId, cohortId),
+            eq(cohortMembers.userId, userId),
+          ),
+        )
+        .for('update');
+      if (!existing) {
+        throw new CohortMemberNotFoundException(
+          `No membership for ${userId} in cohort ${cohortId}`,
+          { cohortId, userId },
+        );
+      }
+      if (existing.leftAt !== null) {
+        throw new CohortConflictException('That membership has already ended', {
+          cohortId,
+          userId,
+          leftAt: existing.leftAt,
+        });
+      }
+      if (existing.role !== CohortRole.Guest) {
+        throw new CohortConflictException(
+          'Only a guest has a visit to extend',
+          { cohortId, userId, role: existing.role },
+        );
+      }
+      // The schema makes an end date part of being a guest, so null here
+      // would be a row the schema could not have written; the visit running
+      // out is the case that exists.
+      const previousEnd = existing.accessExpiresAt;
+      if (previousEnd === null || previousEnd.getTime() <= now.getTime()) {
+        throw new CohortConflictException(
+          'The visit has already ended; send a new invite',
+          {
+            cohortId,
+            userId,
+            accessExpiresAt: previousEnd,
+          },
+        );
+      }
+      if (accessExpiresAt.getTime() <= now.getTime()) {
+        throw new CohortInvalidArgumentException('Request validation failed', {
+          fields: { accessExpiresAt: 'accessExpiresAt must be in the future' },
+        });
+      }
+      if (accessExpiresAt.getTime() <= previousEnd.getTime()) {
+        throw new CohortInvalidArgumentException('Request validation failed', {
+          fields: {
+            accessExpiresAt:
+              'accessExpiresAt must be later than the visit end it already has',
+          },
+        });
+      }
+
+      const [row] = await tx
+        .update(cohortMembers)
+        .set({ accessExpiresAt })
+        .where(eq(cohortMembers.id, existing.id))
+        .returning();
+      await writeAuditEntry(tx, {
+        ...audit,
+        action: AuditAction.GuestVisitExtended,
+        subject: { type: AuditSubjectType.CohortMember, id: row.id },
+        details: {
+          cohortId,
+          accessExpiresAt,
+          previousAccessExpiresAt: previousEnd,
+        },
+      });
+
+      return {
+        id: row.id,
+        cohortId: row.cohortId,
+        userId: row.userId,
+        role: row.role,
+        // Straight back what was written: the row repeats it as nullable,
+        // and a guest's is never null.
+        accessExpiresAt,
+      };
+    });
   }
 }

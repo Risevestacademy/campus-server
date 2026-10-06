@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
 import { TrackResponseDto } from '../../tracks/dto/track-response.dto.js';
-import { CohortStatus } from '../schema.js';
+import { CohortRole, CohortStatus } from '../schema.js';
 
 export class CohortResponseDto {
   @ApiProperty({ example: '11111111-1111-4111-8111-111111111111' })
@@ -79,4 +79,33 @@ export class CohortDetailResponseDto extends CohortResponseDto {
     description: 'The tracks this cohort runs, by track name.',
   })
   tracks: CohortTrackResponseDto[];
+}
+
+/**
+ * A membership with the fields that identify it and the deadline it runs to:
+ * what a guest's visit looks like to the admin who just moved it.
+ */
+export class CohortMemberResponseDto {
+  @ApiProperty({
+    example: '55555555-5555-4555-8555-555555555555',
+    description: "The membership's own id.",
+  })
+  id: string;
+
+  @ApiProperty({ example: '11111111-1111-4111-8111-111111111111' })
+  cohortId: string;
+
+  @ApiProperty({ example: '44444444-4444-4444-8444-444444444444' })
+  userId: string;
+
+  @ApiProperty({ enum: CohortRole, enumName: 'CohortRole' })
+  role: CohortRole;
+
+  @ApiProperty({
+    type: String,
+    format: 'date-time',
+    example: '2026-10-20T12:00:00.000Z',
+    description: 'When the visit now ends.',
+  })
+  accessExpiresAt: Date;
 }

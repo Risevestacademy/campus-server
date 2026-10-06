@@ -15,6 +15,7 @@ import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
 import { RosterMemberDto } from '../dto/cohort-roster.dto.js';
 import {
   CohortDetailResponseDto,
+  CohortMemberResponseDto,
   CohortResponseDto,
   CohortTrackResponseDto,
 } from '../dto/cohort-response.dto.js';
@@ -254,6 +255,112 @@ export function ApiUpdateCohort(): MethodDecorator {
                   code: 'CONFLICT',
                   message: 'A cohort with code C1 already exists',
                   details: { code: 'C1' },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
+export function ApiExtendGuestVisit(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: "Extend a guest's visit (admin only)",
+      description:
+        'Moves when a guest membership ends. The new end must be in the ' +
+        'future and later than the end it already has. The guest needs no ' +
+        'sign-in: their next refresh reads the new end from the ' +
+        'membership. A visit that has already ended is refused with a ' +
+        '409 — send a new invite instead.',
+    }),
+    ApiOkResponse({ type: CohortMemberResponseDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'cohortId or userId is not a UUID, accessExpiresAt is not a date, ' +
+        'is not in the future, or is not later than the current end.',
+      content: {
+        'application/json': {
+          examples: {
+            notLater: {
+              summary: 'Not later than the current end',
+              value: {
+                error: {
+                  code: 'INVALID_ARGUMENT',
+                  message: 'Request validation failed',
+                  details: {
+                    fields: {
+                      accessExpiresAt:
+                        'accessExpiresAt must be later than the visit end it already has',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'Nobody in that cohort has this membership.',
+      content: {
+        'application/json': {
+          examples: {
+            memberNotFound: {
+              summary: 'No such membership',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message:
+                    'No membership for 44444444-4444-4444-8444-444444444444 in cohort 11111111-1111-4111-8111-111111111111',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The membership has left, is not a guest, or the visit has ended.',
+      content: {
+        'application/json': {
+          examples: {
+            visitEnded: {
+              summary: 'Visit already over',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'The visit has already ended; send a new invite',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                    accessExpiresAt: '2026-10-01T12:00:00.000Z',
+                  },
+                },
+              },
+            },
+            notAGuest: {
+              summary: 'Not a guest',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'Only a guest has a visit to extend',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                    role: 'student',
+                  },
                 },
               },
             },
