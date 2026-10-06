@@ -341,6 +341,36 @@ export class Env {
   )
   EMAIL_FROM?: string;
 
+  /**
+   * The Resend template the invite email is sent with, by id or alias.
+   * Unset, the email is the one written in invite-email.ts.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  @IsString()
+  RESEND_INVITE_TEMPLATE_ID?: string;
+
+  /**
+   * Templates of their own for an admin's invite and a guest's, which offer
+   * something a cohort member's does not. Either one unset and that invite
+   * uses the standard template; the standard one unset and both are ignored.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  @IsString()
+  RESEND_INVITE_ADMIN_TEMPLATE_ID?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  @IsString()
+  RESEND_INVITE_GUEST_TEMPLATE_ID?: string;
+
   // require_tld: false keeps http://localhost:3000 valid for local dev;
   // require_protocol: true still rejects bare words like "not-a-url".
   @IsUrl({ require_tld: false, require_protocol: true })

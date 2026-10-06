@@ -59,6 +59,7 @@ describe('OpenAPI security (e2e)', () => {
   it.each([
     ['/v1/invites', 'post'],
     ['/v1/invites', 'get'],
+    ['/v1/invites/import', 'post'],
     ['/v1/invites/{id}/revoke', 'post'],
     ['/v1/invites/{id}/resend', 'post'],
     ['/v1/invites/validate-user-invite', 'get'],
@@ -69,6 +70,7 @@ describe('OpenAPI security (e2e)', () => {
     ['/v1/users/me', 'patch'],
     ['/v1/users/{id}/profile', 'get'],
     ['/v1/auth/me', 'get'],
+    ['/v1/cohorts/{cohortId}/members/{userId}', 'patch'],
   ])('still marks %s (%s) as needing a session', (path, method) => {
     expect(security(path, method)).toEqual([{ bearer: [] }]);
   });

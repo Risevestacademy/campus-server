@@ -71,6 +71,7 @@ function user(overrides: Partial<User> = {}): User {
     phone: null,
     bio: null,
     spriteKey: null,
+    sessionEpoch: 0,
     ...overrides,
   };
 }
@@ -157,6 +158,31 @@ describe('completeGoogleSignIn', () => {
    * keeps full access, and carries the invite so sign-in can send them to
    * answer it.
    */
+  /**
+   * A row found by address is linked to the Google subject on the way in,
+   * and that write hands back a newer read of the row. If the account's
+   * sessions were revoked after the roster was consulted, the newer read
+   * carries the new epoch. The session has to be held to the epoch the
+   * decision was made at, or it would be minted for somebody just removed.
+   */
+  it('holds the session to the epoch the grant was decided at, not a later read', async () => {
+    users.findForGoogleIdentity.mockResolvedValue(
+      user({ providerId: null, sessionEpoch: 4 }),
+    );
+    members.resolveActiveAccess.mockResolvedValue({ endsAt: null });
+    users.linkGoogleIdentity.mockResolvedValue(
+      user({ providerId: 'google-sub-1', sessionEpoch: 5 }),
+    );
+
+    const outcome = await service.completeGoogleSignIn('code');
+
+    expect(outcome.kind).toBe('full_access');
+    expect(outcome.user).toMatchObject({
+      providerId: 'google-sub-1',
+      sessionEpoch: 4,
+    });
+  });
+
   it('lets a member invited to another cohort in, carrying the invite', async () => {
     users.findForGoogleIdentity.mockResolvedValue(user());
     members.resolveActiveAccess.mockResolvedValue({ endsAt: null });

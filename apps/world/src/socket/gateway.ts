@@ -293,6 +293,7 @@ export function registerGateway(
         continue;
       }
       if (account && !account.suspended) {
+        dropIfRevoked(connection, account.sessionEpoch);
         continue;
       }
 
@@ -304,6 +305,35 @@ export function registerGateway(
       drop(connection, false);
       connection.socket.close(POLICY_VIOLATION, reason);
     }
+  }
+
+  /**
+   * Closes a socket that was opened before its account's sessions were
+   * revoked. The upgrade refuses a revoked token; this is what reaches the
+   * socket already open, which would otherwise stay until the login stopped
+   * being refreshed.
+   *
+   * Only one that is behind the account's epoch. Somebody who signed in
+   * again after the revoke opened on the new epoch, and is as current as it
+   * gets.
+   *
+   * And only one that still holds the account's place. The account was read
+   * across an await, and in that time a newer socket may have displaced this
+   * one — which has then been told `replaced` and closed already, and has
+   * nothing left to drop.
+   */
+  function dropIfRevoked(connection: Connection, sessionEpoch: number): void {
+    if (connection.epoch === sessionEpoch || !connections.has(connection)) {
+      return;
+    }
+    app.log.info(
+      { connectionId: connection.id, userId: connection.userId },
+      'session revoked, closing socket',
+    );
+    // Remembered, like a sign-out: the account is still welcome, and signing
+    // back in may resume where they stood.
+    drop(connection);
+    connection.socket.close(POLICY_VIOLATION, 'session_revoked');
   }
 
   /**
@@ -528,6 +558,7 @@ export function registerGateway(
       cohortId: decision.cohortId,
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
+      epoch: decision.claims.epoch,
       socket: ws,
       openedAt: Date.now(),
       alive: true,

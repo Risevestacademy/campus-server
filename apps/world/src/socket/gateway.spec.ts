@@ -32,6 +32,8 @@ const accounts = {
   gone: new Set<string>(),
   /** Logins signed out, revoked or no longer refreshed. Every other one is live. */
   endedSessions: new Set<string>(),
+  /** Session epochs that have moved on from zero, where every account starts. */
+  epochs: new Map<string, number>(),
   /** `userId:cohortId` pairs with no live membership. Everything else has one. */
   notMembers: new Set<string>(),
   admins: new Set<string>(),
@@ -42,6 +44,7 @@ const accounts = {
           id: userId,
           suspended: accounts.suspended.has(userId),
           admin: accounts.admins.has(userId),
+          sessionEpoch: accounts.epochs.get(userId) ?? 0,
         },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
@@ -150,9 +153,10 @@ async function token(
   scope: SessionScope = SessionScope.FullAccess,
   secret = SECRET,
   userId = 'user-1',
+  epoch = 0,
 ): Promise<string> {
   const { token } = await signSessionToken(
-    { userId, email: `${userId}@campus.local`, scope },
+    { epoch, userId, email: `${userId}@campus.local`, scope },
     { secret, ttlMinutes: 30 },
   );
   return token;
@@ -209,6 +213,7 @@ beforeEach(() => {
   accounts.suspended.clear();
   accounts.gone.clear();
   accounts.endedSessions.clear();
+  accounts.epochs.clear();
   accounts.notMembers.clear();
   accounts.admins.clear();
   store.positions.clear();
@@ -485,6 +490,87 @@ describe('sockets that go wrong', () => {
     expect(world.gateway.connections.size).toBe(0);
   }, 15_000);
 
+  describe('once the account sessions are revoked', () => {
+    const REVOKED = 'user-9';
+    const open = async (epoch: number) => {
+      const conn = connect({
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(
+          SessionScope.FullAccess,
+          SECRET,
+          REVOKED,
+          epoch,
+        )}`,
+      });
+      await conn.first;
+      return conn;
+    };
+
+    /** A token from before the revoke, however long it still has to run. */
+    it('refuses an upgrade with a token signed before it', async () => {
+      accounts.epochs.set(REVOKED, 1);
+      const { first, settled } = connect({
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(
+          SessionScope.FullAccess,
+          SECRET,
+          REVOKED,
+          0,
+        )}`,
+      });
+
+      await expect(first).resolves.toMatchObject({
+        message: 'session_revoked',
+      });
+      await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+    });
+
+    it('closes a socket that was already open', async () => {
+      const conn = await open(0);
+
+      accounts.epochs.set(REVOKED, 1);
+
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 1008,
+        closeReason: 'session_revoked',
+      });
+      expect(world.gateway.connections.size).toBe(0);
+    }, 15_000);
+
+    // Revoking ends sessions, not the account: signing back in may resume
+    // where they stood, unlike a suspension, which forgets the position.
+    it('keeps the position for signing back in', async () => {
+      const conn = await open(0);
+
+      accounts.epochs.set(REVOKED, 1);
+      await conn.settled;
+
+      await expect
+        .poll(() => world.gateway.players.isRemembered(REVOKED))
+        .toBe(true);
+    }, 15_000);
+
+    // An account holds one socket. Signing in again after the revoke opens
+    // a new one, which takes the old one's place; the sweep then finds a
+    // socket on the current epoch and leaves it alone.
+    it('leaves alone a socket opened after it, which replaced the old one', async () => {
+      const before = await open(0);
+      accounts.epochs.set(REVOKED, 1);
+      const after = await open(1);
+
+      await expect(before.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+      // Through at least one more sweep, and still here.
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      expect(after.ws.readyState).toBe(after.ws.OPEN);
+
+      after.ws.close();
+      await after.settled;
+    }, 20_000);
+  });
+
   /** A database that is down must not throw the campus off. */
   it('leaves sockets alone when the account check fails', async () => {
     const conn = connect({
@@ -508,6 +594,7 @@ describe('sockets that go wrong', () => {
   it('closes a socket once its session expires', async () => {
     const almostExpired = await signSessionToken(
       {
+        epoch: 0,
         userId: 'user-2',
         email: 'grace@campus.local',
         scope: SessionScope.FullAccess,
@@ -537,6 +624,7 @@ describe('a socket following its login', () => {
   async function signed(minutesAgo: number, sessionId = SESSION) {
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId: 'user-3',
         email: 'lin@campus.local',
         scope: SessionScope.FullAccess,
@@ -679,6 +767,7 @@ describe('a slow session check', () => {
     const SESSION = 'aaaaaaaa-0000-4000-8000-00000000beef';
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId: 'user-4',
         email: 'kay@campus.local',
         scope: SessionScope.FullAccess,

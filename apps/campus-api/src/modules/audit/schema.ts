@@ -66,6 +66,12 @@ export enum AuditAction {
    * after, and never the address or anything of the token.
    */
   InviteResent = 'invite_resent',
+  /**
+   * An admin moved a guest's visit deadline forward. `details` has the
+   * deadline before and after; the subject says which membership, so who
+   * and where are read from the row rather than repeated here.
+   */
+  GuestVisitExtended = 'guest_visit_extended',
 }
 
 export enum AuditSubjectType {

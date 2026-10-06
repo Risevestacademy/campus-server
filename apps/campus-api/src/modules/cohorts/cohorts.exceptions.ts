@@ -12,3 +12,7 @@ export class CohortInvalidArgumentException extends DomainException {
 export class CohortNotFoundException extends DomainException {
   readonly code = ExceptionCode.NotFound;
 }
+
+export class CohortMemberNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
