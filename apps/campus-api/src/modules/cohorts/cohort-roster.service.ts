@@ -134,12 +134,15 @@ export class CohortRosterService {
  * Spelt out rather than left to the enum, which sorts in the order its
  * values were added: students first, and guests wherever a migration put
  * them.
+ *
+ * Professors and mentors share a rank: staff are one group, sorted by name
+ * across both roles, not professors and then mentors.
  */
 const ROLE_ORDER = sql`case ${cohortMembers.role}
   when ${sql.raw(`'${CohortRole.Professor}'`)} then 0
-  when ${sql.raw(`'${CohortRole.Mentor}'`)} then 1
-  when ${sql.raw(`'${CohortRole.Student}'`)} then 2
-  else 3 end`;
+  when ${sql.raw(`'${CohortRole.Mentor}'`)} then 0
+  when ${sql.raw(`'${CohortRole.Student}'`)} then 1
+  else 2 end`;
 
 function scopeFilter(scope: RosterScope, now: Date): SQL | undefined {
   switch (scope) {

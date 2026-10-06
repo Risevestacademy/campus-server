@@ -48,8 +48,8 @@ export class ListRosterQueryDto extends PaginationQueryDto {
     format: 'uuid',
     example: '33333333-3333-4333-8333-333333333333',
     description:
-      'Members on this track. Only students are placed on a track, so this ' +
-      'finds students.',
+      'Members on this track: its students, and any staff or guest who ' +
+      'was placed on it. Add `role=student` for the students alone.',
   })
   @IsOptional()
   @IsUUID()
@@ -124,7 +124,9 @@ export class RosterMemberDto {
   @ApiProperty({
     type: () => RosterTrackDto,
     nullable: true,
-    description: 'Set for students; null for every other role.',
+    description:
+      'Always set for a student. Staff and guests have one only when they ' +
+      'were placed on a track; otherwise null.',
   })
   track: RosterTrackDto | null;
 

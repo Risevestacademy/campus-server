@@ -174,11 +174,39 @@ describe('CohortRosterService', () => {
     await join(await person('prof@campus.local'), CohortRole.Professor);
 
     expect(await emails()).toEqual([
-      'prof@campus.local',
       'mentor@campus.local',
+      'prof@campus.local',
       'abel@campus.local',
       'zed@campus.local',
       'guest@campus.local',
+    ]);
+  });
+
+  // Staff are one group: a mentor called Abel comes before a professor
+  // called Zed, and a professor called Baker sits between them.
+  it('sorts professors and mentors together, by name', async () => {
+    await join(
+      await person('prof.zed@campus.local', { lastName: 'Zed' }),
+      CohortRole.Professor,
+    );
+    await join(
+      await person('mentor.abel@campus.local', { lastName: 'Abel' }),
+      CohortRole.Mentor,
+    );
+    await join(
+      await person('prof.baker@campus.local', { lastName: 'Baker' }),
+      CohortRole.Professor,
+    );
+    await join(
+      await person('student.aaron@campus.local', { lastName: 'Aaron' }),
+      CohortRole.Student,
+    );
+
+    expect(await emails()).toEqual([
+      'mentor.abel@campus.local',
+      'prof.baker@campus.local',
+      'prof.zed@campus.local',
+      'student.aaron@campus.local',
     ]);
   });
 
@@ -196,8 +224,8 @@ describe('CohortRosterService', () => {
 
     expect(await emails()).toEqual(['ada@campus.local']);
     expect(await emails({}, c2)).toEqual([
-      'other@campus.local',
       'ada@campus.local',
+      'other@campus.local',
     ]);
   });
 
@@ -328,6 +356,36 @@ describe('CohortRosterService', () => {
       expect(await emails({ role: CohortRole.Professor, trackId: se })).toEqual(
         [],
       );
+    });
+
+    // A track is required of a student and allowed for anyone: an invite
+    // may place a professor on one, and the roster says so rather than
+    // hiding it.
+    it('shows a track on staff who were placed on one, and finds them by it', async () => {
+      await join(await person('pd.prof@campus.local'), CohortRole.Professor, {
+        cohortTrackId: c1pd,
+      });
+
+      const page = await service.list(c1, {
+        page: 1,
+        perPage: 20,
+        state: RosterScope.Live,
+        trackId: pd,
+      });
+
+      expect(
+        page.items.map((item) => [
+          item.user.email,
+          item.role,
+          item.track?.code,
+        ]),
+      ).toEqual([
+        ['pd.prof@campus.local', CohortRole.Professor, 'PD'],
+        ['pd@campus.local', CohortRole.Student, 'PD'],
+      ]);
+      expect(await emails({ role: CohortRole.Student, trackId: pd })).toEqual([
+        'pd@campus.local',
+      ]);
     });
   });
 
