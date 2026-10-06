@@ -88,7 +88,12 @@ describe('with the position store failing', () => {
       } as NodeJS.ProcessEnv),
       {
         ...accounts,
-        find: async (id: string) => ({ id, suspended: false, admin: false }),
+        find: async (id: string) => ({
+          id,
+          suspended: false,
+          admin: false,
+          sessionEpoch: 0,
+        }),
       },
       failing,
     );
@@ -96,6 +101,7 @@ describe('with the position store failing', () => {
     const { port } = world.app.server.address() as AddressInfo;
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId: 'ada',
         email: 'ada@campus.local',
         scope: SessionScope.FullAccess,

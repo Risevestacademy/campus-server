@@ -12,6 +12,7 @@ import {
 import { ApiAdminOnly } from '../../../shared/dto/admin-route.docs.js';
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
 import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
+import { RosterMemberDto } from '../dto/cohort-roster.dto.js';
 import {
   CohortDetailResponseDto,
   CohortMemberResponseDto,
@@ -114,6 +115,38 @@ export function ApiGetCohort(): MethodDecorator {
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
       description: 'id is not a UUID.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No cohort has this id.',
+      content: { 'application/json': { examples: { cohortNotFound } } },
+    }),
+  );
+}
+
+export function ApiListRoster(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'List a cohort’s members (admin only)',
+      description:
+        'The roster: one row per membership, with the person who holds it, ' +
+        'paginated. Staff first, then students, then guests, by name within ' +
+        'each.\n\n' +
+        'By default only the people in the cohort now — `state=live`, the ' +
+        'rule sign-in uses. `state=ended` lists those who left, were ' +
+        'dismissed, withdrew, deferred or graduated, and guests whose visit ' +
+        'is over; `state=all` lists both. Each row says which it is.\n\n' +
+        'Filter further with `role`, `trackId` and `status` (a student’s ' +
+        'status); they combine with AND. A filter that matches nobody is an ' +
+        'empty page; a cohort that does not exist is a 404.\n\n' +
+        'A suspended account keeps its place on the roster. The row’s ' +
+        '`user.status` says so.',
+    }),
+    ApiPaginatedResponse(RosterMemberDto),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'The id or a filter is malformed.',
     }),
     ApiAdminOnly(),
     ApiNotFoundResponse({

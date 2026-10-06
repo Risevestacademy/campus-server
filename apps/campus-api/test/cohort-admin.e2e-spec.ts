@@ -77,7 +77,12 @@ describe('cohort and track admin routes (e2e)', () => {
 
   const cookieFor = async (user: { id: string; email: string }) => {
     const { token } = await signSessionToken(
-      { userId: user.id, email: user.email, scope: SessionScope.FullAccess },
+      {
+        epoch: 0,
+        userId: user.id,
+        email: user.email,
+        scope: SessionScope.FullAccess,
+      },
       { secret: SECRET, ttlMinutes: 15 },
     );
     return `${SESSION_COOKIE}=${token}`;
@@ -974,6 +979,101 @@ describe('cohort and track admin routes (e2e)', () => {
    * only record of which admin set a cohort up — and the correlation id on
    * it is what leads from the entry back to the request's log lines.
    */
+  describe('roster', () => {
+    let cohortId: string;
+
+    beforeEach(async () => {
+      const track = (await createTrack().expect(201)).body;
+      const cohort = (await createCohort().expect(201)).body;
+      const link = (
+        await as(adminCookie)
+          .post(`/v1/cohorts/${cohort.id}/tracks`, { trackId: track.id })
+          .expect(201)
+      ).body;
+      cohortId = cohort.id;
+
+      const [member] = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, 'member@campus.local'));
+      const [left] = await db
+        .insert(users)
+        .values({ email: 'left@campus.local' })
+        .returning();
+      await db.insert(schema.cohortMembers).values([
+        {
+          cohortId,
+          userId: member.id,
+          cohortTrackId: link.id,
+          role: CohortRole.Student,
+          status: 'active',
+        },
+        {
+          cohortId,
+          userId: left.id,
+          role: CohortRole.Mentor,
+          leftAt: new Date('2026-01-01T00:00:00Z'),
+        },
+      ]);
+    });
+
+    const roster = (query = '', cookie = adminCookie) =>
+      as(cookie).get(`/v1/cohorts/${cohortId}/members${query}`);
+
+    it('lists the people in the cohort now, by default', async () => {
+      const res = await roster().expect(200);
+
+      expect(res.body.meta).toMatchObject({ total: 1 });
+      expect(res.body.items[0]).toMatchObject({
+        user: { email: 'member@campus.local' },
+        role: 'student',
+        track: { code: 'SE' },
+        state: 'live',
+      });
+    });
+
+    it.each([
+      ['?state=ended', ['left@campus.local']],
+      ['?state=all&role=mentor', ['left@campus.local']],
+      ['?role=mentor', []],
+      ['?state=all', ['left@campus.local', 'member@campus.local']],
+    ])('reads %s from the query string', async (query, expected) => {
+      const res = await roster(query).expect(200);
+
+      expect(
+        res.body.items.map(
+          (item: { user: { email: string } }) => item.user.email,
+        ),
+      ).toEqual(expected);
+    });
+
+    it.each([
+      ['state', '?state=sometimes'],
+      ['role', '?role=janitor'],
+      ['trackId', '?trackId=not-a-uuid'],
+      ['status', '?status=asleep'],
+    ])('rejects a malformed %s', async (field, query) => {
+      const res = await roster(query);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.details.fields[field]).toEqual(expect.any(String));
+    });
+
+    it('is for admins only', async () => {
+      await roster('', memberCookie).expect(403);
+      await request(app.getHttpServer())
+        .get(`/v1/cohorts/${cohortId}/members`)
+        .expect(401);
+    });
+
+    it('answers 404 for a missing cohort and 400 for a bad id', async () => {
+      await as(adminCookie)
+        .get('/v1/cohorts/99999999-9999-4999-8999-999999999999/members')
+        .expect(404);
+      await as(adminCookie).get('/v1/cohorts/not-a-uuid/members').expect(400);
+    });
+  });
+
   describe('audit log', () => {
     const entries = () =>
       db.select().from(auditLog).orderBy(auditLog.createdAt);

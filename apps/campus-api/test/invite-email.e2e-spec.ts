@@ -145,7 +145,12 @@ describe('invite email on POST /v1/invites (e2e)', () => {
     cohortTrackId = link.id;
 
     const { token } = await signSessionToken(
-      { userId: admin.id, email: admin.email, scope: SessionScope.FullAccess },
+      {
+        epoch: 0,
+        userId: admin.id,
+        email: admin.email,
+        scope: SessionScope.FullAccess,
+      },
       { secret: SECRET, ttlMinutes: 15 },
     );
     adminCookie = `${SESSION_COOKIE}=${token}`;

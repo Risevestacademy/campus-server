@@ -185,8 +185,14 @@ everything else behind the guard.
   outlive the access it stands for, which is what keeps a guest's visit from
   running on until the token happens to lapse.
 - **Refresh**: see below. Every refresh re-checks the account and its access,
-  so fifteen minutes is also how long a removed or suspended person can keep
-  using a token they already hold.
+  so fifteen minutes is the longest a person whose access ran out on its own
+  can keep using a token they already hold.
+- **Session epoch**: every token carries the account's `session_epoch` as it
+  was when the token was signed (the `epoch` claim), and campus-api and
+  `world` both refuse a token whose epoch is not the one on the row. Ending
+  an account's sessions on purpose bumps the column, so it takes effect on
+  the next request rather than when the token lapses. See
+  [Ending an account's sessions](#ending-an-accounts-sessions).
 
 ## Refreshing and signing out
 
@@ -251,6 +257,34 @@ sequenceDiagram
   subdomains, which is how `world` on its own host receives it.
   `campus_refresh` stays on campus-api's host and path alone.
 
+## Ending an account's sessions
+
+Signing out ends one sign-in. Taking somebody's access away has to end all
+of them, at once, and without waiting for a token to run out. That is
+`SessionIssuer.revokeAllSessions(userId)`, and it does two things in one
+transaction:
+
+- **Bumps `users.session_epoch`.** Every access token already out was signed
+  with the old value, so the guard answers 401 `Session has been revoked` on
+  its next request, and `world` refuses it on an upgrade.
+- **Revokes every refresh family the account holds**, under the same lock a
+  refresh takes. Without this the dead access token could be swapped for a
+  new one on the new epoch.
+
+The claim is required. A token with no `epoch` is refused outright, since it
+cannot be told apart from one that a revocation was meant to end.
+
+The epoch only goes up, and it is compared for equality. An account whose
+sessions were revoked can sign in again, on the new epoch, if whatever took
+the access away still lets it through the sign-in gate.
+
+It is for access being taken away, not for an ending the person chose:
+signing out and declining an invite do not touch it.
+
+Nothing calls it yet. Suspending an account, removing a member and cutting a
+visit short are the routes that will, each passing the transaction of its
+own change so the two commit together.
+
 ## Native apps
 
 A native app cannot use the redirect flow: it has no cookie jar the API can
@@ -309,19 +343,21 @@ not revoked, not expired, and was minted within
 the account and its access before minting, so a recent token is campus-api
 vouching for the session again.
 
-| What happened                            | When the socket closes                                              |
-| ---------------------------------------- | ------------------------------------------------------------------- |
-| Signed out                               | Within a heartbeat (30 s)                                           |
-| Suspended                                | Within a heartbeat — `world` checks the account itself              |
-| Access ended, or removed from the cohort | When a refresh fails, or at most the window after the last good one |
-| Browser stopped refreshing               | The window after the last refresh                                   |
+| What happened              | When the socket closes                                              |
+| -------------------------- | ------------------------------------------------------------------- |
+| Signed out                 | Within a heartbeat (30 s)                                           |
+| Suspended                  | Within a heartbeat — `world` checks the account itself              |
+| Sessions revoked           | Within a heartbeat — `world` compares the socket's epoch to the row |
+| Access ran out on its own  | When a refresh fails, or at most the window after the last good one |
+| Browser stopped refreshing | The window after the last refresh                                   |
 
 A token with no `sid` — minted before this existed — is followed the old way,
 by its own expiry.
 
 ## Not built yet
 
-- **Immediate revocation.** Access taken away early — removing a member,
-  cutting a visit short — takes effect when the next refresh fails, so within
-  fifteen minutes for campus-api and within the refresh window for `world`.
-  Nothing yet revokes a family the moment access is taken away.
+- **The routes that take access away.** The mechanism for ending an
+  account's sessions at once is built (see
+  [Ending an account's sessions](#ending-an-accounts-sessions)), but nothing
+  calls it: there is no route yet to suspend an account, remove a member or
+  cut a visit short.

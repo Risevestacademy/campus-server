@@ -20,6 +20,15 @@ export interface SessionClaims {
   userId: string;
   email: string;
   scope: SessionScope;
+  /**
+   * The account's session epoch when the token was signed: USERS.session_epoch.
+   * Taking somebody's access away bumps the column, and every consumer
+   * refuses a token whose epoch is not the row's — so a session ends on its
+   * next request, not whenever the token happens to run out.
+   *
+   * Compared by the consumer, not here: this package has no database.
+   */
+  epoch: number;
   /** Present on provisional sessions: the invite still to be accepted. */
   inviteId?: string;
   /**
@@ -63,6 +72,7 @@ export async function signSessionToken(
   const token = await new SignJWT({
     email: claims.email,
     scope: claims.scope,
+    epoch: claims.epoch,
     ...(claims.inviteId ? { inviteId: claims.inviteId } : {}),
     ...(claims.sessionId ? { sid: claims.sessionId } : {}),
   })
@@ -105,12 +115,19 @@ export async function verifySessionToken(
 
   const scope = payload['scope'];
   const email = payload['email'];
+  const epoch = payload['epoch'];
   const inviteId = payload['inviteId'];
   const sessionId = payload['sid'];
 
   if (
     !payload.sub ||
     typeof email !== 'string' ||
+    // Required, never defaulted. A token with no epoch cannot be told apart
+    // from one whose epoch was since bumped, and guessing in the holder's
+    // favour would make every revocation skippable by an older token.
+    typeof epoch !== 'number' ||
+    !Number.isSafeInteger(epoch) ||
+    epoch < 0 ||
     (scope !== SessionScope.Provisional && scope !== SessionScope.FullAccess) ||
     (inviteId !== undefined && typeof inviteId !== 'string') ||
     (sessionId !== undefined && typeof sessionId !== 'string') ||
@@ -126,6 +143,7 @@ export async function verifySessionToken(
     userId: payload.sub,
     email,
     scope,
+    epoch,
     inviteId,
     sessionId,
     expiresAt: new Date(payload.exp * 1000),
