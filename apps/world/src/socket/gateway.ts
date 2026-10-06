@@ -5,6 +5,11 @@ import type { WebSocket } from 'ws';
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import type { PositionStore, SavedPosition } from '../infra/positions.js';
+import type {
+  Displacement,
+  Presence,
+  PresenceStore,
+} from '../infra/presence.js';
 import { Players, type Player } from '../movement/players.js';
 import {
   decideUpgrade,
@@ -42,6 +47,7 @@ export function registerGateway(
   env: Env,
   accounts: AccountLookup,
   positions: PositionStore,
+  presence: PresenceStore,
 ): Gateway {
   const connections = new Connections();
   const players = new Players(
@@ -160,6 +166,66 @@ export function registerGateway(
   );
   periodicSave.unref();
 
+  function presenceOf(connection: Connection): Presence {
+    return {
+      userId: connection.userId,
+      connectionId: connection.id,
+      cohortId: connection.cohortId,
+      since: connection.openedAt,
+    };
+  }
+
+  /**
+   * Entries this instance stops renewing lapse on their own, so a failure
+   * here only leaves somebody looking online a little longer.
+   */
+  function leavePresence(leaving: readonly Connection[]): void {
+    if (leaving.length === 0) return;
+    presence.leave(leaving.map(presenceOf)).catch((err: unknown) => {
+      app.log.warn({ err }, 'could not remove presence');
+    });
+  }
+
+  /**
+   * The account entered the campus on another instance. Closed as a second
+   * tab here would close it, except the avatar leaves this instance too: it
+   * now stands on that one.
+   */
+  function displacedElsewhere({ userId, connectionId }: Displacement): void {
+    const connection = connections.forUser(userId);
+    if (connection?.id !== connectionId) {
+      return;
+    }
+    app.log.info(
+      { connectionId, userId },
+      'socket displaced, account entered the campus on another instance',
+    );
+    drop(connection);
+    send(connection.socket, { type: 'replaced' });
+    connection.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
+  }
+  presence.onDisplaced(displacedElsewhere);
+
+  /**
+   * Also how somebody comes back into presence after Redis was away, and how
+   * a displacement whose message never arrived is caught.
+   */
+  async function renewPresence(): Promise<void> {
+    const open = connections.all();
+    if (open.length === 0) return;
+    for (const displaced of await presence.renew(open.map(presenceOf))) {
+      displacedElsewhere(displaced);
+    }
+  }
+
+  const presenceRenewal = setInterval(
+    oneAtATime(renewPresence, (err) => {
+      app.log.warn({ err }, 'could not renew presence');
+    }),
+    (env.WORLD_PRESENCE_TTL_SECONDS * 1000) / 3,
+  );
+  presenceRenewal.unref();
+
   /**
    * Every way a socket stops counting goes through here, so a player can
    * never outlive the socket standing for them. Idempotent: a socket dropped
@@ -173,6 +239,11 @@ export function registerGateway(
    * return is worse than a flicker for somebody who does.
    */
   function drop(connection: Connection, remember = true): void {
+    // A connection displaced here no longer holds the account's presence;
+    // after shutdown began, everybody has been removed already.
+    if (connections.has(connection) && !stopping) {
+      leavePresence([connection]);
+    }
     connections.remove(connection);
     if (connections.forUser(connection.userId)) {
       return;
@@ -489,6 +560,7 @@ export function registerGateway(
       sessionId: decision.claims.sessionId,
       epoch: decision.claims.epoch,
       socket: ws,
+      openedAt: Date.now(),
       alive: true,
     };
     registered = connection;
@@ -549,6 +621,13 @@ export function registerGateway(
       send(displaced.socket, { type: 'replaced' });
       displaced.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
     }
+
+    presence.enter(presenceOf(connection)).catch((err: unknown) => {
+      app.log.warn(
+        { err, userId: connection.userId },
+        'could not record presence, the next renewal will',
+      );
+    });
     app.log.info(
       {
         connectionId: connection.id,
@@ -673,6 +752,7 @@ export function registerGateway(
       clearInterval(heartbeat);
       clearInterval(tick);
       clearInterval(periodicSave);
+      clearInterval(presenceRenewal);
       // Everybody still here, whether or not they moved since the last save:
       // a redeploy should put nobody back at the spawn. Before the sockets
       // close, so the positions written are the ones they stood at.
@@ -682,6 +762,11 @@ export function registerGateway(
         await positions.save(players.all());
       } catch (err) {
         app.log.warn({ err }, 'could not save positions on shutdown');
+      }
+      try {
+        await presence.leave(connections.all().map(presenceOf));
+      } catch (err) {
+        app.log.warn({ err }, 'could not remove presence on shutdown');
       }
       for (const connection of connections.all()) {
         connection.socket.close(GOING_AWAY, 'server shutting down');

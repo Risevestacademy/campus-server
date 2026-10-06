@@ -17,6 +17,8 @@ export interface Connection {
    * access tokens the browser goes through meanwhile.
    */
   sessionId?: string;
+  /** In ms. Across instances, the newest connection holds the account. */
+  openedAt: number;
   /**
    * The account's session epoch when this socket opened. Once the account's
    * moves past it, this socket belongs to a session that has been revoked —

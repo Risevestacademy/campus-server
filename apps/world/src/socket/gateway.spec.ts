@@ -1,4 +1,5 @@
 import { signSessionToken, SessionScope } from '@campus/session';
+import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import {
   afterAll,
@@ -9,11 +10,18 @@ import {
   expect,
   it,
 } from 'vitest';
+import { Redis } from 'ioredis';
 import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
 import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
+import {
+  DISPLACED_CHANNEL,
+  MemoryPresenceStore,
+  type Displacement,
+  type Presence,
+} from '../infra/presence.js';
 
 const SECRET = 'a-world-session-secret-of-at-least-32-chars';
 const ORIGIN = 'https://campus.example.com';
@@ -76,6 +84,48 @@ const store = {
   close: async () => undefined,
 };
 
+/** Stands in for presence in Redis, and for the other instances behind it. */
+const presence = {
+  instanceId: 'this-instance',
+  entries: new Map<string, Presence>(),
+  /** Connections whose account a newer connection on another instance holds. */
+  heldElsewhere: new Set<string>(),
+  failing: false,
+  listeners: [] as ((displaced: Displacement) => void)[],
+  enter: async (entry: Presence) => {
+    if (presence.failing) throw new Error('redis is down');
+    presence.entries.set(entry.userId, entry);
+  },
+  renew: async (entries: readonly Presence[]) => {
+    if (presence.failing) throw new Error('redis is down');
+    const displaced: Displacement[] = [];
+    for (const entry of entries) {
+      if (presence.heldElsewhere.has(entry.connectionId)) {
+        displaced.push(entry);
+      } else {
+        presence.entries.set(entry.userId, entry);
+      }
+    }
+    return displaced;
+  },
+  leave: async (entries: readonly Presence[]) => {
+    for (const { userId, connectionId } of entries) {
+      if (presence.entries.get(userId)?.connectionId === connectionId) {
+        presence.entries.delete(userId);
+      }
+    }
+  },
+  online: async () => [],
+  onDisplaced: (listener: (displaced: Displacement) => void) => {
+    presence.listeners.push(listener);
+  },
+  close: async () => undefined,
+  /** What another instance says once the account enters the campus there. */
+  displace: (displaced: Displacement) => {
+    for (const listener of presence.listeners) listener(displaced);
+  },
+};
+
 const env = loadEnv({
   AUTH_SESSION_SECRET: SECRET,
   DATABASE_URL: 'postgres://unused',
@@ -91,6 +141,8 @@ const env = loadEnv({
   WORLD_TICK_MS: '200',
   // The shortest allowed, so a periodic save lands within a test.
   WORLD_POSITION_SAVE_SECONDS: '1',
+  // The shortest allowed, so presence is renewed every second.
+  WORLD_PRESENCE_TTL_SECONDS: '3',
   FF_LOG_LEVEL: 'fatal',
 } as NodeJS.ProcessEnv);
 
@@ -167,6 +219,9 @@ beforeEach(() => {
   store.positions.clear();
   store.failLoad = false;
   store.loads = 0;
+  presence.entries.clear();
+  presence.heldElsewhere.clear();
+  presence.failing = false;
 });
 
 /**
@@ -189,7 +244,7 @@ afterEach(async () => {
 });
 
 beforeAll(async () => {
-  world = await buildWorld(env, accounts, store);
+  world = await buildWorld(env, accounts, store, presence);
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket`;
@@ -1451,19 +1506,123 @@ describe('movement', () => {
       await expect.poll(() => store.positions.has(ada)).toBe(false);
     }, 15_000);
   });
+
+  describe('presence', () => {
+    const connectionIdOf = async (conn: ReturnType<typeof connect>) =>
+      (await waitFor(conn, (m) => m.type === 'welcome')).connectionId as string;
+
+    it('records who is online, and in which cohort, while their socket is open', async () => {
+      const ada = person();
+      const conn = await arrive(ada, 'cohort-frontend');
+      const connectionId = await connectionIdOf(conn);
+
+      await expect
+        .poll(() => presence.entries.get(ada))
+        .toMatchObject({ connectionId, cohortId: 'cohort-frontend' });
+
+      await leave(conn);
+      await expect.poll(() => presence.entries.has(ada)).toBe(false);
+    });
+
+    it('keeps the replacing socket present once the one it replaced closes', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      const connectionId = await connectionIdOf(second);
+      await first.settled;
+
+      await quiet();
+      expect(presence.entries.get(ada)?.connectionId).toBe(connectionId);
+
+      await leave(second);
+    });
+
+    it('closes a socket whose account entered the campus on another instance', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const conn = await arrive(ada);
+
+      presence.displace({
+        userId: ada,
+        connectionId: await connectionIdOf(conn),
+      });
+
+      await expect(
+        waitFor(conn, (m) => m.type === 'replaced'),
+      ).resolves.toEqual({ type: 'replaced' });
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+      // The avatar now stands on the other instance.
+      await expect(
+        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+      expect(world.gateway.players.has(ada)).toBe(false);
+
+      await leave(watcher);
+    });
+
+    it('ignores a displacement of a socket already replaced here', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const firstId = await connectionIdOf(first);
+      const second = await arrive(ada);
+      await first.settled;
+
+      presence.displace({ userId: ada, connectionId: firstId });
+
+      await quiet();
+      expect(second.ws.readyState).toBe(WebSocket.OPEN);
+      await leave(second);
+    });
+
+    /** The message from the other instance can be missed; the renewal cannot. */
+    it('closes a socket a renewal finds displaced', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      presence.heldElsewhere.add(await connectionIdOf(conn));
+
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+    });
+
+    it('lets somebody in while presence cannot be written, and records them once it can', async () => {
+      const ada = person();
+      presence.failing = true;
+
+      const conn = await arrive(ada);
+      await quiet();
+      expect(presence.entries.has(ada)).toBe(false);
+
+      presence.failing = false;
+      await expect
+        .poll(() => presence.entries.has(ada), { timeout: 3_000 })
+        .toBe(true);
+      await leave(conn);
+    });
+  });
 });
 
 /** A redeploy must not send everybody back to the spawn. */
 describe('shutdown', () => {
-  it('saves everybody still here before closing their sockets', async () => {
+  it('saves everybody still here and takes them out of presence before closing their sockets', async () => {
     const saved = new Map<string, unknown>();
-    const own = await buildWorld(env, accounts, {
-      ...store,
-      save: async (players) => {
-        for (const { userId, x, y, facing } of players)
-          saved.set(userId, { x, y, facing });
+    const own = await buildWorld(
+      env,
+      accounts,
+      {
+        ...store,
+        save: async (players) => {
+          for (const { userId, x, y, facing } of players)
+            saved.set(userId, { x, y, facing });
+        },
       },
-    });
+      new MemoryPresenceStore(),
+    );
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = own.app.server.address() as AddressInfo;
     const ws = new WebSocket(
@@ -1477,11 +1636,108 @@ describe('shutdown', () => {
     );
     const closed = new Promise((resolve) => ws.on('close', resolve));
     await new Promise((resolve) => ws.on('message', resolve));
+    expect(await own.presence.online(COHORT)).toHaveLength(1);
 
     await own.gateway.stop();
 
     expect(saved.get('leaving-1')).toEqual({ x: 0, y: 0, facing: 'down' });
+    expect(await own.presence.online(COHORT)).toEqual([]);
     await closed;
     await own.app.close();
+  });
+});
+
+/**
+ * Two instances sharing one Redis, as production will run them. Needs a real
+ * Redis: see WORLD_TEST_REDIS_URL in presence.spec.ts.
+ */
+const redisUrl = process.env.WORLD_TEST_REDIS_URL;
+
+describe.skipIf(!redisUrl)('across instances', () => {
+  const shared = loadEnv({
+    AUTH_SESSION_SECRET: SECRET,
+    DATABASE_URL: 'postgres://unused',
+    CORS_ORIGINS: ORIGIN,
+    REDIS_URL: redisUrl,
+    FF_LOG_LEVEL: 'fatal',
+  } as NodeJS.ProcessEnv);
+  const cohortId = `cohort-${randomUUID()}`;
+  const instances: World[] = [];
+  let redis: Redis;
+
+  async function instance(): Promise<World> {
+    const own = await buildWorld(shared, accounts, store);
+    instances.push(own);
+    await own.app.listen({ port: 0, host: '127.0.0.1' });
+    return own;
+  }
+
+  function enter(own: World, cookie: string) {
+    const { port } = own.app.server.address() as AddressInfo;
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/socket?cohortId=${cohortId}`,
+      { headers: { origin: ORIGIN, cookie } },
+    );
+    const messages: Record<string, unknown>[] = [];
+    ws.on('message', (raw) =>
+      messages.push(JSON.parse(raw.toString()) as Record<string, unknown>),
+    );
+    const closed = new Promise<[number, string]>((resolve) =>
+      ws.on('close', (code, reason) => resolve([code, reason.toString()])),
+    );
+    return { ws, messages, closed };
+  }
+
+  beforeAll(() => {
+    redis = new Redis(redisUrl as string);
+  });
+
+  afterAll(async () => {
+    for (const own of instances) {
+      await own.gateway.stop();
+      await own.app.close();
+      await own.presence.close();
+      await own.positions.close();
+    }
+    await redis.quit();
+  });
+
+  it('closes the socket on one instance when the account enters on another', async () => {
+    const first = await instance();
+    const second = await instance();
+    // Both listening before anybody enters, or the message has nobody to hear it.
+    await expect
+      .poll(async () => {
+        const [, count] = (await redis.pubsub('NUMSUB', DISPLACED_CHANNEL)) as [
+          string,
+          number,
+        ];
+        return count;
+      })
+      .toBeGreaterThanOrEqual(2);
+    const userId = `elsewhere-${randomUUID()}`;
+    const cookie = `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`;
+
+    const onFirst = enter(first, cookie);
+    await expect
+      .poll(() => onFirst.messages.some((m) => m.type === 'snapshot'))
+      .toBe(true);
+    const onSecond = enter(second, cookie);
+
+    await expect(onFirst.closed).resolves.toEqual([4000, 'entered_elsewhere']);
+    expect(onFirst.messages).toContainEqual({ type: 'replaced' });
+    expect(first.gateway.players.has(userId)).toBe(false);
+    const welcome = onSecond.messages.find((m) => m.type === 'welcome');
+    await expect(second.presence.online(cohortId)).resolves.toEqual([
+      expect.objectContaining({
+        userId,
+        connectionId: welcome?.connectionId,
+        instanceId: second.presence.instanceId,
+      }),
+    ]);
+
+    onSecond.ws.close();
+    await onSecond.closed;
+    await expect.poll(() => second.presence.online(cohortId)).toEqual([]);
   });
 });
