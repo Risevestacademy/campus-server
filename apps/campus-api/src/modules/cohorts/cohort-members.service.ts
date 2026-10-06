@@ -164,6 +164,18 @@ export class CohortMembersService {
     audit: AuditContext,
     now: Date = new Date(),
   ): Promise<CohortMemberResponseDto> {
+    // The route's check passes ISO forms Date cannot read — a week date
+    // like 2026-W43-2, or 20261020 — and an invalid Date compares false
+    // against everything below, so it would reach the UPDATE and fail there.
+    if (Number.isNaN(accessExpiresAt.getTime())) {
+      throw new CohortInvalidArgumentException('Request validation failed', {
+        fields: {
+          accessExpiresAt:
+            'accessExpiresAt is not a date: use a form like 2026-11-30T17:00:00Z',
+        },
+      });
+    }
+
     return this.db.transaction(async (tx) => {
       const [existing] = await tx
         .select()

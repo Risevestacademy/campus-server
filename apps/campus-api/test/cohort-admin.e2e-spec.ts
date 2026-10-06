@@ -887,6 +887,27 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(await visitEntries()).toHaveLength(0);
     });
 
+    // Forms the request check lets through and Date cannot read. Unguarded,
+    // they reached the UPDATE as an invalid date and answered 500.
+    it.each(['2099-W43-2', '20991020', '2099-293'])(
+      'refuses %s, an ISO form that is not a readable date, as a field error',
+      async (value) => {
+        const previous = new Date(Date.now() + HOUR);
+        const guest = await guestWithVisit(previous);
+
+        const res = await extend(guest.id, value).expect(400);
+
+        expect(res.body.error).toMatchObject({
+          code: 'INVALID_ARGUMENT',
+          details: {
+            fields: { accessExpiresAt: expect.stringMatching(/not a date/) },
+          },
+        });
+        expect(await visitOf(guest.id)).toEqual(previous);
+        expect(await visitEntries()).toHaveLength(0);
+      },
+    );
+
     it('refuses an end date no later than the one the visit already has', async () => {
       const previous = new Date(Date.now() + HOUR);
       const guest = await guestWithVisit(previous);
