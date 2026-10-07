@@ -51,9 +51,11 @@ export function ApiSetSystemRole(): MethodDecorator {
       summary: 'Grant or revoke the admin role (admin only)',
       description:
         'Send `admin` to make somebody an admin, `user` to make them an ' +
-        'ordinary user again. Any admin may do either. It takes effect on ' +
-        'the person’s next request, and revoking the role also signs them ' +
-        'out everywhere.\n\n' +
+        'ordinary user again. Any admin may do either.\n\n' +
+        'A grant takes effect on the person’s next request if they are ' +
+        'signed in. Somebody signed out, or still answering an invitation, ' +
+        'has it from their next sign-in. Revoking the role also signs the ' +
+        'person out everywhere.\n\n' +
         'Two people are off limits, both answered with a 409:\n\n' +
         '- **A super admin.** Their role cannot be changed through the API ' +
         'in either direction. Super admins are the accounts in ' +

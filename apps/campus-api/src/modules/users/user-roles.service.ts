@@ -38,9 +38,13 @@ export class UserRolesService {
    *   with nobody having decided it, and granting yourself a role you hold
    *   means nothing. Somebody else does it.
    *
-   * A grant takes effect on the target's next request with nothing to
-   * revoke: the session guard reads the role from the row every time, never
-   * from the token. A revocation ends their sessions as well. The admin
+   * A grant takes effect on the next request of anybody holding a full
+   * session, with nothing to revoke: the session guard reads the role from
+   * the row every time, never from the token. It cannot reach somebody
+   * signed out, or still answering an invitation — a provisional session is
+   * refused by its kind before the role is read — and for them it starts
+   * when they next sign in, where the gate admits an admin on the role
+   * alone. A revocation ends their sessions as well. The admin
    * routes would refuse them anyway, but an admin needs no cohort to hold a
    * session, so without that one who has none would keep a working token,
    * and a place in the world, until it ran out.

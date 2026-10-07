@@ -11,7 +11,12 @@ import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
-import { SessionIssuer } from './../src/modules/auth/session-issuer.js';
+import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
+import { CohortRole, CohortStatus } from './../src/modules/cohorts/schema.js';
+import {
+  generateInviteToken,
+  hashInviteToken,
+} from './../src/modules/invites/invite-token.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
@@ -24,6 +29,8 @@ const MIGRATIONS = fileURLToPath(
   new URL('../src/infra/database/migrations', import.meta.url),
 );
 const db = drizzle(new PGlite(), { schema });
+/** Stands in for Google: says whose id_token it was handed. */
+const google = { verifyIdToken: vi.fn() };
 
 /**
  * Granting and revoking admin, from the outside. The rules are proven in the
@@ -39,12 +46,30 @@ describe('PATCH /v1/users/:id/system-role (e2e)', () => {
   let rootToken: string;
   let adminToken: string;
   let memberToken: string;
+  let cohort: typeof schema.cohorts.$inferSelect;
 
-  // Real tokens from the real issuer, so these hold whatever a session
-  // token is made to carry.
+  // Through the real sign-in, so each token is the one this account would
+  // be handed: the gate decides between a full session, a provisional one
+  // and none at all. Issuing a session directly would hand a full one to
+  // somebody the gate would have given a provisional one.
+  const signIn = async (email: string) => {
+    google.verifyIdToken.mockResolvedValueOnce({
+      subject: `google-${email}`,
+      email,
+      emailVerified: true,
+      firstName: null,
+      lastName: null,
+      displayName: null,
+      avatarUrl: null,
+    });
+    const res = await request(app.getHttpServer())
+      .post('/v1/auth/google/token')
+      .send({ idToken: `id-token-for-${email}` })
+      .expect(200);
+    return res.body as { accessToken: string; scope: string };
+  };
   const tokenFor = async (user: typeof users.$inferSelect) =>
-    (await app.get(SessionIssuer).issueFullAccess(user, { endsAt: null }))
-      .token;
+    (await signIn(user.email)).accessToken;
 
   const setRole = (token: string, userId: string, body: object) =>
     request(app.getHttpServer())
@@ -64,6 +89,8 @@ describe('PATCH /v1/users/:id/system-role (e2e)', () => {
     })
       .overrideProvider(DRIZZLE)
       .useValue(db)
+      .overrideProvider(GoogleOAuthService)
+      .useValue(google)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -92,7 +119,7 @@ describe('PATCH /v1/users/:id/system-role (e2e)', () => {
 
   beforeEach(async () => {
     await db.execute(
-      sql`truncate audit_log, refresh_tokens, invites, cohort_members, users cascade`,
+      sql`truncate audit_log, refresh_tokens, invites, cohort_members, cohorts, users cascade`,
     );
     [root, admin, member] = await db
       .insert(users)
@@ -102,6 +129,17 @@ describe('PATCH /v1/users/:id/system-role (e2e)', () => {
         { email: 'member@campus.local', systemRole: SystemRole.User },
       ])
       .returning();
+    // The member is in a cohort, which is what gives an ordinary user a
+    // full session; the two admins are let in on their role alone.
+    [cohort] = await db
+      .insert(schema.cohorts)
+      .values({ name: 'Cohort 1', code: 'C1', status: CohortStatus.Active })
+      .returning();
+    await db.insert(schema.cohortMembers).values({
+      cohortId: cohort.id,
+      userId: member.id,
+      role: CohortRole.Mentor,
+    });
     rootToken = await tokenFor(root);
     adminToken = await tokenFor(admin);
     memberToken = await tokenFor(member);
@@ -138,6 +176,36 @@ describe('PATCH /v1/users/:id/system-role (e2e)', () => {
 
     await setRole(adminToken, member.id, { systemRole: 'user' }).expect(200);
     await listUsers(memberToken).expect(401);
+  });
+
+  // Somebody still answering an invitation holds a provisional session,
+  // which the admin routes refuse by its kind before the role is ever read.
+  // Granting admin cannot reach into that session: it reaches them when
+  // they sign in again, where the gate lets an admin in on the role alone.
+  it('reaches somebody mid-invitation when they next sign in, not before', async () => {
+    await db.insert(schema.invites).values({
+      email: 'invited@campus.local',
+      cohortId: cohort.id,
+      cohortRole: CohortRole.Mentor,
+      systemRole: SystemRole.User,
+      tokenHash: hashInviteToken(generateInviteToken()),
+      invitedBy: admin.id,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    const before = await signIn('invited@campus.local');
+    expect(before.scope).toBe('provisional');
+    await listUsers(before.accessToken).expect(401);
+    const [invited] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, 'invited@campus.local'));
+
+    await setRole(adminToken, invited.id, { systemRole: 'admin' }).expect(200);
+
+    await listUsers(before.accessToken).expect(401);
+    const after = await signIn('invited@campus.local');
+    expect(after.scope).toBe('full_access');
+    await listUsers(after.accessToken).expect(200);
   });
 
   it('lets one admin revoke another', async () => {
