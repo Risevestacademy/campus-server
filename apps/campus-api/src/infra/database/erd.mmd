@@ -26,6 +26,7 @@ erDiagram
         varchar sprite_key "Which sprite walks around the map — deliberately distinct…"
         system_role_enum system_role "user | admin"
         user_status_enum status "active | suspended"
+        integer session_epoch "bumped to end every session the account holds"
         timestamptz last_login_at
         timestamptz created_at
         timestamptz updated_at

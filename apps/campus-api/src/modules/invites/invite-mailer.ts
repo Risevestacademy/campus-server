@@ -1,12 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 
+import { CONFIG } from '../../infra/config/config.constants.js';
+import type { Env } from '../../infra/config/env.js';
 import {
   EMAIL_SENDER,
   type EmailSender,
 } from '../../infra/email/email-sender.js';
 import { InviteEmailStatus } from './dto/invite-response.dto.js';
-import { renderInviteEmail } from './invite-email.js';
+import {
+  renderInviteEmail,
+  renderInviteTemplateEmail,
+} from './invite-email.js';
 import { InvitesService } from './invites.service.js';
 
 /**
@@ -22,6 +27,13 @@ export class InviteMailer {
     private readonly invites: InvitesService,
     @Inject(EMAIL_SENDER) private readonly sender: EmailSender,
     private readonly logger: PinoLogger,
+    @Inject(CONFIG)
+    private readonly config: Pick<
+      Env,
+      | 'RESEND_INVITE_TEMPLATE_ID'
+      | 'RESEND_INVITE_ADMIN_TEMPLATE_ID'
+      | 'RESEND_INVITE_GUEST_TEMPLATE_ID'
+    >,
   ) {
     this.logger.setContext(InviteMailer.name);
   }
@@ -42,7 +54,14 @@ export class InviteMailer {
       // The same read the invitation screen makes, so the email and the page
       // it links to cannot disagree about the offer.
       const details = await this.invites.previewByToken(invite.token);
-      const rendered = renderInviteEmail(details, invite.inviteLink);
+      const standard = this.config.RESEND_INVITE_TEMPLATE_ID;
+      const rendered = standard
+        ? renderInviteTemplateEmail(details, invite.inviteLink, {
+            standard,
+            admin: this.config.RESEND_INVITE_ADMIN_TEMPLATE_ID,
+            guest: this.config.RESEND_INVITE_GUEST_TEMPLATE_ID,
+          })
+        : renderInviteEmail(details, invite.inviteLink);
       const result = await this.sender.send({
         to: details.email,
         ...rendered,

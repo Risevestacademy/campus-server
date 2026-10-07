@@ -44,6 +44,7 @@ describe('session access (e2e)', () => {
   ) => {
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId,
         email,
         scope,
@@ -154,6 +155,7 @@ describe('session access (e2e)', () => {
 
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId: admin.id,
         email: admin.email,
         scope: SessionScope.FullAccess,

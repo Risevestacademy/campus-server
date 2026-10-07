@@ -7,6 +7,7 @@ import {
 
 import type { AccountLookup } from '../infra/accounts.js';
 import { allowedOrigins, type Env } from '../infra/env.js';
+import { SESSION_COOKIE } from './endpoint.js';
 
 export type Refusal =
   | 'origin_not_allowed'
@@ -15,10 +16,13 @@ export type Refusal =
   | 'wrong_scope'
   | 'account_gone'
   | 'account_suspended'
-  | 'session_ended';
+  | 'session_revoked'
+  | 'session_ended'
+  | 'no_cohort'
+  | 'not_a_member';
 
 export type UpgradeDecision =
-  | { ok: true; claims: SessionClaims }
+  | { ok: true; claims: SessionClaims; cohortId: string }
   | {
       ok: false;
       refusal: Refusal;
@@ -28,8 +32,6 @@ export type UpgradeDecision =
        */
       userId?: string;
     };
-
-const SESSION_COOKIE = 'campus_session';
 
 /** Same cookie campus-api sets; the browser sends it on the upgrade. */
 export function readSessionCookie(
@@ -72,11 +74,15 @@ function bearer(header: string | undefined): string | undefined {
  * who somebody was when they signed in and cannot say whether they still
  * belong here — and, when it names one, against the login it came from,
  * which may have been signed out since.
+ *
+ * The cohort comes last, so a refusal tells somebody who is not signed in
+ * nothing about who belongs where.
  */
 export async function decideUpgrade(
   env: Env,
   accounts: AccountLookup,
   headers: { origin?: string; cookie?: string; authorization?: string },
+  cohortId: string | undefined,
 ): Promise<UpgradeDecision> {
   const cookieToken = readSessionCookie(headers.cookie);
 
@@ -115,6 +121,13 @@ export async function decideUpgrade(
     return { ok: false, refusal: 'account_suspended', userId: claims.userId };
   }
 
+  // The account's sessions were ended on purpose after this token was
+  // signed: access taken away, not a sign-out. campus-api refuses the same
+  // token on the same comparison.
+  if (claims.epoch !== account.sessionEpoch) {
+    return { ok: false, refusal: 'session_revoked' };
+  }
+
   // An access token outlives a sign-out by up to its fifteen minutes. The
   // login behind it has to be live too, or a token lifted from a browser
   // that has since signed out would still open the campus.
@@ -130,7 +143,26 @@ export async function decideUpgrade(
     }
   }
 
-  return { ok: true, claims };
+  // No default: somebody may belong to several, and guessing would put them
+  // somewhere they did not ask to be.
+  if (cohortId === undefined || cohortId === '') {
+    return { ok: false, refusal: 'no_cohort' };
+  }
+
+  // Admins bypass cohort gating, as they do at campus-api's sign-in gate,
+  // where the role alone is a grant. From the row, never the token, so a
+  // demotion takes effect on the next socket.
+  //
+  // For everybody else: without this a Backend student enters the Frontend
+  // floor by editing a query string.
+  if (
+    !account.admin &&
+    !(await accounts.liveMembership(claims.userId, cohortId, new Date()))
+  ) {
+    return { ok: false, refusal: 'not_a_member' };
+  }
+
+  return { ok: true, claims, cohortId };
 }
 
 /** The oldest refresh that still counts as campus-api vouching for a login. */

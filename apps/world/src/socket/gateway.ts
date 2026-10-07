@@ -4,7 +4,16 @@ import type { WebSocket } from 'ws';
 
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
-import type { PositionStore, SavedPosition } from '../infra/positions.js';
+import type {
+  PositionStore,
+  PositionToSave,
+  SavedPosition,
+} from '../infra/positions.js';
+import type {
+  Displacement,
+  Presence,
+  PresenceStore,
+} from '../infra/presence.js';
 import { Players, type Player } from '../movement/players.js';
 import {
   decideUpgrade,
@@ -12,6 +21,7 @@ import {
   type Refusal,
 } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
+import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
 import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
 import {
@@ -25,6 +35,11 @@ import {
 const POLICY_VIOLATION = 1008;
 const INTERNAL_ERROR = 1011;
 const GOING_AWAY = 1001;
+/**
+ * Its own code, not a policy violation: this is the one close the client must
+ * not reconnect after, or two tabs would replace each other indefinitely.
+ */
+const ENTERED_ELSEWHERE = 4000;
 
 export interface Gateway {
   connections: Connections;
@@ -37,6 +52,7 @@ export function registerGateway(
   env: Env,
   accounts: AccountLookup,
   positions: PositionStore,
+  presence: PresenceStore,
 ): Gateway {
   const connections = new Connections();
   const players = new Players(
@@ -50,17 +66,11 @@ export function registerGateway(
   );
 
   /**
-   * Who moved since the last tick, and the socket that made their latest
-   * change. Holds names, not positions: the tick reads where each person
-   * stands when it runs, so several steps in one tick collapse into the last.
-   *
-   * Only the latest, not every socket that moved them: that socket's
-   * `moveResult` already carries the final position, but an earlier one's
-   * does not. With two tabs stepping inside one tick, the first tab's last
-   * answer is an intermediate position, and leaving it out of the tick too
-   * would strand it there until it happened to move again.
+   * Who moved since the last tick. Holds names, not positions: the tick reads
+   * where each person stands when it runs, so several steps in one tick
+   * collapse into the last.
    */
-  const pendingMoves = new Map<string, Connection>();
+  const pendingMoves = new Set<string>();
 
   /**
    * Sends once per tick rather than once per step. Per step, every move is a
@@ -72,33 +82,31 @@ export function registerGateway(
       return;
     }
     const moved: Player[] = [];
-    const origins = new Map<Connection, Set<string>>();
-    for (const [userId, latestBy] of pendingMoves) {
+    const movedIds = new Set<string>();
+    for (const userId of pendingMoves) {
       const player = players.get(userId);
       // Left since the step: `left` has already gone out, and an entry now
       // would put back an avatar the client has just taken away.
       if (!player) continue;
       moved.push(player);
-      const own = origins.get(latestBy);
-      if (own) own.add(userId);
-      else origins.set(latestBy, new Set([userId]));
+      movedIds.add(userId);
     }
     pendingMoves.clear();
     if (moved.length === 0) {
       return;
     }
 
-    // One frame for nearly everybody. Only a socket that made somebody's
-    // latest change needs its own, without the entry it already has an
-    // answer for.
+    // Encoded once for everybody who did not move; somebody who did needs
+    // their own, without the entry their `moveResult` already answered.
     const shared = encode({ type: 'moved', players: moved });
     for (const connection of connections.all()) {
-      const own = origins.get(connection);
-      if (!own) {
+      if (!movedIds.has(connection.userId)) {
         sendFrame(connection.socket, shared);
         continue;
       }
-      const others = moved.filter((player) => !own.has(player.userId));
+      const others = moved.filter(
+        (player) => player.userId !== connection.userId,
+      );
       if (others.length > 0) {
         sendFrame(
           connection.socket,
@@ -112,10 +120,12 @@ export function registerGateway(
   tick.unref();
 
   /**
-   * Who has moved since their position was last written to the store. A
-   * name, not a position: the save reads where they stand when it runs.
+   * Who has moved since their position was last written to the store, keyed
+   * to the cohort they moved in. A name and a cohort, not a position: the
+   * save reads where they stand when it runs. The cohort travels with the
+   * name because a position is kept per account and cohort.
    */
-  const unsaved = new Set<string>();
+  const unsaved = new Map<string, string>();
   /** Set once shutdown has written everybody, so the closes it causes do not write again. */
   let stopping = false;
 
@@ -126,35 +136,45 @@ export function registerGateway(
    * has left cannot be retried that way: if the save as they left fails,
    * what was last written for them, at most one interval old, stands.
    */
-  function persist(standing: Player[]): void {
-    if (standing.length === 0) return;
-    positions.save(standing).catch((err: unknown) => {
-      app.log.warn({ err, count: standing.length }, 'could not save positions');
-      for (const player of standing) {
-        if (players.has(player.userId)) unsaved.add(player.userId);
+  function persist(entries: readonly PositionToSave[]): void {
+    if (entries.length === 0) return;
+    positions.save(entries).catch((err: unknown) => {
+      app.log.warn({ err, count: entries.length }, 'could not save positions');
+      for (const entry of entries) {
+        // Retried only while the account is still in that cohort: a write
+        // that failed before a cohort switch must not later land a position
+        // taken in the new cohort under the old cohort's key.
+        if (connections.forUser(entry.userId)?.cohortId === entry.cohortId) {
+          unsaved.set(entry.userId, entry.cohortId);
+        }
       }
     });
   }
 
-  function forgetSaved(userId: string): void {
+  /** Forgets one cohort's kept position, for access taken away. */
+  function forgetSaved(userId: string, cohortId: string): void {
     unsaved.delete(userId);
-    positions.forget(userId).catch((err: unknown) => {
-      app.log.warn({ err, userId }, 'could not forget saved position');
+    positions.forget(userId, cohortId).catch((err: unknown) => {
+      app.log.warn(
+        { err, userId, cohortId },
+        'could not forget saved position',
+      );
     });
   }
 
   /**
-   * Everybody still here who moved since the last write. Somebody who left
-   * in the meantime was written as they left (drop), so is skipped here.
+   * Everybody still here who moved since the last write, as a store write in
+   * the cohort they moved in. Somebody who left in the meantime was written
+   * as they left (drop), so is skipped here.
    */
   function saveMoved(): void {
-    const standing: Player[] = [];
-    for (const userId of unsaved) {
+    const entries: PositionToSave[] = [];
+    for (const [userId, cohortId] of unsaved) {
       const player = players.get(userId);
-      if (player) standing.push(player);
+      if (player) entries.push(positionOf(player, cohortId));
     }
     unsaved.clear();
-    persist(standing);
+    persist(entries);
   }
 
   const periodicSave = setInterval(
@@ -163,34 +183,107 @@ export function registerGateway(
   );
   periodicSave.unref();
 
+  function presenceOf(connection: Connection): Presence {
+    return {
+      userId: connection.userId,
+      connectionId: connection.id,
+      cohortId: connection.cohortId,
+      since: connection.openedAt,
+    };
+  }
+
+  /**
+   * Entries this instance stops renewing lapse on their own, so a failure
+   * here only leaves somebody looking online a little longer.
+   */
+  function leavePresence(leaving: readonly Connection[]): void {
+    if (leaving.length === 0) return;
+    presence.leave(leaving.map(presenceOf)).catch((err: unknown) => {
+      app.log.warn({ err }, 'could not remove presence');
+    });
+  }
+
+  /**
+   * The account entered the campus on another instance. Closed as a second
+   * tab here would close it, except the avatar leaves this instance too: it
+   * now stands on that one.
+   */
+  function displacedElsewhere({ userId, connectionId }: Displacement): void {
+    const connection = connections.forUser(userId);
+    if (connection?.id !== connectionId) {
+      return;
+    }
+    app.log.info(
+      { connectionId, userId },
+      'socket displaced, account entered the campus on another instance',
+    );
+    drop(connection);
+    send(connection.socket, { type: 'replaced' });
+    connection.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
+  }
+  presence.onDisplaced(displacedElsewhere);
+
+  /**
+   * Also how somebody comes back into presence after Redis was away, and how
+   * a displacement whose message never arrived is caught.
+   */
+  async function renewPresence(): Promise<void> {
+    const open = connections.all();
+    if (open.length === 0) return;
+    for (const displaced of await presence.renew(open.map(presenceOf))) {
+      displacedElsewhere(displaced);
+    }
+  }
+
+  const presenceRenewal = setInterval(
+    oneAtATime(renewPresence, (err) => {
+      app.log.warn({ err }, 'could not renew presence');
+    }),
+    (env.WORLD_PRESENCE_TTL_SECONDS * 1000) / 3,
+  );
+  presenceRenewal.unref();
+
   /**
    * Every way a socket stops counting goes through here, so a player can
-   * never outlive the last socket standing for them. The avatar stays while
-   * any tab is open, and leaves with the last one. Idempotent: a socket
-   * dropped by the heartbeat comes back through here from its close event.
+   * never outlive the socket standing for them. Idempotent: a socket dropped
+   * by the heartbeat comes back through here from its close event, and a
+   * displaced one finds its replacement already holding the account's place.
    *
-   * Where the last tab stood is remembered for the reconnect grace, unless
-   * `remember` is false — for access taken away, where a reconnect would be
-   * refused anyway and there is nothing to come back to. The avatar leaves
-   * everybody else's screen either way: a frozen stand-in for somebody who
-   * may never return is worse than a flicker for somebody who does.
+   * Where they stood is remembered for the reconnect grace, unless `remember`
+   * is false — for access taken away, where a reconnect would be refused
+   * anyway and there is nothing to come back to. The avatar leaves everybody
+   * else's screen either way: a frozen stand-in for somebody who may never
+   * return is worse than a flicker for somebody who does.
    */
   function drop(connection: Connection, remember = true): void {
+    // A connection displaced here no longer holds the account's presence;
+    // after shutdown began, everybody has been removed already.
+    if (connections.has(connection) && !stopping) {
+      leavePresence([connection]);
+    }
     connections.remove(connection);
-    if (connections.forUser(connection.userId).length > 0) {
+    if (connections.forUser(connection.userId)) {
       return;
     }
     const standing = players.get(connection.userId);
-    if (players.leave(connection.userId, Date.now(), remember)) {
+    if (
+      players.leave(
+        connection.userId,
+        Date.now(),
+        remember,
+        connection.cohortId,
+      )
+    ) {
       broadcast({ type: 'left', userId: connection.userId });
     }
     // Kept for the next visit only when they may come back; after shutdown
-    // began, everybody has been written already.
+    // began, everybody has been written already. Access taken away forgets
+    // this connection's cohort: there is nothing to come back to.
     if (!remember) {
-      forgetSaved(connection.userId);
+      forgetSaved(connection.userId, connection.cohortId);
     } else if (standing && !stopping) {
       unsaved.delete(connection.userId);
-      persist([standing]);
+      persist([positionOf(standing, connection.cohortId)]);
     }
   }
 
@@ -209,18 +302,12 @@ export function registerGateway(
   /**
    * Checked once per heartbeat rather than per frame: a ban should take
    * effect in seconds, and asking the database on every message would put a
-   * query in the path of every movement. One query per distinct user, not
-   * per socket, because two tabs are one account.
+   * query in the path of every movement. One query per socket, which is one
+   * query per account, since an account holds a single socket.
    */
   async function dropRevokedAccounts(): Promise<void> {
-    const byUser = new Map<string, Connection[]>();
     for (const connection of connections.all()) {
-      const held = byUser.get(connection.userId);
-      if (held) held.push(connection);
-      else byUser.set(connection.userId, [connection]);
-    }
-
-    for (const [userId, held] of byUser) {
+      const { userId } = connection;
       let account;
       try {
         account = await accounts.find(userId);
@@ -231,19 +318,47 @@ export function registerGateway(
         continue;
       }
       if (account && !account.suspended) {
+        dropIfRevoked(connection, account.sessionEpoch);
         continue;
       }
 
       const reason = account ? 'account_suspended' : 'account_gone';
-      for (const connection of held) {
-        app.log.info(
-          { connectionId: connection.id, userId, reason },
-          'closing socket, account no longer welcome',
-        );
-        drop(connection, false);
-        connection.socket.close(POLICY_VIOLATION, reason);
-      }
+      app.log.info(
+        { connectionId: connection.id, userId, reason },
+        'closing socket, account no longer welcome',
+      );
+      drop(connection, false);
+      connection.socket.close(POLICY_VIOLATION, reason);
     }
+  }
+
+  /**
+   * Closes a socket that was opened before its account's sessions were
+   * revoked. The upgrade refuses a revoked token; this is what reaches the
+   * socket already open, which would otherwise stay until the login stopped
+   * being refreshed.
+   *
+   * Only one that is behind the account's epoch. Somebody who signed in
+   * again after the revoke opened on the new epoch, and is as current as it
+   * gets.
+   *
+   * And only one that still holds the account's place. The account was read
+   * across an await, and in that time a newer socket may have displaced this
+   * one — which has then been told `replaced` and closed already, and has
+   * nothing left to drop.
+   */
+  function dropIfRevoked(connection: Connection, sessionEpoch: number): void {
+    if (connection.epoch === sessionEpoch || !connections.has(connection)) {
+      return;
+    }
+    app.log.info(
+      { connectionId: connection.id, userId: connection.userId },
+      'session revoked, closing socket',
+    );
+    // Remembered, like a sign-out: the account is still welcome, and signing
+    // back in may resume where they stood.
+    drop(connection);
+    connection.socket.close(POLICY_VIOLATION, 'session_revoked');
   }
 
   /**
@@ -350,17 +465,22 @@ export function registerGateway(
   // The handler returns its promise so @fastify/websocket can catch a
   // rejection; returning undefined would turn one bad socket into an
   // unhandled rejection that takes the whole process down.
-  app.get('/socket', { websocket: true }, async (socket, request) => {
-    await openConnection(socket, {
-      origin: request.headers.origin,
-      cookie: request.headers.cookie,
-      authorization: request.headers.authorization,
-    });
+  app.get(SOCKET_PATH, { websocket: true }, async (socket, request) => {
+    await openConnection(
+      socket,
+      {
+        origin: request.headers.origin,
+        cookie: request.headers.cookie,
+        authorization: request.headers.authorization,
+      },
+      cohortIdFrom(request.query),
+    );
   });
 
   async function openConnection(
     ws: WebSocket,
     headers: { origin?: string; cookie?: string; authorization?: string },
+    cohortId: string | undefined,
   ): Promise<void> {
     // Authentication is asynchronous, and a client can be gone before it
     // finishes. Watching for that now means a socket that dies in the
@@ -390,7 +510,7 @@ export function registerGateway(
 
     let decision;
     try {
-      decision = await decideUpgrade(env, accounts, headers);
+      decision = await decideUpgrade(env, accounts, headers, cohortId);
     } catch (err) {
       app.log.error({ err }, 'could not decide socket upgrade');
       // Reading has to resume for the closing handshake to complete.
@@ -399,53 +519,72 @@ export function registerGateway(
       return;
     }
 
-    // A position kept from an earlier drop must not survive access being
-    // taken away. The sweep forgets it only for somebody still connected; a
-    // suspended account whose socket had already gone is caught here, at its
-    // next attempt — whether or not this socket is still around to be told.
+    // Access taken away forgets the cohort this attempt named, and the one
+    // any still-open tab stands in: drop() forgets the latter. Only those
+    // two — a per-cohort key has no single entry to remove, and scanning
+    // every cohort would be KEYS/SCAN, which this service avoids.
     //
     // Any tab still open for them is closed the way the revocation sweep
     // closes it, through drop(): taking the player away underneath an open
     // tab would leave that tab registered with nobody standing for it, so
     // nobody would be told they left and its next move would throw.
     if (!decision.ok && decision.userId) {
+      if (cohortId !== undefined) {
+        forgetSaved(decision.userId, cohortId);
+      }
       const open = connections.forUser(decision.userId);
-      if (open.length > 0) {
-        for (const connection of open) {
-          app.log.info(
-            {
-              connectionId: connection.id,
-              userId: connection.userId,
-              reason: decision.refusal,
-            },
-            'closing socket, account no longer welcome',
-          );
-          drop(connection, false);
-          connection.socket.close(POLICY_VIOLATION, decision.refusal);
-        }
+      if (open) {
+        app.log.info(
+          {
+            connectionId: open.id,
+            userId: open.userId,
+            reason: decision.refusal,
+          },
+          'closing socket, account no longer welcome',
+        );
+        drop(open, false);
+        open.socket.close(POLICY_VIOLATION, decision.refusal);
       } else {
-        players.leave(decision.userId, Date.now(), false);
-        forgetSaved(decision.userId);
+        players.leave(decision.userId, Date.now(), false, cohortId);
       }
     }
 
-    // Where they stood on an earlier visit, read before the socket is
-    // checked again: the read is asynchronous too, and the socket may go in
-    // the meantime. Only asked for when this process holds nothing fresher —
-    // another tab, or a reconnect within the grace.
+    // The cohort this account occupies here, if any: the open tab's, or the
+    // one a reconnect memory was left in. A connection naming another cohort
+    // is a switch, and starts from the cohort it is entering — never from
+    // where it stood elsewhere.
+    let heldCohort: string | undefined;
+    let switchingCohort = false;
+
+    // Where they stood on an earlier visit, read before the socket is checked
+    // again: the read is asynchronous too, and the socket may go in the
+    // meantime. Skipped only when this process will resume a position for
+    // this same cohort — another tab, or a reconnect within the grace.
     let saved: SavedPosition | undefined;
-    if (
-      decision.ok &&
-      !players.has(decision.claims.userId) &&
-      !players.isRemembered(decision.claims.userId)
-    ) {
-      try {
-        saved = await positions.load(decision.claims.userId);
-      } catch (err) {
-        app.log.warn(
-          { err, userId: decision.claims.userId },
-          'could not load saved position, starting at the spawn',
-        );
+    if (decision.ok) {
+      const previous = connections.forUser(decision.claims.userId);
+      heldCohort = players.has(decision.claims.userId)
+        ? previous?.cohortId
+        : players.rememberedCohort(decision.claims.userId);
+      switchingCohort =
+        heldCohort !== undefined && heldCohort !== decision.cohortId;
+
+      if (
+        switchingCohort ||
+        (!players.has(decision.claims.userId) &&
+          !players.isRemembered(decision.claims.userId))
+      ) {
+        try {
+          saved = await positions.load(
+            decision.claims.userId,
+            decision.cohortId,
+          );
+        } catch (err) {
+          app.log.warn(
+            { err, userId: decision.claims.userId },
+            'could not load saved position, starting at the spawn',
+          );
+        }
       }
     }
 
@@ -462,24 +601,83 @@ export function registerGateway(
       id: randomUUID(),
       userId: decision.claims.userId,
       email: decision.claims.email,
+      cohortId: decision.cohortId,
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
+      epoch: decision.claims.epoch,
       socket: ws,
+      openedAt: Date.now(),
       alive: true,
     };
     registered = connection;
+
+    if (switchingCohort) {
+      const standing = players.get(connection.userId);
+      if (standing && heldCohort !== undefined) {
+        // The old cohort's position is written before the switch below takes
+        // the player out of it: from the join that follows, the account is in
+        // the new cohort, and the live position would no longer be reachable
+        // under the old cohort's key. A dropped write only means that cohort
+        // keeps the last saved position, so the switch is not held up for it —
+        // Redis being down must not keep anybody out.
+        unsaved.delete(connection.userId);
+        persist([positionOf(standing, heldCohort)]);
+      }
+      // Remembered under the cohort being left; the join below discards it
+      // because this connection names a different one, so the destination
+      // starts from its own saved position or the spawn. Before the new place
+      // exists, so the old cohort sees a departure.
+      if (players.leave(connection.userId, Date.now(), true, heldCohort)) {
+        broadcast({ type: 'left', userId: connection.userId });
+      }
+    }
+
     // Joined before anybody is told, and before any frame is read, so a move
     // can never arrive for a player who is not standing anywhere yet.
     const arriving = !players.has(connection.userId);
-    const player = players.join(connection.userId, Date.now(), saved);
+    const player = players.join(
+      connection.userId,
+      Date.now(),
+      saved,
+      connection.cohortId,
+    );
     if (arriving) {
       // Told to everyone already here; the arrival learns of itself from the
-      // snapshot. A second tab is not an arrival.
+      // snapshot.
       broadcast({ type: 'joined', player });
     }
-    connections.add(connection);
+
+    // Registered before the old socket is closed: drop() decides whether the
+    // avatar goes by asking whether the account still holds one, so this
+    // order is what keeps a same-cohort replacement from removing it.
+    const displaced = connections.add(connection);
+    if (displaced) {
+      app.log.info(
+        {
+          connectionId: displaced.id,
+          replacedBy: connection.id,
+          userId: connection.userId,
+          cohortId: displaced.cohortId,
+          enteredCohortId: connection.cohortId,
+        },
+        'socket displaced, account entered the campus elsewhere',
+      );
+      send(displaced.socket, { type: 'replaced' });
+      displaced.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
+    }
+
+    presence.enter(presenceOf(connection)).catch((err: unknown) => {
+      app.log.warn(
+        { err, userId: connection.userId },
+        'could not record presence, the next renewal will',
+      );
+    });
     app.log.info(
-      { connectionId: connection.id, userId: connection.userId },
+      {
+        connectionId: connection.id,
+        userId: connection.userId,
+        cohortId: connection.cohortId,
+      },
       'socket opened',
     );
 
@@ -539,8 +737,8 @@ export function registerGateway(
             player: moved.player,
           });
           if (moved.changed) {
-            pendingMoves.set(connection.userId, connection);
-            unsaved.add(connection.userId);
+            pendingMoves.add(connection.userId);
+            unsaved.set(connection.userId, connection.cohortId);
           }
           return;
         }
@@ -598,21 +796,52 @@ export function registerGateway(
       clearInterval(heartbeat);
       clearInterval(tick);
       clearInterval(periodicSave);
+      clearInterval(presenceRenewal);
       // Everybody still here, whether or not they moved since the last save:
       // a redeploy should put nobody back at the spawn. Before the sockets
       // close, so the positions written are the ones they stood at.
       stopping = true;
       unsaved.clear();
       try {
-        await positions.save(players.all());
+        await positions.save(
+          connections.all().flatMap((connection) => {
+            const player = players.get(connection.userId);
+            return player ? [positionOf(player, connection.cohortId)] : [];
+          }),
+        );
       } catch (err) {
         app.log.warn({ err }, 'could not save positions on shutdown');
+      }
+      try {
+        await presence.leave(connections.all().map(presenceOf));
+      } catch (err) {
+        app.log.warn({ err }, 'could not remove presence on shutdown');
       }
       for (const connection of connections.all()) {
         connection.socket.close(GOING_AWAY, 'server shutting down');
       }
     },
   };
+}
+
+/** A store write for one player, in the cohort named. */
+function positionOf(player: Player, cohortId: string): PositionToSave {
+  return {
+    userId: player.userId,
+    cohortId,
+    x: player.x,
+    y: player.y,
+    facing: player.facing,
+  };
+}
+
+/** A repeated parameter arrives as an array, which reads as none at all. */
+function cohortIdFrom(query: unknown): string | undefined {
+  if (typeof query !== 'object' || query === null) {
+    return undefined;
+  }
+  const value = (query as Record<string, unknown>)[COHORT_QUERY_PARAM];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /**

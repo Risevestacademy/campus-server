@@ -94,7 +94,11 @@ change to either reaches both apps:
   the frontend origin for that environment; required, boot fails without it),
   `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7),
   `FF_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM` (the invite
-  email, e.g. `Campus by Rise <invites@campusbyrise.com>`).
+  email, e.g. `Campus by Rise <invites@campusbyrise.com>`),
+  `RESEND_INVITE_TEMPLATE_ID`, `RESEND_INVITE_ADMIN_TEMPLATE_ID` and
+  `RESEND_INVITE_GUEST_TEMPLATE_ID` (the Resend templates the invite email is
+  sent with, by id or alias; optional, unset sends the email built into the
+  API).
   `PORT` is injected by Railway, not set manually.
 - Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
@@ -223,20 +227,22 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
 - One instance per environment, like Postgres. Only `world` connects, over
   the **internal** URL.
 - It holds state that is cheap to lose but should not vanish on every
-  restart: each player's last position between visits, and later who is
-  online where (presence) and the fan-out between world instances.
+  restart: each player's last position between visits, who is online where
+  (presence), and the messages between world instances.
 - **Persistence on.** A restart that empties Redis sends everyone back to
   the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
-- **Eviction `noeviction` (Redis's default) or `volatile-lru`.** Never an
-  `allkeys-*` policy: under memory pressure it would drop positions and
-  presence to make room, silently. Position keys carry a TTL (~90 days), so
-  `volatile-lru` only ever evicts those.
+- **Eviction `noeviction` (Redis's default).** Any other policy would drop
+  positions and presence to make room under memory pressure, silently —
+  `volatile-*` included, since every key world writes carries a TTL
+  (positions ~90 days, presence a minute).
 - Locally, the `redis` container in `docker-compose.local.yml` already runs
   this way: append-only on, default eviction.
 - world reads it as `REDIS_URL`. Unset, world still runs and keeps nothing
-  between visits. Redis going down never keeps anybody out: a position that
-  cannot be read means starting at the spawn, and one that cannot be written
-  is lost.
+  between visits, and keeps presence in memory — fine for one instance, wrong
+  for more. Redis going down never keeps anybody out: a position that cannot
+  be read means starting at the spawn, one that cannot be written is lost,
+  and somebody whose presence cannot be written is put back by the next
+  renewal once Redis returns.
 
 ## world
 
@@ -246,19 +252,26 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   open, and a sleep would drop everybody.
 - Healthcheck path: `/health` (no `/v1`). It answers while the process is
   up; it does not check the database.
+- Reads campus-api's tables with its own SQL (`users`, `refresh_tokens`), so
+  a campus-api migration that adds a column world selects has to be applied
+  before the world build that selects it starts. campus-api's pre-deploy
+  step runs the migrations; when a change touches both, let campus-api
+  finish deploying first. `users.session_epoch` was the first such column:
+  world's account lookup fails on every socket without it.
 - Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
   no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
   from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
   world re-checks that the account behind a token still exists and is not
   suspended, so a ban reaches open sockets instead of waiting out the token).
   `PORT` is injected by Railway. `REDIS_URL` (the Redis service's internal
-  URL) keeps where each player last stood between visits.
+  URL) keeps where each player last stood between visits, and presence.
 - Tuning, all defaulted — see `apps/world/.env.example`: `WORLD_DB_POOL`,
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
   the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
-  `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, the session refresh
+  `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
+  `WORLD_PRESENCE_TTL_SECONDS`, the session refresh
   window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
   and the placeholder
   map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
@@ -269,9 +282,13 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   `WORLD_POSITION_SAVE_SECONDS` for anyone who moved, and for everybody on a
   graceful shutdown — so a redeploy puts people back where they were, and a
   crash loses at most one save interval.
-- Sockets are per-process state too. Running more than one instance needs the
-  presence work first, or two tabs may land on different instances and
-  disagree about who is online.
+- Sockets are per-process state too, but presence is in Redis: each account's
+  entry names its live connection and the instance holding it, so two tabs
+  on different instances still leave one place, and the older one is closed
+  with `entered_elsewhere`. More than one instance therefore needs
+  `REDIS_URL`. What is still per-process is the live map: players on one
+  instance do not see players on another yet, and somebody moving instance
+  starts from their last saved position.
 - Browsers reach world on its own hostname with the access cookie, once
   campus-api's `AUTH_COOKIE_DOMAIN` covers that hostname. World's
   `CORS_ORIGINS` must name the web app's origin.
@@ -329,8 +346,6 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 - Production is not described in `.railway/railway.ts`. It has no Redis, no
   variables on campus-api or world, and older build settings; bring it in
   line before the file is taught about it.
-- Redis is provisioned on staging and `world` is given `REDIS_URL`, but
-  nothing connects to it until the presence work lands.
 - Node version isn't pinned on Railway. Railpack takes it from `engines.node`
   in the root `package.json`, which says `>=20`, so it builds on Node 20
   while CI runs 24. Pin it (for example `"node": "24.x"`) to match.

@@ -4,12 +4,16 @@ import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
+import { createPresenceStore, type PresenceStore } from './infra/presence.js';
 import {
   CORRELATION_ID_HEADER,
   correlationId,
   loggerOptions,
 } from './infra/logger.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
+import { protocolAsyncApi } from './socket/protocol.asyncapi.js';
+import { protocolDocsPage } from './socket/protocol.docs.js';
+import { protocolJsonSchema } from './socket/protocol.schema.js';
 
 export interface World {
   app: FastifyInstance;
@@ -17,6 +21,7 @@ export interface World {
   env: Env;
   accounts: AccountLookup;
   positions: PositionStore;
+  presence: PresenceStore;
 }
 
 export async function buildWorld(
@@ -25,6 +30,8 @@ export async function buildWorld(
   accounts: AccountLookup = createAccountLookup(env),
   // Also injectable; defaults to Redis when REDIS_URL is set, nothing if not.
   positions?: PositionStore,
+  // Redis when REDIS_URL is set, memory if not.
+  presence?: PresenceStore,
 ): Promise<World> {
   const app = Fastify({
     logger: loggerOptions(env),
@@ -62,7 +69,8 @@ export async function buildWorld(
   });
 
   const store = positions ?? createPositionStore(env, app.log);
-  const gateway = registerGateway(app, env, accounts, store);
+  const present = presence ?? createPresenceStore(env, app.log);
+  const gateway = registerGateway(app, env, accounts, store, present);
 
   app.get('/health', async () => ({
     status: 'ok',
@@ -74,5 +82,44 @@ export async function buildWorld(
     },
   }));
 
-  return { app, gateway, env, accounts, positions: store };
+  const protocolSchema = `${JSON.stringify(protocolJsonSchema(), null, 2)}\n`;
+  app.get('/schema.json', async (_request, reply) => {
+    void reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('cache-control', 'public, max-age=300');
+    return protocolSchema;
+  });
+
+  // The same protocol as an AsyncAPI document, for what reads that: it adds
+  // where the socket is, how to get in, and which way each message goes.
+  // Named as campus-api names its own: /docs-json for the document, /docs
+  // for the page that shows it.
+  // Built per request only for the address, which is the caller's own view
+  // of this instance — behind a proxy that is the forwarded scheme, since
+  // the hop that reaches us is plain.
+  app.get('/docs-json', async (request, reply) => {
+    const forwarded = request.headers['x-forwarded-proto'];
+    const scheme =
+      (Array.isArray(forwarded) ? forwarded[0] : forwarded)
+        ?.split(',')[0]
+        ?.trim() ?? request.protocol;
+    void reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('cache-control', 'public, max-age=300');
+    return `${JSON.stringify(
+      protocolAsyncApi({ host: request.host, secure: scheme === 'https' }),
+      null,
+      2,
+    )}\n`;
+  });
+
+  const docsPage = protocolDocsPage('/docs-json');
+  app.get('/docs', async (_request, reply) => {
+    void reply
+      .header('content-type', 'text/html; charset=utf-8')
+      .header('cache-control', 'public, max-age=300');
+    return docsPage;
+  });
+
+  return { app, gateway, env, accounts, positions: store, presence: present };
 }

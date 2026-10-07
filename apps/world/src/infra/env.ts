@@ -114,6 +114,14 @@ const schema = z
     WORLD_POSITION_TTL_DAYS: z.coerce.number().int().min(1).default(90),
 
     /**
+     * How long somebody stays present without their instance renewing it,
+     * which it does three times within this. So an instance that crashes
+     * takes its people out of presence within this long, rather than leaving
+     * them online forever.
+     */
+    WORLD_PRESENCE_TTL_SECONDS: z.coerce.number().int().min(3).default(60),
+
+    /**
      * How recently a login must have been refreshed for its socket to stay
      * open. A client refreshes at least once per access token, and the shared
      * session policy caps those at fifteen minutes, so the window must cover

@@ -1,4 +1,5 @@
 import { signSessionToken, SessionScope } from '@campus/session';
+import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import {
   afterAll,
@@ -9,14 +10,27 @@ import {
   expect,
   it,
 } from 'vitest';
+import { Redis } from 'ioredis';
 import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
 import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
+import type { PositionToSave } from '../infra/positions.js';
+import {
+  DISPLACED_CHANNEL,
+  MemoryPresenceStore,
+  type Displacement,
+  type Presence,
+} from '../infra/presence.js';
 
 const SECRET = 'a-world-session-secret-of-at-least-32-chars';
 const ORIGIN = 'https://campus.example.com';
+const COHORT = 'cohort-1';
+
+/** How the fake store keys a position: by account and cohort. */
+const positionKey = (userId: string, cohortId = COHORT) =>
+  `${userId}:${cohortId}`;
 
 /** Answers for the database, so these tests need none. */
 const accounts = {
@@ -24,12 +38,24 @@ const accounts = {
   gone: new Set<string>(),
   /** Logins signed out, revoked or no longer refreshed. Every other one is live. */
   endedSessions: new Set<string>(),
+  /** Session epochs that have moved on from zero, where every account starts. */
+  epochs: new Map<string, number>(),
+  /** `userId:cohortId` pairs with no live membership. Everything else has one. */
+  notMembers: new Set<string>(),
+  admins: new Set<string>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
       ? null
-      : { id: userId, suspended: accounts.suspended.has(userId) },
+      : {
+          id: userId,
+          suspended: accounts.suspended.has(userId),
+          admin: accounts.admins.has(userId),
+          sessionEpoch: accounts.epochs.get(userId) ?? 0,
+        },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
+  liveMembership: async (userId: string, cohortId: string): Promise<boolean> =>
+    !accounts.notMembers.has(`${userId}:${cohortId}`),
   close: async () => undefined,
 };
 
@@ -37,31 +63,68 @@ const accounts = {
 const store = {
   positions: new Map<string, { x: number; y: number; facing: string }>(),
   failLoad: false,
+  failSave: false,
   loads: 0,
-  load: async (userId: string) => {
+  load: async (userId: string, cohortId: string) => {
     store.loads += 1;
     if (store.failLoad) throw new Error('redis is down');
-    return store.positions.get(userId) as
+    return store.positions.get(positionKey(userId, cohortId)) as
       | { x: number; y: number; facing: 'up' | 'down' | 'left' | 'right' }
       | undefined;
   },
-  save: async (
-    players: readonly {
-      userId: string;
-      x: number;
-      y: number;
-      facing: string;
-    }[],
-  ) => {
-    for (const { userId, x, y, facing } of players) {
-      store.positions.set(userId, { x, y, facing });
+  save: async (entries: readonly PositionToSave[]) => {
+    if (store.failSave) throw new Error('redis is down');
+    for (const { userId, cohortId, x, y, facing } of entries) {
+      store.positions.set(positionKey(userId, cohortId), { x, y, facing });
     }
   },
-  forget: async (userId: string) => {
-    store.positions.delete(userId);
+  forget: async (userId: string, cohortId: string) => {
+    store.positions.delete(positionKey(userId, cohortId));
   },
   ready: async () => true,
   close: async () => undefined,
+};
+
+/** Stands in for presence in Redis, and for the other instances behind it. */
+const presence = {
+  instanceId: 'this-instance',
+  entries: new Map<string, Presence>(),
+  /** Connections whose account a newer connection on another instance holds. */
+  heldElsewhere: new Set<string>(),
+  failing: false,
+  listeners: [] as ((displaced: Displacement) => void)[],
+  enter: async (entry: Presence) => {
+    if (presence.failing) throw new Error('redis is down');
+    presence.entries.set(entry.userId, entry);
+  },
+  renew: async (entries: readonly Presence[]) => {
+    if (presence.failing) throw new Error('redis is down');
+    const displaced: Displacement[] = [];
+    for (const entry of entries) {
+      if (presence.heldElsewhere.has(entry.connectionId)) {
+        displaced.push(entry);
+      } else {
+        presence.entries.set(entry.userId, entry);
+      }
+    }
+    return displaced;
+  },
+  leave: async (entries: readonly Presence[]) => {
+    for (const { userId, connectionId } of entries) {
+      if (presence.entries.get(userId)?.connectionId === connectionId) {
+        presence.entries.delete(userId);
+      }
+    }
+  },
+  online: async () => [],
+  onDisplaced: (listener: (displaced: Displacement) => void) => {
+    presence.listeners.push(listener);
+  },
+  close: async () => undefined,
+  /** What another instance says once the account enters the campus there. */
+  displace: (displaced: Displacement) => {
+    for (const listener of presence.listeners) listener(displaced);
+  },
 };
 
 const env = loadEnv({
@@ -79,6 +142,8 @@ const env = loadEnv({
   WORLD_TICK_MS: '200',
   // The shortest allowed, so a periodic save lands within a test.
   WORLD_POSITION_SAVE_SECONDS: '1',
+  // The shortest allowed, so presence is renewed every second.
+  WORLD_PRESENCE_TTL_SECONDS: '3',
   FF_LOG_LEVEL: 'fatal',
 } as NodeJS.ProcessEnv);
 
@@ -89,17 +154,23 @@ async function token(
   scope: SessionScope = SessionScope.FullAccess,
   secret = SECRET,
   userId = 'user-1',
+  epoch = 0,
 ): Promise<string> {
   const { token } = await signSessionToken(
-    { userId, email: `${userId}@campus.local`, scope },
+    { epoch, userId, email: `${userId}@campus.local`, scope },
     { secret, ttlMinutes: 30 },
   );
   return token;
 }
 
-/** Opens a socket and collects what the server says, until it closes or settles. */
-function connect(headers: Record<string, string>) {
-  const ws = new WebSocket(url, { headers });
+/**
+ * Opens a socket and collects what the server says, until it closes or
+ * settles. Pass '' as the cohort to leave the parameter off entirely.
+ */
+function connect(headers: Record<string, string>, cohortId = COHORT) {
+  const target =
+    cohortId === '' ? url : `${url}?cohortId=${encodeURIComponent(cohortId)}`;
+  const ws = new WebSocket(target, { headers });
   const messages: Record<string, unknown>[] = [];
 
   const settled = new Promise<{ closeCode?: number; closeReason?: string }>(
@@ -141,9 +212,16 @@ beforeEach(() => {
   accounts.suspended.clear();
   accounts.gone.clear();
   accounts.endedSessions.clear();
+  accounts.epochs.clear();
+  accounts.notMembers.clear();
+  accounts.admins.clear();
   store.positions.clear();
   store.failLoad = false;
+  store.failSave = false;
   store.loads = 0;
+  presence.entries.clear();
+  presence.heldElsewhere.clear();
+  presence.failing = false;
 });
 
 /**
@@ -166,7 +244,7 @@ afterEach(async () => {
 });
 
 beforeAll(async () => {
-  world = await buildWorld(env, accounts, store);
+  world = await buildWorld(env, accounts, store, presence);
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket`;
@@ -211,6 +289,53 @@ describe('socket upgrade', () => {
       message: 'origin_not_allowed',
     });
     await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+  });
+
+  it('refuses a socket that names no cohort', async () => {
+    const { first, settled } = connect(
+      { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      '',
+    );
+
+    await expect(first).resolves.toMatchObject({
+      type: 'error',
+      code: 'UNAUTHORIZED',
+      message: 'no_cohort',
+    });
+    await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+  });
+
+  it('refuses a cohort the account has no live membership in', async () => {
+    accounts.notMembers.add('user-1:cohort-elsewhere');
+
+    const { first, settled } = connect(
+      { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      'cohort-elsewhere',
+    );
+
+    await expect(first).resolves.toMatchObject({
+      type: 'error',
+      code: 'UNAUTHORIZED',
+      message: 'not_a_member',
+    });
+    await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+  });
+
+  /** Campus-api's sign-in gate admits an admin on their role alone. */
+  it('lets an admin into a cohort they hold no membership in', async () => {
+    accounts.admins.add('user-1');
+    accounts.notMembers.add('user-1:cohort-elsewhere');
+
+    const { ws, first } = connect(
+      { origin: ORIGIN, cookie: `campus_session=${await token()}` },
+      'cohort-elsewhere',
+    );
+
+    await expect(first).resolves.toMatchObject({
+      type: 'welcome',
+      userId: 'user-1',
+    });
+    ws.close();
   });
 
   it('refuses a cookie sent with no origin at all', async () => {
@@ -289,7 +414,7 @@ describe('sockets that go wrong', () => {
    * is simply gone.
    */
   it('does not lose a frame sent the instant the socket opens', async () => {
-    const ws = new WebSocket(url, {
+    const ws = new WebSocket(`${url}?cohortId=${COHORT}`, {
       headers: { origin: ORIGIN, cookie: `campus_session=${await token()}` },
     });
     const replies: Record<string, unknown>[] = [];
@@ -365,6 +490,87 @@ describe('sockets that go wrong', () => {
     expect(world.gateway.connections.size).toBe(0);
   }, 15_000);
 
+  describe('once the account sessions are revoked', () => {
+    const REVOKED = 'user-9';
+    const open = async (epoch: number) => {
+      const conn = connect({
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(
+          SessionScope.FullAccess,
+          SECRET,
+          REVOKED,
+          epoch,
+        )}`,
+      });
+      await conn.first;
+      return conn;
+    };
+
+    /** A token from before the revoke, however long it still has to run. */
+    it('refuses an upgrade with a token signed before it', async () => {
+      accounts.epochs.set(REVOKED, 1);
+      const { first, settled } = connect({
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(
+          SessionScope.FullAccess,
+          SECRET,
+          REVOKED,
+          0,
+        )}`,
+      });
+
+      await expect(first).resolves.toMatchObject({
+        message: 'session_revoked',
+      });
+      await expect(settled).resolves.toMatchObject({ closeCode: 1008 });
+    });
+
+    it('closes a socket that was already open', async () => {
+      const conn = await open(0);
+
+      accounts.epochs.set(REVOKED, 1);
+
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 1008,
+        closeReason: 'session_revoked',
+      });
+      expect(world.gateway.connections.size).toBe(0);
+    }, 15_000);
+
+    // Revoking ends sessions, not the account: signing back in may resume
+    // where they stood, unlike a suspension, which forgets the position.
+    it('keeps the position for signing back in', async () => {
+      const conn = await open(0);
+
+      accounts.epochs.set(REVOKED, 1);
+      await conn.settled;
+
+      await expect
+        .poll(() => world.gateway.players.isRemembered(REVOKED))
+        .toBe(true);
+    }, 15_000);
+
+    // An account holds one socket. Signing in again after the revoke opens
+    // a new one, which takes the old one's place; the sweep then finds a
+    // socket on the current epoch and leaves it alone.
+    it('leaves alone a socket opened after it, which replaced the old one', async () => {
+      const before = await open(0);
+      accounts.epochs.set(REVOKED, 1);
+      const after = await open(1);
+
+      await expect(before.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+      // Through at least one more sweep, and still here.
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      expect(after.ws.readyState).toBe(after.ws.OPEN);
+
+      after.ws.close();
+      await after.settled;
+    }, 20_000);
+  });
+
   /** A database that is down must not throw the campus off. */
   it('leaves sockets alone when the account check fails', async () => {
     const conn = connect({
@@ -388,6 +594,7 @@ describe('sockets that go wrong', () => {
   it('closes a socket once its session expires', async () => {
     const almostExpired = await signSessionToken(
       {
+        epoch: 0,
         userId: 'user-2',
         email: 'grace@campus.local',
         scope: SessionScope.FullAccess,
@@ -417,6 +624,7 @@ describe('a socket following its login', () => {
   async function signed(minutesAgo: number, sessionId = SESSION) {
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId: 'user-3',
         email: 'lin@campus.local',
         scope: SessionScope.FullAccess,
@@ -559,6 +767,7 @@ describe('a slow session check', () => {
     const SESSION = 'aaaaaaaa-0000-4000-8000-00000000beef';
     const { token } = await signSessionToken(
       {
+        epoch: 0,
         userId: 'user-4',
         email: 'kay@campus.local',
         scope: SessionScope.FullAccess,
@@ -649,7 +858,7 @@ describe('an open socket', () => {
   it('counts the connection while it is open, and forgets it after', async () => {
     const conn = await open();
     expect(world.gateway.connections.size).toBe(1);
-    expect(world.gateway.connections.forUser('user-1')).toHaveLength(1);
+    expect(world.gateway.connections.forUser('user-1')).toBeDefined();
 
     conn.ws.close();
     await conn.settled;
@@ -658,11 +867,13 @@ describe('an open socket', () => {
     expect(world.gateway.connections.size).toBe(0);
   });
 
-  it('holds both tabs a person has open', async () => {
+  it('replaces the socket a person already had open', async () => {
     const one = await open();
     const two = await open();
 
-    expect(world.gateway.connections.forUser('user-1')).toHaveLength(2);
+    await one.settled;
+    expect(world.gateway.connections.forUser('user-1')).toBeDefined();
+    expect(world.gateway.connections.size).toBe(1);
     expect(world.gateway.connections.users).toBe(1);
 
     one.ws.close();
@@ -676,11 +887,14 @@ describe('movement', () => {
   /** A fresh person per test, so nobody starts where an earlier test left them. */
   const person = () => `walker-${++nextUser}`;
 
-  async function arrive(userId: string) {
-    const conn = connect({
-      origin: ORIGIN,
-      cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
-    });
+  async function arrive(userId: string, cohortId = COHORT) {
+    const conn = connect(
+      {
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
+      },
+      cohortId,
+    );
     await waitFor(conn, (m) => m.type === 'snapshot');
     return conn;
   }
@@ -902,103 +1116,283 @@ describe('movement', () => {
     await leave(staying);
   });
 
-  /**
-   * Two tabs are one person in one place: the second must not announce a
-   * second arrival, and closing one must not make them vanish.
-   */
-  describe('somebody with two tabs', () => {
-    it('is one player, not two', async () => {
-      const ada = person();
-      const watcher = await arrive(person());
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
+  /** One cohort, one device, one tab: the newest connection wins. */
+  describe('one place at a time', () => {
+    const entryOf = (message: Record<string, unknown>) =>
+      message.player as { userId: string; x: number; y: number };
 
-      await quiet();
-      expect(watcher.messages.filter((m) => m.type === 'joined')).toHaveLength(
-        1,
-      );
+    it('holds one socket for the account, however many were opened', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      const third = await arrive(ada);
+      await first.settled;
+      await second.settled;
+
+      expect(
+        world.gateway.connections.all().filter((c) => c.userId === ada),
+      ).toHaveLength(1);
+      expect(world.gateway.connections.forUser(ada)).toBeDefined();
       expect(
         world.gateway.players.all().filter((p) => p.userId === ada),
       ).toHaveLength(1);
 
-      await leave(tabOne);
-      await leave(tabTwo);
-      await leave(watcher);
+      await leave(third);
     });
 
-    it('walks the same avatar from either tab, and both follow along', async () => {
+    it('tells the socket it displaced, then closes it with 4000', async () => {
       const ada = person();
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
-
-      move(tabOne, 'right', 1);
+      const first = await arrive(ada);
+      const second = await arrive(ada);
 
       await expect(
-        waitFor(tabTwo, (m) => m.type === 'moved'),
-      ).resolves.toMatchObject({
-        players: [{ userId: ada, x: 1, y: 0 }],
+        waitFor(first, (m) => m.type === 'replaced'),
+      ).resolves.toEqual({ type: 'replaced' });
+      await expect(first.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
       });
 
-      move(tabTwo, 'down', 1);
-      await expect(
-        waitFor(tabTwo, (m) => m.type === 'moveResult'),
-      ).resolves.toMatchObject({
-        player: { x: 1, y: 1 },
-      });
-
-      await leave(tabOne);
-      await leave(tabTwo);
+      await leave(second);
     });
 
-    /**
-     * Tab one's last answer is its own step; tab two's step came after it.
-     * If the tick leaves out every tab that moved, tab one never learns
-     * where the avatar ended up.
-     */
-    it('brings both tabs to the final position when both step inside one tick', async () => {
-      const ada = person();
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
-
-      move(tabOne, 'right', 1);
-      move(tabTwo, 'down', 1);
-      await waitFor(tabTwo, (m) => m.type === 'moveResult');
-
-      await expect(
-        waitFor(
-          tabOne,
-          (m) =>
-            m.type === 'moved' &&
-            (m.players as { userId: string; x: number; y: number }[]).some(
-              (p) => p.userId === ada && p.x === 1 && p.y === 1,
-            ),
-        ),
-      ).resolves.toBeDefined();
-
-      await leave(tabOne);
-      await leave(tabTwo);
-    });
-
-    it('stays while either tab is open, and leaves with the last', async () => {
+    /** The avatar must not blink out and back for everybody watching. */
+    it('leaves the avatar where it stood, replacing within one cohort', async () => {
       const ada = person();
       const watcher = await arrive(person());
-      const tabOne = await arrive(ada);
-      const tabTwo = await arrive(ada);
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
 
-      await leave(tabOne);
+      const second = await arrive(ada);
+
+      const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
+
       await quiet();
-      expect(watcher.messages.some((m) => m.type === 'left')).toBe(false);
-      expect(world.gateway.players.has(ada)).toBe(true);
+      expect(
+        watcher.messages.filter((m) => m.type === 'left' && m.userId === ada),
+      ).toHaveLength(0);
+      // The one from their original arrival, and no second one.
+      expect(
+        watcher.messages.filter(
+          (m) => m.type === 'joined' && entryOf(m).userId === ada,
+        ),
+      ).toHaveLength(1);
 
-      await leave(tabTwo);
-      await expect(waitFor(watcher, (m) => m.type === 'left')).resolves.toEqual(
-        {
-          type: 'left',
-          userId: ada,
-        },
+      await leave(second);
+      await leave(watcher);
+    });
+
+    it('switches into a cohort with a saved position, starting there', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      // Backend already knows where they stood last time.
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
+      await expect(
+        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+      await expect(
+        waitFor(
+          watcher,
+          (m) =>
+            m.type === 'joined' &&
+            entryOf(m).userId === ada &&
+            entryOf(m).x === 3,
+        ),
+      ).resolves.toMatchObject({ player: { userId: ada, x: 3, y: 2 } });
+
+      // The cohort left is saved where they stood; the destination keeps its
+      // own saved position, untouched by the switch.
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
+      await leave(inBackend);
+      await leave(watcher);
+    });
+
+    it('switches into a cohort with no saved position, starting at the spawn', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
+
+      // Saved under the cohort left; nothing carried into the new one.
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
+        false,
       );
 
+      await leave(inBackend);
+    });
+
+    it('after a switch, a move updates only the destination cohort key', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
+      const inBackend = await arrive(ada, 'cohort-backend');
+      await waitFor(inBackend, (m) => m.type === 'snapshot');
+      move(inBackend, 'right', 1);
+      await waitFor(inBackend, (m) => m.type === 'moveResult');
+
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-backend')), {
+          timeout: 3_000,
+        })
+        .toEqual({ x: 4, y: 2, facing: 'right' });
+      // The cohort left keeps where they stood.
+      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
+
+      await leave(inBackend);
+    });
+
+    it('discards reconnect memory left in another cohort', async () => {
+      const ada = person();
+      const first = await arrive(ada, 'cohort-frontend');
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      await expect
+        .poll(() => world.gateway.players.isRemembered(ada))
+        .toBe(true);
+      expect(world.gateway.players.rememberedCohort(ada)).toBe(
+        'cohort-frontend',
+      );
+
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      // The memory from Frontend is not resumed; Backend's own saved position
+      // is, and the stale memory is gone.
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      expect(world.gateway.players.isRemembered(ada)).toBe(false);
+
+      await leave(inBackend);
+    });
+
+    it('enters the new cohort even when the leaving position cannot be saved', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      store.failSave = true;
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      // The switch goes ahead: a dropped write only loses the old cohort's
+      // position, and Redis being down must not keep anybody out. With no
+      // saved position for the destination, they start at the spawn.
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
+      expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
+        'cohort-backend',
+      );
+
+      store.failSave = false;
+      await leave(inBackend);
+    });
+
+    it('keeps the avatar until the surviving socket closes', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      await first.settled;
+
+      await quiet();
+      expect(world.gateway.players.has(ada)).toBe(true);
+      expect(
+        watcher.messages.some((m) => m.type === 'left' && m.userId === ada),
+      ).toBe(false);
+
+      await leave(second);
+      await expect(
+        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+
       await leave(watcher);
+    });
+
+    it('leaves the newest socket in charge of the avatar', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      await first.settled;
+
+      move(second, 'down', 1);
+      await expect(
+        waitFor(second, (m) => m.type === 'moveResult'),
+      ).resolves.toMatchObject({ outcome: 'moved', player: { x: 0, y: 1 } });
+
+      await leave(second);
     });
   });
 
@@ -1042,6 +1436,9 @@ describe('movement', () => {
       await expect
         .poll(() => world.gateway.players.isRemembered(ada))
         .toBe(true);
+      await expect
+        .poll(() => store.positions.get(positionKey(ada)))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
 
       accounts.suspended.add(ada);
       const refused = connect({
@@ -1053,6 +1450,9 @@ describe('movement', () => {
       });
       await refused.settled;
       expect(world.gateway.players.isRemembered(ada)).toBe(false);
+      await expect
+        .poll(() => store.positions.has(positionKey(ada)))
+        .toBe(false);
 
       // Suspension lifted: welcome back, but at the spawn.
       accounts.suspended.delete(ada);
@@ -1065,6 +1465,38 @@ describe('movement', () => {
         facing: 'down',
       });
       await leave(again);
+    });
+
+    it('forgets only the cohort the refusal named, leaving others', async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada, 'cohort-frontend'), {
+        x: 1,
+        y: 1,
+        facing: 'up',
+      });
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 2,
+        y: 2,
+        facing: 'down',
+      });
+
+      accounts.suspended.add(ada);
+      const refused = connect(
+        {
+          origin: ORIGIN,
+          cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
+        },
+        'cohort-frontend',
+      );
+      await refused.settled;
+
+      await expect
+        .poll(() => store.positions.has(positionKey(ada, 'cohort-frontend')))
+        .toBe(false);
+      // The cohort not involved in the attempt is left alone.
+      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
+        true,
+      );
     });
 
     /** Gone from everybody's screen at once, and back in the same place. */
@@ -1119,7 +1551,7 @@ describe('movement', () => {
       userId: ada,
     });
     expect(world.gateway.players.has(ada)).toBe(false);
-    expect(world.gateway.connections.forUser(ada)).toHaveLength(0);
+    expect(world.gateway.connections.forUser(ada)).toBeUndefined();
 
     await leave(watcher);
   }, 15_000);
@@ -1152,7 +1584,7 @@ describe('movement', () => {
   describe('between visits', () => {
     it('starts somebody where they stood last time', async () => {
       const ada = person();
-      store.positions.set(ada, { x: 2, y: 3, facing: 'left' });
+      store.positions.set(positionKey(ada), { x: 2, y: 3, facing: 'left' });
 
       const conn = await arrive(ada);
 
@@ -1168,7 +1600,7 @@ describe('movement', () => {
 
     it('starts at the spawn when the saved tile is no longer on the map', async () => {
       const ada = person();
-      store.positions.set(ada, { x: 9, y: 9, facing: 'up' });
+      store.positions.set(positionKey(ada), { x: 9, y: 9, facing: 'up' });
 
       const conn = await arrive(ada);
 
@@ -1207,7 +1639,7 @@ describe('movement', () => {
       await leave(conn);
 
       await expect
-        .poll(() => store.positions.get(ada))
+        .poll(() => store.positions.get(positionKey(ada)))
         .toEqual({ x: 1, y: 0, facing: 'right' });
     });
 
@@ -1218,7 +1650,7 @@ describe('movement', () => {
       await waitFor(conn, (m) => m.type === 'moveResult');
 
       await expect
-        .poll(() => store.positions.get(ada), { timeout: 3_000 })
+        .poll(() => store.positions.get(positionKey(ada)), { timeout: 3_000 })
         .toEqual({ x: 0, y: 1, facing: 'down' });
       await leave(conn);
     });
@@ -1226,7 +1658,10 @@ describe('movement', () => {
     /** The grace in memory is fresher than the store, and costs no round trip. */
     it('does not ask the store when reconnecting within the grace', async () => {
       const ada = person();
-      await leave(await arrive(ada));
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
       await expect
         .poll(() => world.gateway.players.isRemembered(ada))
         .toBe(true);
@@ -1235,6 +1670,13 @@ describe('movement', () => {
       const again = await arrive(ada);
 
       expect(store.loads).toBe(loadsBefore);
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
       await leave(again);
     });
 
@@ -1244,43 +1686,249 @@ describe('movement', () => {
       move(conn, 'right', 1);
       await waitFor(conn, (m) => m.type === 'moveResult');
       await expect
-        .poll(() => store.positions.has(ada), { timeout: 3_000 })
+        .poll(() => store.positions.has(positionKey(ada)), { timeout: 3_000 })
         .toBe(true);
 
       accounts.suspended.add(ada);
 
       await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
-      await expect.poll(() => store.positions.has(ada)).toBe(false);
+      await expect
+        .poll(() => store.positions.has(positionKey(ada)), { timeout: 3_000 })
+        .toBe(false);
     }, 15_000);
+  });
+
+  describe('presence', () => {
+    const connectionIdOf = async (conn: ReturnType<typeof connect>) =>
+      (await waitFor(conn, (m) => m.type === 'welcome')).connectionId as string;
+
+    it('records who is online, and in which cohort, while their socket is open', async () => {
+      const ada = person();
+      const conn = await arrive(ada, 'cohort-frontend');
+      const connectionId = await connectionIdOf(conn);
+
+      await expect
+        .poll(() => presence.entries.get(ada))
+        .toMatchObject({ connectionId, cohortId: 'cohort-frontend' });
+
+      await leave(conn);
+      await expect.poll(() => presence.entries.has(ada)).toBe(false);
+    });
+
+    it('keeps the replacing socket present once the one it replaced closes', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const second = await arrive(ada);
+      const connectionId = await connectionIdOf(second);
+      await first.settled;
+
+      await quiet();
+      expect(presence.entries.get(ada)?.connectionId).toBe(connectionId);
+
+      await leave(second);
+    });
+
+    it('closes a socket whose account entered the campus on another instance', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const conn = await arrive(ada);
+
+      presence.displace({
+        userId: ada,
+        connectionId: await connectionIdOf(conn),
+      });
+
+      await expect(
+        waitFor(conn, (m) => m.type === 'replaced'),
+      ).resolves.toEqual({ type: 'replaced' });
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+      // The avatar now stands on the other instance.
+      await expect(
+        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+      expect(world.gateway.players.has(ada)).toBe(false);
+
+      await leave(watcher);
+    });
+
+    it('ignores a displacement of a socket already replaced here', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      const firstId = await connectionIdOf(first);
+      const second = await arrive(ada);
+      await first.settled;
+
+      presence.displace({ userId: ada, connectionId: firstId });
+
+      await quiet();
+      expect(second.ws.readyState).toBe(WebSocket.OPEN);
+      await leave(second);
+    });
+
+    /** The message from the other instance can be missed; the renewal cannot. */
+    it('closes a socket a renewal finds displaced', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      presence.heldElsewhere.add(await connectionIdOf(conn));
+
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+    });
+
+    it('lets somebody in while presence cannot be written, and records them once it can', async () => {
+      const ada = person();
+      presence.failing = true;
+
+      const conn = await arrive(ada);
+      await quiet();
+      expect(presence.entries.has(ada)).toBe(false);
+
+      presence.failing = false;
+      await expect
+        .poll(() => presence.entries.has(ada), { timeout: 3_000 })
+        .toBe(true);
+      await leave(conn);
+    });
   });
 });
 
 /** A redeploy must not send everybody back to the spawn. */
 describe('shutdown', () => {
-  it('saves everybody still here before closing their sockets', async () => {
+  it('saves everybody still here and takes them out of presence before closing their sockets', async () => {
     const saved = new Map<string, unknown>();
-    const own = await buildWorld(env, accounts, {
-      ...store,
-      save: async (players) => {
-        for (const { userId, x, y, facing } of players)
-          saved.set(userId, { x, y, facing });
+    const own = await buildWorld(
+      env,
+      accounts,
+      {
+        ...store,
+        save: async (players) => {
+          for (const { userId, x, y, facing } of players)
+            saved.set(userId, { x, y, facing });
+        },
       },
-    });
+      new MemoryPresenceStore(),
+    );
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = own.app.server.address() as AddressInfo;
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/socket`, {
-      headers: {
-        origin: ORIGIN,
-        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, 'leaving-1')}`,
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`,
+      {
+        headers: {
+          origin: ORIGIN,
+          cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, 'leaving-1')}`,
+        },
       },
-    });
+    );
     const closed = new Promise((resolve) => ws.on('close', resolve));
     await new Promise((resolve) => ws.on('message', resolve));
+    expect(await own.presence.online(COHORT)).toHaveLength(1);
 
     await own.gateway.stop();
 
     expect(saved.get('leaving-1')).toEqual({ x: 0, y: 0, facing: 'down' });
+    expect(await own.presence.online(COHORT)).toEqual([]);
     await closed;
     await own.app.close();
+  });
+});
+
+/**
+ * Two instances sharing one Redis, as production will run them. Needs a real
+ * Redis: see WORLD_TEST_REDIS_URL in presence.spec.ts.
+ */
+const redisUrl = process.env.WORLD_TEST_REDIS_URL;
+
+describe.skipIf(!redisUrl)('across instances', () => {
+  const shared = loadEnv({
+    AUTH_SESSION_SECRET: SECRET,
+    DATABASE_URL: 'postgres://unused',
+    CORS_ORIGINS: ORIGIN,
+    REDIS_URL: redisUrl,
+    FF_LOG_LEVEL: 'fatal',
+  } as NodeJS.ProcessEnv);
+  const cohortId = `cohort-${randomUUID()}`;
+  const instances: World[] = [];
+  let redis: Redis;
+
+  async function instance(): Promise<World> {
+    const own = await buildWorld(shared, accounts, store);
+    instances.push(own);
+    await own.app.listen({ port: 0, host: '127.0.0.1' });
+    return own;
+  }
+
+  function enter(own: World, cookie: string) {
+    const { port } = own.app.server.address() as AddressInfo;
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/socket?cohortId=${cohortId}`,
+      { headers: { origin: ORIGIN, cookie } },
+    );
+    const messages: Record<string, unknown>[] = [];
+    ws.on('message', (raw) =>
+      messages.push(JSON.parse(raw.toString()) as Record<string, unknown>),
+    );
+    const closed = new Promise<[number, string]>((resolve) =>
+      ws.on('close', (code, reason) => resolve([code, reason.toString()])),
+    );
+    return { ws, messages, closed };
+  }
+
+  beforeAll(() => {
+    redis = new Redis(redisUrl as string);
+  });
+
+  afterAll(async () => {
+    for (const own of instances) {
+      await own.gateway.stop();
+      await own.app.close();
+      await own.presence.close();
+      await own.positions.close();
+    }
+    await redis.quit();
+  });
+
+  it('closes the socket on one instance when the account enters on another', async () => {
+    const first = await instance();
+    const second = await instance();
+    // Both listening before anybody enters, or the message has nobody to hear it.
+    await expect
+      .poll(async () => {
+        const [, count] = (await redis.pubsub('NUMSUB', DISPLACED_CHANNEL)) as [
+          string,
+          number,
+        ];
+        return count;
+      })
+      .toBeGreaterThanOrEqual(2);
+    const userId = `elsewhere-${randomUUID()}`;
+    const cookie = `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`;
+
+    const onFirst = enter(first, cookie);
+    await expect
+      .poll(() => onFirst.messages.some((m) => m.type === 'snapshot'))
+      .toBe(true);
+    const onSecond = enter(second, cookie);
+
+    await expect(onFirst.closed).resolves.toEqual([4000, 'entered_elsewhere']);
+    expect(onFirst.messages).toContainEqual({ type: 'replaced' });
+    expect(first.gateway.players.has(userId)).toBe(false);
+    const welcome = onSecond.messages.find((m) => m.type === 'welcome');
+    await expect(second.presence.online(cohortId)).resolves.toEqual([
+      expect.objectContaining({
+        userId,
+        connectionId: welcome?.connectionId,
+        instanceId: second.presence.instanceId,
+      }),
+    ]);
+
+    onSecond.ws.close();
+    await onSecond.closed;
+    await expect.poll(() => second.presence.online(cohortId)).toEqual([]);
   });
 });

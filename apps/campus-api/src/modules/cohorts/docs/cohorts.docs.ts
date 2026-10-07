@@ -12,8 +12,10 @@ import {
 import { ApiAdminOnly } from '../../../shared/dto/admin-route.docs.js';
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
 import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
+import { RosterMemberDto } from '../dto/cohort-roster.dto.js';
 import {
   CohortDetailResponseDto,
+  CohortMemberResponseDto,
   CohortResponseDto,
   CohortTrackResponseDto,
 } from '../dto/cohort-response.dto.js';
@@ -113,6 +115,38 @@ export function ApiGetCohort(): MethodDecorator {
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
       description: 'id is not a UUID.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No cohort has this id.',
+      content: { 'application/json': { examples: { cohortNotFound } } },
+    }),
+  );
+}
+
+export function ApiListRoster(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'List a cohort’s members (admin only)',
+      description:
+        'The roster: one row per membership, with the person who holds it, ' +
+        'paginated. Staff first, then students, then guests, by name within ' +
+        'each.\n\n' +
+        'By default only the people in the cohort now — `state=live`, the ' +
+        'rule sign-in uses. `state=ended` lists those who left, were ' +
+        'dismissed, withdrew, deferred or graduated, and guests whose visit ' +
+        'is over; `state=all` lists both. Each row says which it is.\n\n' +
+        'Filter further with `role`, `trackId` and `status` (a student’s ' +
+        'status); they combine with AND. A filter that matches nobody is an ' +
+        'empty page; a cohort that does not exist is a 404.\n\n' +
+        'A suspended account keeps its place on the roster. The row’s ' +
+        '`user.status` says so.',
+    }),
+    ApiPaginatedResponse(RosterMemberDto),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'The id or a filter is malformed.',
     }),
     ApiAdminOnly(),
     ApiNotFoundResponse({
@@ -304,14 +338,119 @@ export function ApiDetachTrack(): MethodDecorator {
   );
 }
 
+export function ApiExtendGuestVisit(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: "Extend a guest's visit (admin only)",
+      description:
+        'Moves when a guest membership ends. The new end must be in the ' +
+        'future and later than the end it already has. The guest needs no ' +
+        'sign-in: their next refresh reads the new end from the ' +
+        'membership. A visit that has already ended is refused with a ' +
+        '409 — send a new invite instead.',
+    }),
+    ApiOkResponse({ type: CohortMemberResponseDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'cohortId or userId is not a UUID, accessExpiresAt is not a date, ' +
+        'is not in the future, or is not later than the current end.',
+      content: {
+        'application/json': {
+          examples: {
+            notLater: {
+              summary: 'Not later than the current end',
+              value: {
+                error: {
+                  code: 'INVALID_ARGUMENT',
+                  message: 'Request validation failed',
+                  details: {
+                    fields: {
+                      accessExpiresAt:
+                        'accessExpiresAt must be later than the visit end it already has',
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'Nobody in that cohort has this membership.',
+      content: {
+        'application/json': {
+          examples: {
+            memberNotFound: {
+              summary: 'No such membership',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message:
+                    'No membership for 44444444-4444-4444-8444-444444444444 in cohort 11111111-1111-4111-8111-111111111111',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The membership has left, is not a guest, or the visit has ended.',
+      content: {
+        'application/json': {
+          examples: {
+            visitEnded: {
+              summary: 'Visit already over',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'The visit has already ended; send a new invite',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                    accessExpiresAt: '2026-10-01T12:00:00.000Z',
+                  },
+                },
+              },
+            },
+            notAGuest: {
+              summary: 'Not a guest',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'Only a guest has a visit to extend',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                    role: 'student',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
 export function ApiDeleteCohort(): MethodDecorator {
   return applyDecorators(
     ApiOperation({
       summary: 'Delete a cohort (admin only)',
       description:
         'Removes a cohort with nothing attached to it. A cohort that still ' +
-        'has tracks, members or invites is refused with a 409. Tracks come ' +
-        'off with DELETE /v1/cohorts/{id}/tracks/{trackId}.',
+        'has tracks, members or invites is refused with a 409.',
     }),
     ApiNoContentResponse({ description: 'The cohort was deleted.' }),
     ApiBadRequestResponse({

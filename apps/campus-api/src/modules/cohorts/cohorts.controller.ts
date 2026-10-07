@@ -22,14 +22,18 @@ import {
 } from '../../shared/dto/index.js';
 import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
+import { CohortMembersService } from './cohort-members.service.js';
+import { CohortRosterService } from './cohort-roster.service.js';
 import { CohortsService } from './cohorts.service.js';
 import {
   ApiAttachTrack,
   ApiCreateCohort,
   ApiDeleteCohort,
   ApiDetachTrack,
+  ApiExtendGuestVisit,
   ApiGetCohort,
   ApiListCohorts,
+  ApiListRoster,
   ApiUpdateCohort,
 } from './docs/cohorts.docs.js';
 import {
@@ -39,10 +43,16 @@ import {
 } from './dto/attach-track.dto.js';
 import {
   CohortDetailResponseDto,
+  CohortMemberResponseDto,
   CohortResponseDto,
   CohortTrackResponseDto,
 } from './dto/cohort-response.dto.js';
+import {
+  ListRosterQueryDto,
+  RosterMemberDto,
+} from './dto/cohort-roster.dto.js';
 import { CreateCohortDto } from './dto/create-cohort.dto.js';
+import { ExtendGuestVisitDto, MemberParamDto } from './dto/extend-visit.dto.js';
 import { UpdateCohortDto } from './dto/update-cohort.dto.js';
 
 @ApiTags('cohorts')
@@ -52,7 +62,11 @@ import { UpdateCohortDto } from './dto/update-cohort.dto.js';
 @UseGuards(SessionGuard, AdminGuard)
 @Controller('cohorts')
 export class CohortsController {
-  constructor(private readonly cohorts: CohortsService) {}
+  constructor(
+    private readonly cohorts: CohortsService,
+    private readonly members: CohortMembersService,
+    private readonly roster: CohortRosterService,
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -77,6 +91,15 @@ export class CohortsController {
   @ApiGetCohort()
   get(@Param() params: CohortIdParamDto): Promise<CohortDetailResponseDto> {
     return this.cohorts.get(params.id);
+  }
+
+  @Get(':id/members')
+  @ApiListRoster()
+  listMembers(
+    @Param() params: CohortIdParamDto,
+    @Query() query: ListRosterQueryDto,
+  ): Promise<PaginatedResponseDto<RosterMemberDto>> {
+    return this.roster.list(params.id, query);
   }
 
   @Post(':id/tracks')
@@ -106,6 +129,22 @@ export class CohortsController {
       actorUserId: admin.id,
       correlationId,
     });
+  }
+
+  @Patch(':cohortId/members/:userId')
+  @ApiExtendGuestVisit()
+  extendVisit(
+    @Param() params: MemberParamDto,
+    @Body() dto: ExtendGuestVisitDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<CohortMemberResponseDto> {
+    return this.members.extendGuestVisit(
+      params.cohortId,
+      params.userId,
+      new Date(dto.accessExpiresAt),
+      { actorUserId: admin.id, correlationId },
+    );
   }
 
   @Patch(':id')
