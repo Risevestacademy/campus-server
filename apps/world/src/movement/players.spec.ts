@@ -264,6 +264,54 @@ describe('Players', () => {
         y: 0,
       });
     });
+
+    it('resumes a position only in the cohort it was left in', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 0, true, 'frontend');
+
+      // Another cohort starts fresh, not where they stood in Frontend.
+      expect(world.join('ada', 1, undefined, 'backend')).toMatchObject({
+        x: 0,
+        y: 0,
+      });
+      expect(world.remembered).toBe(0);
+    });
+
+    it('resumes a position left in the same cohort', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 0, true, 'frontend');
+
+      expect(world.join('ada', 1, undefined, 'frontend')).toMatchObject({
+        x: 1,
+        y: 0,
+      });
+    });
+
+    /** A memory from before cohorts names none, so it cannot be trusted. */
+    it('treats a memory with no recorded cohort as another cohort', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.move('ada', 'right', 0);
+      world.leave('ada', 0, true);
+
+      expect(world.join('ada', 1, undefined, 'frontend')).toMatchObject({
+        x: 0,
+        y: 0,
+      });
+    });
+
+    it('reports the cohort a position is held for', () => {
+      const world = withGrace();
+      world.join('ada', 0);
+      world.leave('ada', 0, true, 'frontend');
+
+      expect(world.rememberedCohort('ada')).toBe('frontend');
+      expect(world.rememberedCohort('nobody')).toBeUndefined();
+    });
   });
 
   it('hands out copies, so a caller cannot move anybody by editing one', () => {

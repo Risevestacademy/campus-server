@@ -265,7 +265,14 @@ export function registerGateway(
       return;
     }
     const standing = players.get(connection.userId);
-    if (players.leave(connection.userId, Date.now(), remember)) {
+    if (
+      players.leave(
+        connection.userId,
+        Date.now(),
+        remember,
+        connection.cohortId,
+      )
+    ) {
       broadcast({ type: 'left', userId: connection.userId });
     }
     // Kept for the next visit only when they may come back; after shutdown
@@ -537,27 +544,46 @@ export function registerGateway(
         drop(open, false);
         open.socket.close(POLICY_VIOLATION, decision.refusal);
       } else {
-        players.leave(decision.userId, Date.now(), false);
+        players.leave(decision.userId, Date.now(), false, cohortId);
       }
     }
 
-    // Where they stood on an earlier visit, read before the socket is
-    // checked again: the read is asynchronous too, and the socket may go in
-    // the meantime. Only asked for when this process holds nothing fresher —
-    // another tab, or a reconnect within the grace.
+    // The cohort this account occupies here, if any: the open tab's, or the
+    // one a reconnect memory was left in. A connection naming another cohort
+    // is a switch, and starts from the cohort it is entering — never from
+    // where it stood elsewhere.
+    let heldCohort: string | undefined;
+    let switchingCohort = false;
+
+    // Where they stood on an earlier visit, read before the socket is checked
+    // again: the read is asynchronous too, and the socket may go in the
+    // meantime. Skipped only when this process will resume a position for
+    // this same cohort — another tab, or a reconnect within the grace.
     let saved: SavedPosition | undefined;
-    if (
-      decision.ok &&
-      !players.has(decision.claims.userId) &&
-      !players.isRemembered(decision.claims.userId)
-    ) {
-      try {
-        saved = await positions.load(decision.claims.userId, decision.cohortId);
-      } catch (err) {
-        app.log.warn(
-          { err, userId: decision.claims.userId },
-          'could not load saved position, starting at the spawn',
-        );
+    if (decision.ok) {
+      const previous = connections.forUser(decision.claims.userId);
+      heldCohort = players.has(decision.claims.userId)
+        ? previous?.cohortId
+        : players.rememberedCohort(decision.claims.userId);
+      switchingCohort =
+        heldCohort !== undefined && heldCohort !== decision.cohortId;
+
+      if (
+        switchingCohort ||
+        (!players.has(decision.claims.userId) &&
+          !players.isRemembered(decision.claims.userId))
+      ) {
+        try {
+          saved = await positions.load(
+            decision.claims.userId,
+            decision.cohortId,
+          );
+        } catch (err) {
+          app.log.warn(
+            { err, userId: decision.claims.userId },
+            'could not load saved position, starting at the spawn',
+          );
+        }
       }
     }
 
@@ -584,34 +610,23 @@ export function registerGateway(
     };
     registered = connection;
 
-    const previous = connections.forUser(connection.userId);
-    const switchingCohort =
-      previous !== undefined && previous.cohortId !== connection.cohortId;
-
-    /**
-     * Carried by hand rather than left to the reconnect memory, which only
-     * holds a position while that grace is configured above zero.
-     */
-    let carried: SavedPosition | undefined;
     if (switchingCohort) {
       const standing = players.get(connection.userId);
-      if (standing) {
-        carried = {
-          x: standing.x,
-          y: standing.y,
-          facing: standing.facing,
-        };
+      if (standing && heldCohort !== undefined) {
         // The old cohort's position is written before the switch below takes
         // the player out of it: from the join that follows, the account is in
-        // the new cohort, and the live position the new cohort carries would
-        // no longer be reachable under the old cohort's key. A dropped write
-        // only means that cohort keeps the last saved position, so the switch
-        // is not held up for it — Redis being down must not keep anybody out.
+        // the new cohort, and the live position would no longer be reachable
+        // under the old cohort's key. A dropped write only means that cohort
+        // keeps the last saved position, so the switch is not held up for it —
+        // Redis being down must not keep anybody out.
         unsaved.delete(connection.userId);
-        persist([positionOf(standing, previous.cohortId)]);
+        persist([positionOf(standing, heldCohort)]);
       }
-      // Before the new place exists, so the old cohort sees a departure.
-      if (players.leave(connection.userId, Date.now(), true)) {
+      // Remembered under the cohort being left; the join below discards it
+      // because this connection names a different one, so the destination
+      // starts from its own saved position or the spawn. Before the new place
+      // exists, so the old cohort sees a departure.
+      if (players.leave(connection.userId, Date.now(), true, heldCohort)) {
         broadcast({ type: 'left', userId: connection.userId });
       }
     }
@@ -622,7 +637,8 @@ export function registerGateway(
     const player = players.join(
       connection.userId,
       Date.now(),
-      saved ?? carried,
+      saved,
+      connection.cohortId,
     );
     if (arriving) {
       // Told to everyone already here; the arrival learns of itself from the

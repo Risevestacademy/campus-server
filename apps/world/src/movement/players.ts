@@ -59,8 +59,15 @@ interface Held {
  */
 export class Players {
   private readonly byUser = new Map<string, Held>();
-  /** Left recently, and may come back to where they stood until `until`. */
-  private readonly departed = new Map<string, { held: Held; until: number }>();
+  /**
+   * Left recently, and may come back to where they stood until `until`. The
+   * cohort they left in is kept with it: a position only resumes in the same
+   * campus, never carried into another.
+   */
+  private readonly departed = new Map<
+    string,
+    { held: Held; until: number; cohortId?: string }
+  >();
 
   constructor(
     private readonly grid: Grid,
@@ -72,14 +79,15 @@ export class Players {
 
   /**
    * Places somebody on the map: where they stood if they left within the
-   * grace period, else where they last stood on an earlier visit (`saved`,
-   * if that tile is still walkable), else at the spawn. Returns the existing
-   * player if they are already here.
+   * grace period and in the same cohort, else where they last stood on an
+   * earlier visit (`saved`, if that tile is still walkable), else at the
+   * spawn. Returns the existing player if they are already here.
    */
   join(
     userId: string,
     now: number,
     saved?: Pick<Player, 'x' | 'y' | 'facing'>,
+    cohortId?: string,
   ): Player {
     const existing = this.byUser.get(userId);
     if (existing) {
@@ -88,7 +96,15 @@ export class Players {
 
     const remembered = this.departed.get(userId);
     this.departed.delete(userId);
-    if (remembered && remembered.until > now) {
+    // A position is resumed only in the cohort it was left in: a memory from
+    // another campus, or one that names no cohort at all, would put somebody
+    // where they never stood here. The destination starts from its own saved
+    // position or the spawn instead.
+    if (
+      remembered &&
+      remembered.until > now &&
+      remembered.cohortId === cohortId
+    ) {
       // The step allowance comes back as it was: leaving and rejoining must
       // not be a way to refill it.
       this.byUser.set(userId, remembered.held);
@@ -114,11 +130,17 @@ export class Players {
   /**
    * Takes somebody off the map. True if they were on it.
    *
-   * With `remember`, where they stood is kept for the grace period so a
-   * reconnect resumes there. Without it they are forgotten entirely — for
-   * access being taken away, where there is nothing to come back to.
+   * With `remember`, where they stood is kept for the grace period, tagged
+   * with the cohort they left in, so a reconnect in that same cohort resumes
+   * there. Without it they are forgotten entirely — for access being taken
+   * away, where there is nothing to come back to.
    */
-  leave(userId: string, now: number, remember: boolean): boolean {
+  leave(
+    userId: string,
+    now: number,
+    remember: boolean,
+    cohortId?: string,
+  ): boolean {
     const held = this.byUser.get(userId);
     if (!remember) {
       this.departed.delete(userId);
@@ -128,7 +150,7 @@ export class Players {
     }
     this.byUser.delete(userId);
     if (remember && this.graceMs > 0) {
-      this.departed.set(userId, { held, until: now + this.graceMs });
+      this.departed.set(userId, { held, until: now + this.graceMs, cohortId });
     }
     return true;
   }
@@ -153,6 +175,15 @@ export class Players {
    */
   isRemembered(userId: string): boolean {
     return this.departed.has(userId);
+  }
+
+  /**
+   * The cohort a position is being held for, if any. Undefined when nothing
+   * is held, or when the memory predates cohorts — which a caller comparing
+   * it against an incoming cohort treats as a mismatch.
+   */
+  rememberedCohort(userId: string): string | undefined {
+    return this.departed.get(userId)?.cohortId;
   }
 
   /**

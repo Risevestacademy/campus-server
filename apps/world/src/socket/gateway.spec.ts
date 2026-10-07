@@ -1189,14 +1189,29 @@ describe('movement', () => {
       await leave(watcher);
     });
 
-    it('leaves the old cohort and joins the new, keeping the position', async () => {
+    it('switches into a cohort with a saved position, starting there', async () => {
       const ada = person();
       const watcher = await arrive(person());
       const inFrontend = await arrive(ada, 'cohort-frontend');
       move(inFrontend, 'right', 1);
       await waitFor(inFrontend, (m) => m.type === 'moveResult');
 
+      // Backend already knows where they stood last time.
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
       const inBackend = await arrive(ada, 'cohort-backend');
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
 
       await expect(
         waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
@@ -1207,16 +1222,42 @@ describe('movement', () => {
           (m) =>
             m.type === 'joined' &&
             entryOf(m).userId === ada &&
-            entryOf(m).x === 1,
+            entryOf(m).x === 3,
         ),
-      ).resolves.toMatchObject({ player: { userId: ada, x: 1, y: 0 } });
+      ).resolves.toMatchObject({ player: { userId: ada, x: 3, y: 2 } });
 
-      expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
-        'cohort-backend',
-      );
+      // The cohort left is saved where they stood; the destination keeps its
+      // own saved position, untouched by the switch.
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
 
-      // Saved under the cohort they left, and nothing written for the one
-      // they entered: the new cohort's position is only kept once they move.
+      await leave(inBackend);
+      await leave(watcher);
+    });
+
+    it('switches into a cohort with no saved position, starting at the spawn', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
+
+      // Saved under the cohort left; nothing carried into the new one.
       await expect
         .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
         .toEqual({ x: 1, y: 0, facing: 'right' });
@@ -1225,7 +1266,71 @@ describe('movement', () => {
       );
 
       await leave(inBackend);
-      await leave(watcher);
+    });
+
+    it('after a switch, a move updates only the destination cohort key', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
+      const inBackend = await arrive(ada, 'cohort-backend');
+      await waitFor(inBackend, (m) => m.type === 'snapshot');
+      move(inBackend, 'right', 1);
+      await waitFor(inBackend, (m) => m.type === 'moveResult');
+
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-backend')), {
+          timeout: 3_000,
+        })
+        .toEqual({ x: 4, y: 2, facing: 'right' });
+      // The cohort left keeps where they stood.
+      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
+
+      await leave(inBackend);
+    });
+
+    it('discards reconnect memory left in another cohort', async () => {
+      const ada = person();
+      const first = await arrive(ada, 'cohort-frontend');
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      await expect
+        .poll(() => world.gateway.players.isRemembered(ada))
+        .toBe(true);
+      expect(world.gateway.players.rememberedCohort(ada)).toBe(
+        'cohort-frontend',
+      );
+
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      // The memory from Frontend is not resumed; Backend's own saved position
+      // is, and the stale memory is gone.
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      expect(world.gateway.players.isRemembered(ada)).toBe(false);
+
+      await leave(inBackend);
     });
 
     it('enters the new cohort even when the leaving position cannot be saved', async () => {
@@ -1237,14 +1342,15 @@ describe('movement', () => {
       store.failSave = true;
       const inBackend = await arrive(ada, 'cohort-backend');
 
-      // The move goes ahead: a dropped write only loses the old cohort's
-      // position, and Redis being down must not keep anybody out.
+      // The switch goes ahead: a dropped write only loses the old cohort's
+      // position, and Redis being down must not keep anybody out. With no
+      // saved position for the destination, they start at the spawn.
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
       expect(snapshot.players).toContainEqual({
         userId: ada,
-        x: 1,
+        x: 0,
         y: 0,
-        facing: 'right',
+        facing: 'down',
       });
       expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
         'cohort-backend',
@@ -1552,7 +1658,10 @@ describe('movement', () => {
     /** The grace in memory is fresher than the store, and costs no round trip. */
     it('does not ask the store when reconnecting within the grace', async () => {
       const ada = person();
-      await leave(await arrive(ada));
+      const first = await arrive(ada);
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
       await expect
         .poll(() => world.gateway.players.isRemembered(ada))
         .toBe(true);
@@ -1561,6 +1670,13 @@ describe('movement', () => {
       const again = await arrive(ada);
 
       expect(store.loads).toBe(loadsBefore);
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
       await leave(again);
     });
 
