@@ -78,7 +78,7 @@ database.
 
 ```
 src/
-  app.ts                Fastify app: error handling, /health, /schema.json, the gateway
+  app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
   index.ts              boot and graceful shutdown
   infra/                env, logger, account lookup, Redis (positions, presence)
   movement/             the grid and who stands where — no sockets here
@@ -102,6 +102,15 @@ Messages are defined once, in `src/socket/protocol.ts`. From them:
 - **`GET /schema.json`** serves that same document from the running
   instance, open to anybody, so the frontend can generate its types from the
   environment it builds against.
+- **`GET /docs-json`** serves the protocol as an AsyncAPI 2.6 document,
+  built by `src/socket/protocol.asyncapi.ts` from the same schemas. It adds
+  the socket's address, the session cookie, and which side sends each
+  message — read from the `ClientMessage` and `ServerMessage` unions, so a
+  new message lands on the right side without being listed anywhere else.
+- **`GET /docs`** shows that document as a page, as campus-api's `/docs`
+  shows its own. The page loads AsyncAPI's viewer from a CDN
+  (`src/socket/protocol.docs.ts` pins the version) and reads `/docs-json`
+  from the same instance.
 - **[docs/world-protocol.md](../../docs/world-protocol.md)** explains to
   client authors what the schema can't: message order, correcting a predicted
   step, limits and close codes. Update it when what a client should _do_
