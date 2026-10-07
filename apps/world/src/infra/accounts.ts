@@ -1,3 +1,4 @@
+import { hasAdminPowers } from '@campus/session';
 import postgres from 'postgres';
 
 import type { Env } from './env.js';
@@ -35,16 +36,6 @@ export interface Account {
   sessionEpoch: number;
   /** Admins bypass cohort gating, as they do at campus-api's sign-in gate. */
   admin: boolean;
-}
-
-/**
- * Whether USERS.system_role is one that does what admins do. campus-api has
- * two, `admin` and `super_admin`, and asks the same question through its own
- * hasAdminPowers; comparing against `admin` alone would shut every super
- * admin out of a cohort they are not a member of.
- */
-export function hasAdminPowers(systemRole: string): boolean {
-  return systemRole === 'admin' || systemRole === 'super_admin';
 }
 
 /**
