@@ -60,6 +60,54 @@ describe('the HTTP surface', () => {
     await app.close();
   });
 
+  it('serves the protocol as AsyncAPI, addressed as the caller reached it', async () => {
+    const { app, gateway } = await buildWorld(env, accounts);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/docs-json',
+      headers: { host: 'ws.campus.example', 'x-forwarded-proto': 'https' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe(
+      'application/json; charset=utf-8',
+    );
+    expect(response.json()).toMatchObject({
+      asyncapi: '2.6.0',
+      servers: { world: { url: 'ws.campus.example', protocol: 'wss' } },
+    });
+
+    const plain = await app.inject({
+      method: 'GET',
+      url: '/docs-json',
+      headers: { host: 'localhost:3001' },
+    });
+    expect(plain.json().servers.world).toMatchObject({
+      url: 'localhost:3001',
+      protocol: 'ws',
+    });
+    await gateway.stop();
+    await app.close();
+  });
+
+  // The page is a frame: the viewer comes from a CDN and reads the document
+  // from this same instance, so all there is to check here is where it points.
+  it('serves a docs page that shows the document this instance serves', async () => {
+    const { app, gateway } = await buildWorld(env, accounts);
+
+    const response = await app.inject({ method: 'GET', url: '/docs' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
+    expect(response.body).toContain('url: "/docs-json"');
+    expect(response.body).toMatch(
+      /unpkg\.com\/@asyncapi\/react-component@\d+\.\d+\.\d+\/browser\/standalone\/index\.js/,
+    );
+    await gateway.stop();
+    await app.close();
+  });
+
   it('answers an unknown route in the shared error shape', async () => {
     const { app, gateway } = await buildWorld(env, accounts);
 

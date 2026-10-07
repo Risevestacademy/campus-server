@@ -7,6 +7,7 @@ import {
 
 import type { AccountLookup } from '../infra/accounts.js';
 import { allowedOrigins, type Env } from '../infra/env.js';
+import { SESSION_COOKIE } from './endpoint.js';
 
 export type Refusal =
   | 'origin_not_allowed'
@@ -31,8 +32,6 @@ export type UpgradeDecision =
        */
       userId?: string;
     };
-
-const SESSION_COOKIE = 'campus_session';
 
 /** Same cookie campus-api sets; the browser sends it on the upgrade. */
 export function readSessionCookie(
