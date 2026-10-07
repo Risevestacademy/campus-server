@@ -4,6 +4,7 @@ export interface Connection {
   id: string;
   userId: string;
   email: string;
+  cohortId: string;
   socket: WebSocket;
   /**
    * When the access token this socket opened with runs out. Enforced only
@@ -16,6 +17,14 @@ export interface Connection {
    * access tokens the browser goes through meanwhile.
    */
   sessionId?: string;
+  /** In ms. Across instances, the newest connection holds the account. */
+  openedAt: number;
+  /**
+   * The account's session epoch when this socket opened. Once the account's
+   * moves past it, this socket belongs to a session that has been revoked —
+   * while one opened after the bump carries the new epoch and stays.
+   */
+  epoch: number;
   /** Set false on every heartbeat, true by the client's pong. */
   alive: boolean;
 }
@@ -25,46 +34,44 @@ export interface Connection {
  * shared across instances and lives in Redis. This only knows about sockets
  * this process is holding open.
  *
- * Keyed by user because a person may have two tabs, and a message for them
- * belongs on both.
+ * One socket per account: a second one displaces the first rather than
+ * joining it.
  */
 export class Connections {
-  private readonly byUser = new Map<string, Set<Connection>>();
+  private readonly byUser = new Map<string, Connection>();
 
-  add(connection: Connection): void {
-    const existing = this.byUser.get(connection.userId);
-    if (existing) {
-      existing.add(connection);
-      return;
-    }
-    this.byUser.set(connection.userId, new Set([connection]));
+  /** Takes the account's place and returns whatever held it before. */
+  add(connection: Connection): Connection | undefined {
+    const displaced = this.byUser.get(connection.userId);
+    this.byUser.set(connection.userId, connection);
+    return displaced === connection ? undefined : displaced;
   }
 
+  /**
+   * Identity-checked: a displaced socket's close event arrives after its
+   * replacement has registered, and removing by account alone would take the
+   * live socket out from under it.
+   */
   remove(connection: Connection): void {
-    const held = this.byUser.get(connection.userId);
-    if (!held) {
-      return;
-    }
-    held.delete(connection);
-    if (held.size === 0) {
+    if (this.byUser.get(connection.userId) === connection) {
       this.byUser.delete(connection.userId);
     }
   }
 
   has(connection: Connection): boolean {
-    return this.byUser.get(connection.userId)?.has(connection) ?? false;
+    return this.byUser.get(connection.userId) === connection;
   }
 
-  forUser(userId: string): Connection[] {
-    return [...(this.byUser.get(userId) ?? [])];
+  forUser(userId: string): Connection | undefined {
+    return this.byUser.get(userId);
   }
 
   all(): Connection[] {
-    return [...this.byUser.values()].flatMap((set) => [...set]);
+    return [...this.byUser.values()];
   }
 
   get size(): number {
-    return this.all().length;
+    return this.byUser.size;
   }
 
   get users(): number {

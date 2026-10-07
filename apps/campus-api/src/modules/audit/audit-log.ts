@@ -109,6 +109,15 @@ interface AuditEntryShapes {
       previousExpiresAt: Date;
     };
   };
+  [AuditAction.GuestVisitExtended]: {
+    subject: AuditSubjectType.CohortMember;
+    details: {
+      cohortId: string;
+      /** The deadline the extension set, and the one it replaced. */
+      accessExpiresAt: Date;
+      previousAccessExpiresAt: Date;
+    };
+  };
   [AuditAction.InviteFlagged]: {
     subject: AuditSubjectType.Invite;
     details: { cohortId: string | null; invitedBy: string };

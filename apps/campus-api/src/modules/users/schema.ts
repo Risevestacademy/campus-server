@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
+  integer,
   pgEnum,
   pgTable,
   text,
@@ -59,6 +60,14 @@ export const users = pgTable(
       .notNull()
       .default(SystemRole.User),
     status: userStatusEnum('status').notNull().default(UserStatus.Active),
+    /**
+     * Counts the times this account's sessions have been ended on purpose.
+     * Every session token is signed with the value it found here, and is
+     * refused once the two differ — so bumping this ends every session the
+     * account holds at its next request, without waiting for a token to
+     * lapse. Only ever goes up; see SessionIssuer.revokeAllSessions.
+     */
+    sessionEpoch: integer('session_epoch').notNull().default(0),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

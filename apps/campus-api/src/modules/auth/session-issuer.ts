@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, isNull, isNotNull, lt, or } from 'drizzle-orm';
+import { and, eq, isNull, isNotNull, lt, or, sql } from 'drizzle-orm';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
@@ -11,7 +11,7 @@ import {
 import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { refreshTokens } from './schema.js';
 import type { Invite } from '../invites/schema.js';
-import type { User } from '../users/schema.js';
+import { users as usersTable, type User } from '../users/schema.js';
 import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { SessionScope, signSessionToken } from '@campus/session';
@@ -100,6 +100,14 @@ export class SessionIssuer {
    *
    * A grant that has already ended is refused outright. By the time we are
    * minting, its holder is somebody the sign-in gate would now turn away.
+   *
+   * `user` has to be the row the grant was decided against, read before the
+   * decision. Its session epoch is what the mint is held to: if the account's
+   * sessions have been revoked since — which is what removing a member will
+   * do — the row has moved on and nothing is minted. The account is read again
+   * below for its current details, but never for its epoch: a fresh read
+   * taken after a revoke would agree with the row, and wave through a grant
+   * that the revoke had just made untrue.
    */
   async issueFullAccess(
     user: User,
@@ -112,12 +120,46 @@ export class SessionIssuer {
     if (endsAt !== null && endsAt.getTime() <= now.getTime()) {
       throw new SessionUnauthorizedError('Access has already ended');
     }
-    const account = await this.users.findById(user.id);
-    if (!account) {
+    const current = await this.users.findById(user.id);
+    if (!current) {
       throw new SessionUnauthorizedError('Account is not usable');
     }
-    const membership = await this.members.resolveActiveMembership(user.id, now);
-    return this.mintSession(account, membership, endsAt, now, familyId, tx);
+    // The current row, on the epoch the grant was decided at.
+    const account: User = { ...current, sessionEpoch: user.sessionEpoch };
+
+    // Checked and minted in one transaction, so a revoke cannot land between
+    // the grant being decided and the family being inserted below. Without
+    // it the revoke would sweep the families that existed, miss the one
+    // minted a moment later, and leave a working refresh token behind.
+    const mint = async (tx: Tx) => {
+      await this.assertEpochCurrent(tx, account);
+      return this.mintSession(account, endsAt, now, familyId, tx);
+    };
+    return tx ? mint(tx) : this.db.transaction(mint);
+  }
+
+  /**
+   * Holds the account's row against a revoke for the rest of the
+   * transaction, and refuses if one has already landed since `account` was
+   * read — which has to be before whatever decided it may have a session.
+   *
+   * A shared lock is enough: sign-ins and refreshes do not block one
+   * another, only revokeAllSessions, whose UPDATE of the same row waits for
+   * this transaction and then revokes whatever it minted.
+   *
+   * Always taken before any refresh-token lock. revokeAllSessions takes the
+   * two in the same order — the account, then its tokens — so neither can
+   * end up holding what the other is waiting for.
+   */
+  private async assertEpochCurrent(tx: Tx, account: User): Promise<void> {
+    const [row] = await tx
+      .select({ sessionEpoch: usersTable.sessionEpoch })
+      .from(usersTable)
+      .where(eq(usersTable.id, account.id))
+      .for('share');
+    if (!row || row.sessionEpoch !== account.sessionEpoch) {
+      throw new SessionUnauthorizedError('Session has been revoked');
+    }
   }
 
   /**
@@ -132,9 +174,6 @@ export class SessionIssuer {
    */
   private async mintSession(
     account: User,
-    membership: Awaited<
-      ReturnType<CohortMembersService['resolveActiveMembership']>
-    >,
     endsAt: Date | null,
     now: Date,
     familyId: string,
@@ -145,10 +184,7 @@ export class SessionIssuer {
         userId: account.id,
         email: account.email,
         scope: SessionScope.FullAccess,
-        systemRole: account.systemRole,
-        ...(membership
-          ? { role: membership.role, cohortId: membership.cohortId }
-          : {}),
+        epoch: account.sessionEpoch,
         // The refresh family, so world can hold a socket for as long as this
         // login is alive and being refreshed, rather than for one access
         // token's fifteen minutes.
@@ -198,7 +234,7 @@ export class SessionIssuer {
         userId: user.id,
         email: user.email,
         scope: SessionScope.Provisional,
-        systemRole: user.systemRole,
+        epoch: user.sessionEpoch,
         inviteId: invite.id,
       },
       {
@@ -224,6 +260,68 @@ export class SessionIssuer {
     if (stored) {
       await this.revokeFamily(stored.familyId, new Date());
     }
+  }
+
+  /**
+   * Ends every session an account holds, now. For whatever takes access
+   * away without warning — a suspension, a removal from a cohort, a visit
+   * cut short — so that it reaches as far as the next request rather than
+   * the next sign-in.
+   *
+   * Two things, because a session has two halves. Bumping the epoch kills
+   * the access tokens already out: SessionGuard and world compare the one a
+   * token was signed with against the row and refuse a mismatch. Revoking
+   * the refresh families stops any of them being swapped for a new token,
+   * which would carry the new epoch and walk straight back in.
+   *
+   * Give it the transaction of the change that takes the access away, so the
+   * two commit together: a removal that left sessions alive, or sessions
+   * ended for a removal that rolled back, would both be wrong.
+   *
+   * Not for an ending the person chose. Signing out revokes one family and
+   * leaves their other devices alone, and declining an invite ends a flow,
+   * not somebody's access.
+   *
+   * Returns the new epoch, or null when there is no such account.
+   */
+  async revokeAllSessions(
+    userId: string,
+    now: Date = new Date(),
+    tx?: Tx,
+  ): Promise<number | null> {
+    if (!tx) {
+      return this.db.transaction((tx) =>
+        this.revokeAllSessions(userId, now, tx),
+      );
+    }
+
+    const [bumped] = await tx
+      .update(usersTable)
+      .set({ sessionEpoch: sql`${usersTable.sessionEpoch} + 1` })
+      .where(eq(usersTable.id, userId))
+      .returning({ sessionEpoch: usersTable.sessionEpoch });
+    if (!bumped) {
+      return null;
+    }
+
+    // The UPDATE above is what a sign-in or refresh in flight is waited out
+    // on: each holds a shared lock on this row until it commits (see
+    // assertEpochCurrent). Then the same two steps as revokeFamily, for the
+    // same reason: the UPDATE of the tokens reads afresh once the lock is
+    // held, so it revokes the row that sign-in or refresh minted too.
+    await tx
+      .select({ id: refreshTokens.id })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.userId, userId))
+      .for('update');
+    await tx
+      .update(refreshTokens)
+      .set({ revokedAt: now })
+      .where(
+        and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)),
+      );
+
+    return bumped.sessionEpoch;
   }
 
   async refreshSession(
@@ -268,8 +366,6 @@ export class SessionIssuer {
       throw new SessionUnauthorizedError('Access has already ended');
     }
 
-    const membership = await this.members.resolveActiveMembership(user.id, now);
-
     // One transaction for the three steps that must not interleave: claim the
     // old token, re-check the family, mint the replacement. The family is
     // locked first so that a replayed token revoking it, and this refresh
@@ -280,6 +376,11 @@ export class SessionIssuer {
     // inserted here too.
     return this.db
       .transaction(async (tx) => {
+        // First, before the family lock, and safe to throw from: nothing has
+        // been written yet. A revoke since the account was read above is
+        // refused here; one arriving later waits for this transaction.
+        await this.assertEpochCurrent(tx, user);
+
         await tx
           .select({ id: refreshTokens.id })
           .from(refreshTokens)
@@ -339,7 +440,6 @@ export class SessionIssuer {
           kind: 'session',
           session: await this.mintSession(
             user,
-            membership,
             grant.endsAt,
             now,
             familyId,

@@ -19,12 +19,15 @@ const config = {
   AUTH_SESSION_SECRET: SECRET,
 } as never;
 
-const user = { id: 'user-1', email: 'guest@campus.local' } as User;
+const user = {
+  id: 'user-1',
+  email: 'guest@campus.local',
+  sessionEpoch: 0,
+} as User;
 const users = {
   findById: vi.fn(async () => ({ ...user, systemRole: 'user' })),
 };
 const members = {
-  resolveActiveMembership: vi.fn(async () => null),
   resolveActiveAccess: vi.fn(async () => ({ endsAt: null })),
 };
 const storedRefresh = {
@@ -43,7 +46,9 @@ const db = {
     from: () => ({
       where: () => ({
         limit: vi.fn(async () => [storedRefresh]),
-        for: vi.fn(async () => [storedRefresh]),
+        // Also answers the lock on the account's row, which reads back
+        // the epoch the account was signed in on.
+        for: vi.fn(async () => [{ ...storedRefresh, sessionEpoch: 0 }]),
       }),
     }),
   }),
@@ -89,8 +94,8 @@ describe('SessionIssuer', () => {
     const session = await issuer.issueFullAccess(user, unbounded, now);
 
     expect(minutesBetween(now, session.expiresAt)).toBe(720);
-    expect((await verifySessionToken(session.token, SECRET)).systemRole).toBe(
-      'user',
+    expect((await verifySessionToken(session.token, SECRET)).scope).toBe(
+      SessionScope.FullAccess,
     );
     expect(session.refreshToken).toEqual(expect.any(String));
   });

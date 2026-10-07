@@ -1,5 +1,5 @@
 {
-  "id": "eaf7f11a-7a7b-4e15-a7a7-4baf44a1e402",
+  "id": "b1930b8e-8fb2-40dc-bc43-d2e58ee8b5a7",
   "prevId": "cdd73bc1-587a-4fae-819c-a999770037ec",
   "version": "7",
   "dialect": "postgresql",
@@ -1039,6 +1039,13 @@
           "notNull": true,
           "default": "'active'"
         },
+        "session_epoch": {
+          "name": "session_epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "last_login_at": {
           "name": "last_login_at",
           "type": "timestamp with time zone",
@@ -1159,8 +1166,7 @@
       "schema": "public",
       "values": [
         "user",
-        "admin",
-        "super_admin"
+        "admin"
       ]
     },
     "public.user_status": {

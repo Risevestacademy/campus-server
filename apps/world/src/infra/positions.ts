@@ -1,10 +1,15 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { Redis, type RedisOptions } from 'ioredis';
 import { z } from 'zod';
 
 import { Direction } from '../movement/grid.js';
 import type { Player } from '../movement/players.js';
 import type { Env } from './env.js';
+import {
+  FAIL_FAST,
+  connectRedis,
+  logOutages,
+  type ConnectRedis,
+} from './redis.js';
 
 /**
  * The map everybody stands on until real maps load. Saved with every
@@ -69,41 +74,21 @@ export const noPositionStore: PositionStore = {
 export function createPositionStore(
   env: Env,
   log: FastifyBaseLogger,
-  // How the client is made. Injectable so a test can give the real client a
-  // transport that never connects; the options are still decided here.
-  connect: (url: string, options: RedisOptions) => Redis = (url, options) =>
-    new Redis(url, options),
+  connect: ConnectRedis = connectRedis,
 ): PositionStore {
   if (!env.REDIS_URL) {
     log.warn('REDIS_URL is unset: positions are not kept between visits');
     return noPositionStore;
   }
 
-  const redis = connect(env.REDIS_URL, {
-    // A join waits on a load, so a command must fail fast rather than queue
-    // while Redis is away: somebody should start at the spawn, not stand at
-    // a loading screen until Redis comes back.
-    enableOfflineQueue: false,
-    commandTimeout: 500,
-    maxRetriesPerRequest: 1,
-  });
-
-  // ioredis reports every failed reconnect attempt; one line per outage is
-  // what somebody reading the logs needs.
-  let healthy: boolean | undefined;
-  redis.on('ready', () => {
-    healthy = true;
-    log.info('redis connected');
-  });
-  redis.on('error', (err: Error) => {
-    if (healthy !== false) {
-      log.warn(
-        { err },
-        'redis unavailable: positions will not be kept until it is back',
-      );
-    }
-    healthy = false;
-  });
+  // A join waits on a load: somebody should start at the spawn, not wait.
+  const redis = connect(env.REDIS_URL, FAIL_FAST);
+  logOutages(
+    redis,
+    log,
+    'positions',
+    'positions will not be kept until it is back',
+  );
 
   return new RedisPositionStore(
     redis,

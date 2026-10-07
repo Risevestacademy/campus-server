@@ -31,6 +31,7 @@ describe('protocol.schema.json', () => {
         'SnapshotMessage',
         'JoinedMessage',
         'LeftMessage',
+        'ReplacedMessage',
         'MovedMessage',
         'MoveResultMessage',
         'ErrorMessage',
