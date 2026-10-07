@@ -4,7 +4,11 @@ import type { WebSocket } from 'ws';
 
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
-import type { PositionStore, SavedPosition } from '../infra/positions.js';
+import type {
+  PositionStore,
+  PositionToSave,
+  SavedPosition,
+} from '../infra/positions.js';
 import type {
   Displacement,
   Presence,
@@ -116,10 +120,12 @@ export function registerGateway(
   tick.unref();
 
   /**
-   * Who has moved since their position was last written to the store. A
-   * name, not a position: the save reads where they stand when it runs.
+   * Who has moved since their position was last written to the store, keyed
+   * to the cohort they moved in. A name and a cohort, not a position: the
+   * save reads where they stand when it runs. The cohort travels with the
+   * name because a position is kept per account and cohort.
    */
-  const unsaved = new Set<string>();
+  const unsaved = new Map<string, string>();
   /** Set once shutdown has written everybody, so the closes it causes do not write again. */
   let stopping = false;
 
@@ -130,35 +136,45 @@ export function registerGateway(
    * has left cannot be retried that way: if the save as they left fails,
    * what was last written for them, at most one interval old, stands.
    */
-  function persist(standing: Player[]): void {
-    if (standing.length === 0) return;
-    positions.save(standing).catch((err: unknown) => {
-      app.log.warn({ err, count: standing.length }, 'could not save positions');
-      for (const player of standing) {
-        if (players.has(player.userId)) unsaved.add(player.userId);
+  function persist(entries: readonly PositionToSave[]): void {
+    if (entries.length === 0) return;
+    positions.save(entries).catch((err: unknown) => {
+      app.log.warn({ err, count: entries.length }, 'could not save positions');
+      for (const entry of entries) {
+        // Retried only while the account is still in that cohort: a write
+        // that failed before a cohort switch must not later land a position
+        // taken in the new cohort under the old cohort's key.
+        if (connections.forUser(entry.userId)?.cohortId === entry.cohortId) {
+          unsaved.set(entry.userId, entry.cohortId);
+        }
       }
     });
   }
 
-  function forgetSaved(userId: string): void {
+  /** Forgets one cohort's kept position, for access taken away. */
+  function forgetSaved(userId: string, cohortId: string): void {
     unsaved.delete(userId);
-    positions.forget(userId).catch((err: unknown) => {
-      app.log.warn({ err, userId }, 'could not forget saved position');
+    positions.forget(userId, cohortId).catch((err: unknown) => {
+      app.log.warn(
+        { err, userId, cohortId },
+        'could not forget saved position',
+      );
     });
   }
 
   /**
-   * Everybody still here who moved since the last write. Somebody who left
-   * in the meantime was written as they left (drop), so is skipped here.
+   * Everybody still here who moved since the last write, as a store write in
+   * the cohort they moved in. Somebody who left in the meantime was written
+   * as they left (drop), so is skipped here.
    */
   function saveMoved(): void {
-    const standing: Player[] = [];
-    for (const userId of unsaved) {
+    const entries: PositionToSave[] = [];
+    for (const [userId, cohortId] of unsaved) {
       const player = players.get(userId);
-      if (player) standing.push(player);
+      if (player) entries.push(positionOf(player, cohortId));
     }
     unsaved.clear();
-    persist(standing);
+    persist(entries);
   }
 
   const periodicSave = setInterval(
@@ -250,16 +266,24 @@ export function registerGateway(
       return;
     }
     const standing = players.get(connection.userId);
-    if (players.leave(connection.userId, Date.now(), remember)) {
+    if (
+      players.leave(
+        connection.userId,
+        Date.now(),
+        remember,
+        connection.cohortId,
+      )
+    ) {
       broadcast({ type: 'left', userId: connection.userId });
     }
     // Kept for the next visit only when they may come back; after shutdown
-    // began, everybody has been written already.
+    // began, everybody has been written already. Access taken away forgets
+    // this connection's cohort: there is nothing to come back to.
     if (!remember) {
-      forgetSaved(connection.userId);
+      forgetSaved(connection.userId, connection.cohortId);
     } else if (standing && !stopping) {
       unsaved.delete(connection.userId);
-      persist([standing]);
+      persist([positionOf(standing, connection.cohortId)]);
     }
   }
 
@@ -495,16 +519,19 @@ export function registerGateway(
       return;
     }
 
-    // A position kept from an earlier drop must not survive access being
-    // taken away. The sweep forgets it only for somebody still connected; a
-    // suspended account whose socket had already gone is caught here, at its
-    // next attempt — whether or not this socket is still around to be told.
+    // Access taken away forgets the cohort this attempt named, and the one
+    // any still-open tab stands in: drop() forgets the latter. Only those
+    // two — a per-cohort key has no single entry to remove, and scanning
+    // every cohort would be KEYS/SCAN, which this service avoids.
     //
     // Any tab still open for them is closed the way the revocation sweep
     // closes it, through drop(): taking the player away underneath an open
     // tab would leave that tab registered with nobody standing for it, so
     // nobody would be told they left and its next move would throw.
     if (!decision.ok && decision.userId) {
+      if (cohortId !== undefined) {
+        forgetSaved(decision.userId, cohortId);
+      }
       const open = connections.forUser(decision.userId);
       if (open) {
         app.log.info(
@@ -518,28 +545,46 @@ export function registerGateway(
         drop(open, false);
         open.socket.close(POLICY_VIOLATION, decision.refusal);
       } else {
-        players.leave(decision.userId, Date.now(), false);
-        forgetSaved(decision.userId);
+        players.leave(decision.userId, Date.now(), false, cohortId);
       }
     }
 
-    // Where they stood on an earlier visit, read before the socket is
-    // checked again: the read is asynchronous too, and the socket may go in
-    // the meantime. Only asked for when this process holds nothing fresher —
-    // another tab, or a reconnect within the grace.
+    // The cohort this account occupies here, if any: the open tab's, or the
+    // one a reconnect memory was left in. A connection naming another cohort
+    // is a switch, and starts from the cohort it is entering — never from
+    // where it stood elsewhere.
+    let heldCohort: string | undefined;
+    let switchingCohort = false;
+
+    // Where they stood on an earlier visit, read before the socket is checked
+    // again: the read is asynchronous too, and the socket may go in the
+    // meantime. Skipped only when this process will resume a position for
+    // this same cohort — another tab, or a reconnect within the grace.
     let saved: SavedPosition | undefined;
-    if (
-      decision.ok &&
-      !players.has(decision.claims.userId) &&
-      !players.isRemembered(decision.claims.userId)
-    ) {
-      try {
-        saved = await positions.load(decision.claims.userId);
-      } catch (err) {
-        app.log.warn(
-          { err, userId: decision.claims.userId },
-          'could not load saved position, starting at the spawn',
-        );
+    if (decision.ok) {
+      const previous = connections.forUser(decision.claims.userId);
+      heldCohort = players.has(decision.claims.userId)
+        ? previous?.cohortId
+        : players.rememberedCohort(decision.claims.userId);
+      switchingCohort =
+        heldCohort !== undefined && heldCohort !== decision.cohortId;
+
+      if (
+        switchingCohort ||
+        (!players.has(decision.claims.userId) &&
+          !players.isRemembered(decision.claims.userId))
+      ) {
+        try {
+          saved = await positions.load(
+            decision.claims.userId,
+            decision.cohortId,
+          );
+        } catch (err) {
+          app.log.warn(
+            { err, userId: decision.claims.userId },
+            'could not load saved position, starting at the spawn',
+          );
+        }
       }
     }
 
@@ -566,26 +611,23 @@ export function registerGateway(
     };
     registered = connection;
 
-    const previous = connections.forUser(connection.userId);
-    const switchingCohort =
-      previous !== undefined && previous.cohortId !== connection.cohortId;
-
-    /**
-     * Carried by hand rather than left to the reconnect memory, which only
-     * holds a position while that grace is configured above zero.
-     */
-    let carried: SavedPosition | undefined;
     if (switchingCohort) {
       const standing = players.get(connection.userId);
-      if (standing) {
-        carried = {
-          x: standing.x,
-          y: standing.y,
-          facing: standing.facing,
-        };
+      if (standing && heldCohort !== undefined) {
+        // The old cohort's position is written before the switch below takes
+        // the player out of it: from the join that follows, the account is in
+        // the new cohort, and the live position would no longer be reachable
+        // under the old cohort's key. A dropped write only means that cohort
+        // keeps the last saved position, so the switch is not held up for it —
+        // Redis being down must not keep anybody out.
+        unsaved.delete(connection.userId);
+        persist([positionOf(standing, heldCohort)]);
       }
-      // Before the new place exists, so the old cohort sees a departure.
-      if (players.leave(connection.userId, Date.now(), true)) {
+      // Remembered under the cohort being left; the join below discards it
+      // because this connection names a different one, so the destination
+      // starts from its own saved position or the spawn. Before the new place
+      // exists, so the old cohort sees a departure.
+      if (players.leave(connection.userId, Date.now(), true, heldCohort)) {
         broadcast({ type: 'left', userId: connection.userId });
       }
     }
@@ -596,7 +638,8 @@ export function registerGateway(
     const player = players.join(
       connection.userId,
       Date.now(),
-      saved ?? carried,
+      saved,
+      connection.cohortId,
     );
     if (arriving) {
       // Told to everyone already here; the arrival learns of itself from the
@@ -695,7 +738,7 @@ export function registerGateway(
           });
           if (moved.changed) {
             pendingMoves.add(connection.userId);
-            unsaved.add(connection.userId);
+            unsaved.set(connection.userId, connection.cohortId);
           }
           return;
         }
@@ -760,7 +803,12 @@ export function registerGateway(
       stopping = true;
       unsaved.clear();
       try {
-        await positions.save(players.all());
+        await positions.save(
+          connections.all().flatMap((connection) => {
+            const player = players.get(connection.userId);
+            return player ? [positionOf(player, connection.cohortId)] : [];
+          }),
+        );
       } catch (err) {
         app.log.warn({ err }, 'could not save positions on shutdown');
       }
@@ -773,6 +821,17 @@ export function registerGateway(
         connection.socket.close(GOING_AWAY, 'server shutting down');
       }
     },
+  };
+}
+
+/** A store write for one player, in the cohort named. */
+function positionOf(player: Player, cohortId: string): PositionToSave {
+  return {
+    userId: player.userId,
+    cohortId,
+    x: player.x,
+    y: player.y,
+    facing: player.facing,
   };
 }
 

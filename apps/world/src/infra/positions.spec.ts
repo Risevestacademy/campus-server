@@ -50,17 +50,49 @@ function fakeRedis() {
   };
 }
 
+describe('positionKey', () => {
+  it('names the key by account and cohort', () => {
+    expect(positionKey('ada', 'cohort-1')).toBe('world:position:ada:cohort-1');
+  });
+});
+
 describe('RedisPositionStore', () => {
   it('gives back what it saved', async () => {
     const { redis } = fakeRedis();
     const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
 
-    await store.save([{ userId: 'ada', x: 3, y: 4, facing: 'left' }]);
+    await store.save([
+      { userId: 'ada', cohortId: 'cohort-1', x: 3, y: 4, facing: 'left' },
+    ]);
 
-    await expect(store.load('ada')).resolves.toEqual({
+    await expect(store.load('ada', 'cohort-1')).resolves.toEqual({
       x: 3,
       y: 4,
       facing: 'left',
+    });
+  });
+
+  /** Two cohorts, two keys: one person standing in both at once. */
+  it('keeps a separate position per cohort, without one overwriting the other', async () => {
+    const { redis } = fakeRedis();
+    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+
+    await store.save([
+      { userId: 'ada', cohortId: 'frontend', x: 1, y: 1, facing: 'up' },
+    ]);
+    await store.save([
+      { userId: 'ada', cohortId: 'backend', x: 2, y: 2, facing: 'down' },
+    ]);
+
+    await expect(store.load('ada', 'frontend')).resolves.toEqual({
+      x: 1,
+      y: 1,
+      facing: 'up',
+    });
+    await expect(store.load('ada', 'backend')).resolves.toEqual({
+      x: 2,
+      y: 2,
+      facing: 'down',
     });
   });
 
@@ -68,9 +100,11 @@ describe('RedisPositionStore', () => {
     const { redis, ttls } = fakeRedis();
     const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
 
-    await store.save([{ userId: 'ada', x: 0, y: 0, facing: 'down' }]);
+    await store.save([
+      { userId: 'ada', cohortId: 'cohort-1', x: 0, y: 0, facing: 'down' },
+    ]);
 
-    expect(ttls.get(positionKey('ada'))).toBe(90 * 86_400);
+    expect(ttls.get(positionKey('ada', 'cohort-1'))).toBe(90 * 86_400);
   });
 
   it('has nothing for somebody never saved', async () => {
@@ -80,19 +114,35 @@ describe('RedisPositionStore', () => {
       90,
     );
 
-    await expect(store.load('nobody')).resolves.toBeUndefined();
+    await expect(store.load('nobody', 'cohort-1')).resolves.toBeUndefined();
   });
 
   /** Once real maps load, a placeholder position belongs to a map that is gone. */
   it('ignores a position saved on another map', async () => {
     const { redis } = fakeRedis();
     await new RedisPositionStore(redis, 'old-map', 90).save([
-      { userId: 'ada', x: 3, y: 4, facing: 'left' },
+      { userId: 'ada', cohortId: 'cohort-1', x: 3, y: 4, facing: 'left' },
     ]);
 
     const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
 
-    await expect(store.load('ada')).resolves.toBeUndefined();
+    await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
+  });
+
+  /**
+   * Positions used to live under world:position:{userId}, with no cohort.
+   * That key is never read: a position from before cohorts belongs to a map
+   * that is not this one, and a fallback would resurrect it.
+   */
+  it('ignores a position saved under the old, cohort-less key', async () => {
+    const { redis, values } = fakeRedis();
+    values.set(
+      'world:position:ada',
+      JSON.stringify({ mapId: PLACEHOLDER_MAP_ID, x: 3, y: 4, facing: 'left' }),
+    );
+    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+
+    await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
   });
 
   it.each([
@@ -112,20 +162,30 @@ describe('RedisPositionStore', () => {
     ],
   ])('treats %s as nothing saved', async (_label, raw) => {
     const { redis, values } = fakeRedis();
-    values.set(positionKey('ada'), raw);
+    values.set(positionKey('ada', 'cohort-1'), raw);
     const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
 
-    await expect(store.load('ada')).resolves.toBeUndefined();
+    await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
   });
 
-  it('forgets', async () => {
+  it('forgets one cohort, leaving the other', async () => {
     const { redis } = fakeRedis();
     const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
-    await store.save([{ userId: 'ada', x: 1, y: 1, facing: 'up' }]);
+    await store.save([
+      { userId: 'ada', cohortId: 'frontend', x: 1, y: 1, facing: 'up' },
+    ]);
+    await store.save([
+      { userId: 'ada', cohortId: 'backend', x: 2, y: 2, facing: 'down' },
+    ]);
 
-    await store.forget('ada');
+    await store.forget('ada', 'frontend');
 
-    await expect(store.load('ada')).resolves.toBeUndefined();
+    await expect(store.load('ada', 'frontend')).resolves.toBeUndefined();
+    await expect(store.load('ada', 'backend')).resolves.toEqual({
+      x: 2,
+      y: 2,
+      facing: 'down',
+    });
   });
 
   /** The gateway retries a failed save, so a failure has to reach it. */
@@ -135,7 +195,9 @@ describe('RedisPositionStore', () => {
     failNextExec();
 
     await expect(
-      store.save([{ userId: 'ada', x: 1, y: 1, facing: 'up' }]),
+      store.save([
+        { userId: 'ada', cohortId: 'cohort-1', x: 1, y: 1, facing: 'up' },
+      ]),
     ).rejects.toThrow('READONLY');
   });
 
@@ -236,13 +298,15 @@ describe('createPositionStore with Redis unavailable', () => {
     );
 
   it.each([
-    ['load', (store: PositionStore) => store.load('ada')],
+    ['load', (store: PositionStore) => store.load('ada', 'cohort-1')],
     [
       'save',
       (store: PositionStore) =>
-        store.save([{ userId: 'ada', x: 1, y: 1, facing: 'up' }]),
+        store.save([
+          { userId: 'ada', cohortId: 'cohort-1', x: 1, y: 1, facing: 'up' },
+        ]),
     ],
-    ['forget', (store: PositionStore) => store.forget('ada')],
+    ['forget', (store: PositionStore) => store.forget('ada', 'cohort-1')],
   ])('refuses a %s at once instead of queueing it', async (_name, operate) => {
     const store = build();
 
@@ -331,7 +395,7 @@ describe('createPositionStore with Redis connected but not answering', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     let outcome = 'pending';
-    store.load('ada').then(
+    store.load('ada', 'cohort-1').then(
       () => (outcome = 'resolved'),
       () => (outcome = 'rejected'),
     );
