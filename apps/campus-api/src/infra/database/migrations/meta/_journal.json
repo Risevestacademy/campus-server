@@ -78,6 +78,13 @@
       "when": 1791326601094,
       "tag": "0010_super_admin_role",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791398746441,
+      "tag": "0011_invite_role_grantable",
+      "breakpoints": true
     }
   ]
 }
