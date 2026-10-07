@@ -1,3 +1,4 @@
+import { COHORT_QUERY_PARAM, SESSION_COOKIE, SOCKET_PATH } from './endpoint.js';
 import { protocolJsonSchema } from './protocol.schema.js';
 
 /** Where the instance answering is reached, as the request that asked saw it. */
@@ -76,18 +77,18 @@ export function protocolAsyncApi(server: AsyncApiServer): JsonObject {
       },
     },
     channels: {
-      '/socket': {
+      [SOCKET_PATH]: {
         description:
           'One socket per account, in the cohort it names. The upgrade must ' +
-          'carry the `campus_session` cookie and an `Origin` world allows; a ' +
+          `carry the \`${SESSION_COOKIE}\` cookie and an \`Origin\` world allows; a ` +
           'refusal arrives as a close code, not an HTTP status.',
         bindings: {
           ws: {
             query: {
               type: 'object',
-              required: ['cohortId'],
+              required: [COHORT_QUERY_PARAM],
               properties: {
-                cohortId: {
+                [COHORT_QUERY_PARAM]: {
                   type: 'string',
                   description: 'The cohort being entered. Required.',
                 },
@@ -117,7 +118,7 @@ export function protocolAsyncApi(server: AsyncApiServer): JsonObject {
         session: {
           type: 'httpApiKey',
           in: 'cookie',
-          name: 'campus_session',
+          name: SESSION_COOKIE,
           description:
             'The session cookie campus-api sets at sign-in. A browser sends ' +
             'it on the upgrade by itself.',

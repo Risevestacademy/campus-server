@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { COHORT_QUERY_PARAM, SESSION_COOKIE, SOCKET_PATH } from './endpoint.js';
 import { protocolAsyncApi } from './protocol.asyncapi.js';
 import { protocolJsonSchema } from './protocol.schema.js';
 
@@ -30,6 +31,22 @@ describe('the AsyncAPI document', () => {
     expect(document.channels['/socket'].bindings.ws.query.required).toEqual([
       'cohortId',
     ]);
+  });
+
+  // The document repeats nothing about the connection: the path, the
+  // parameter and the cookie are the values the gateway itself enforces.
+  it('names the path, parameter and cookie the gateway uses', () => {
+    const channel = document.channels[SOCKET_PATH];
+
+    expect(Object.keys(document.channels)).toEqual([SOCKET_PATH]);
+    expect(channel.bindings.ws.query.required).toEqual([COHORT_QUERY_PARAM]);
+    expect(Object.keys(channel.bindings.ws.query.properties)).toEqual([
+      COHORT_QUERY_PARAM,
+    ]);
+    expect(channel.description).toContain(SESSION_COOKIE);
+    expect(document.components.securitySchemes.session.name).toBe(
+      SESSION_COOKIE,
+    );
   });
 
   it('describes a plain connection as ws', () => {

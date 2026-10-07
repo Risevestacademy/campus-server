@@ -17,6 +17,7 @@ import {
   type Refusal,
 } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
+import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
 import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
 import {
@@ -440,7 +441,7 @@ export function registerGateway(
   // The handler returns its promise so @fastify/websocket can catch a
   // rejection; returning undefined would turn one bad socket into an
   // unhandled rejection that takes the whole process down.
-  app.get('/socket', { websocket: true }, async (socket, request) => {
+  app.get(SOCKET_PATH, { websocket: true }, async (socket, request) => {
     await openConnection(
       socket,
       {
@@ -780,7 +781,7 @@ function cohortIdFrom(query: unknown): string | undefined {
   if (typeof query !== 'object' || query === null) {
     return undefined;
   }
-  const value = (query as Record<string, unknown>)['cohortId'];
+  const value = (query as Record<string, unknown>)[COHORT_QUERY_PARAM];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
