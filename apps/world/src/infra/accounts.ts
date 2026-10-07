@@ -38,6 +38,16 @@ export interface Account {
 }
 
 /**
+ * Whether USERS.system_role is one that does what admins do. campus-api has
+ * two, `admin` and `super_admin`, and asks the same question through its own
+ * hasAdminPowers; comparing against `admin` alone would shut every super
+ * admin out of a cohort they are not a member of.
+ */
+export function hasAdminPowers(systemRole: string): boolean {
+  return systemRole === 'admin' || systemRole === 'super_admin';
+}
+
+/**
  * Exported so a test can run the very same statement against a real
  * PostgreSQL engine. The columns belong to campus-api's migration, and a
  * rename there would otherwise only surface as every socket refusing a
@@ -119,7 +129,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             id: row.id,
             suspended: row.status === 'suspended',
             sessionEpoch: row.session_epoch,
-            admin: row.system_role === 'admin',
+            admin: hasAdminPowers(row.system_role),
           }
         : null;
     },

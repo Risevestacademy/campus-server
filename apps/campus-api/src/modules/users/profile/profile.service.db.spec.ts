@@ -299,6 +299,22 @@ describe('profile card', () => {
     expect(card).not.toHaveProperty('phone');
   });
 
+  // The role above admin has every admin power: a check against `admin`
+  // alone would show a super admin less than the admins they appoint.
+  it('shows a super admin what it shows an admin', async () => {
+    const root = await person('root@campus.local', {
+      systemRole: SystemRole.SuperAdmin,
+    });
+    await db
+      .update(users)
+      .set({ status: UserStatus.Suspended })
+      .where(eq(users.id, ada.id));
+
+    const card = await service.getCard(viewerOf(root), ada.id);
+
+    expect(card.id).toBe(ada.id);
+  });
+
   it('shows a person their own card, with no cohort needed', async () => {
     const card = await service.getCard(viewerOf(grace), grace.id);
 

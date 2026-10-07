@@ -7,6 +7,7 @@ import {
   LIVE_MEMBERSHIP_QUERY,
   LIVE_SESSIONS_QUERY,
   looksLikeId,
+  hasAdminPowers,
 } from './accounts.js';
 
 /**
@@ -45,6 +46,19 @@ beforeAll(async () => {
       await db.exec(statement);
     }
   }
+});
+
+describe('hasAdminPowers', () => {
+  // campus-api's two admin roles. A super admin is seeded, often with no
+  // cohort of their own, so the gate has to let them past as it does an admin.
+  it.each([
+    ['admin', true],
+    ['super_admin', true],
+    ['user', false],
+    ['', false],
+  ])('answers for %j', (role, expected) => {
+    expect(hasAdminPowers(role)).toBe(expected);
+  });
 });
 
 describe("world's account lookup, against campus-api's schema", () => {
