@@ -119,8 +119,10 @@ describe('PATCH /v1/users/:id/system-role (e2e)', () => {
     await listUsers(rootToken).expect(200);
   });
 
-  // The guard reads the role from the row on every request, so there is
-  // nothing to revoke and nothing to wait for.
+  // The guard reads the role from the row on every request, so a grant has
+  // nothing to wait for. A revocation ends the session as well: the token
+  // that was an admin's a moment ago is refused outright, not merely kept
+  // off the admin routes.
   it('takes effect on the very next request, in both directions', async () => {
     await listUsers(memberToken).expect(403);
 
@@ -135,7 +137,7 @@ describe('PATCH /v1/users/:id/system-role (e2e)', () => {
     await listUsers(memberToken).expect(200);
 
     await setRole(adminToken, member.id, { systemRole: 'user' }).expect(200);
-    await listUsers(memberToken).expect(403);
+    await listUsers(memberToken).expect(401);
   });
 
   it('lets one admin revoke another', async () => {

@@ -52,7 +52,8 @@ export function ApiSetSystemRole(): MethodDecorator {
       description:
         'Send `admin` to make somebody an admin, `user` to make them an ' +
         'ordinary user again. Any admin may do either. It takes effect on ' +
-        'the person’s next request.\n\n' +
+        'the person’s next request, and revoking the role also signs them ' +
+        'out everywhere.\n\n' +
         'Two people are off limits, both answered with a 409:\n\n' +
         '- **A super admin.** Their role cannot be changed through the API ' +
         'in either direction. Super admins are the accounts in ' +
