@@ -1,11 +1,16 @@
 import { PGlite } from '@electric-sql/pglite';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
+import { drizzle as drizzlePg } from 'drizzle-orm/postgres-js';
+import { migrate as migratePg } from 'drizzle-orm/postgres-js/migrator';
 import { fileURLToPath } from 'node:url';
+import postgres from 'postgres';
 
 import { AuditAction, auditLog } from '../../modules/audit/schema.js';
+import { SessionIssuer } from '../../modules/auth/session-issuer.js';
 import { SystemRole, UserStatus, users } from '../../modules/users/schema.js';
+import { UserRolesService } from '../../modules/users/user-roles.service.js';
 import type { Db } from './database.constants.js';
 import { seedAdmin, seedAdmins } from './seeder.js';
 
@@ -200,4 +205,94 @@ describe('seedAdmin audit log', () => {
 
     expect(await entries()).toHaveLength(1);
   });
+});
+
+/**
+ * The seed beside an admin changing the same account's role through the API,
+ * each on its own connection. PGlite has one connection and runs the two one
+ * after the other, so this needs a real PostgreSQL: set
+ * CAMPUS_TEST_DATABASE_URL to a database nothing else uses and the migrations
+ * are applied to it. Rows are made under fresh addresses and never cleared.
+ */
+const realUrl = process.env.CAMPUS_TEST_DATABASE_URL;
+
+describe.skipIf(!realUrl)('seedAdmin beside an API role change', () => {
+  let client: ReturnType<typeof postgres>;
+  let pg: ReturnType<typeof drizzlePg>;
+  let roles: UserRolesService;
+
+  beforeAll(async () => {
+    client = postgres(realUrl as string, {
+      max: 10,
+      onnotice: () => undefined,
+    });
+    pg = drizzlePg(client, { schema: { users, auditLog } });
+    await migratePg(pg, { migrationsFolder: MIGRATIONS });
+    roles = new UserRolesService(
+      pg as never,
+      new SessionIssuer({} as never, pg as never, {} as never, {} as never),
+    );
+  });
+
+  afterAll(async () => {
+    await client.end();
+  });
+
+  // The entry says which role the seed replaced. If an admin made the
+  // account an admin a moment before, that is `admin`; an entry still
+  // saying `user` would be a history of something that did not happen.
+  it('records the role it actually replaced, whichever lands first', async () => {
+    const quiet = { info: () => undefined };
+    const wrong: string[] = [];
+
+    for (let round = 0; round < 60; round += 1) {
+      const tag = `${Date.now()}-${round}-${Math.random().toString(36).slice(2)}`;
+      const [actor, target] = await pg
+        .insert(users)
+        .values([
+          { email: `actor-${tag}@campus.local`, systemRole: SystemRole.Admin },
+          { email: `target-${tag}@campus.local`, systemRole: SystemRole.User },
+        ])
+        .returning();
+
+      await Promise.allSettled([
+        seedAdmin(pg as never, target.email, quiet),
+        roles.setSystemRole(
+          { id: actor.id, email: actor.email, systemRole: actor.systemRole },
+          target.id,
+          SystemRole.Admin,
+        ),
+      ]);
+
+      const entries = await pg
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.subjectId, target.id));
+      const details = entries.map(
+        (entry) =>
+          entry.details as { from: string; to: string; source: string },
+      );
+      const bySeed = details.find((entry) => entry.source === 'seed');
+      const byAdmin = details.find((entry) => entry.source === 'admin');
+      // Once the seed has run the account is a super admin and the API
+      // refuses to touch it, so an entry by the admin can only have come
+      // first.
+      const replaced = byAdmin ? SystemRole.Admin : SystemRole.User;
+      const [after] = await pg
+        .select()
+        .from(users)
+        .where(eq(users.id, target.id));
+
+      if (
+        bySeed?.from !== replaced ||
+        after.systemRole !== SystemRole.SuperAdmin
+      ) {
+        wrong.push(
+          `round ${round}: seed says from ${bySeed?.from}, replaced ${replaced}, ended ${after.systemRole}`,
+        );
+      }
+    }
+
+    expect(wrong).toEqual([]);
+  }, 120_000);
 });
