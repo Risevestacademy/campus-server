@@ -11,6 +11,9 @@ import {
   loggerOptions,
 } from './infra/logger.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
+import { protocolAsyncApi } from './socket/protocol.asyncapi.js';
+import { protocolDocsPage } from './socket/protocol.docs.js';
+import { protocolJsonSchema } from './socket/protocol.schema.js';
 
 export interface World {
   app: FastifyInstance;
@@ -78,6 +81,45 @@ export async function buildWorld(
       users: gateway.connections.users,
     },
   }));
+
+  const protocolSchema = `${JSON.stringify(protocolJsonSchema(), null, 2)}\n`;
+  app.get('/schema.json', async (_request, reply) => {
+    void reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('cache-control', 'public, max-age=300');
+    return protocolSchema;
+  });
+
+  // The same protocol as an AsyncAPI document, for what reads that: it adds
+  // where the socket is, how to get in, and which way each message goes.
+  // Named as campus-api names its own: /docs-json for the document, /docs
+  // for the page that shows it.
+  // Built per request only for the address, which is the caller's own view
+  // of this instance — behind a proxy that is the forwarded scheme, since
+  // the hop that reaches us is plain.
+  app.get('/docs-json', async (request, reply) => {
+    const forwarded = request.headers['x-forwarded-proto'];
+    const scheme =
+      (Array.isArray(forwarded) ? forwarded[0] : forwarded)
+        ?.split(',')[0]
+        ?.trim() ?? request.protocol;
+    void reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('cache-control', 'public, max-age=300');
+    return `${JSON.stringify(
+      protocolAsyncApi({ host: request.host, secure: scheme === 'https' }),
+      null,
+      2,
+    )}\n`;
+  });
+
+  const docsPage = protocolDocsPage('/docs-json');
+  app.get('/docs', async (_request, reply) => {
+    void reply
+      .header('content-type', 'text/html; charset=utf-8')
+      .header('cache-control', 'public, max-age=300');
+    return docsPage;
+  });
 
   return { app, gateway, env, accounts, positions: store, presence: present };
 }

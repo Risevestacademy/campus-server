@@ -6,11 +6,28 @@ drawing everybody else, and what to do when the socket closes.
 The message shapes are not in this document. They live in
 [`apps/world/protocol.schema.json`](../apps/world/protocol.schema.json),
 generated from the server's code, with a description on every message and
-field. Generate your types from it rather than writing them by hand:
+field. Every world instance also serves the one it is running, at
+`GET /schema.json`, with no sign-in needed. Generate your types from it
+rather than writing them by hand, against whichever environment you build
+for:
 
 ```sh
-npx json-schema-to-typescript -i apps/world/protocol.schema.json -o world-protocol.d.ts
+curl -s https://ws.dev.campusbyrise.com/schema.json \
+  | npx json-schema-to-typescript -o world-protocol.d.ts
 ```
+
+Each environment serves the protocol of the code deployed there, so one that
+is behind another describes the older protocol.
+
+The same instance documents the protocol the way campus-api documents its
+routes: a page at `GET /docs`, and behind it the document at `GET /docs-json`.
+The document is [AsyncAPI](https://www.asyncapi.com). It holds the same
+message shapes and adds what a plain schema cannot say: the socket's address,
+how to get in, and which messages a client sends and which it is sent. Read
+the page to browse the protocol; give `/docs-json` to anything that reads
+AsyncAPI, such as Postman, which can import it and build a WebSocket
+collection from it. For generating types, `/schema.json` is the simpler
+input.
 
 That gives `ClientMessage`, `ServerMessage`, one type per message
 (`MoveMessage`, `MovedMessage`, `MoveResultMessage`, …), and `Player`,
@@ -260,4 +277,5 @@ For whoever edits the server:
 2. Run `pnpm --filter world protocol:schema` and commit the regenerated
    `protocol.schema.json`. CI fails if you forget.
 3. Update this document if what a client should _do_ changed.
-4. Tell the frontend: they regenerate their types from the new file.
+4. Tell the frontend: they regenerate their types once it is deployed, from
+   that environment's `/schema.json`.
