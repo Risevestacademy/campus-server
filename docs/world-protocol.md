@@ -240,15 +240,18 @@ That covers a network blip, the server's own cut-offs — `rate_limited`, a
 missed heartbeat, not reading fast enough — and `session_ended`,
 `session_expired` or `session_revoked`: signing straight back in resumes too, since a sign-in
 ending is routine rather than access being taken away. Past the grace, or
-after a server restart, you start where you last stood on an earlier visit —
-world keeps that between visits — or at the spawn if nothing is kept, the
-tile is no longer walkable, or it was more than 90 days ago. So never assume
-an arrival is at the spawn: read your position from the `snapshot`.
+after a server restart, you start where you last stood in that cohort on an
+earlier visit — world keeps a position per cohort — or at the spawn if nothing
+is kept, the tile is no longer walkable, or it was more than 90 days ago. So
+never assume an arrival is at the spawn: read your position from the
+`snapshot`.
 
 A suspension or a removed account forgets the position as soon as world
 notices: at its next check of open sockets, or when a reconnect is refused
-for it. If a suspension is lifted before either happens, the person was never
-refused and resumes as normal.
+for it. Only the cohorts involved are forgotten — the one an open socket
+stood in, and the one a refused attempt named; a position for any other
+cohort is left alone. If a suspension is lifted before any of that happens,
+the person was never refused and resumes as normal.
 
 Either way, take your position from the new `snapshot`, never from what you
 drew before the drop, and throw away any moves still pending: they were

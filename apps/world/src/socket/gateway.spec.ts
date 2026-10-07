@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import { buildWorld, type World } from '../app.js';
 import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
+import type { PositionToSave } from '../infra/positions.js';
 import {
   DISPLACED_CHANNEL,
   MemoryPresenceStore,
@@ -25,6 +26,11 @@ import {
 
 const SECRET = 'a-world-session-secret-of-at-least-32-chars';
 const ORIGIN = 'https://campus.example.com';
+const COHORT = 'cohort-1';
+
+/** How the fake store keys a position: by account and cohort. */
+const positionKey = (userId: string, cohortId = COHORT) =>
+  `${userId}:${cohortId}`;
 
 /** Answers for the database, so these tests need none. */
 const accounts = {
@@ -57,28 +63,23 @@ const accounts = {
 const store = {
   positions: new Map<string, { x: number; y: number; facing: string }>(),
   failLoad: false,
+  failSave: false,
   loads: 0,
-  load: async (userId: string) => {
+  load: async (userId: string, cohortId: string) => {
     store.loads += 1;
     if (store.failLoad) throw new Error('redis is down');
-    return store.positions.get(userId) as
+    return store.positions.get(positionKey(userId, cohortId)) as
       | { x: number; y: number; facing: 'up' | 'down' | 'left' | 'right' }
       | undefined;
   },
-  save: async (
-    players: readonly {
-      userId: string;
-      x: number;
-      y: number;
-      facing: string;
-    }[],
-  ) => {
-    for (const { userId, x, y, facing } of players) {
-      store.positions.set(userId, { x, y, facing });
+  save: async (entries: readonly PositionToSave[]) => {
+    if (store.failSave) throw new Error('redis is down');
+    for (const { userId, cohortId, x, y, facing } of entries) {
+      store.positions.set(positionKey(userId, cohortId), { x, y, facing });
     }
   },
-  forget: async (userId: string) => {
-    store.positions.delete(userId);
+  forget: async (userId: string, cohortId: string) => {
+    store.positions.delete(positionKey(userId, cohortId));
   },
   ready: async () => true,
   close: async () => undefined,
@@ -162,8 +163,6 @@ async function token(
   return token;
 }
 
-const COHORT = 'cohort-1';
-
 /**
  * Opens a socket and collects what the server says, until it closes or
  * settles. Pass '' as the cohort to leave the parameter off entirely.
@@ -218,6 +217,7 @@ beforeEach(() => {
   accounts.admins.clear();
   store.positions.clear();
   store.failLoad = false;
+  store.failSave = false;
   store.loads = 0;
   presence.entries.clear();
   presence.heldElsewhere.clear();
@@ -1215,8 +1215,43 @@ describe('movement', () => {
         'cohort-backend',
       );
 
+      // Saved under the cohort they left, and nothing written for the one
+      // they entered: the new cohort's position is only kept once they move.
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
+        false,
+      );
+
       await leave(inBackend);
       await leave(watcher);
+    });
+
+    it('enters the new cohort even when the leaving position cannot be saved', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      store.failSave = true;
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      // The move goes ahead: a dropped write only loses the old cohort's
+      // position, and Redis being down must not keep anybody out.
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
+      expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
+        'cohort-backend',
+      );
+
+      store.failSave = false;
+      await leave(inBackend);
     });
 
     it('keeps the avatar until the surviving socket closes', async () => {
@@ -1295,6 +1330,9 @@ describe('movement', () => {
       await expect
         .poll(() => world.gateway.players.isRemembered(ada))
         .toBe(true);
+      await expect
+        .poll(() => store.positions.get(positionKey(ada)))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
 
       accounts.suspended.add(ada);
       const refused = connect({
@@ -1306,6 +1344,9 @@ describe('movement', () => {
       });
       await refused.settled;
       expect(world.gateway.players.isRemembered(ada)).toBe(false);
+      await expect
+        .poll(() => store.positions.has(positionKey(ada)))
+        .toBe(false);
 
       // Suspension lifted: welcome back, but at the spawn.
       accounts.suspended.delete(ada);
@@ -1318,6 +1359,38 @@ describe('movement', () => {
         facing: 'down',
       });
       await leave(again);
+    });
+
+    it('forgets only the cohort the refusal named, leaving others', async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada, 'cohort-frontend'), {
+        x: 1,
+        y: 1,
+        facing: 'up',
+      });
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 2,
+        y: 2,
+        facing: 'down',
+      });
+
+      accounts.suspended.add(ada);
+      const refused = connect(
+        {
+          origin: ORIGIN,
+          cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
+        },
+        'cohort-frontend',
+      );
+      await refused.settled;
+
+      await expect
+        .poll(() => store.positions.has(positionKey(ada, 'cohort-frontend')))
+        .toBe(false);
+      // The cohort not involved in the attempt is left alone.
+      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
+        true,
+      );
     });
 
     /** Gone from everybody's screen at once, and back in the same place. */
@@ -1405,7 +1478,7 @@ describe('movement', () => {
   describe('between visits', () => {
     it('starts somebody where they stood last time', async () => {
       const ada = person();
-      store.positions.set(ada, { x: 2, y: 3, facing: 'left' });
+      store.positions.set(positionKey(ada), { x: 2, y: 3, facing: 'left' });
 
       const conn = await arrive(ada);
 
@@ -1421,7 +1494,7 @@ describe('movement', () => {
 
     it('starts at the spawn when the saved tile is no longer on the map', async () => {
       const ada = person();
-      store.positions.set(ada, { x: 9, y: 9, facing: 'up' });
+      store.positions.set(positionKey(ada), { x: 9, y: 9, facing: 'up' });
 
       const conn = await arrive(ada);
 
@@ -1460,7 +1533,7 @@ describe('movement', () => {
       await leave(conn);
 
       await expect
-        .poll(() => store.positions.get(ada))
+        .poll(() => store.positions.get(positionKey(ada)))
         .toEqual({ x: 1, y: 0, facing: 'right' });
     });
 
@@ -1471,7 +1544,7 @@ describe('movement', () => {
       await waitFor(conn, (m) => m.type === 'moveResult');
 
       await expect
-        .poll(() => store.positions.get(ada), { timeout: 3_000 })
+        .poll(() => store.positions.get(positionKey(ada)), { timeout: 3_000 })
         .toEqual({ x: 0, y: 1, facing: 'down' });
       await leave(conn);
     });
@@ -1497,13 +1570,15 @@ describe('movement', () => {
       move(conn, 'right', 1);
       await waitFor(conn, (m) => m.type === 'moveResult');
       await expect
-        .poll(() => store.positions.has(ada), { timeout: 3_000 })
+        .poll(() => store.positions.has(positionKey(ada)), { timeout: 3_000 })
         .toBe(true);
 
       accounts.suspended.add(ada);
 
       await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
-      await expect.poll(() => store.positions.has(ada)).toBe(false);
+      await expect
+        .poll(() => store.positions.has(positionKey(ada)), { timeout: 3_000 })
+        .toBe(false);
     }, 15_000);
   });
 

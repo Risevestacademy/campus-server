@@ -2,7 +2,6 @@ import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
 
 import { Direction } from '../movement/grid.js';
-import type { Player } from '../movement/players.js';
 import type { Env } from './env.js';
 import {
   FAIL_FAST,
@@ -25,6 +24,16 @@ export interface SavedPosition {
 }
 
 /**
+ * A position to write and whose it is. The account and cohort travel with the
+ * value rather than living on Player, which is sent to clients and must not
+ * carry a cohort they have no use for.
+ */
+export interface PositionToSave extends SavedPosition {
+  userId: string;
+  cohortId: string;
+}
+
+/**
  * Where each player last stood, kept between visits. In Redis rather
  * than Postgres: the data is small, changes often and is cheap to lose — the
  * worst case is one start at the spawn. An interface so the gateway can be
@@ -37,10 +46,14 @@ export interface SavedPosition {
  */
 export interface PositionStore {
   /** Undefined when nothing is kept, or what is kept is for another map. */
-  load(userId: string): Promise<SavedPosition | undefined>;
-  save(players: readonly Player[]): Promise<void>;
-  /** For access taken away: there is nothing to come back to. */
-  forget(userId: string): Promise<void>;
+  load(userId: string, cohortId: string): Promise<SavedPosition | undefined>;
+  save(positions: readonly PositionToSave[]): Promise<void>;
+  /**
+   * For access taken away: there is nothing to come back to. Only the named
+   * cohort, because a position is kept per cohort and there is no single
+   * entry to remove.
+   */
+  forget(userId: string, cohortId: string): Promise<void>;
   /**
    * Resolves true once the store can answer, or false after `timeoutMs`.
    * Waited on before accepting sockets: after a redeploy everybody
@@ -58,8 +71,8 @@ const stored = z.object({
   facing: z.enum(Direction),
 });
 
-export function positionKey(userId: string): string {
-  return `world:position:${userId}`;
+export function positionKey(userId: string, cohortId: string): string {
+  return `world:position:${userId}:${cohortId}`;
 }
 
 /** Keeps nothing: every visit starts at the spawn. For when REDIS_URL is unset. */
@@ -124,8 +137,11 @@ export class RedisPositionStore implements PositionStore {
     this.ttlSeconds = ttlDays * 86_400;
   }
 
-  async load(userId: string): Promise<SavedPosition | undefined> {
-    const raw = await this.redis.get(positionKey(userId));
+  async load(
+    userId: string,
+    cohortId: string,
+  ): Promise<SavedPosition | undefined> {
+    const raw = await this.redis.get(positionKey(userId, cohortId));
     if (raw === null) {
       return undefined;
     }
@@ -145,21 +161,21 @@ export class RedisPositionStore implements PositionStore {
     return { x, y, facing };
   }
 
-  async save(players: readonly Player[]): Promise<void> {
-    if (players.length === 0) {
+  async save(positions: readonly PositionToSave[]): Promise<void> {
+    if (positions.length === 0) {
       return;
     }
     // One round trip for everybody, and each write refreshes the TTL, so a
     // regular visitor's position never lapses.
     const batch = this.redis.multi();
-    for (const player of players) {
+    for (const position of positions) {
       batch.set(
-        positionKey(player.userId),
+        positionKey(position.userId, position.cohortId),
         JSON.stringify({
           mapId: this.mapId,
-          x: player.x,
-          y: player.y,
-          facing: player.facing,
+          x: position.x,
+          y: position.y,
+          facing: position.facing,
         }),
         'EX',
         this.ttlSeconds,
@@ -172,8 +188,8 @@ export class RedisPositionStore implements PositionStore {
     }
   }
 
-  async forget(userId: string): Promise<void> {
-    await this.redis.del(positionKey(userId));
+  async forget(userId: string, cohortId: string): Promise<void> {
+    await this.redis.del(positionKey(userId, cohortId));
   }
 
   ready(timeoutMs: number): Promise<boolean> {
