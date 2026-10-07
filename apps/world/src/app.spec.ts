@@ -1,4 +1,5 @@
 import { SessionScope, signSessionToken } from '@campus/session';
+import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -31,6 +32,30 @@ describe('the HTTP surface', () => {
       status: 'ok',
       sockets: { connections: 0, users: 0 },
     });
+    await gateway.stop();
+    await app.close();
+  });
+
+  // What a client builds its types from. The committed file is the same
+  // document, kept in step by the test beside protocol.schema.ts, so the two
+  // can be compared byte for byte.
+  it('serves the protocol it speaks, as the committed schema', async () => {
+    const { app, gateway } = await buildWorld(env, accounts);
+
+    const response = await app.inject({ method: 'GET', url: '/schema.json' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe(
+      'application/json; charset=utf-8',
+    );
+    expect(response.headers['cache-control']).toBe('public, max-age=300');
+    expect(response.body).toBe(
+      await readFile(
+        new URL('../protocol.schema.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    expect(Object.keys(response.json().definitions)).toContain('ServerMessage');
     await gateway.stop();
     await app.close();
   });

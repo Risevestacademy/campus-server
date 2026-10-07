@@ -11,6 +11,7 @@ import {
   loggerOptions,
 } from './infra/logger.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
+import { protocolJsonSchema } from './socket/protocol.schema.js';
 
 export interface World {
   app: FastifyInstance;
@@ -78,6 +79,14 @@ export async function buildWorld(
       users: gateway.connections.users,
     },
   }));
+
+  const protocolSchema = `${JSON.stringify(protocolJsonSchema(), null, 2)}\n`;
+  app.get('/schema.json', async (_request, reply) => {
+    void reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('cache-control', 'public, max-age=300');
+    return protocolSchema;
+  });
 
   return { app, gateway, env, accounts, positions: store, presence: present };
 }

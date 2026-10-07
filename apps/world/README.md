@@ -78,7 +78,7 @@ database.
 
 ```
 src/
-  app.ts                Fastify app: error handling, /health, the gateway
+  app.ts                Fastify app: error handling, /health, /schema.json, the gateway
   index.ts              boot and graceful shutdown
   infra/                env, logger, account lookup, Redis (positions, presence)
   movement/             the grid and who stands where — no sockets here
@@ -99,6 +99,9 @@ Messages are defined once, in `src/socket/protocol.ts`. From them:
 - **`protocol.schema.json`** is generated for the frontend to build types
   from. After changing `protocol.ts`, run `pnpm --filter world protocol:schema`
   and commit the result; a test fails CI if you forget.
+- **`GET /schema.json`** serves that same document from the running
+  instance, open to anybody, so the frontend can generate its types from the
+  environment it builds against.
 - **[docs/world-protocol.md](../../docs/world-protocol.md)** explains to
   client authors what the schema can't: message order, correcting a predicted
   step, limits and close codes. Update it when what a client should _do_
