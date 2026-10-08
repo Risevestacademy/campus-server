@@ -35,6 +35,11 @@ export enum AuditAction {
    */
   CohortCreated = 'cohort_created',
   CohortTrackAttached = 'cohort_track_attached',
+  /**
+   * An admin stopped a cohort running a track. The link row is gone, so
+   * `details` keeps which cohort and which track it joined.
+   */
+  CohortTrackDetached = 'cohort_track_detached',
   TrackCreated = 'track_created',
   /**
    * An admin edited a cohort or a track. `details.changes` maps each field

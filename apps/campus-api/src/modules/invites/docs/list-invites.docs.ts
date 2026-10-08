@@ -16,7 +16,8 @@ export function ApiListInvites(): MethodDecorator {
       description:
         'Every invite the system has, newest first, paginated. Filter with ' +
         '`status` — `pending` for the open offers, `revoked` to see who ' +
-        'cancelled what.\n\n' +
+        'cancelled what — and narrow to one intake with `cohortId`, ' +
+        '`trackId`, or both.\n\n' +
         'This is the only place a revoked invite stays visible: sign-in ' +
         'cannot find one, so without this route "who revoked that address" ' +
         'would have no answer at all.\n\n' +

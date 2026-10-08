@@ -265,6 +265,79 @@ export function ApiUpdateCohort(): MethodDecorator {
   );
 }
 
+export function ApiDetachTrack(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Detach a track from a cohort (admin only)',
+      description:
+        'Stops the cohort running a track: the reverse of ' +
+        'POST /v1/cohorts/{id}/tracks, named by the same `trackId`. The ' +
+        'track itself stays in the catalogue.\n\n' +
+        'Refused with a 409 while anything in the cohort is still on the ' +
+        'track — a student placed on it, or an invite that names it, ' +
+        'whether pending or already settled. Nothing is moved or removed ' +
+        'for you.\n\n' +
+        'A cohort has to have its tracks detached before it can be deleted.',
+    }),
+    ApiNoContentResponse({ description: 'The track was detached.' }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'id or trackId is not a UUID.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'No cohort has this id, or the cohort does not run this track.',
+      content: {
+        'application/json': {
+          examples: {
+            cohortNotFound,
+            notAttached: {
+              summary: 'The cohort does not run this track',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message:
+                    'Track 33333333-3333-4333-8333-333333333333 is not attached to this cohort',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    trackId: '33333333-3333-4333-8333-333333333333',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description: 'Students or invites in the cohort are still on the track.',
+      content: {
+        'application/json': {
+          examples: {
+            inUse: {
+              summary: 'Track in use',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'Track cannot be detached while students or invites in this cohort are still on it',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    trackId: '33333333-3333-4333-8333-333333333333',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
 export function ApiExtendGuestVisit(): MethodDecorator {
   return applyDecorators(
     ApiOperation({

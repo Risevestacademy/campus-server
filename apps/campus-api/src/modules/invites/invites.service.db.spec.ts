@@ -1965,6 +1965,126 @@ describe('InvitesService admin revoke and list', () => {
       expect(onlyRevoked.items.map((i) => i.id)).toEqual([revoked.id]);
     });
 
+    describe('by cohort and track', () => {
+      let otherCohortId: string;
+      let otherCohortSeLink: string;
+      let pdLink: string;
+      let seTrackId: string;
+      let pdTrackId: string;
+
+      // Cohort 1 runs SE (from the fixtures) and PD; Cohort 2 runs SE too.
+      beforeEach(async () => {
+        const [se] = await db.select().from(tracks);
+        seTrackId = se.id;
+        const [pd] = await db
+          .insert(tracks)
+          .values({ name: 'Product Design', code: 'PD' })
+          .returning();
+        pdTrackId = pd.id;
+        const [other] = await db
+          .insert(cohorts)
+          .values({ name: 'Cohort 2', code: 'C2', status: CohortStatus.Active })
+          .returning();
+        otherCohortId = other.id;
+        const links = await db
+          .insert(cohortTracks)
+          .values([
+            { cohortId, trackId: pd.id },
+            { cohortId: other.id, trackId: se.id },
+          ])
+          .returning();
+        pdLink = links[0].id;
+        otherCohortSeLink = links[1].id;
+
+        await makeInvite({ email: 'c1.se@campus.local' });
+        await makeInvite({
+          email: 'c1.pd@campus.local',
+          cohortTrackId: pdLink,
+        });
+        await makeInvite({
+          email: 'c1.mentor@campus.local',
+          cohortRole: CohortRole.Mentor,
+          cohortTrackId: null,
+        });
+        await makeInvite({
+          email: 'c2.se@campus.local',
+          cohortId: otherCohortId,
+          cohortTrackId: otherCohortSeLink,
+        });
+        await makeInvite({
+          email: 'admin.invite@campus.local',
+          cohortId: null,
+          cohortRole: null,
+          cohortTrackId: null,
+          systemRole: SystemRole.Admin,
+        });
+      });
+
+      const emails = async (filters: {
+        cohortId?: string;
+        trackId?: string;
+      }) => {
+        const page = await service.list({ page: 1, perPage: 20, ...filters });
+        expect(page.meta.total).toBe(page.items.length);
+        return page.items.map((i) => i.email).sort();
+      };
+
+      it('lists one cohort’s invites, whatever track they are on', async () => {
+        expect(await emails({ cohortId })).toEqual([
+          'c1.mentor@campus.local',
+          'c1.pd@campus.local',
+          'c1.se@campus.local',
+        ]);
+        expect(await emails({ cohortId: otherCohortId })).toEqual([
+          'c2.se@campus.local',
+        ]);
+      });
+
+      it('lists a track’s invites across the cohorts that run it', async () => {
+        expect(await emails({ trackId: seTrackId })).toEqual([
+          'c1.se@campus.local',
+          'c2.se@campus.local',
+        ]);
+        expect(await emails({ trackId: pdTrackId })).toEqual([
+          'c1.pd@campus.local',
+        ]);
+      });
+
+      it('narrows to one cohort’s intake on a track with both', async () => {
+        expect(await emails({ cohortId, trackId: seTrackId })).toEqual([
+          'c1.se@campus.local',
+        ]);
+        expect(
+          await emails({ cohortId: otherCohortId, trackId: pdTrackId }),
+        ).toEqual([]);
+      });
+
+      it('combines with the status filter', async () => {
+        const [target] = (
+          await service.list({ page: 1, perPage: 20, cohortId: otherCohortId })
+        ).items;
+        await service.revoke(target.id, admin);
+
+        const pending = await service.list({
+          page: 1,
+          perPage: 20,
+          cohortId: otherCohortId,
+          status: InviteStatus.Pending,
+        });
+        expect(pending.items).toEqual([]);
+        expect(pending.meta.total).toBe(0);
+      });
+
+      // A filter that matches nothing is an empty page: the caller asked
+      // which invites, not whether the cohort exists.
+      it('answers an unknown cohort or track with an empty page', async () => {
+        const missing = '99999999-9999-4999-8999-999999999999';
+
+        expect(await emails({ cohortId: missing })).toEqual([]);
+        expect(await emails({ trackId: missing })).toEqual([]);
+      });
+    });
+
     /**
      * The one that justifies not reusing InviteResponseDto. That one carries
      * the raw token because it is shown exactly once at creation; a list would

@@ -29,13 +29,18 @@ import {
   ApiAttachTrack,
   ApiCreateCohort,
   ApiDeleteCohort,
+  ApiDetachTrack,
   ApiExtendGuestVisit,
   ApiGetCohort,
   ApiListCohorts,
   ApiListRoster,
   ApiUpdateCohort,
 } from './docs/cohorts.docs.js';
-import { AttachTrackDto, CohortIdParamDto } from './dto/attach-track.dto.js';
+import {
+  AttachTrackDto,
+  CohortIdParamDto,
+  CohortTrackParamDto,
+} from './dto/attach-track.dto.js';
 import {
   CohortDetailResponseDto,
   CohortMemberResponseDto,
@@ -107,6 +112,20 @@ export class CohortsController {
     @CorrelationId() correlationId: string | undefined,
   ): Promise<CohortTrackResponseDto> {
     return this.cohorts.attachTrack(params.id, dto.trackId, {
+      actorUserId: admin.id,
+      correlationId,
+    });
+  }
+
+  @Delete(':id/tracks/:trackId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiDetachTrack()
+  detachTrack(
+    @Param() params: CohortTrackParamDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<void> {
+    return this.cohorts.detachTrack(params.id, params.trackId, {
       actorUserId: admin.id,
       correlationId,
     });

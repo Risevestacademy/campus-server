@@ -108,8 +108,9 @@ works on a pending or an expired invite; one that was accepted, declined or
 revoked is refused, and so is an expired one whose address has been invited
 again since.
 
-An admin sees every invite with `GET /v1/invites` (paginated, filterable by
-`status`; a lapsed invite is listed as `expired`), and cancels a pending one
+An admin sees every invite with `GET /v1/invites` (paginated; filterable by
+`status`, by `cohortId` and by `trackId`; a lapsed invite is listed as
+`expired`), and cancels a pending one
 with `POST /v1/invites/{id}/revoke`, which records who revoked it and when.
 An address holds one pending invite at a time, so re-inviting somebody means
 revoking the open invite first. Revoking an invite that has already expired

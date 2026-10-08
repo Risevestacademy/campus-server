@@ -398,8 +398,29 @@ describe('invite admin routes (e2e)', () => {
       ]);
     });
 
+    it('filters by cohort and by track', async () => {
+      const invite = await createInvite('student@campus.local').expect(201);
+      // The one link the fixtures make: this cohort running SE.
+      const [link] = await db.select().from(cohortTracks);
+      const elsewhere = '99999999-9999-4999-8999-999999999999';
+      const ids = async (query: string) =>
+        (
+          await as(adminCookie).get(`/v1/invites?${query}`).expect(200)
+        ).body.items.map((i: { id: string }) => i.id);
+
+      expect(await ids(`cohortId=${cohortId}`)).toEqual([invite.body.id]);
+      expect(await ids(`trackId=${link.trackId}`)).toEqual([invite.body.id]);
+      expect(await ids(`cohortId=${cohortId}&trackId=${link.trackId}`)).toEqual(
+        [invite.body.id],
+      );
+      expect(await ids(`cohortId=${elsewhere}`)).toEqual([]);
+      expect(await ids(`trackId=${elsewhere}`)).toEqual([]);
+    });
+
     it('rejects a status that is not one of the five', async () => {
       await as(adminCookie).get('/v1/invites?status=nonsense').expect(400);
+      await as(adminCookie).get('/v1/invites?cohortId=nonsense').expect(400);
+      await as(adminCookie).get('/v1/invites?trackId=nonsense').expect(400);
     });
 
     it('rejects perPage above the cap', async () => {

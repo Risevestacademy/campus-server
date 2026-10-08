@@ -1624,6 +1624,18 @@ export class InvitesService {
     const filter = and(
       statusFilter(query.status, now),
       flaggedFilter(query.flagged),
+      query.cohortId ? eq(invites.cohortId, query.cohortId) : undefined,
+      // An invite names the cohort's own link to a track, not the track, so
+      // the catalogue id is matched through whichever cohorts run it.
+      query.trackId
+        ? inArray(
+            invites.cohortTrackId,
+            this.db
+              .select({ id: cohortTracks.id })
+              .from(cohortTracks)
+              .where(eq(cohortTracks.trackId, query.trackId)),
+          )
+        : undefined,
     );
 
     const [rows, [{ total }]] = await Promise.all([

@@ -23,7 +23,7 @@ export class InviteIdParamDto {
 }
 
 /**
- * Pagination plus an optional status filter.
+ * Pagination plus the optional filters.
  *
  * Extends PaginationQueryDto rather than repeating page/perPage: this is the
  * only list in the invites module and the shape should match cohorts and
@@ -56,6 +56,30 @@ export class ListInvitesQueryDto extends PaginationQueryDto {
   )
   @IsBoolean()
   flagged?: boolean;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    example: '11111111-1111-4111-8111-111111111111',
+    description:
+      'Invites to this cohort. An admin invite names no cohort, so it never ' +
+      'matches. A cohort that does not exist matches nothing: an empty ' +
+      'page, not a 404.',
+  })
+  @IsOptional()
+  @IsUUID()
+  cohortId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    example: '33333333-3333-4333-8333-333333333333',
+    description:
+      'Invites placed on this track, in whichever cohort runs it: the ' +
+      'catalogue track id, as the roster takes it. Add `cohortId` for one ' +
+      'cohort’s intake on the track.',
+  })
+  @IsOptional()
+  @IsUUID()
+  trackId?: string;
 }
 
 /**
