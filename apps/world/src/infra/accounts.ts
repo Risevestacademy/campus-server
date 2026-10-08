@@ -1,3 +1,4 @@
+import { hasAdminPowers } from '@campus/session';
 import postgres from 'postgres';
 
 import type { Env } from './env.js';
@@ -119,7 +120,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             id: row.id,
             suspended: row.status === 'suspended',
             sessionEpoch: row.session_epoch,
-            admin: row.system_role === 'admin',
+            admin: hasAdminPowers(row.system_role),
           }
         : null;
     },

@@ -4,6 +4,7 @@ import {
   IsDateString,
   IsEmail,
   IsEnum,
+  IsIn,
   IsNotEmpty,
   IsOptional,
   IsUUID,
@@ -11,6 +12,9 @@ import {
 
 import { CohortRole } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
+
+/** The system roles an invite may carry. Never super admin. */
+const INVITABLE_SYSTEM_ROLES = [SystemRole.User, SystemRole.Admin];
 
 /**
  * Two shapes are accepted (mirrors the INVITES CHECK constraints):
@@ -81,14 +85,16 @@ export class CreateInviteDto {
   mentorshipGroupId?: string;
 
   @ApiPropertyOptional({
-    enum: SystemRole,
-    enumName: 'SystemRole',
+    enum: INVITABLE_SYSTEM_ROLES,
     example: SystemRole.User,
     description:
-      "Defaults to 'user'. Admin invites pass 'admin' with no cohort fields.",
+      "Defaults to 'user'. Admin invites pass 'admin' with no cohort " +
+      'fields. An invite cannot make a super admin: only the seed does.',
   })
   @IsOptional()
-  @IsEnum(SystemRole)
+  @IsIn(INVITABLE_SYSTEM_ROLES, {
+    message: `systemRole must be one of: ${INVITABLE_SYSTEM_ROLES.join(', ')}`,
+  })
   systemRole?: SystemRole;
 
   @ApiPropertyOptional({

@@ -1,0 +1,1 @@
+ALTER TABLE "invites" ADD CONSTRAINT "invites_system_role_grantable" CHECK ("invites"."system_role" in ('user', 'admin'));

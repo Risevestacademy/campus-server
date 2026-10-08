@@ -6,3 +6,5 @@
  */
 export * from './session-token.js';
 export * from './session-policy.js';
+// The other thing both services read off an account: its system role.
+export * from './system-role.js';

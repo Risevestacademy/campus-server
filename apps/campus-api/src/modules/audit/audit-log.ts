@@ -82,6 +82,7 @@ interface AuditEntryShapes {
     } & (
       | { inviteId: string; invitedBy: string } // an accepted invite granted it
       | { source: 'seed' } // the seed did, on nobody's behalf
+      | { source: 'admin' } // an admin did, through the API; they are the actor
     );
   };
   [AuditAction.InviteCreated]: {

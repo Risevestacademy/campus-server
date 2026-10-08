@@ -1689,6 +1689,27 @@ describe('decide()', () => {
 
       expect(await entries()).toEqual([]);
     });
+
+    // "Raise anybody who is not an admin" would match a super admin too,
+    // and accepting an admin invite would quietly demote them.
+    it('never demotes a super admin who accepts an admin invite', async () => {
+      await db
+        .update(users)
+        .set({ systemRole: SystemRole.SuperAdmin })
+        .where(eqUser(invitee.id));
+      const invite = await makeInvite({ systemRole: SystemRole.Admin });
+
+      const outcome = await service.decide(
+        invite.id,
+        InviteDecision.Accept,
+        invitee as never,
+      );
+
+      expect(outcome.kind).toBe('accepted');
+      const [row] = await db.select().from(users).where(eqUser(invitee.id));
+      expect(row.systemRole).toBe(SystemRole.SuperAdmin);
+      expect(await entries()).toEqual([]);
+    });
   });
 });
 

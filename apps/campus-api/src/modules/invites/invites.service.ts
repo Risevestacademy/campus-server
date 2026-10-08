@@ -10,7 +10,6 @@ import {
   isNotNull,
   isNull,
   lte,
-  ne,
   or,
   type SQL,
 } from 'drizzle-orm';
@@ -997,7 +996,9 @@ export class InvitesService {
     const [raised] = await tx
       .update(users)
       .set({ systemRole: SystemRole.Admin })
-      .where(and(eq(users.id, userId), ne(users.systemRole, SystemRole.Admin)))
+      // Only ever from `user`. Matching "anything but admin" would also
+      // match a super admin, and accepting an admin invite would demote them.
+      .where(and(eq(users.id, userId), eq(users.systemRole, SystemRole.User)))
       .returning();
 
     if (raised) {
@@ -1006,7 +1007,7 @@ export class InvitesService {
         action: AuditAction.SystemRoleChanged,
         subject: { type: AuditSubjectType.User, id: userId },
         details: {
-          // The WHERE only matches a non-admin, and user is the one other role.
+          // The WHERE only matches a user.
           from: SystemRole.User,
           to: SystemRole.Admin,
           inviteId: invite.id,

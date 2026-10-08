@@ -147,6 +147,15 @@ export const invites = pgTable(
       'invites_cohortless_is_admin',
       sql`${table.status} is distinct from ${sql.raw(`'${InviteStatus.Pending}'`)} or ${table.cohortId} is not null or ${table.systemRole} = ${sql.raw(`'${SystemRole.Admin}'`)}`,
     ),
+    // The role type gained super_admin for USERS; an invite must never offer
+    // it. Only the seed makes a super admin, and the request check that
+    // refuses one here does not cover a write that skips the request. Named
+    // by the two roles an invite may carry, so a role added later is refused
+    // until somebody decides an invite may grant it.
+    check(
+      'invites_system_role_grantable',
+      sql`${table.systemRole} in (${sql.raw(`'${SystemRole.User}'`)}, ${sql.raw(`'${SystemRole.Admin}'`)})`,
+    ),
     // A guest invite has to say when the visit ends, because the membership
     // it creates cannot exist without one.
     check(
