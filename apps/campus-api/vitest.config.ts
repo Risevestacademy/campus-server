@@ -23,6 +23,9 @@ export default defineConfig({
     // evaluated. main.ts guarantees this via its first import; tests need
     // the same guarantee when they import a decorated class directly.
     setupFiles: ['reflect-metadata'],
+    // Applies the migrations to the real PostgreSQL that a few tests need,
+    // when one is named; does nothing otherwise.
+    globalSetup: ['./vitest.global-setup.ts'],
     // PGlite suites boot a full Postgres engine in WASM and apply the
     // committed migrations in beforeAll. Running in parallel that takes
     // longer than the 10s default, and a hook that times out reports as the
