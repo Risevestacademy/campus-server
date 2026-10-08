@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AdminGuard } from '../../shared/auth/admin.guard.js';
 import { SessionModule } from '../auth/session.module.js';
 import { UserDirectoryService } from './user-directory.service.js';
+import { UserRolesService } from './user-roles.service.js';
 import { UsersController } from './users.controller.js';
 
 /**
@@ -14,6 +15,6 @@ import { UsersController } from './users.controller.js';
 @Module({
   imports: [SessionModule],
   controllers: [UsersController],
-  providers: [UserDirectoryService, AdminGuard],
+  providers: [UserDirectoryService, UserRolesService, AdminGuard],
 })
 export class UserAdminModule {}

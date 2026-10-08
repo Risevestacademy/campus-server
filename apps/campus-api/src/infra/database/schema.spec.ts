@@ -322,6 +322,28 @@ describe('invites', () => {
     );
   });
 
+  // Only the seed makes a super admin. The route refuses to invite one;
+  // this is what refuses a write that never went through the route.
+  it('refuses an invite that offers super admin, with or without a cohort', async () => {
+    await expectViolation(
+      invite({
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Mentor,
+        systemRole: SystemRole.SuperAdmin,
+      }),
+      'invites_system_role_grantable',
+    );
+    // A pending one with no cohort is refused by invites_cohortless_is_admin
+    // first, so the settled shape is what shows this rule on its own.
+    await expectViolation(
+      invite({
+        systemRole: SystemRole.SuperAdmin,
+        status: InviteStatus.Revoked,
+      }),
+      'invites_system_role_grantable',
+    );
+  });
+
   it('accepts a guest invited to one cohort, with an end date', async () => {
     await invite({
       cohortId: fixtures.cohortId,

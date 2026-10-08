@@ -41,4 +41,15 @@ describe('AdminGuard', () => {
     });
     expect(guard.canActivate(ctx)).toBe(true);
   });
+
+  // A check written as "is the role admin" would turn these away: a super
+  // admin is not `admin`, and is the last account that should be locked out.
+  it('allows super admins', () => {
+    const ctx = contextWithUser({
+      id: 's1',
+      email: 'root@campus.local',
+      systemRole: SystemRole.SuperAdmin,
+    });
+    expect(guard.canActivate(ctx)).toBe(true);
+  });
 });

@@ -24,7 +24,7 @@ erDiagram
         text bio
         varchar avatar_url "profile photo"
         varchar sprite_key "Which sprite walks around the map — deliberately distinct…"
-        system_role_enum system_role "user | admin"
+        system_role_enum system_role "user | admin | super_admin"
         user_status_enum status "active | suspended"
         integer session_epoch "bumped to end every session the account holds"
         timestamptz last_login_at
@@ -80,7 +80,7 @@ erDiagram
         uuid cohort_track_id FK
         uuid mentorship_group_id FK "FK declared below (lazy, avoids a declaration cycle)"
         cohort_role_enum cohort_role "student | professor | mentor"
-        system_role_enum system_role "user | admin"
+        system_role_enum system_role "user | admin | super_admin"
         varchar token_hash UK
         invite_status_enum status "pending | accepted | declined | revoked | expired"
         uuid invited_by FK

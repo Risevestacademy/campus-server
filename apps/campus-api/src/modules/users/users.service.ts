@@ -4,7 +4,13 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { GoogleIdentity } from './google-identity.js';
 import { GoogleIdentityMismatchError } from './users.exceptions.js';
-import { SystemRole, User, UserStatus, users } from './schema.js';
+import {
+  hasAdminPowers,
+  SystemRole,
+  User,
+  UserStatus,
+  users,
+} from './schema.js';
 
 export const GOOGLE_PROVIDER = 'google';
 
@@ -14,7 +20,7 @@ export const GOOGLE_PROVIDER = 'google';
  * of one-liners has to be kept in step with the schema for no added safety.
  */
 export function isAdmin(user: User): boolean {
-  return user.systemRole === SystemRole.Admin;
+  return hasAdminPowers(user.systemRole);
 }
 
 export function isSuspended(user: User): boolean {

@@ -12,7 +12,7 @@ import type {
   UpdateProfileDto,
 } from './dto/profile.dto.js';
 import { loadLiveMemberships } from '../live-memberships.js';
-import { SystemRole, UserStatus, users, type User } from '../schema.js';
+import { hasAdminPowers, UserStatus, users, type User } from '../schema.js';
 import { ProfileNotFoundException } from '../users.exceptions.js';
 
 /** The fields a person may change about themselves. */
@@ -96,7 +96,7 @@ export class ProfileService {
     }
 
     const seesEverything =
-      viewer.id === target.id || viewer.systemRole === SystemRole.Admin;
+      viewer.id === target.id || hasAdminPowers(viewer.systemRole);
 
     const memberships = await loadLiveMemberships(
       this.db,

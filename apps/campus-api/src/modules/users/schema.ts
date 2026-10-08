@@ -11,10 +11,11 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-export enum SystemRole {
-  User = 'user',
-  Admin = 'admin',
-}
+import { SystemRole, hasAdminPowers } from '@campus/session';
+
+// The role vocabulary and the "is this an admin" rule live in the shared
+// package: world reads the same column and has to answer the same way.
+export { SystemRole, hasAdminPowers };
 
 export enum UserStatus {
   Active = 'active',

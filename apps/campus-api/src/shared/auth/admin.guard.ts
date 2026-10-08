@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 
-import { SystemRole } from '../../modules/users/schema.js';
+import { hasAdminPowers } from '../../modules/users/schema.js';
 import {
   AccessDeniedException,
   NotAuthenticatedException,
@@ -14,7 +14,7 @@ import type { AuthenticatedRequest } from './authenticated-user.js';
  * ({ id, email, systemRole }) before this guard runs.
  *
  * - No req.user -> NotAuthenticatedException (401 UNAUTHORIZED).
- * - systemRole != admin -> AccessDeniedException (403 FORBIDDEN).
+ * - systemRole is neither admin role -> AccessDeniedException (403 FORBIDDEN).
  *
  * Lives in shared rather than beside the one route that uses it today: the
  * check is about system_role and nothing else, so an invite-flavoured
@@ -28,7 +28,7 @@ export class AdminGuard implements CanActivate {
     if (!req.user) {
       throw new NotAuthenticatedException('Authentication required');
     }
-    if (req.user.systemRole !== SystemRole.Admin) {
+    if (!hasAdminPowers(req.user.systemRole)) {
       throw new AccessDeniedException('Admin role required');
     }
     return true;
