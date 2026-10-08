@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 
 import { CohortRole } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
@@ -18,16 +18,45 @@ export class InviteResponseDto {
   @ApiProperty({ example: 'new.student@campus.local' })
   email: string;
 
-  @ApiPropertyOptional({ example: '11111111-1111-4111-8111-111111111111' })
+  // The four below are always sent, as null when the invite has none. The
+  // type is spelt out because the generator cannot read it off `T | null`:
+  // left to itself it documents a bare object, and a client generated from
+  // that cannot use the value.
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    example: '11111111-1111-4111-8111-111111111111',
+    description: 'Null for an invite that grants a system role only.',
+  })
   cohortId: string | null;
 
-  @ApiPropertyOptional({ enum: CohortRole, enumName: 'CohortRole' })
+  @ApiProperty({
+    enum: CohortRole,
+    enumName: 'CohortRole',
+    nullable: true,
+    description: 'Null for an invite that grants a system role only.',
+  })
   cohortRole: CohortRole | null;
 
-  @ApiPropertyOptional({ example: '22222222-2222-4222-8222-222222222222' })
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    example: '22222222-2222-4222-8222-222222222222',
+    description:
+      'The cohort’s own link to a track, not the catalogue track. Null ' +
+      'when the invite places nobody on a track.',
+  })
   cohortTrackId: string | null;
 
-  @ApiPropertyOptional({ example: '33333333-3333-4333-8333-333333333333' })
+  @ApiProperty({
+    type: String,
+    format: 'uuid',
+    nullable: true,
+    example: '33333333-3333-4333-8333-333333333333',
+    description: 'Null when the invite assigns no mentorship group.',
+  })
   mentorshipGroupId: string | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
@@ -39,7 +68,7 @@ export class InviteResponseDto {
   @ApiProperty({ example: '2026-09-29T12:00:00.000Z' })
   expiresAt: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: String,
     format: 'date-time',
     nullable: true,
