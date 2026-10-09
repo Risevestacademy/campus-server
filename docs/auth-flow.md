@@ -348,6 +348,7 @@ vouching for the session again.
 | Signed out                 | Within a heartbeat (30 s)                                           |
 | Suspended                  | Within a heartbeat — `world` checks the account itself              |
 | Sessions revoked           | Within a heartbeat — `world` compares the socket's epoch to the row |
+| Visit ran out (a guest)    | Within a heartbeat — `world` re-checks the cohort membership        |
 | Access ran out on its own  | When a refresh fails, or at most the window after the last good one |
 | Browser stopped refreshing | The window after the last refresh                                   |
 

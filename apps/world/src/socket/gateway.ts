@@ -300,12 +300,15 @@ export function registerGateway(
   }
 
   /**
-   * Checked once per heartbeat rather than per frame: a ban should take
-   * effect in seconds, and asking the database on every message would put a
-   * query in the path of every movement. One query per socket, which is one
-   * query per account, since an account holds a single socket.
+   * Checked once per heartbeat rather than per frame: a ban, or the end of a
+   * guest's visit, should take effect in seconds, and asking the database on
+   * every message would put a query in the path of every movement. One query
+   * per socket for the account, which is one query per account since an
+   * account holds a single socket, plus one for the cohort membership behind
+   * every socket that is not an admin's.
    */
-  async function dropRevokedAccounts(): Promise<void> {
+  async function dropUnwelcome(): Promise<void> {
+    const now = new Date();
     for (const connection of connections.all()) {
       const { userId } = connection;
       let account;
@@ -319,6 +322,12 @@ export function registerGateway(
       }
       if (account && !account.suspended) {
         dropIfRevoked(connection, account.sessionEpoch);
+        // The cohort is asked again for everybody but an admin, who is
+        // admitted on their role alone — from the row, as at the upgrade, so
+        // a demotion lands on the socket already open too.
+        if (!account.admin) {
+          await dropIfNotMember(connection, now);
+        }
         continue;
       }
 
@@ -359,6 +368,60 @@ export function registerGateway(
     // back in may resume where they stood.
     drop(connection);
     connection.socket.close(POLICY_VIOLATION, 'session_revoked');
+  }
+
+  /**
+   * The cohort this socket named, asked again. The upgrade asks once, and
+   * nothing behind the socket keeps that answer true: a guest's visit has an
+   * end date, and neither the access token the socket opened with nor the
+   * login it follows runs out with it. So a membership that ends while the
+   * socket is open has to reach that socket, within one heartbeat.
+   *
+   * Admins are excepted by the caller, as they are at the upgrade.
+   *
+   * And only one that still holds the account's place, for the same reason as
+   * dropIfRevoked: the read crosses awaits, and in that time a newer socket
+   * may have displaced this one — which has then been told `replaced` and
+   * closed already.
+   */
+  async function dropIfNotMember(
+    connection: Connection,
+    now: Date,
+  ): Promise<void> {
+    let live: boolean;
+    try {
+      live = await accounts.liveMembership(
+        connection.userId,
+        connection.cohortId,
+        now,
+      );
+    } catch (err) {
+      // As with the account: a database that is not answering must not throw
+      // everybody off the campus. The next sweep tries again.
+      app.log.error(
+        { err, userId: connection.userId, cohortId: connection.cohortId },
+        'could not re-check membership',
+      );
+      return;
+    }
+    if (live || !connections.has(connection)) {
+      return;
+    }
+
+    app.log.info(
+      {
+        connectionId: connection.id,
+        userId: connection.userId,
+        cohortId: connection.cohortId,
+      },
+      'membership ended, closing socket',
+    );
+    // Remembered, unlike a suspension: a visit may be extended, or the account
+    // may belong here again, and then signing back in resumes where they
+    // stood rather than starting over. The same reason an upgrade refused for
+    // this leaves the kept position alone.
+    drop(connection);
+    connection.socket.close(POLICY_VIOLATION, 'not_a_member');
   }
 
   /**
@@ -415,11 +478,11 @@ export function registerGateway(
   const sweepFailed = (err: unknown): void => {
     app.log.error({ err }, 'heartbeat sweep failed');
   };
-  const sweepAccounts = oneAtATime(dropRevokedAccounts, sweepFailed);
+  const sweepUnwelcome = oneAtATime(dropUnwelcome, sweepFailed);
   const sweepSessions = oneAtATime(dropEndedSessions, sweepFailed);
 
   const heartbeat = setInterval(() => {
-    sweepAccounts();
+    sweepUnwelcome();
     sweepSessions();
     const now = Date.now();
     players.forgetExpired(now);

@@ -35,7 +35,8 @@ server decides every position.
   - follows the sign-in behind each socket rather than its fifteen-minute
     access token: signing out closes it within a heartbeat, and so does a
     sign-in that stops being refreshed
-  - re-checks the accounts behind open sockets, so a suspension reaches them
+  - re-checks the account and the cohort membership behind each socket, so a
+    suspension — or the end of a guest's visit — reaches an open socket
     within one heartbeat
 - **Movement on a tile grid:**
   - the server enforces walking speed
