@@ -7,6 +7,9 @@ export default defineConfig({
   // does not depend on whether it has been built yet.
   resolve: {
     alias: {
+      '@campus/media': fileURLToPath(
+        new URL('../../packages/media/src/index.ts', import.meta.url),
+      ),
       '@campus/session': fileURLToPath(
         new URL('../../packages/session/src/index.ts', import.meta.url),
       ),

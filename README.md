@@ -11,7 +11,7 @@ apps/
   world/        Realtime WebSocket service: presence and movement
 packages/
   session/      Session tokens, shared by campus-api (signs) and world (verifies)
-  media/        LiveKit room tokens, for whichever service ends up minting them
+  media/        LiveKit room tokens, minted by world
 docs/           Cross-service docs: auth flow, deployment, world protocol
 docker-compose.local.yml   Local dev dependencies (Postgres, Redis, LiveKit, OTel Collector)
 livekit.yaml               LiveKit server config
