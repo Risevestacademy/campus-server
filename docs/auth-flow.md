@@ -281,9 +281,10 @@ the access away still lets it through the sign-in gate.
 It is for access being taken away, not for an ending the person chose:
 signing out and declining an invite do not touch it.
 
-Nothing calls it yet. Suspending an account, removing a member and cutting a
-visit short are the routes that will, each passing the transaction of its
-own change so the two commit together.
+Suspending an account calls it: `POST /v1/users/{id}/suspend` bumps the
+epoch as part of its own transaction, so the status and the sessions commit
+together. Removing a member and cutting a visit short are the routes still
+to come; each will pass the transaction of its own change the same way.
 
 ## Native apps
 
@@ -356,8 +357,10 @@ by its own expiry.
 
 ## Not built yet
 
-- **The routes that take access away.** The mechanism for ending an
-  account's sessions at once is built (see
-  [Ending an account's sessions](#ending-an-accounts-sessions)), but nothing
-  calls it: there is no route yet to suspend an account, remove a member or
-  cut a visit short.
+- **The rest of the routes that take access away.** Suspension is built
+  (`POST /v1/users/{id}/suspend` sets the status and ends the account's
+  sessions in one transaction; `POST /v1/users/{id}/reinstate` puts the
+  status back and leaves the sessions ended), but there is no route yet to
+  remove a member or cut a visit short. Both will call
+  [Ending an account's sessions](#ending-an-accounts-sessions) like
+  suspension does.

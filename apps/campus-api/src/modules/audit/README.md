@@ -96,23 +96,25 @@ actor (`actor_user_id, created_at`) and by subject
 
 ## Actions
 
-| Action                  | Subject         | Actor                     | `details`                                                                                                                                                                                                 | Written when                                                                                    |
-| ----------------------- | --------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `cohort_created`        | `cohort`        | admin                     | `name`, `code`, `status`, `startDate`, `endDate`                                                                                                                                                          | A cohort is created.                                                                            |
-| `cohort_updated`        | `cohort`        | admin                     | `changes`: each field that moved, with `from` and `to`                                                                                                                                                    | A cohort edit changes at least one field. An edit that moves nothing writes no entry.           |
-| `cohort_deleted`        | `cohort`        | admin                     | The cohort as it was: `name`, `code`, `status`, `startDate`, `endDate`                                                                                                                                    | A cohort is deleted. The row is gone, so this is the only trace of it.                          |
-| `cohort_track_attached` | `cohort_track`  | admin                     | `cohortId`, `trackId`                                                                                                                                                                                     | A track is attached to a cohort.                                                                |
-| `cohort_track_detached` | `cohort_track`  | admin                     | `cohortId`, `trackId`                                                                                                                                                                                     | A track is detached from a cohort. The link row is gone, so this is the only trace of it.       |
-| `track_created`         | `track`         | admin                     | `name`, `code`                                                                                                                                                                                            | A track is created.                                                                             |
-| `track_updated`         | `track`         | admin                     | `changes`: each field that moved, with `from` and `to`                                                                                                                                                    | A track edit changes at least one field.                                                        |
-| `track_deleted`         | `track`         | admin                     | The track as it was: `name`, `code`, `description`                                                                                                                                                        | A track is deleted.                                                                             |
-| `invite_created`        | `invite`        | admin                     | `cohortId`, `cohortRole`, `cohortTrackId`, `systemRole`, `expiresAt`, `guestAccessExpiresAt`                                                                                                              | An invite is created.                                                                           |
-| `invite_revoked`        | `invite`        | admin                     | `cohortId`, `expiresAt`                                                                                                                                                                                   | An admin revokes a pending invite.                                                              |
-| `invite_flagged`        | `invite`        | invitee                   | `cohortId`, `invitedBy`                                                                                                                                                                                   | The invitee flags a mistake on their invite.                                                    |
-| `invite_resent`         | `invite`        | admin                     | `cohortId`, `expiresAt` (the new deadline), `previousExpiresAt`                                                                                                                                           | An admin resends an invite: a new link for a live one, or an expired one brought back.          |
-| `membership_revived`    | `cohort_member` | invitee                   | `inviteId`, `invitedBy`, `previous`: the membership as it stood (`role`, `cohortTrackId`, `status`, `dismissalReason`, `joinedAt`, `leftAt`, `accessExpiresAt`)                                           | Accepting an invite brings back a membership that had ended. A first enrolment writes no entry. |
-| `guest_visit_extended`  | `cohort_member` | admin                     | `cohortId`, `accessExpiresAt` (the new deadline), `previousAccessExpiresAt`                                                                                                                               | An admin moves a guest's visit end forward. A visit that has already ended is refused instead.  |
-| `system_role_changed`   | `user`          | invitee, admin, or nobody | `from`, `to`, and one of: `inviteId` + `invitedBy` (an accepted invite granted admin), `source: "admin"` (an admin granted or revoked it through the API), `source: "seed"` (the seed made a super admin) | An account's system role changes. Nothing is written when it already had the role.              |
+| Action                  | Subject         | Actor                     | `details`                                                                                                                                                                                                 | Written when                                                                                                 |
+| ----------------------- | --------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `cohort_created`        | `cohort`        | admin                     | `name`, `code`, `status`, `startDate`, `endDate`                                                                                                                                                          | A cohort is created.                                                                                         |
+| `cohort_updated`        | `cohort`        | admin                     | `changes`: each field that moved, with `from` and `to`                                                                                                                                                    | A cohort edit changes at least one field. An edit that moves nothing writes no entry.                        |
+| `cohort_deleted`        | `cohort`        | admin                     | The cohort as it was: `name`, `code`, `status`, `startDate`, `endDate`                                                                                                                                    | A cohort is deleted. The row is gone, so this is the only trace of it.                                       |
+| `cohort_track_attached` | `cohort_track`  | admin                     | `cohortId`, `trackId`                                                                                                                                                                                     | A track is attached to a cohort.                                                                             |
+| `cohort_track_detached` | `cohort_track`  | admin                     | `cohortId`, `trackId`                                                                                                                                                                                     | A track is detached from a cohort. The link row is gone, so this is the only trace of it.                    |
+| `track_created`         | `track`         | admin                     | `name`, `code`                                                                                                                                                                                            | A track is created.                                                                                          |
+| `track_updated`         | `track`         | admin                     | `changes`: each field that moved, with `from` and `to`                                                                                                                                                    | A track edit changes at least one field.                                                                     |
+| `track_deleted`         | `track`         | admin                     | The track as it was: `name`, `code`, `description`                                                                                                                                                        | A track is deleted.                                                                                          |
+| `invite_created`        | `invite`        | admin                     | `cohortId`, `cohortRole`, `cohortTrackId`, `systemRole`, `expiresAt`, `guestAccessExpiresAt`                                                                                                              | An invite is created.                                                                                        |
+| `invite_revoked`        | `invite`        | admin                     | `cohortId`, `expiresAt`                                                                                                                                                                                   | An admin revokes a pending invite.                                                                           |
+| `invite_flagged`        | `invite`        | invitee                   | `cohortId`, `invitedBy`                                                                                                                                                                                   | The invitee flags a mistake on their invite.                                                                 |
+| `invite_resent`         | `invite`        | admin                     | `cohortId`, `expiresAt` (the new deadline), `previousExpiresAt`                                                                                                                                           | An admin resends an invite: a new link for a live one, or an expired one brought back.                       |
+| `membership_revived`    | `cohort_member` | invitee                   | `inviteId`, `invitedBy`, `previous`: the membership as it stood (`role`, `cohortTrackId`, `status`, `dismissalReason`, `joinedAt`, `leftAt`, `accessExpiresAt`)                                           | Accepting an invite brings back a membership that had ended. A first enrolment writes no entry.              |
+| `guest_visit_extended`  | `cohort_member` | admin                     | `cohortId`, `accessExpiresAt` (the new deadline), `previousAccessExpiresAt`                                                                                                                               | An admin moves a guest's visit end forward. A visit that has already ended is refused instead.               |
+| `system_role_changed`   | `user`          | invitee, admin, or nobody | `from`, `to`, and one of: `inviteId` + `invitedBy` (an accepted invite granted admin), `source: "admin"` (an admin granted or revoked it through the API), `source: "seed"` (the seed made a super admin) | An account's system role changes. Nothing is written when it already had the role.                           |
+| `user_suspended`        | `user`          | admin                     | `reason`: what the admin wrote, or null when they wrote nothing                                                                                                                                           | An admin suspends an account. A 409, and no entry, for the caller's own account or one already suspended.    |
+| `user_reinstated`       | `user`          | admin                     | nothing — an empty object; the subject and the action say what happened                                                                                                                                   | An admin puts a suspended account back to active. A 409, and no entry, for an account that is not suspended. |
 
 What is not recorded, so nobody goes looking for it:
 
@@ -147,14 +149,19 @@ it refers to them by id and holds as little else as it can.
   (`flag_message`).
 - Anything from a request body that is not listed in the action's shape.
 
-**The one exception**
+**The exceptions: free text an admin wrote**
 
-`membership_revived` keeps `previous.dismissalReason`. It is free text an
-admin wrote about a named person, and it is the most sensitive thing in the
-table. It is here because reviving a membership clears the reason from
-`cohort_members`, and without the entry the fact that somebody was dismissed,
-and why, would be gone. Treat any export or screen built on this table
-accordingly.
+- `membership_revived` keeps `previous.dismissalReason`. It is here because
+  reviving a membership clears the reason from `cohort_members`, and without
+  the entry the fact that somebody was dismissed, and why, would be gone.
+- `user_suspended` keeps `reason`. A suspension records the account's status
+  and nothing else, so without the entry an admin's reason would have
+  nowhere to live.
+
+Both are free text an admin wrote about a named person, and between them the
+most sensitive things in the table. `dismissalReason` belongs to one
+membership; `reason` to an account as a whole, for as long as the entry
+lasts. Treat any export or screen built on this table accordingly.
 
 An id is still personal data while the `users` row it points to exists, so
 access to this table should be as narrow as access to `users`. No API route
@@ -190,11 +197,14 @@ Not built yet: there is no route or script that does the stripping, and
 `users` has no deleted state. Until there is, do not hard-delete a `users`
 row by hand.
 
-Two things the stripping has to cover when it is built:
+Three things the stripping has to cover when it is built:
 
 - `membership_revived` entries about the person keep
   `previous.dismissalReason`, free text that may identify them. It lives in
   the log, so stripping the `users` row does not reach it.
+- `user_suspended` entries about the person keep `reason`, the admin's own
+  words. Same again: it lives in the log, and unlike `dismissalReason` it is
+  about the account as a whole rather than one membership.
 - A user who is only the _subject_ of entries (`subject_id`, or `invitedBy`
   inside `details`) is referenced by id with no foreign key. Those entries
   keep the id either way.

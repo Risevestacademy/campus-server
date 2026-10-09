@@ -12,6 +12,7 @@ import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.
 import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
 import { UserSystemRoleDto } from '../dto/system-role.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
+import { UserStatusDto } from '../dto/user-status.dto.js';
 
 export function ApiListUsers(): MethodDecorator {
   return applyDecorators(
@@ -98,6 +99,117 @@ export function ApiSetSystemRole(): MethodDecorator {
                 error: {
                   code: 'CONFLICT',
                   message: 'You cannot change your own role: ask another admin',
+                  details: { userId: '22222222-2222-4222-8222-222222222222' },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
+export function ApiSuspendUser(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Suspend an account (admin only)',
+      description:
+        'Takes an account out of service. From the next request it cannot ' +
+        'sign in or call the API, its sessions end now rather than when ' +
+        'their tokens run out, and an open `world` socket closes on the ' +
+        'next heartbeat.\n\n' +
+        'The account keeps its cohorts and its role; only its status ' +
+        'changes, and it lasts until an admin reinstates it. Any admin may ' +
+        'suspend any account but their own, super admins included, so a ' +
+        'compromised root account can still be taken out.\n\n' +
+        'Two refusals, each a 409: **yourself** — ask another admin, so ' +
+        'nobody locks themselves out by a slip — and **an account already ' +
+        'suspended**, which has nothing left to do.\n\n' +
+        '`reason` is optional, and is kept in the audit log beside the ' +
+        'actor and the target — nowhere else on the account.',
+    }),
+    ApiOkResponse({ type: UserStatusDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The id is not a UUID, or reason is not a string of at most 500 ' +
+        'characters.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No user has this id.',
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description: 'The target is the caller, or is already suspended.',
+      content: {
+        'application/json': {
+          examples: {
+            self: {
+              summary: 'The target is the caller',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'You cannot suspend your own account: ask another admin',
+                  details: { userId: '22222222-2222-4222-8222-222222222222' },
+                },
+              },
+            },
+            alreadySuspended: {
+              summary: 'The account is already suspended',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'This account is already suspended',
+                  details: { userId: '22222222-2222-4222-8222-222222222222' },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
+export function ApiReinstateUser(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Reinstate a suspended account (admin only)',
+      description:
+        'Puts a suspended account back to active: from the next request it ' +
+        'can sign in and call the API again.\n\n' +
+        'Its sessions are not restored with it — the person signs in again ' +
+        'rather than walking back in with tokens issued before the ' +
+        'suspension — and an open `world` socket stays closed.\n\n' +
+        'The one refusal is a 409: **an account that is not suspended**, ' +
+        'which has nothing to be put back.',
+    }),
+    ApiOkResponse({ type: UserStatusDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'The id is not a UUID.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No user has this id.',
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description: 'The account is not suspended.',
+      content: {
+        'application/json': {
+          examples: {
+            notSuspended: {
+              summary: 'The account is not suspended',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'This account is not suspended',
                   details: { userId: '22222222-2222-4222-8222-222222222222' },
                 },
               },

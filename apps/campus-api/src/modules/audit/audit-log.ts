@@ -85,6 +85,16 @@ interface AuditEntryShapes {
       | { source: 'admin' } // an admin did, through the API; they are the actor
     );
   };
+  [AuditAction.UserSuspended]: {
+    subject: AuditSubjectType.User;
+    /** What the admin wrote as the reason, or null for none. */
+    details: { reason: string | null };
+  };
+  [AuditAction.UserReinstated]: {
+    subject: AuditSubjectType.User;
+    /** Nothing beyond the subject: the change is the status going back. */
+    details: Record<string, never>;
+  };
   [AuditAction.InviteCreated]: {
     subject: AuditSubjectType.Invite;
     details: {
