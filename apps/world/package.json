@@ -27,6 +27,7 @@
     "@campus/media": "workspace:*",
     "@campus/session": "workspace:*",
     "@fastify/websocket": "^11.3.1",
+    "campus-world-map": "^0.1.1",
     "fastify": "^5.12.3",
     "ioredis": "^6.0.0",
     "postgres": "catalog:",

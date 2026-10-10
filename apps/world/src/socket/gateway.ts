@@ -15,6 +15,7 @@ import type {
   PresenceStore,
 } from '../infra/presence.js';
 import { Players, type Player } from '../movement/players.js';
+import type { WorldMap } from '../movement/world-map.js';
 import {
   decideUpgrade,
   sessionRefreshedSince,
@@ -53,14 +54,11 @@ export function registerGateway(
   accounts: AccountLookup,
   positions: PositionStore,
   presence: PresenceStore,
+  map: WorldMap,
 ): Gateway {
   const connections = new Connections();
   const players = new Players(
-    {
-      width: env.WORLD_MAP_WIDTH,
-      height: env.WORLD_MAP_HEIGHT,
-      spawn: { x: env.WORLD_SPAWN_X, y: env.WORLD_SPAWN_Y },
-    },
+    map.grid,
     env.WORLD_STEP_MS,
     env.WORLD_RECONNECT_GRACE_SECONDS * 1000,
   );
@@ -289,8 +287,8 @@ export function registerGateway(
 
   /**
    * For arrivals and departures, which are rare enough to send at once.
-   * Everybody in this process is on the one placeholder map, so everybody
-   * hears everything; scoped to a map once maps exist (W6).
+   * Everybody in this process is on the one map it loaded, so everybody
+   * hears everything; scoped to a map once there is more than one.
    */
   function broadcast(message: ServerMessage): void {
     const frame = encode(message);
@@ -818,7 +816,12 @@ export function registerGateway(
     });
     send(ws, {
       type: 'snapshot',
-      map: { width: env.WORLD_MAP_WIDTH, height: env.WORLD_MAP_HEIGHT },
+      map: {
+        id: map.id,
+        version: map.version,
+        width: map.grid.width,
+        height: map.grid.height,
+      },
       players: players.all(),
     });
 

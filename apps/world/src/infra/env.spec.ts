@@ -4,6 +4,7 @@ import { allowedOrigins, loadEnv, mediaCredentials } from './env.js';
 
 const minimal = {
   AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+  DEPLOYMENT_ENVIRONMENT: 'development',
   DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/campus',
 } as NodeJS.ProcessEnv;
 
@@ -28,6 +29,7 @@ describe('loadEnv', () => {
     expect(() =>
       loadEnv({
         AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+        DEPLOYMENT_ENVIRONMENT: 'development',
       } as NodeJS.ProcessEnv),
     ).toThrow(/DATABASE_URL/);
   });
@@ -44,12 +46,8 @@ describe('loadEnv', () => {
     });
   });
 
-  it('defaults a placeholder map with its spawn inside it', () => {
+  it('defaults the movement timings and limits', () => {
     expect(loadEnv(minimal)).toMatchObject({
-      WORLD_MAP_WIDTH: 40,
-      WORLD_MAP_HEIGHT: 30,
-      WORLD_SPAWN_X: 20,
-      WORLD_SPAWN_Y: 15,
       WORLD_STEP_MS: 100,
       WORLD_TICK_MS: 50,
       WORLD_RECONNECT_GRACE_SECONDS: 30,
@@ -84,22 +82,49 @@ describe('loadEnv', () => {
     ).toBe(1020);
   });
 
-  /** A spawn off the map would drop every arrival where they cannot move. */
-  it('refuses a spawn outside the map', () => {
+  /**
+   * `development` is what lets world run with no walls, so it is never
+   * assumed: a deployed service that lost the variable must not boot as one.
+   */
+  it('refuses to start without being told which deployment it is', () => {
+    const { DEPLOYMENT_ENVIRONMENT: _, ...unnamed } = minimal;
+
+    expect(() => loadEnv(unnamed as NodeJS.ProcessEnv)).toThrow(
+      /DEPLOYMENT_ENVIRONMENT/,
+    );
+    expect(() =>
+      loadEnv({ ...minimal, DEPLOYMENT_ENVIRONMENT: ' ' } as NodeJS.ProcessEnv),
+    ).toThrow(/DEPLOYMENT_ENVIRONMENT/);
+  });
+
+  /** Development may run without a published map; nothing else may. */
+  it('needs somewhere to load the map from, outside development', () => {
+    const development = loadEnv(minimal);
+    expect(development.SANITY_PROJECT_ID).toBeUndefined();
+    expect(development.SANITY_DATASET).toBe('production');
     expect(() =>
       loadEnv({
         ...minimal,
-        WORLD_MAP_WIDTH: '10',
-        WORLD_SPAWN_X: '10',
+        DEPLOYMENT_ENVIRONMENT: 'staging',
       } as NodeJS.ProcessEnv),
-    ).toThrow(/WORLD_SPAWN_X/);
-    expect(() =>
+    ).toThrow(/SANITY_PROJECT_ID/);
+    // A blank line in a .env file is not a project, and neither is a space.
+    for (const blank of ['', '  ']) {
+      expect(() =>
+        loadEnv({
+          ...minimal,
+          DEPLOYMENT_ENVIRONMENT: 'staging',
+          SANITY_PROJECT_ID: blank,
+        } as NodeJS.ProcessEnv),
+      ).toThrow(/SANITY_PROJECT_ID/);
+    }
+    expect(
       loadEnv({
         ...minimal,
-        WORLD_MAP_HEIGHT: '10',
-        WORLD_SPAWN_Y: '12',
+        DEPLOYMENT_ENVIRONMENT: 'staging',
+        SANITY_PROJECT_ID: 'abc123',
       } as NodeJS.ProcessEnv),
-    ).toThrow(/WORLD_SPAWN_Y/);
+    ).toMatchObject({ SANITY_PROJECT_ID: 'abc123' });
   });
 
   it('rejects a log level pino would not understand', () => {

@@ -18,6 +18,8 @@ import { buildWorld, type World } from '../app.js';
 import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';
+import { tileIndex } from '../movement/grid.js';
+import type { WorldMap } from '../movement/world-map.js';
 import {
   DISPLACED_CHANNEL,
   MemoryPresenceStore,
@@ -141,15 +143,11 @@ const presence = {
 
 const env = loadEnv({
   AUTH_SESSION_SECRET: SECRET,
+  DEPLOYMENT_ENVIRONMENT: 'development',
   DATABASE_URL: 'postgres://unused',
   CORS_ORIGINS: `${ORIGIN},http://localhost:3000`,
   WORLD_HEARTBEAT_SECONDS: '1',
   WORLD_MAX_MESSAGE_BYTES: '256',
-  // Small, with spawn in a corner, so an edge is one step away.
-  WORLD_MAP_WIDTH: '5',
-  WORLD_MAP_HEIGHT: '5',
-  WORLD_SPAWN_X: '0',
-  WORLD_SPAWN_Y: '0',
   // Long enough that steps sent together reliably land in one tick.
   WORLD_TICK_MS: '200',
   // The shortest allowed, so a periodic save lands within a test.
@@ -158,6 +156,19 @@ const env = loadEnv({
   WORLD_PRESENCE_TTL_SECONDS: '3',
   FF_LOG_LEVEL: 'fatal',
 } as NodeJS.ProcessEnv);
+
+/**
+ * Small, with spawn in a corner, so an edge is one step away, and one wall
+ * two steps below the spawn.
+ */
+const WALL = { x: 0, y: 2 };
+const walls = new Uint8Array(5 * 5);
+walls[tileIndex({ width: 5 }, WALL)] = 1;
+const map: WorldMap = {
+  id: 'campus',
+  version: 'v-test',
+  grid: { width: 5, height: 5, spawn: { x: 0, y: 0 }, walls },
+};
 
 let world: World;
 let url: string;
@@ -260,7 +271,7 @@ afterEach(async () => {
 });
 
 beforeAll(async () => {
-  world = await buildWorld(env, accounts, store, presence);
+  world = await buildWorld(env, accounts, store, presence, map);
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket`;
@@ -1013,7 +1024,10 @@ describe('movement', () => {
     const second = await arrive(grace);
 
     const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
-    expect(snapshot).toMatchObject({ map: { width: 5, height: 5 } });
+    // Which map and version, so the client loads the one enforced here.
+    expect(snapshot).toMatchObject({
+      map: { id: 'campus', version: 'v-test', width: 5, height: 5 },
+    });
     expect(snapshot.players).toEqual(
       expect.arrayContaining([
         { userId: ada, x: 0, y: 0, facing: 'down' },
@@ -1041,6 +1055,25 @@ describe('movement', () => {
 
     await leave(first);
     await leave(second);
+  });
+
+  it('stops somebody at a wall, facing it', async () => {
+    const ada = person();
+    const walker = await arrive(ada);
+
+    move(walker, 'down', 1);
+    move(walker, 'down', 2);
+
+    await expect(
+      waitFor(walker, (m) => m.type === 'moveResult' && m.seq === 2),
+    ).resolves.toEqual({
+      type: 'moveResult',
+      seq: 2,
+      outcome: 'blocked',
+      player: { userId: ada, x: 0, y: 1, facing: 'down' },
+    });
+
+    await leave(walker);
   });
 
   it('answers a step with where the server has them, and shows it to others', async () => {
@@ -1710,6 +1743,22 @@ describe('movement', () => {
       await leave(conn);
     });
 
+    it('starts at the spawn when the saved tile is now a wall', async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada), { ...WALL, facing: 'up' });
+
+      const conn = await arrive(ada);
+
+      const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
+      await leave(conn);
+    });
+
     it('starts at the spawn when the store cannot answer', async () => {
       const ada = person();
       store.failLoad = true;
@@ -1909,6 +1958,7 @@ describe('shutdown', () => {
         },
       },
       new MemoryPresenceStore(),
+      map,
     );
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = own.app.server.address() as AddressInfo;
@@ -1943,6 +1993,7 @@ const redisUrl = process.env.WORLD_TEST_REDIS_URL;
 describe.skipIf(!redisUrl)('across instances', () => {
   const shared = loadEnv({
     AUTH_SESSION_SECRET: SECRET,
+    DEPLOYMENT_ENVIRONMENT: 'development',
     DATABASE_URL: 'postgres://unused',
     CORS_ORIGINS: ORIGIN,
     REDIS_URL: redisUrl,

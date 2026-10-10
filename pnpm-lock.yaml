@@ -210,6 +210,9 @@ importers:
       '@fastify/websocket':
         specifier: ^11.3.1
         version: 11.3.1
+      campus-world-map:
+        specifier: ^0.1.1
+        version: 0.1.1
       fastify:
         specifier: ^5.12.3
         version: 5.12.3
@@ -1949,6 +1952,10 @@ packages:
   callsites@3.1.0:
     resolution: {integrity: sha512-P8BjAsXvZS+VIDUI11hHCQEv74YT67YUi5JJFNWIqL235sBmjX4+qx9Muvls5ivyNENctx46xQLQ3aTuE7ssaQ==}
     engines: {node: '>=6'}
+
+  campus-world-map@0.1.1:
+    resolution: {integrity: sha512-zsuH8O59PIrPDzp/g+rOmK8Yvt13vBW8D/yNxhSq3nGuw6ueFdr6Q2t+rw4poHqU3zQD8ysg6UZUPxvRDoITAw==}
+    engines: {node: '>=20'}
 
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
@@ -5089,6 +5096,8 @@ snapshots:
       get-intrinsic: 1.3.0
 
   callsites@3.1.0: {}
+
+  campus-world-map@0.1.1: {}
 
   chai@6.2.2: {}
 

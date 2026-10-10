@@ -39,6 +39,9 @@ server decides every position.
     suspension — or the end of a guest's visit — reaches an open socket
     within one heartbeat
 - **Movement on a tile grid:**
+  - the map is the published entry map, loaded from Sanity once at startup
+    through `campus-world-map`; its collision shapes become blocked tiles, and
+    the `snapshot` tells clients which map and version that is
   - the server enforces walking speed
   - one avatar per account, walked by whichever socket holds its place
   - other players' moves are sent once per tick
@@ -51,9 +54,9 @@ server decides every position.
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
 
-Not yet: real maps, spaces, portals, live positions shared across instances
-(a player who moves to another instance starts from their last saved
-position), or audio and video rooms.
+Not yet: more than one map, spaces, portals, live positions shared across
+instances (a player who moves to another instance starts from their last
+saved position), or audio and video rooms.
 
 ## Running it
 
@@ -83,7 +86,7 @@ database.
 src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
   index.ts              boot and graceful shutdown
-  infra/                env, logger, account lookup, Redis (positions, presence)
+  infra/                env, logger, account lookup, Redis (positions, presence), the published map
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   socket/

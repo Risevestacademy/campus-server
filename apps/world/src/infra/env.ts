@@ -31,7 +31,12 @@ const optionalText = z
 const schema = z
   .object({
     PORT: z.coerce.number().int().min(1).default(3001),
-    DEPLOYMENT_ENVIRONMENT: z.string().default('development'),
+    /**
+     * Which deployment this is. No default: `development` is what lets world
+     * run without a published map, so a deployed service that lost the
+     * variable must refuse to boot rather than be taken for a laptop.
+     */
+    DEPLOYMENT_ENVIRONMENT: z.string().trim().min(1),
 
     FF_LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
     FF_LOG_PRETTY: flag.default(false),
@@ -74,13 +79,13 @@ const schema = z
     WORLD_MAX_BUFFERED_BYTES: z.coerce.number().int().min(1).default(1_048_576),
 
     /**
-     * The placeholder map, in tiles, until real maps load (W6). Tiles, not
-     * pixels: the tile's pixel size is the client's business.
+     * Where the campus maps are published. world loads the entry map from here
+     * once, at startup, and enforces that version until it restarts. No token:
+     * the dataset is public. Required outside development, where a world with
+     * no walls would be worse than one that is down. Empty counts as unset.
      */
-    WORLD_MAP_WIDTH: z.coerce.number().int().min(1).default(40),
-    WORLD_MAP_HEIGHT: z.coerce.number().int().min(1).default(30),
-    WORLD_SPAWN_X: z.coerce.number().int().min(0).default(20),
-    WORLD_SPAWN_Y: z.coerce.number().int().min(0).default(15),
+    SANITY_PROJECT_ID: optionalText,
+    SANITY_DATASET: z.string().min(1).default('production'),
 
     /**
      * Fastest a player may walk: one tile per this many milliseconds. The
@@ -191,20 +196,11 @@ const schema = z
       });
     }
 
-    // A spawn off the map would place every arrival somewhere they could not
-    // move from; better to refuse to boot.
-    if (env.WORLD_SPAWN_X >= env.WORLD_MAP_WIDTH) {
+    if (!isDevelopment(env) && !env.SANITY_PROJECT_ID) {
       ctx.addIssue({
         code: 'custom',
-        path: ['WORLD_SPAWN_X'],
-        message: 'must be inside WORLD_MAP_WIDTH',
-      });
-    }
-    if (env.WORLD_SPAWN_Y >= env.WORLD_MAP_HEIGHT) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['WORLD_SPAWN_Y'],
-        message: 'must be inside WORLD_MAP_HEIGHT',
+        path: ['SANITY_PROJECT_ID'],
+        message: 'is required outside development: the map is loaded from it',
       });
     }
   });
@@ -220,6 +216,17 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error(`Invalid environment variables: ${detail}`);
   }
   return parsed.data;
+}
+
+/**
+ * The one place that says what counts as development: only the word itself,
+ * set on purpose. Everything that is allowed there and nowhere else — running
+ * without a published map — asks this.
+ */
+export function isDevelopment(env: {
+  DEPLOYMENT_ENVIRONMENT: string;
+}): boolean {
+  return env.DEPLOYMENT_ENVIRONMENT === 'development';
 }
 
 /** Undefined when this deployment has no media server. */

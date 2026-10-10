@@ -5,12 +5,14 @@ import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
 import { createPresenceStore, type PresenceStore } from './infra/presence.js';
+import { loadWorldMap } from './infra/world-map.js';
 import { registerConnectionCheck } from './media/connection-check.js';
 import {
   CORRELATION_ID_HEADER,
   correlationId,
   loggerOptions,
 } from './infra/logger.js';
+import type { WorldMap } from './movement/world-map.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
 import { protocolAsyncApi } from './socket/protocol.asyncapi.js';
 import { protocolDocsPage } from './socket/protocol.docs.js';
@@ -33,6 +35,8 @@ export async function buildWorld(
   positions?: PositionStore,
   // Redis when REDIS_URL is set, memory if not.
   presence?: PresenceStore,
+  // The published entry map when left out, which is a call to Sanity.
+  map?: WorldMap,
 ): Promise<World> {
   const app = Fastify({
     logger: loggerOptions(env),
@@ -69,9 +73,13 @@ export async function buildWorld(
     options: { maxPayload: env.WORLD_MAX_MESSAGE_BYTES },
   });
 
-  const store = positions ?? createPositionStore(env, app.log);
+  // Before any socket is accepted, and before anything is connected to: every
+  // position placed, moved or read back from here on is checked against this
+  // map, and a boot that fails for want of one leaves nothing open behind it.
+  const worldMap = map ?? (await loadWorldMap(env, app.log));
+  const store = positions ?? createPositionStore(env, app.log, worldMap.id);
   const present = presence ?? createPresenceStore(env, app.log);
-  const gateway = registerGateway(app, env, accounts, store, present);
+  const gateway = registerGateway(app, env, accounts, store, present, worldMap);
   registerConnectionCheck(app, env, accounts);
 
   app.get('/health', async () => ({

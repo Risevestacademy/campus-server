@@ -100,6 +100,8 @@ change to either reaches both apps:
   sent with, by id or alias; optional, unset sends the email built into the
   API).
   `PORT` is injected by Railway, not set manually.
+  `SANITY_PROJECT_ID` and `SANITY_DATASET` are set on staging but nothing in
+  campus-api reads them yet; they are there for when it does.
 - Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
   (this API, matching a registered redirect URI byte for byte) and two
@@ -273,9 +275,22 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
   `WORLD_PRESENCE_TTL_SECONDS`, the session refresh
   window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
-  and the placeholder
-  map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
-  `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
+  and `SANITY_DATASET` (`production` unless set; staging reads `staging`).
+- `SANITY_PROJECT_ID`: the Sanity project the campus maps are published to,
+  `sj3zsz66`. Required outside development. world loads the entry map from
+  it once, at startup, with no token (the dataset is public), and refuses to
+  start if it cannot: an unset variable, Sanity unreachable, nothing
+  published, not exactly one entry map, or an entry map without a spawn. A
+  newly published map is picked up by restarting world, not before.
+- `DEPLOYMENT_ENVIRONMENT`: required, with no default. `development` is the
+  only value that lets world run without a published map, on an open
+  placeholder, so a service that lost the variable refuses to boot rather
+  than run with no walls. Staging sets `staging`.
+- **Before the first release to production**, which `.railway/railway.ts`
+  does not describe: set `SANITY_PROJECT_ID`, `SANITY_DATASET=production` and
+  `DEPLOYMENT_ENVIRONMENT` on world by hand, and publish an entry map with a
+  spawn to the `production` dataset. world will not start there without all
+  four.
 - Live positions are per-process state. A reconnect within the grace resumes
   from memory; otherwise a player starts where they last stood, read from
   Redis. Positions are written when somebody's last tab closes, every

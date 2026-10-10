@@ -250,6 +250,7 @@ describe('createPresenceStore', () => {
   it('keeps presence in memory when REDIS_URL is unset', () => {
     const env = loadEnv({
       AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+      DEPLOYMENT_ENVIRONMENT: 'development',
       DATABASE_URL: 'postgres://unused',
     } as NodeJS.ProcessEnv);
 
@@ -269,6 +270,7 @@ describe('createPresenceStore', () => {
 
     const env = loadEnv({
       AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+      DEPLOYMENT_ENVIRONMENT: 'development',
       DATABASE_URL: 'postgres://unused',
       REDIS_URL: 'redis://unreachable.invalid:6379',
     } as NodeJS.ProcessEnv);
