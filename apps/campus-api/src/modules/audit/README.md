@@ -15,6 +15,7 @@ an entry's `correlationId` leads to it).
 - [Retention](#retention)
   - [Deleting an account](#deleting-an-account)
 - [Rollout](#rollout)
+- [Reading it](#reading-it)
 - [Adding an action](#adding-an-action)
 
 ## How an entry is written
@@ -53,8 +54,9 @@ belong to their own modules, and the log records the value it is given. The
 one import that remains is the `users` table in `schema.ts`, which the
 `actor_user_id` foreign key needs.
 
-There is no Nest module and nothing to inject: `writeAuditEntry` is a plain
-function, called by the service that makes the change.
+Writing needs no Nest module and nothing to inject: `writeAuditEntry` is a
+plain function, called by the service that makes the change. `AuditModule`
+exists only for the [read route](#reading-it).
 
 Entries are append-only, and the database enforces it. A trigger on
 `audit_log` (`audit_log_append_only`, migration `0008`) rejects every row
@@ -157,8 +159,8 @@ and why, would be gone. Treat any export or screen built on this table
 accordingly.
 
 An id is still personal data while the `users` row it points to exists, so
-access to this table should be as narrow as access to `users`. No API route
-reads it today; it is reachable only with database access.
+access to this table should be as narrow as access to `users`. The one route
+that reads it, `GET /v1/audit-log`, is admin-only, the same as `GET /v1/users`.
 
 ## Retention
 
@@ -215,15 +217,33 @@ Two things the stripping has to cover when it is built:
 - **Old code, new table.** A release that predates this module simply does
   not write entries. Rolling back the code does not need the migration
   rolled back.
-- **Reading it.** There is no API or admin screen yet. Query it directly,
-  for example everything that happened to one invite:
 
-  ```sql
-  select created_at, action, actor_user_id, details
-  from audit_log
-  where subject_type = 'invite' and subject_id = '<invite id>'
-  order by created_at;
-  ```
+## Reading it
+
+`GET /v1/audit-log`, admin only, lists entries newest first, paginated like
+the other admin lists. Every filter is optional and they combine with AND:
+
+| Query         | Matches                                                         |
+| ------------- | --------------------------------------------------------------- |
+| `action`      | One `AuditAction`.                                              |
+| `actorUserId` | Entries that account wrote.                                     |
+| `subjectType` | One `AuditSubjectType`.                                         |
+| `subjectId`   | Entries about that id. With `subjectType`, one thing's history. |
+| `from`        | Written at or after this instant.                               |
+| `to`          | Written before this instant. Must be after `from`.              |
+
+The range is half-open, so ranges placed end to end never count an entry
+twice: all of 7 October is `from=2026-10-07&to=2026-10-08`. A bare date is
+midnight UTC. A timestamp must carry its zone (`Z` or `+01:00`), because
+one without a zone would be read in the server's zone.
+
+Entries from one transaction share a `created_at`, so the id breaks ties
+and pages never overlap.
+
+An entry is returned as written, apart from `space_id`, which nothing
+writes yet. People appear as ids. Look an id up through `GET /v1/users`.
+The service is `AuditLogService`, and its filters are tested against
+PGlite in `audit-log.service.db.spec.ts`.
 
 ## Adding an action
 
