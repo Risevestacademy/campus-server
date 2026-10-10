@@ -87,13 +87,23 @@ interface AuditEntryShapes {
   };
   [AuditAction.UserSuspended]: {
     subject: AuditSubjectType.User;
-    /** What the admin wrote as the reason, or null for none. */
-    details: { reason: string | null };
+    details: {
+      /** What the admin wrote as the reason, or null for none. */
+      reason: string | null;
+      /** The actor's system_role at the time, not whatever it is now. */
+      actorRole: string;
+    };
   };
   [AuditAction.UserReinstated]: {
     subject: AuditSubjectType.User;
-    /** Nothing beyond the subject: the change is the status going back. */
-    details: Record<string, never>;
+    details: {
+      /** The actor's system_role at the time, not whatever it is now. */
+      actorRole: string;
+      /** Who suspended the account, or null when that predates it. */
+      suspendedBy: string | null;
+      /** The role that account held when it suspended, null likewise. */
+      suspendedByRole: string | null;
+    };
   };
   [AuditAction.InviteCreated]: {
     subject: AuditSubjectType.Invite;

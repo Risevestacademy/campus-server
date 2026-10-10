@@ -93,6 +93,11 @@ describe('UserStatusService.suspend', () => {
       status: UserStatus.Suspended,
     });
     expect(await statusOf(ada.id)).toBe(UserStatus.Suspended);
+    // On the row as well as in the log: reinstate reads it to decide who
+    // may lift this.
+    const row = await db.select().from(users).where(eq(users.id, ada.id));
+    expect(row[0].suspendedBy).toBe(admin.id);
+    expect(row[0].suspendedByRole).toBe(SystemRole.Admin);
     expect(await entries()).toEqual([
       expect.objectContaining({
         actorUserId: admin.id,
@@ -100,7 +105,10 @@ describe('UserStatusService.suspend', () => {
         subjectType: AuditSubjectType.User,
         subjectId: ada.id,
         correlationId: 'corr-1',
-        details: { reason: 'Posted the answer to a live assessment' },
+        details: {
+          reason: 'Posted the answer to a live assessment',
+          actorRole: SystemRole.Admin,
+        },
       }),
     ]);
   });
@@ -110,7 +118,10 @@ describe('UserStatusService.suspend', () => {
 
     await service.suspend(actorOf(admin), ada.id);
 
-    expect((await entries())[0].details).toEqual({ reason: null });
+    expect((await entries())[0].details).toEqual({
+      reason: null,
+      actorRole: SystemRole.Admin,
+    });
   });
 
   // The account is not merely marked: what it already holds has to stop
@@ -142,7 +153,10 @@ describe('UserStatusService.suspend', () => {
     ).rejects.toBeInstanceOf(AccountStatusLockedException);
 
     expect(await entries()).toHaveLength(1);
-    expect((await entries())[0].details).toEqual({ reason: 'first' });
+    expect((await entries())[0].details).toEqual({
+      reason: 'first',
+      actorRole: SystemRole.Admin,
+    });
   });
 
   it('lets one admin suspend another', async () => {
@@ -151,6 +165,55 @@ describe('UserStatusService.suspend', () => {
     await service.suspend(actorOf(admin), other.id);
 
     expect(await statusOf(other.id)).toBe(UserStatus.Suspended);
+    expect((await entries())[0].details).toEqual({
+      reason: null,
+      actorRole: SystemRole.Admin,
+    });
+  });
+
+  // Otherwise one admin account could lock out every super admin and leave
+  // recovery to whoever can reach the database.
+  it('refuses a plain admin suspending a super admin', async () => {
+    const root = await person('root@campus.local', SystemRole.SuperAdmin);
+    const attempt = service.suspend(actorOf(admin), root.id);
+
+    await expect(attempt).rejects.toBeInstanceOf(AccessDeniedException);
+    await expect(attempt).rejects.toThrow(
+      'A super admin is required to suspend a super admin',
+    );
+
+    expect(await statusOf(root.id)).toBe(UserStatus.Active);
+    expect(await entries()).toEqual([]);
+  });
+
+  it('lets a super admin suspend a super admin', async () => {
+    const root = await person('root@campus.local', SystemRole.SuperAdmin);
+    const otherRoot = await person('root2@campus.local', SystemRole.SuperAdmin);
+
+    await service.suspend(actorOf(root), otherRoot.id);
+
+    expect(await statusOf(otherRoot.id)).toBe(UserStatus.Suspended);
+    expect((await entries())[0].details.actorRole).toBe(SystemRole.SuperAdmin);
+  });
+
+  // The guard refuses a suspended caller with a 401 before any route runs,
+  // so this only comes up when the caller is suspended between the guard
+  // and this transaction. The row is what closes it either way.
+  it('refuses a caller who is no longer active', async () => {
+    const ada = await person('ada@campus.local');
+    const stale = actorOf(admin);
+    await db
+      .update(users)
+      .set({ status: UserStatus.Suspended })
+      .where(eq(users.id, admin.id));
+
+    const attempt = service.suspend(stale, ada.id);
+
+    await expect(attempt).rejects.toBeInstanceOf(AccessDeniedException);
+    await expect(attempt).rejects.toThrow('Your account is not active');
+
+    expect(await statusOf(ada.id)).toBe(UserStatus.Active);
+    expect(await entries()).toEqual([]);
   });
 
   // The guard read the caller's role before the change began. By the time
@@ -196,6 +259,11 @@ describe('UserStatusService.reinstate', () => {
       status: UserStatus.Active,
     });
     expect(await statusOf(ada.id)).toBe(UserStatus.Active);
+    // Who suspended it is spent: back to null, with the audit entry left
+    // holding it.
+    const row = await db.select().from(users).where(eq(users.id, ada.id));
+    expect(row[0].suspendedBy).toBeNull();
+    expect(row[0].suspendedByRole).toBeNull();
     const written = await entries();
     expect(written).toHaveLength(2);
     expect(written[1]).toMatchObject({
@@ -204,7 +272,11 @@ describe('UserStatusService.reinstate', () => {
       subjectType: AuditSubjectType.User,
       subjectId: ada.id,
       correlationId: 'corr-2',
-      details: {},
+      details: {
+        actorRole: SystemRole.Admin,
+        suspendedBy: admin.id,
+        suspendedByRole: SystemRole.Admin,
+      },
     });
   });
 
@@ -234,5 +306,51 @@ describe('UserStatusService.reinstate', () => {
     await expect(
       service.reinstate(actorOf(admin), '99999999-9999-4999-8999-999999999999'),
     ).rejects.toBeInstanceOf(UserNotFoundException);
+  });
+
+  it('refuses a plain admin lifting a suspension a super admin made', async () => {
+    const root = await person('root@campus.local', SystemRole.SuperAdmin);
+    const bea = await person('bea@campus.local');
+    await service.suspend(actorOf(root), bea.id, 'a super admin decided this');
+
+    const attempt = service.reinstate(actorOf(admin), bea.id);
+    await expect(attempt).rejects.toBeInstanceOf(AccessDeniedException);
+    await expect(attempt).rejects.toThrow(
+      'A super admin is required to lift this suspension',
+    );
+
+    expect(await statusOf(bea.id)).toBe(UserStatus.Suspended);
+    const refused = await entries();
+    expect(refused).toHaveLength(2);
+    expect(refused[1].action).toBe(AuditAction.UserSuspended);
+
+    // A super admin may reinstate anybody.
+    await service.reinstate(actorOf(root), bea.id);
+
+    expect(await statusOf(bea.id)).toBe(UserStatus.Active);
+    expect(await entries()).toHaveLength(3);
+  });
+
+  // The role recorded is the one the suspender held then, so promoting them
+  // afterwards does not turn an ordinary suspension into a super-admin-only
+  // one.
+  it('lifts what a plain admin suspended, whatever rank that admin holds now', async () => {
+    await db
+      .update(users)
+      .set({ systemRole: SystemRole.SuperAdmin })
+      .where(eq(users.id, admin.id));
+    const other = await person('other@campus.local', SystemRole.Admin);
+
+    await service.reinstate(actorOf(other), ada.id);
+
+    expect(await statusOf(ada.id)).toBe(UserStatus.Active);
+    expect((await entries())[1]).toMatchObject({
+      actorUserId: other.id,
+      details: {
+        actorRole: SystemRole.Admin,
+        suspendedBy: admin.id,
+        suspendedByRole: SystemRole.Admin,
+      },
+    });
   });
 });

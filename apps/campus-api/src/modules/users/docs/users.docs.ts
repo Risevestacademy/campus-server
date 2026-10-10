@@ -2,6 +2,7 @@ import { applyDecorators } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiConflictResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -13,6 +14,44 @@ import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
 import { UserSystemRoleDto } from '../dto/system-role.dto.js';
 import { UserListItemDto } from '../dto/user-list-item.dto.js';
 import { UserStatusDto } from '../dto/user-status.dto.js';
+
+/**
+ * The 403 on the two status routes, which says more than the one
+ * ApiAdminOnly documents: besides "not an admin", an admin who may not make
+ * this change — the wrong rank for it, or no longer active. Declared after
+ * ApiAdminOnly so the two descriptions merge in the document instead of one
+ * replacing the other.
+ *
+ * The examples are top-level, not inside `content`: with a `type` set, Nest
+ * Swagger rebuilds `content` from the type when the document is made and
+ * takes `content` with it, so an example placed there never reaches the
+ * document at all.
+ */
+function ApiStatusForbidden(
+  examples: Record<string, { summary: string; value: unknown }>,
+): MethodDecorator {
+  return ApiForbiddenResponse({
+    type: ApiErrorResponseDto,
+    description:
+      'These routes also refuse an admin: one whose rank is not high ' +
+      'enough for the change, or whose own account is no longer active.',
+    examples: {
+      notAdmin: {
+        summary: 'Ordinary member',
+        value: {
+          error: { code: 'FORBIDDEN', message: 'Admin role required' },
+        },
+      },
+      notActive: {
+        summary: 'The caller is no longer active',
+        value: {
+          error: { code: 'FORBIDDEN', message: 'Your account is not active' },
+        },
+      },
+      ...examples,
+    },
+  });
+}
 
 export function ApiListUsers(): MethodDecorator {
   return applyDecorators(
@@ -120,12 +159,19 @@ export function ApiSuspendUser(): MethodDecorator {
         'their tokens run out, and an open `world` socket closes on the ' +
         'next heartbeat.\n\n' +
         'The account keeps its cohorts and its role; only its status ' +
-        'changes, and it lasts until an admin reinstates it. Any admin may ' +
-        'suspend any account but their own, super admins included, so a ' +
-        'compromised root account can still be taken out.\n\n' +
-        'Two refusals, each a 409: **yourself** — ask another admin, so ' +
-        'nobody locks themselves out by a slip — and **an account already ' +
-        'suspended**, which has nothing left to do.\n\n' +
+        'changes, and it lasts until an admin reinstates it. Suspending ' +
+        'records who suspended it and the role they held then, which is ' +
+        'what decides who may reinstate it.\n\n' +
+        'Who may suspend whom: a super admin may suspend anybody but ' +
+        'themselves, so a compromised root account can still be taken out ' +
+        'by another; a plain admin may suspend anybody but themselves and ' +
+        'super admins, so no single admin account can lock out every super ' +
+        'admin and leave recovery to the database.\n\n' +
+        'Refusals: a 409 for **yourself** — ask another admin, so nobody ' +
+        'locks themselves out by a slip — and for **an account already ' +
+        'suspended**, which has nothing left to do. A 403 for a plain ' +
+        'admin acting on a super admin, for a caller whose own account is ' +
+        'no longer active, and for a caller who is not an admin.\n\n' +
         '`reason` is optional, and is kept in the audit log beside the ' +
         'actor and the target — nowhere else on the account.',
     }),
@@ -137,6 +183,17 @@ export function ApiSuspendUser(): MethodDecorator {
         'characters.',
     }),
     ApiAdminOnly(),
+    ApiStatusForbidden({
+      superAdminTarget: {
+        summary: 'The target is a super admin, the caller is not',
+        value: {
+          error: {
+            code: 'FORBIDDEN',
+            message: 'A super admin is required to suspend a super admin',
+          },
+        },
+      },
+    }),
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
       description: 'No user has this id.',
@@ -185,8 +242,15 @@ export function ApiReinstateUser(): MethodDecorator {
         'Its sessions are not restored with it — the person signs in again ' +
         'rather than walking back in with tokens issued before the ' +
         'suspension — and an open `world` socket stays closed.\n\n' +
-        'The one refusal is a 409: **an account that is not suspended**, ' +
-        'which has nothing to be put back.',
+        'Who may reinstate whom: a super admin may reinstate anybody; a ' +
+        'plain admin only an account that a plain admin suspended, so a ' +
+        'suspension a super admin made is lifted only by a super admin. ' +
+        'The role recorded at suspension time decides, not the role the ' +
+        'suspending admin holds now.\n\n' +
+        'Refusals: a 409 for **an account that is not suspended**, which ' +
+        'has nothing to be put back. A 403 for a plain admin lifting a ' +
+        'suspension a super admin made, for a caller whose own account is ' +
+        'no longer active, and for a caller who is not an admin.',
     }),
     ApiOkResponse({ type: UserStatusDto }),
     ApiBadRequestResponse({
@@ -194,6 +258,17 @@ export function ApiReinstateUser(): MethodDecorator {
       description: 'The id is not a UUID.',
     }),
     ApiAdminOnly(),
+    ApiStatusForbidden({
+      superAdminSuspension: {
+        summary: 'The suspension was made by a super admin',
+        value: {
+          error: {
+            code: 'FORBIDDEN',
+            message: 'A super admin is required to lift this suspension',
+          },
+        },
+      },
+    }),
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
       description: 'No user has this id.',

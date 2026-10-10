@@ -8,7 +8,7 @@ import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { SessionIssuer } from '../auth/session-issuer.js';
 import type { UserStatusDto } from './dto/user-status.dto.js';
-import { hasAdminPowers, UserStatus, users } from './schema.js';
+import { hasAdminPowers, SystemRole, UserStatus, users } from './schema.js';
 import {
   AccountStatusLockedException,
   UserNotFoundException,
@@ -19,6 +19,17 @@ import {
  * UserRolesService, and shaped after it: one transaction, both rows locked
  * in id order, the caller's role read again under the lock, and an audit
  * entry that commits with the change.
+ *
+ * Who may do it to whom, which is what the lock is for — the rank of both
+ * sides is read under it, so it cannot go stale mid-decision:
+ *
+ * - A super admin may suspend anybody but themselves, and reinstate
+ *   anybody.
+ * - A plain admin may suspend anybody but themselves *and* super admins.
+ * - A plain admin may reinstate only an account a plain admin suspended,
+ *   so a suspension a super admin made is lifted only by a super admin.
+ *
+ * The two rank refusals are 403, the state refusals 409.
  */
 @Injectable()
 export class UserStatusService {
@@ -34,18 +45,25 @@ export class UserStatusService {
    * `world` drops an open socket on its next heartbeat too, twice over: the
    * account is suspended, and the epoch the socket named no longer matches.
    *
-   * Two refusals, both 409 rather than 403, which on these routes means
-   * "you are not an admin" — the caller is one, and it is the state of
-   * things that refuses them:
+   * The refusals, and which status each one takes:
    *
-   * - **Themselves.** An admin suspending their own account by a slip is
-   *   locked out with nobody having decided it. Somebody else does it.
-   * - **An account already suspended.** Nothing to do, and nothing to
+   * - **Themselves** (409). An admin suspending their own account by a slip
+   *   is locked out with nobody having decided it. Somebody else does it.
+   * - **An account already suspended** (409). Nothing to do, and nothing to
    *   record twice.
+   * - **A super admin, by a plain admin** (403). Otherwise one admin account
+   *   could lock out every super admin and recovery would need the
+   *   database. A super admin may suspend anybody but themselves, so a
+   *   compromised root account can still be taken out.
+   * - **A caller who is no longer active** (403). Suspended between the
+   *   guard reading them and this transaction locking them; the guard would
+   *   have refused the next request anyway.
    *
    * Suspension is the account's status alone: it keeps its cohorts and its
-   * role, and lasts until an admin reinstates it. The reason, if one was
-   * given, is recorded in the audit entry and nowhere else.
+   * role, and lasts until an admin reinstates it. The row also records who
+   * suspended it and the role they held then, because reinstate decides on
+   * that. The reason, if one was given, is recorded in the audit entry and
+   * nowhere else.
    */
   async suspend(
     actor: AuthenticatedUser,
@@ -72,9 +90,13 @@ export class UserStatusService {
    * Puts a suspended account back to active. It can sign in again from the
    * next request, but its sessions are *not* restored: the epoch it was
    * suspended on stays where it is, so the person signs in again rather than
-   * walking back in with tokens issued before the suspension. Only an
-   * account that is suspended may be reinstated; one that is not is a 409,
-   * the same refusal the other way round.
+   * walking back in with tokens issued before the suspension.
+   *
+   * Only an account that is suspended may be reinstated; one that is not is
+   * a 409, the same refusal the other way round. And a plain admin may lift
+   * only a suspension a plain admin made: one a super admin made is a 403,
+   * as is a caller who is no longer active. Reinstating clears who suspended
+   * the account, and the audit entry keeps who it was.
    */
   async reinstate(
     actor: AuthenticatedUser,
@@ -94,7 +116,8 @@ export class UserStatusService {
    * The one transaction both routes share. The rows are locked in id order,
    * as UserRolesService locks them, so two admins acting on each other queue
    * for the same first lock instead of each holding one and waiting for the
-   * other.
+   * other. Everything decided here is decided under that lock: the caller's
+   * role and status, the target's, and who suspended it.
    */
   private async change(
     actor: AuthenticatedUser,
@@ -110,6 +133,8 @@ export class UserStatusService {
           email: users.email,
           systemRole: users.systemRole,
           status: users.status,
+          suspendedBy: users.suspendedBy,
+          suspendedByRole: users.suspendedByRole,
         })
         .from(users)
         .where(inArray(users.id, [actor.id, targetId]))
@@ -118,16 +143,24 @@ export class UserStatusService {
       const caller = locked.find((row) => row.id === actor.id);
       const target = locked.find((row) => row.id === targetId);
 
-      // The guard read the caller's role before this began, which is too
-      // early to stop a caller who has been demoted since. The row decides.
+      // The guard read the caller before this began, which is too early to
+      // stop a caller who has been demoted — or suspended — since. The row
+      // decides, under the lock.
       if (!caller || !hasAdminPowers(caller.systemRole)) {
         throw new AccessDeniedException('Admin role required');
+      }
+      if (caller.status !== UserStatus.Active) {
+        throw new AccessDeniedException('Your account is not active');
       }
       if (!target) {
         throw new UserNotFoundException(`User ${targetId} not found`, {
           userId: targetId,
         });
       }
+
+      // The state of the target first: it answers the request even when the
+      // caller is also of the wrong rank, so "not suspended" never comes
+      // back as "a super admin is required".
       if (target.status === status) {
         throw new AccountStatusLockedException(
           status === UserStatus.Suspended
@@ -137,9 +170,39 @@ export class UserStatusService {
         );
       }
 
+      // Then the rank of both sides.
+      if (status === UserStatus.Suspended) {
+        if (
+          target.systemRole === SystemRole.SuperAdmin &&
+          caller.systemRole !== SystemRole.SuperAdmin
+        ) {
+          throw new AccessDeniedException(
+            'A super admin is required to suspend a super admin',
+          );
+        }
+      } else if (
+        caller.systemRole !== SystemRole.SuperAdmin &&
+        target.suspendedByRole !== SystemRole.Admin
+      ) {
+        // A plain admin lifts what a plain admin suspended, whatever rank
+        // that admin holds now — the role was stored as it was at the time.
+        // A suspension with no recorded role is one no plain admin may lift.
+        throw new AccessDeniedException(
+          'A super admin is required to lift this suspension',
+        );
+      }
+
       const [row] = await tx
         .update(users)
-        .set({ status })
+        .set(
+          status === UserStatus.Suspended
+            ? {
+                status,
+                suspendedBy: actor.id,
+                suspendedByRole: caller.systemRole,
+              }
+            : { status, suspendedBy: null, suspendedByRole: null },
+        )
         .where(eq(users.id, targetId))
         .returning({
           id: users.id,
@@ -153,7 +216,7 @@ export class UserStatusService {
           correlationId,
           action: AuditAction.UserSuspended,
           subject: { type: AuditSubjectType.User, id: targetId },
-          details: { reason: reason ?? null },
+          details: { reason: reason ?? null, actorRole: caller.systemRole },
         });
         // In this transaction, so the suspension and the sessions go
         // together: neither may commit without the other.
@@ -164,7 +227,11 @@ export class UserStatusService {
           correlationId,
           action: AuditAction.UserReinstated,
           subject: { type: AuditSubjectType.User, id: targetId },
-          details: {},
+          details: {
+            actorRole: caller.systemRole,
+            suspendedBy: target.suspendedBy,
+            suspendedByRole: target.suspendedByRole,
+          },
         });
       }
       return row;

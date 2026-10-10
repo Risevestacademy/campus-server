@@ -211,12 +211,21 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
       email: 'member@campus.local',
       status: UserStatus.Suspended,
     });
+    // The suspension names its author on the row, which is what lets
+    // reinstate decide who may lift it.
+    const row = await rowOf(member.id);
+    expect(row.status).toBe(UserStatus.Suspended);
+    expect(row.suspendedBy).toBe(admin.id);
+    expect(row.suspendedByRole).toBe(SystemRole.Admin);
     expect(await entries()).toEqual([
       expect.objectContaining({
         actorUserId: admin.id,
         subjectType: 'user',
         subjectId: member.id,
-        details: { reason: 'Posted the answer to a live assessment' },
+        details: {
+          reason: 'Posted the answer to a live assessment',
+          actorRole: SystemRole.Admin,
+        },
       }),
     ]);
   });
@@ -225,7 +234,9 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
     await suspend(adminToken, member.id).expect(200);
 
     expect(await entries()).toEqual([
-      expect.objectContaining({ details: { reason: null } }),
+      expect.objectContaining({
+        details: { reason: null, actorRole: SystemRole.Admin },
+      }),
     ]);
   });
 
@@ -275,6 +286,20 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
     expect(await entries()).toHaveLength(1);
   });
 
+  // The service checks the caller's status again, under the lock, for a
+  // request that was already under way when the suspension landed. Over
+  // HTTP the guard gets there first with a 401, which is what this shows;
+  // the service's own refusal is in the service spec, where the two can be
+  // made to cross.
+  it('refuses a suspended admin at the guard, before the route runs', async () => {
+    await suspend(rootToken, admin.id).expect(200);
+
+    const res = await suspend(adminToken, member.id, { reason: 'too late' });
+
+    expect(res.status).toBe(401);
+    expect(await entries()).toHaveLength(1);
+  });
+
   it('refuses to reinstate an account that is not suspended', async () => {
     const res = await reinstate(adminToken, member.id);
 
@@ -284,7 +309,7 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
     expect(await entries()).toEqual([]);
   });
 
-  it('lets one admin suspend another, and a super admin either', async () => {
+  it('lets one admin suspend another, and a super admin suspend an admin', async () => {
     const [other] = await db
       .insert(users)
       .values({ email: 'other@campus.local', systemRole: SystemRole.Admin })
@@ -296,6 +321,86 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
     expect((await rowOf(other.id)).status).toBe(UserStatus.Suspended);
     expect((await rowOf(admin.id)).status).toBe(UserStatus.Suspended);
     expect((await rowOf(root.id)).status).toBe(UserStatus.Active);
+  });
+
+  it('refuses a plain admin suspending a super admin, and lets a super admin suspend one', async () => {
+    const [otherRoot] = await db
+      .insert(users)
+      .values({
+        email: 'root2@campus.local',
+        systemRole: SystemRole.SuperAdmin,
+      })
+      .returning();
+
+    const refused = await suspend(adminToken, root.id, { reason: 'because' });
+
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.code).toBe('FORBIDDEN');
+    expect(refused.body.error.message).toBe(
+      'A super admin is required to suspend a super admin',
+    );
+    expect((await rowOf(root.id)).status).toBe(UserStatus.Active);
+    expect(await entries()).toEqual([]);
+
+    // A super admin may suspend anybody but themselves, super admins
+    // included: a compromised root account still has a way out.
+    await suspend(rootToken, otherRoot.id).expect(200);
+
+    expect((await rowOf(otherRoot.id)).status).toBe(UserStatus.Suspended);
+    expect(await entries()).toHaveLength(1);
+  });
+
+  it('refuses a plain admin lifting a suspension a super admin made, and lets a super admin lift it', async () => {
+    await suspend(rootToken, member.id, {
+      reason: 'a super admin decided',
+    }).expect(200);
+
+    const refused = await reinstate(adminToken, member.id);
+
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.code).toBe('FORBIDDEN');
+    expect(refused.body.error.message).toBe(
+      'A super admin is required to lift this suspension',
+    );
+    expect((await rowOf(member.id)).status).toBe(UserStatus.Suspended);
+    expect(await entries()).toHaveLength(1);
+
+    const back = await reinstate(rootToken, member.id).expect(200);
+
+    expect(back.body.status).toBe(UserStatus.Active);
+    expect(await entries()).toHaveLength(2);
+    expect((await entries())[1]).toMatchObject({
+      actorUserId: root.id,
+      details: {
+        actorRole: SystemRole.SuperAdmin,
+        suspendedBy: root.id,
+        suspendedByRole: SystemRole.SuperAdmin,
+      },
+    });
+  });
+
+  it('lets another plain admin lift a suspension a plain admin made', async () => {
+    const [other] = await db
+      .insert(users)
+      .values({ email: 'other@campus.local', systemRole: SystemRole.Admin })
+      .returning();
+    const otherToken = await tokenFor(other);
+    await suspend(adminToken, member.id, { reason: 'an admin decided' }).expect(
+      200,
+    );
+
+    const back = await reinstate(otherToken, member.id).expect(200);
+
+    expect(back.body.status).toBe(UserStatus.Active);
+    expect((await rowOf(member.id)).suspendedBy).toBeNull();
+    expect((await entries())[1]).toMatchObject({
+      actorUserId: other.id,
+      details: {
+        actorRole: SystemRole.Admin,
+        suspendedBy: admin.id,
+        suspendedByRole: SystemRole.Admin,
+      },
+    });
   });
 
   it('answers 404 for a missing user and 400 for a bad id', async () => {
@@ -321,7 +426,9 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
 
   // Both routes are part of the document the web app generates its client
   // from, so a route that is missing from it, or marked public, is a
-  // contract bug even though the runtime refuses it.
+  // contract bug even though the runtime refuses it. The 403 is two refusals
+  // on these routes — not an admin, and an admin of the wrong rank — so
+  // both have to be in the document, not just the first.
   it('is in the OpenAPI document, needing a session', async () => {
     const document = SwaggerModule.createDocument(
       app,
@@ -329,13 +436,27 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
     );
     const paths = document.paths as Record<
       string,
-      Record<string, { security?: unknown }>
+      Record<
+        string,
+        { security?: unknown; responses?: Record<string, unknown> }
+      >
     >;
 
-    for (const path of ['/v1/users/{id}/suspend', '/v1/users/{id}/reinstate']) {
+    const rankRules = {
+      '/v1/users/{id}/suspend':
+        'A super admin is required to suspend a super admin',
+      '/v1/users/{id}/reinstate':
+        'A super admin is required to lift this suspension',
+    };
+
+    for (const path of Object.keys(rankRules)) {
       expect(paths[path]).toBeDefined();
       expect(paths[path].post).toBeDefined();
       expect(paths[path].post.security).toEqual([{ bearer: [] }]);
+
+      const forbidden = JSON.stringify(paths[path].post.responses?.['403']);
+      expect(forbidden).toContain('Admin role required');
+      expect(forbidden).toContain(rankRules[path as keyof typeof rankRules]);
     }
   });
 });
