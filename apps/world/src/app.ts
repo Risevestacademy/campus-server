@@ -73,11 +73,12 @@ export async function buildWorld(
     options: { maxPayload: env.WORLD_MAX_MESSAGE_BYTES },
   });
 
-  const store = positions ?? createPositionStore(env, app.log);
-  const present = presence ?? createPresenceStore(env, app.log);
-  // Before any socket is accepted: everything placed or moved from here on is
-  // checked against this map.
+  // Before any socket is accepted, and before anything is connected to: every
+  // position placed, moved or read back from here on is checked against this
+  // map, and a boot that fails for want of one leaves nothing open behind it.
   const worldMap = map ?? (await loadWorldMap(env, app.log));
+  const store = positions ?? createPositionStore(env, app.log, worldMap.id);
+  const present = presence ?? createPresenceStore(env, app.log);
   const gateway = registerGateway(app, env, accounts, store, present, worldMap);
   registerConnectionCheck(app, env, accounts);
 

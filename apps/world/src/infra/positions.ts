@@ -10,13 +10,6 @@ import {
   type ConnectRedis,
 } from './redis.js';
 
-/**
- * The map everybody stands on until real maps load. Saved with every
- * position, so once maps exist a position from the placeholder is recognised
- * as belonging to a map that is gone, and its owner starts at the spawn.
- */
-export const PLACEHOLDER_MAP_ID = 'placeholder';
-
 export interface SavedPosition {
   x: number;
   y: number;
@@ -87,6 +80,12 @@ export const noPositionStore: PositionStore = {
 export function createPositionStore(
   env: Env,
   log: FastifyBaseLogger,
+  /**
+   * The map this process runs. Saved with every position and checked on the
+   * way back, so a position from another map — the placeholder, once a real
+   * map loads — is not somewhere to stand on this one.
+   */
+  mapId: string,
   connect: ConnectRedis = connectRedis,
 ): PositionStore {
   if (!env.REDIS_URL) {
@@ -103,11 +102,7 @@ export function createPositionStore(
     'positions will not be kept until it is back',
   );
 
-  return new RedisPositionStore(
-    redis,
-    PLACEHOLDER_MAP_ID,
-    env.WORLD_POSITION_TTL_DAYS,
-  );
+  return new RedisPositionStore(redis, mapId, env.WORLD_POSITION_TTL_DAYS);
 }
 
 /** The subset of the ioredis client the store uses. */

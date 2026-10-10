@@ -4,13 +4,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadEnv } from './env.js';
 import {
-  PLACEHOLDER_MAP_ID,
   RedisPositionStore,
   createPositionStore,
   positionKey,
   type PositionStore,
   type RedisLike,
 } from './positions.js';
+
+const MAP_ID = 'campus';
 
 /** Just enough of Redis: values, and the TTL each SET asked for. */
 function fakeRedis() {
@@ -59,7 +60,7 @@ describe('positionKey', () => {
 describe('RedisPositionStore', () => {
   it('gives back what it saved', async () => {
     const { redis } = fakeRedis();
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
 
     await store.save([
       { userId: 'ada', cohortId: 'cohort-1', x: 3, y: 4, facing: 'left' },
@@ -75,7 +76,7 @@ describe('RedisPositionStore', () => {
   /** Two cohorts, two keys: one person standing in both at once. */
   it('keeps a separate position per cohort, without one overwriting the other', async () => {
     const { redis } = fakeRedis();
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
 
     await store.save([
       { userId: 'ada', cohortId: 'frontend', x: 1, y: 1, facing: 'up' },
@@ -98,7 +99,7 @@ describe('RedisPositionStore', () => {
 
   it('keeps each position for the TTL, refreshed on every save', async () => {
     const { redis, ttls } = fakeRedis();
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
 
     await store.save([
       { userId: 'ada', cohortId: 'cohort-1', x: 0, y: 0, facing: 'down' },
@@ -108,23 +109,19 @@ describe('RedisPositionStore', () => {
   });
 
   it('has nothing for somebody never saved', async () => {
-    const store = new RedisPositionStore(
-      fakeRedis().redis,
-      PLACEHOLDER_MAP_ID,
-      90,
-    );
+    const store = new RedisPositionStore(fakeRedis().redis, MAP_ID, 90);
 
     await expect(store.load('nobody', 'cohort-1')).resolves.toBeUndefined();
   });
 
-  /** Once real maps load, a placeholder position belongs to a map that is gone. */
+  /** A position from the placeholder, or a map since replaced, is not one on this map. */
   it('ignores a position saved on another map', async () => {
     const { redis } = fakeRedis();
     await new RedisPositionStore(redis, 'old-map', 90).save([
       { userId: 'ada', cohortId: 'cohort-1', x: 3, y: 4, facing: 'left' },
     ]);
 
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
 
     await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
   });
@@ -138,23 +135,20 @@ describe('RedisPositionStore', () => {
     const { redis, values } = fakeRedis();
     values.set(
       'world:position:ada',
-      JSON.stringify({ mapId: PLACEHOLDER_MAP_ID, x: 3, y: 4, facing: 'left' }),
+      JSON.stringify({ mapId: MAP_ID, x: 3, y: 4, facing: 'left' }),
     );
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
 
     await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
   });
 
   it.each([
     ['not JSON', '{nope'],
-    [
-      'the wrong shape',
-      JSON.stringify({ mapId: PLACEHOLDER_MAP_ID, x: 'far' }),
-    ],
+    ['the wrong shape', JSON.stringify({ mapId: MAP_ID, x: 'far' })],
     [
       'an unknown facing',
       JSON.stringify({
-        mapId: PLACEHOLDER_MAP_ID,
+        mapId: MAP_ID,
         x: 1,
         y: 1,
         facing: 'north',
@@ -163,14 +157,14 @@ describe('RedisPositionStore', () => {
   ])('treats %s as nothing saved', async (_label, raw) => {
     const { redis, values } = fakeRedis();
     values.set(positionKey('ada', 'cohort-1'), raw);
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
 
     await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
   });
 
   it('forgets one cohort, leaving the other', async () => {
     const { redis } = fakeRedis();
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
     await store.save([
       { userId: 'ada', cohortId: 'frontend', x: 1, y: 1, facing: 'up' },
     ]);
@@ -191,7 +185,7 @@ describe('RedisPositionStore', () => {
   /** The gateway retries a failed save, so a failure has to reach it. */
   it('reports a save Redis refused', async () => {
     const { redis, failNextExec } = fakeRedis();
-    const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+    const store = new RedisPositionStore(redis, MAP_ID, 90);
     failNextExec();
 
     await expect(
@@ -224,18 +218,14 @@ describe('RedisPositionStore', () => {
     }
 
     it('answers at once when already connected', async () => {
-      const store = new RedisPositionStore(
-        fakeRedis().redis,
-        PLACEHOLDER_MAP_ID,
-        90,
-      );
+      const store = new RedisPositionStore(fakeRedis().redis, MAP_ID, 90);
 
       await expect(store.ready(10)).resolves.toBe(true);
     });
 
     it('waits for the connection', async () => {
       const { redis, connect } = connecting();
-      const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+      const store = new RedisPositionStore(redis, MAP_ID, 90);
 
       const ready = store.ready(1_000);
       connect();
@@ -245,7 +235,7 @@ describe('RedisPositionStore', () => {
 
     it('gives up after the timeout, and stops listening', async () => {
       const { redis, listeners } = connecting();
-      const store = new RedisPositionStore(redis, PLACEHOLDER_MAP_ID, 90);
+      const store = new RedisPositionStore(redis, MAP_ID, 90);
 
       await expect(store.ready(20)).resolves.toBe(false);
       expect(listeners.size).toBe(0);
@@ -295,6 +285,7 @@ describe('createPositionStore with Redis unavailable', () => {
     createPositionStore(
       env,
       log,
+      MAP_ID,
       (url, options) => new Redis(url, { ...options, Connector: Unreachable }),
     );
 
@@ -390,6 +381,7 @@ describe('createPositionStore with Redis connected but not answering', () => {
     const store = createPositionStore(
       env,
       log,
+      MAP_ID,
       (url, options) => new Redis(url, { ...options, Connector: Stalled }),
     );
     await expect(store.ready(1_000)).resolves.toBe(true);
