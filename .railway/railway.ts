@@ -87,6 +87,8 @@ export default defineRailway((ctx) => {
       LIVEKIT_API_SECRET: preserve(),
       LIVEKIT_URL: preserve(),
       REDIS_URL: preserve(),
+      SANITY_DATASET: 'staging',
+      SANITY_PROJECT_ID: 'sj3zsz66',
       WORLD_HEARTBEAT_SECONDS: preserve(),
       WORLD_MAX_MESSAGE_BYTES: preserve(),
     },
@@ -150,6 +152,8 @@ export default defineRailway((ctx) => {
       RESEND_INVITE_ADMIN_TEMPLATE_ID: preserve(),
       RESEND_INVITE_GUEST_TEMPLATE_ID: preserve(),
       RESEND_INVITE_TEMPLATE_ID: preserve(),
+      SANITY_DATASET: 'staging',
+      SANITY_PROJECT_ID: 'sj3zsz66',
       TRUST_PROXY_HOPS: preserve(),
     },
   });
