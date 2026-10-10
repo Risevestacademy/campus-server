@@ -5,7 +5,7 @@ import {
   type SessionClaims,
 } from '@campus/session';
 
-import type { AccountLookup } from '../infra/accounts.js';
+import type { Account, AccountLookup } from '../infra/accounts.js';
 import { allowedOrigins, type Env } from '../infra/env.js';
 import { SESSION_COOKIE } from './endpoint.js';
 
@@ -81,9 +81,57 @@ function bearer(header: string | undefined): string | undefined {
 export async function decideUpgrade(
   env: Env,
   accounts: AccountLookup,
-  headers: { origin?: string; cookie?: string; authorization?: string },
+  headers: CallerHeaders,
   cohortId: string | undefined,
 ): Promise<UpgradeDecision> {
+  const caller = await readCaller(env, headers);
+  if (!caller.ok) {
+    return caller;
+  }
+  const checked = await checkAccount(env, accounts, caller.claims);
+  if (!checked.ok) {
+    return checked;
+  }
+
+  // No default: somebody may belong to several, and guessing would put them
+  // somewhere they did not ask to be.
+  if (cohortId === undefined || cohortId === '') {
+    return { ok: false, refusal: 'no_cohort' };
+  }
+
+  // Admins bypass cohort gating, as they do at campus-api's sign-in gate,
+  // where the role alone is a grant. From the row, never the token, so a
+  // demotion takes effect on the next socket.
+  //
+  // For everybody else: without this a Backend student enters the Frontend
+  // floor by editing a query string.
+  if (
+    !checked.account.admin &&
+    !(await accounts.liveMembership(caller.claims.userId, cohortId, new Date()))
+  ) {
+    return { ok: false, refusal: 'not_a_member' };
+  }
+
+  return { ok: true, claims: caller.claims, cohortId };
+}
+
+export interface CallerHeaders {
+  origin?: string;
+  cookie?: string;
+  authorization?: string;
+}
+
+export type Refused = Extract<UpgradeDecision, { ok: false }>;
+
+/**
+ * The first half of `decideUpgrade`, which needs no database: where the
+ * request came from, and a full-access token. Separate so an HTTP route can
+ * rate-limit by the account it names before paying for `checkAccount`.
+ */
+export async function readCaller(
+  env: Env,
+  headers: CallerHeaders,
+): Promise<{ ok: true; claims: SessionClaims } | Refused> {
   const cookieToken = readSessionCookie(headers.cookie);
 
   if (headers.origin !== undefined) {
@@ -113,6 +161,15 @@ export async function decideUpgrade(
     return { ok: false, refusal: 'wrong_scope' };
   }
 
+  return { ok: true, claims };
+}
+
+/** The second half: whether the account and sign-in behind a token still stand. */
+export async function checkAccount(
+  env: Env,
+  accounts: AccountLookup,
+  claims: SessionClaims,
+): Promise<{ ok: true; account: Account } | Refused> {
   const account = await accounts.find(claims.userId);
   if (!account) {
     return { ok: false, refusal: 'account_gone', userId: claims.userId };
@@ -143,26 +200,7 @@ export async function decideUpgrade(
     }
   }
 
-  // No default: somebody may belong to several, and guessing would put them
-  // somewhere they did not ask to be.
-  if (cohortId === undefined || cohortId === '') {
-    return { ok: false, refusal: 'no_cohort' };
-  }
-
-  // Admins bypass cohort gating, as they do at campus-api's sign-in gate,
-  // where the role alone is a grant. From the row, never the token, so a
-  // demotion takes effect on the next socket.
-  //
-  // For everybody else: without this a Backend student enters the Frontend
-  // floor by editing a query string.
-  if (
-    !account.admin &&
-    !(await accounts.liveMembership(claims.userId, cohortId, new Date()))
-  ) {
-    return { ok: false, refusal: 'not_a_member' };
-  }
-
-  return { ok: true, claims, cohortId };
+  return { ok: true, account };
 }
 
 /** The oldest refresh that still counts as campus-api vouching for a login. */

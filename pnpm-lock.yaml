@@ -201,6 +201,9 @@ importers:
 
   apps/world:
     dependencies:
+      '@campus/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@campus/session':
         specifier: workspace:*
         version: link:../../packages/session

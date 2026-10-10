@@ -1,3 +1,8 @@
+import {
+  InvalidMediaConfigError,
+  assertMediaCredentials,
+  type MediaCredentials,
+} from '@campus/media';
 import { MIN_SESSION_REFRESH_WINDOW_SECONDS } from '@campus/session';
 import { z } from 'zod';
 
@@ -17,6 +22,11 @@ const LOG_LEVELS = [
 ] as const;
 
 const flag = z.enum(['true', 'false']).transform((value) => value === 'true');
+
+const optionalText = z
+  .string()
+  .optional()
+  .transform((value) => value?.trim() || undefined);
 
 const schema = z
   .object({
@@ -139,8 +149,51 @@ const schema = z
         message: `must be at least ${MIN_SESSION_REFRESH_WINDOW_SECONDS}: the shared session policy's longest access token plus slack`,
       })
       .default(1200),
+
+    /**
+     * The media server (LiveKit) and the key pair that signs for it. All
+     * three or none: unset, audio and video are off on this deployment and
+     * the routes that need them say so. Empty counts as unset.
+     */
+    LIVEKIT_URL: optionalText,
+    LIVEKIT_API_KEY: optionalText,
+    LIVEKIT_API_SECRET: optionalText,
+
+    /** Connection-check tokens one account may be given per minute. */
+    WORLD_CONNECTION_CHECKS_PER_MINUTE: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .default(5),
   })
   .superRefine((env, ctx) => {
+    const credentials = mediaCredentials(env);
+    if (credentials) {
+      try {
+        assertMediaCredentials(credentials);
+      } catch (err) {
+        if (!(err instanceof InvalidMediaConfigError)) throw err;
+        ctx.addIssue({
+          code: 'custom',
+          path: ['LIVEKIT_URL'],
+          message: err.message,
+        });
+      }
+    } else if (
+      env.LIVEKIT_URL ||
+      env.LIVEKIT_API_KEY ||
+      env.LIVEKIT_API_SECRET
+    ) {
+      // A mix — a remote URL with the local key, say — mints tokens the
+      // server refuses with no hint why.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['LIVEKIT_URL'],
+        message:
+          'set all of LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET, or none',
+      });
+    }
+
     if (
       env.DEPLOYMENT_ENVIRONMENT !== 'development' &&
       !env.SANITY_PROJECT_ID
@@ -164,6 +217,20 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error(`Invalid environment variables: ${detail}`);
   }
   return parsed.data;
+}
+
+/** Undefined when this deployment has no media server. */
+export function mediaCredentials(
+  env: Pick<Env, 'LIVEKIT_URL' | 'LIVEKIT_API_KEY' | 'LIVEKIT_API_SECRET'>,
+): MediaCredentials | undefined {
+  if (!env.LIVEKIT_URL || !env.LIVEKIT_API_KEY || !env.LIVEKIT_API_SECRET) {
+    return undefined;
+  }
+  return {
+    url: env.LIVEKIT_URL,
+    apiKey: env.LIVEKIT_API_KEY,
+    apiSecret: env.LIVEKIT_API_SECRET,
+  };
 }
 
 export function allowedOrigins(env: Env): string[] {

@@ -6,6 +6,7 @@ import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
 import { createPresenceStore, type PresenceStore } from './infra/presence.js';
 import { loadWorldMap } from './infra/world-map.js';
+import { registerConnectionCheck } from './media/connection-check.js';
 import {
   CORRELATION_ID_HEADER,
   correlationId,
@@ -78,6 +79,7 @@ export async function buildWorld(
   // checked against this map.
   const worldMap = map ?? (await loadWorldMap(env, app.log));
   const gateway = registerGateway(app, env, accounts, store, present, worldMap);
+  registerConnectionCheck(app, env, accounts);
 
   app.get('/health', async () => ({
     status: 'ok',

@@ -118,6 +118,7 @@ describe('OpenAPI shapes (e2e)', () => {
     ['/v1/cohorts', 'CohortResponseDto'],
     ['/v1/cohorts/{id}/members', 'RosterMemberDto'],
     ['/v1/users', 'UserListItemDto'],
+    ['/v1/audit-log', 'AuditLogEntryDto'],
   ])('types the page of %s directly, as %s', (path, item) => {
     const response = okSchema(path);
 
