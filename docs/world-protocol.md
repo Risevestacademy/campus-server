@@ -82,8 +82,8 @@ sequenceDiagram
 - **`welcome`** carries your `userId` and the timings to play by:
   `stepMs` (walking speed), `tickMs` (how often others' moves arrive) and
   `heartbeatSeconds`.
-- **`snapshot`** carries the map size and every player on it, you included.
-  Draw from it; everything after is a change to it.
+- **`snapshot`** carries which map this is and every player on it, you
+  included. Draw from it; everything after is a change to it.
 
 You can send as soon as the socket opens. Frames sent while the server is
 still checking the session are held, not lost, and answered in order.
@@ -94,9 +94,30 @@ Positions are **tiles**, never pixels: `x` is the column from 0 at the left,
 `y` the row from 0 at the top, so `up` is `y - 1`. The tile's pixel size is
 entirely the client's — multiply by it to draw. The server never sees it.
 
-For now the map is a placeholder rectangle of `snapshot.map.width` ×
-`height`, and its edge is the only thing that blocks. Real maps, with walls,
-spaces and portals, replace it later.
+The map is the one published from the Studio, loaded once when the server
+starts. `snapshot.map` says which:
+
+```json
+{ "id": "campus", "version": "…", "width": 60, "height": 40 }
+```
+
+Load **that version**, with `fetchWorldMapManifest({ mapId: id, version })`
+from `campus-world-map`, not the current one. A map published since the server
+started has walls the server does not enforce, and every step into one would
+come back `moved` while you drew it `blocked`, or the other way round. The
+server picks up a new version only when it restarts, which closes every socket;
+the `snapshot` after you reconnect carries the new version.
+
+A tile is a wall when a collision shape covers its middle: `blocked(layout,
+tile)` from the same package gives the answer the server uses, so predict with
+it. The map's edge blocks too. `width` and `height` are in tiles.
+
+One map for now, the one people enter the campus on. Spaces and portals are
+read from it by the client but mean nothing to the server yet.
+
+In local development only, a server that cannot load a published map runs on a
+placeholder instead: `id` and `version` are both `"placeholder"`, there is
+nothing to load, and only the edge of `width` × `height` blocks.
 
 Two people can stand on the same tile. Nobody blocks anybody.
 

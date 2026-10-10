@@ -125,7 +125,23 @@ export const ServerMessage = z
     z
       .object({
         type: z.literal('snapshot'),
-        map: z.object({ width: z.number().int(), height: z.number().int() }),
+        map: z.object({
+          id: z
+            .string()
+            .describe(
+              'Which published map this is. With `version`, what to load: the ' +
+                'server enforces exactly that one.',
+            ),
+          version: z
+            .string()
+            .describe(
+              'The published version the server loaded. Load this version, not ' +
+                'the current one: a map published since would have walls the ' +
+                'server does not.',
+            ),
+          width: z.number().int().describe('In tiles.'),
+          height: z.number().int().describe('In tiles.'),
+        }),
         players: z.array(Player),
       })
       .meta({

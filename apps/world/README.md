@@ -38,6 +38,9 @@ server decides every position.
   - re-checks the accounts behind open sockets, so a suspension reaches them
     within one heartbeat
 - **Movement on a tile grid:**
+  - the map is the published entry map, loaded from Sanity once at startup
+    through `campus-world-map`; its collision shapes become blocked tiles, and
+    the `snapshot` tells clients which map and version that is
   - the server enforces walking speed
   - one avatar per account, walked by whichever socket holds its place
   - other players' moves are sent once per tick
@@ -48,9 +51,9 @@ server decides every position.
   - per-socket message size and rate
   - a cap on what may wait unsent to a client that stops reading
 
-Not yet: real maps, spaces, portals, live positions shared across instances
-(a player who moves to another instance starts from their last saved
-position), or audio and video.
+Not yet: more than one map, spaces, portals, live positions shared across
+instances (a player who moves to another instance starts from their last
+saved position), or audio and video.
 
 ## Running it
 
@@ -80,7 +83,7 @@ database.
 src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
   index.ts              boot and graceful shutdown
-  infra/                env, logger, account lookup, Redis (positions, presence)
+  infra/                env, logger, account lookup, Redis (positions, presence), the published map
   movement/             the grid and who stands where — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages

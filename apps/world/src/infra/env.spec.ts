@@ -44,12 +44,8 @@ describe('loadEnv', () => {
     });
   });
 
-  it('defaults a placeholder map with its spawn inside it', () => {
+  it('defaults the movement timings and limits', () => {
     expect(loadEnv(minimal)).toMatchObject({
-      WORLD_MAP_WIDTH: 40,
-      WORLD_MAP_HEIGHT: 30,
-      WORLD_SPAWN_X: 20,
-      WORLD_SPAWN_Y: 15,
       WORLD_STEP_MS: 100,
       WORLD_TICK_MS: 50,
       WORLD_RECONNECT_GRACE_SECONDS: 30,
@@ -84,22 +80,32 @@ describe('loadEnv', () => {
     ).toBe(1020);
   });
 
-  /** A spawn off the map would drop every arrival where they cannot move. */
-  it('refuses a spawn outside the map', () => {
+  /** Development may run without a published map; nothing else may. */
+  it('needs somewhere to load the map from, outside development', () => {
+    const development = loadEnv(minimal);
+    expect(development.SANITY_PROJECT_ID).toBeUndefined();
+    expect(development.SANITY_DATASET).toBe('production');
     expect(() =>
       loadEnv({
         ...minimal,
-        WORLD_MAP_WIDTH: '10',
-        WORLD_SPAWN_X: '10',
+        DEPLOYMENT_ENVIRONMENT: 'staging',
       } as NodeJS.ProcessEnv),
-    ).toThrow(/WORLD_SPAWN_X/);
+    ).toThrow(/SANITY_PROJECT_ID/);
+    // A blank line in a .env file is not a project.
     expect(() =>
       loadEnv({
         ...minimal,
-        WORLD_MAP_HEIGHT: '10',
-        WORLD_SPAWN_Y: '12',
+        DEPLOYMENT_ENVIRONMENT: 'staging',
+        SANITY_PROJECT_ID: '',
       } as NodeJS.ProcessEnv),
-    ).toThrow(/WORLD_SPAWN_Y/);
+    ).toThrow(/SANITY_PROJECT_ID/);
+    expect(
+      loadEnv({
+        ...minimal,
+        DEPLOYMENT_ENVIRONMENT: 'staging',
+        SANITY_PROJECT_ID: 'abc123',
+      } as NodeJS.ProcessEnv),
+    ).toMatchObject({ SANITY_PROJECT_ID: 'abc123' });
   });
 
   it('rejects a log level pino would not understand', () => {

@@ -273,9 +273,14 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
   `WORLD_PRESENCE_TTL_SECONDS`, the session refresh
   window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
-  and the placeholder
-  map until real maps load: `WORLD_MAP_WIDTH`, `WORLD_MAP_HEIGHT`,
-  `WORLD_SPAWN_X`, `WORLD_SPAWN_Y`.
+  and `SANITY_DATASET` (`production` unless set; staging reads `staging`).
+- `SANITY_PROJECT_ID`: the Sanity project the campus maps are published to,
+  `sj3zsz66`.
+  Required outside development. world loads the entry map from it once, at
+  startup, with no token (the dataset is public), and refuses to start if it
+  cannot: an unset variable, Sanity unreachable, nothing published, or an
+  entry map without a spawn. A newly published map is picked up by
+  restarting world, not before.
 - Live positions are per-process state. A reconnect within the grace resumes
   from memory; otherwise a player starts where they last stood, read from
   Redis. Positions are written when somebody's last tab closes, every

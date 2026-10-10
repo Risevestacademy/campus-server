@@ -21,14 +21,19 @@ export interface Tile {
 }
 
 /**
- * A placeholder map: a walkable rectangle with a spawn tile. Real maps, with
- * walls and spaces, replace it when map geometry loads (W6); until then the
- * edge is the only thing that blocks.
+ * One map, as movement needs it: its size, where people first appear, and
+ * which tiles nobody can stand on.
  */
 export interface Grid {
   width: number;
   height: number;
   spawn: Tile;
+  /**
+   * One entry per tile, row by row, non-zero where a wall stands. Worked out
+   * once when the map loads, so a step is a lookup rather than a test against
+   * every collision shape. Left out, the edge is the only thing that blocks.
+   */
+  blocked?: Uint8Array;
 }
 
 const OFFSETS: Record<Direction, Tile> = {
@@ -44,7 +49,13 @@ export function step(from: Tile, direction: Direction): Tile {
 }
 
 export function walkable(grid: Grid, tile: Tile): boolean {
-  return (
-    tile.x >= 0 && tile.y >= 0 && tile.x < grid.width && tile.y < grid.height
-  );
+  if (
+    tile.x < 0 ||
+    tile.y < 0 ||
+    tile.x >= grid.width ||
+    tile.y >= grid.height
+  ) {
+    return false;
+  }
+  return !grid.blocked?.[tile.y * grid.width + tile.x];
 }

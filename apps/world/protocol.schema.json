@@ -182,18 +182,30 @@
         "map": {
           "type": "object",
           "properties": {
+            "id": {
+              "type": "string",
+              "description": "Which published map this is. With `version`, what to load: the server enforces exactly that one."
+            },
+            "version": {
+              "type": "string",
+              "description": "The published version the server loaded. Load this version, not the current one: a map published since would have walls the server does not."
+            },
             "width": {
               "type": "integer",
               "minimum": -9007199254740991,
-              "maximum": 9007199254740991
+              "maximum": 9007199254740991,
+              "description": "In tiles."
             },
             "height": {
               "type": "integer",
               "minimum": -9007199254740991,
-              "maximum": 9007199254740991
+              "maximum": 9007199254740991,
+              "description": "In tiles."
             }
           },
           "required": [
+            "id",
+            "version",
             "width",
             "height"
           ],
