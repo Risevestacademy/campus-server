@@ -5,6 +5,7 @@ import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
 import { createPresenceStore, type PresenceStore } from './infra/presence.js';
+import { registerConnectionCheck } from './media/connection-check.js';
 import {
   CORRELATION_ID_HEADER,
   correlationId,
@@ -71,6 +72,7 @@ export async function buildWorld(
   const store = positions ?? createPositionStore(env, app.log);
   const present = presence ?? createPresenceStore(env, app.log);
   const gateway = registerGateway(app, env, accounts, store, present);
+  registerConnectionCheck(app, env, accounts);
 
   app.get('/health', async () => ({
     status: 'ok',

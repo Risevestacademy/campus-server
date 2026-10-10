@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { allowedOrigins, loadEnv } from './env.js';
+import { allowedOrigins, loadEnv, mediaCredentials } from './env.js';
 
 const minimal = {
   AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
@@ -128,5 +128,64 @@ describe('loadEnv', () => {
         loadEnv({ ...minimal, CORS_ORIGINS: ' , ' } as NodeJS.ProcessEnv),
       ),
     ).toEqual([]);
+  });
+
+  describe('media server', () => {
+    const local = {
+      LIVEKIT_URL: 'ws://localhost:7880',
+      LIVEKIT_API_KEY: 'devkey',
+      LIVEKIT_API_SECRET: 'local-dev-secret-not-for-production-use',
+    };
+
+    it('is off when none of it is set, or all of it is blank', () => {
+      expect(mediaCredentials(loadEnv(minimal))).toBeUndefined();
+      expect(
+        mediaCredentials(
+          loadEnv({
+            ...minimal,
+            LIVEKIT_URL: '',
+            LIVEKIT_API_KEY: ' ',
+            LIVEKIT_API_SECRET: '',
+          } as NodeJS.ProcessEnv),
+        ),
+      ).toBeUndefined();
+    });
+
+    it('reads all three together', () => {
+      expect(
+        mediaCredentials(
+          loadEnv({ ...minimal, ...local } as NodeJS.ProcessEnv),
+        ),
+      ).toEqual({
+        url: local.LIVEKIT_URL,
+        apiKey: local.LIVEKIT_API_KEY,
+        apiSecret: local.LIVEKIT_API_SECRET,
+      });
+    });
+
+    it('refuses some of it without the rest', () => {
+      expect(() =>
+        loadEnv({
+          ...minimal,
+          ...local,
+          LIVEKIT_API_SECRET: '',
+        } as NodeJS.ProcessEnv),
+      ).toThrow(/all of LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET/);
+    });
+
+    // The media package's own rules, so a bad value stops the boot rather
+    // than the first person who tries to join.
+    it.each([
+      ['a secret short enough to guess', { LIVEKIT_API_SECRET: 'short' }],
+      ['a url that is not a socket', { LIVEKIT_URL: 'https://example.com' }],
+    ])('refuses %s', (_, override) => {
+      expect(() =>
+        loadEnv({ ...minimal, ...local, ...override } as NodeJS.ProcessEnv),
+      ).toThrow(/LIVEKIT_URL: media/);
+    });
+
+    it('defaults the connection-check budget', () => {
+      expect(loadEnv(minimal).WORLD_CONNECTION_CHECKS_PER_MINUTE).toBe(5);
+    });
   });
 });

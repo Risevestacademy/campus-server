@@ -48,24 +48,26 @@ server decides every position.
 - **Limits:**
   - per-socket message size and rate
   - a cap on what may wait unsent to a client that stops reading
+- **The pre-join connection check:** a short-lived LiveKit token for testing
+  devices and network before a call. See [below](#the-connection-check).
 
 Not yet: real maps, spaces, portals, live positions shared across instances
 (a player who moves to another instance starts from their last saved
-position), or audio and video.
+position), or audio and video rooms.
 
 ## Running it
 
 From the repo root:
 
 ```bash
-pnpm dev:world      # builds @campus/session and world, then recompiles and restarts on change
-pnpm build:world    # builds @campus/session and world
+pnpm dev:world      # builds @campus/session, @campus/media and world, then recompiles and restarts on change
+pnpm build:world    # builds @campus/session, @campus/media and world
 pnpm start:world    # runs the last build
 ```
 
 Or scoped here with `pnpm --filter world <script>`. Plain `build`, `dev` and
-`start:dev` assume `@campus/session` is already built; the root scripts
-build it for you.
+`start:dev` assume `@campus/session` and `@campus/media` are already built;
+the root scripts build them for you.
 
 Config is read from the environment; `.env.example` lists every variable with
 its default and what it does. Two have no default and are required:
@@ -82,6 +84,7 @@ src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
   index.ts              boot and graceful shutdown
   infra/                env, logger, account lookup, Redis (positions, presence)
+  media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages
@@ -116,6 +119,56 @@ Messages are defined once, in `src/socket/protocol.ts`. From them:
   client authors what the schema can't: message order, correcting a predicted
   step, limits and close codes. Update it when what a client should _do_
   changes.
+
+## The connection check
+
+`POST /media/connection-check` gives a signed-in member a token for
+LiveKit's pre-join device and network check (`ConnectionCheck` in
+`livekit-client`, or LiveKit's hosted connection test). No request body.
+
+- **Who:** the same sign-in as the socket, without the cohort: a
+  `full_access` session whose account still exists, is not suspended, and
+  whose sign-in has not ended. A browser sends the `campus_session` cookie
+  with `credentials: 'include'` from an origin in `CORS_ORIGINS`; anything
+  else sends `Authorization: Bearer <token>`. This route answers CORS itself,
+  preflight included, for those origins only.
+- **What comes back** (`200`, `Cache-Control: no-store`):
+
+  ```json
+  {
+    "url": "wss://campus-dev.livekit.cloud",
+    "room": "connection-check-0b9e…",
+    "token": "eyJ…",
+    "expiresAt": "2026-10-09T10:45:18.000Z"
+  }
+  ```
+
+  Pass `url` and `token` to the check. The room is made up for this call, so
+  nobody else can be in it, and LiveKit removes it when the check disconnects.
+  The token lasts two minutes, enough to run the check once. It may publish
+  audio and video, which the check needs, but not data. Ask for a new one for
+  each run.
+
+- **Errors**, in campus-api's `{ "error": { "code", "message", "details"? } }`
+  shape:
+
+  | Status | `code`                 | When                                                                                                                               |
+  | ------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal: `no_token`, `token_not_usable`, `wrong_scope`, `account_suspended`, … |
+  | 403    | `FORBIDDEN`            | The page's origin is not in `CORS_ORIGINS`, or a cookie came with no origin at all                                                 |
+  | 429    | `RATE_LIMITED`         | More than `WORLD_CONNECTION_CHECKS_PER_MINUTE` (default 5) for this account this minute. `Retry-After` gives the seconds to wait   |
+  | 503    | `MEDIA_NOT_CONFIGURED` | This deployment has no media server. Not worth retrying: skip the check and say calls are unavailable here                         |
+
+  The limit is counted per account, in each instance's memory. It is
+  checked after the token, before the account lookups, so refused callers
+  spend nobody's budget. A member learns that media is not configured only
+  after passing sign-in.
+
+Media is configured by `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`: all three, or none. world refuses to boot with only
+some of them set, or with values `@campus/media` would refuse: a URL that is
+not `ws://` or `wss://`, or a secret under 32 characters. Locally, the values
+in `.env.example` point at the LiveKit container in `docker-compose.local.yml`.
 
 ## Tests
 
