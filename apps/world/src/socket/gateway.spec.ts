@@ -9,6 +9,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from 'vitest';
 import { Redis } from 'ioredis';
 import WebSocket from 'ws';
@@ -42,6 +43,8 @@ const accounts = {
   epochs: new Map<string, number>(),
   /** `userId:cohortId` pairs with no live membership. Everything else has one. */
   notMembers: new Set<string>(),
+  /** When each guest's visit runs out: `userId:cohortId` to the end date. */
+  visitEnds: new Map<string, Date>(),
   admins: new Set<string>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
@@ -54,8 +57,17 @@ const accounts = {
         },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
-  liveMembership: async (userId: string, cohortId: string): Promise<boolean> =>
-    !accounts.notMembers.has(`${userId}:${cohortId}`),
+  /** As the database's own question: is this membership live at `now`? */
+  liveMembership: async (
+    userId: string,
+    cohortId: string,
+    now: Date,
+  ): Promise<boolean> => {
+    const key = `${userId}:${cohortId}`;
+    if (accounts.notMembers.has(key)) return false;
+    const ends = accounts.visitEnds.get(key);
+    return ends === undefined || ends > now;
+  },
   close: async () => undefined,
 };
 
@@ -209,11 +221,15 @@ async function waitFor(
 }
 
 beforeEach(() => {
+  // A test that moves the clock must not leave it moved: every deadline
+  // after it would be read against the wrong time.
+  vi.useRealTimers();
   accounts.suspended.clear();
   accounts.gone.clear();
   accounts.endedSessions.clear();
   accounts.epochs.clear();
   accounts.notMembers.clear();
+  accounts.visitEnds.clear();
   accounts.admins.clear();
   store.positions.clear();
   store.failLoad = false;
@@ -694,6 +710,86 @@ describe('a socket following its login', () => {
     };
     await new Promise((resolve) => setTimeout(resolve, 2_500));
     accounts.liveSessions = working;
+
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+    conn.ws.close();
+    await conn.settled;
+  }, 15_000);
+});
+
+/**
+ * The upgrade asks about the cohort once, and nothing behind an open socket
+ * keeps that answer true. A guest's visit has an end date, and neither the
+ * access token the socket opened with nor the login it follows runs out with
+ * it — so the heartbeat asks again.
+ */
+describe('re-checking the cohort a socket named', () => {
+  const GUEST = 'guest-1';
+
+  async function arrive() {
+    const conn = connect({
+      origin: ORIGIN,
+      cookie: `campus_session=${await token(
+        SessionScope.FullAccess,
+        SECRET,
+        GUEST,
+      )}`,
+    });
+    await conn.first;
+    return conn;
+  }
+
+  it('closes a guest within one sweep of the end of their visit', async () => {
+    const ends = new Date(Date.now() + 60_000);
+    accounts.visitEnds.set(`${GUEST}:${COHORT}`, ends);
+    // Welcome: the visit still has a minute to run when the upgrade decides.
+    const conn = await arrive();
+    expect(world.gateway.connections.size).toBe(1);
+
+    // Move the clock past the end of the visit. Only Date is faked: the
+    // sweep that notices is a real interval, and the socket answers its
+    // pings on real time.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(ends.getTime() + 1) });
+    try {
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 1008,
+        closeReason: 'not_a_member',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(world.gateway.connections.size).toBe(0);
+    // A visit that runs out is not access being taken away: the position is
+    // kept, for the visit an admin may extend, as an upgrade refused for
+    // not_a_member keeps it too.
+    expect(world.gateway.players.isRemembered(GUEST)).toBe(true);
+  }, 15_000);
+
+  /** Campus-api's sign-in gate admits an admin on their role alone; so does this. */
+  it('leaves an admin alone when their cohort membership ends', async () => {
+    accounts.admins.add(GUEST);
+    const conn = await arrive();
+    accounts.notMembers.add(`${GUEST}:${COHORT}`);
+
+    // Through at least one sweep, and still here.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(conn.ws.readyState).toBe(WebSocket.OPEN);
+
+    conn.ws.close();
+    await conn.settled;
+  }, 15_000);
+
+  /** A database that is not answering must not throw the campus off. */
+  it('leaves sockets alone when the membership check fails', async () => {
+    const conn = await arrive();
+
+    const working = accounts.liveMembership;
+    accounts.liveMembership = async () => {
+      throw new Error('database unavailable');
+    };
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    accounts.liveMembership = working;
 
     expect(conn.ws.readyState).toBe(WebSocket.OPEN);
     conn.ws.close();
