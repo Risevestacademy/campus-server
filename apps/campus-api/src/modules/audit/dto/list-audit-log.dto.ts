@@ -164,9 +164,9 @@ export class AuditLogEntryDto {
     description:
       'What the action records beyond its subject. The shape is fixed per ' +
       '`action`; dates are ISO 8601 strings. Ids of people, never ' +
-      'addresses or names — except `membership_revived`, whose ' +
-      '`previous.dismissalReason` is free text an admin wrote about a ' +
-      'person.',
+      'addresses or names — except free text an admin wrote about a ' +
+      'person: `membership_revived.previous.dismissalReason` and ' +
+      '`user_suspended.reason`.',
   })
   details: Record<string, unknown> | null;
 

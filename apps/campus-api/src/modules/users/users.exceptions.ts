@@ -31,6 +31,17 @@ export class SystemRoleLockedException extends DomainException {
 }
 
 /**
+ * The status change is not one anybody may make: the caller is trying to
+ * suspend their own account, the account is already suspended, or it is not
+ * suspended at all. A 409 for the same reason as SystemRoleLockedException:
+ * the caller is an admin, and it is the state of the target that refuses
+ * them rather than their permissions.
+ */
+export class AccountStatusLockedException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
+/**
  * No such profile for this caller: the account does not exist, or it does and
  * they may not see it. One answer for both, so a card cannot be used to find
  * out who has an account.
