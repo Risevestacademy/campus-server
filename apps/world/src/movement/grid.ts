@@ -33,7 +33,7 @@ export interface Grid {
    * once when the map loads, so a step is a lookup rather than a test against
    * every collision shape. Left out, the edge is the only thing that blocks.
    */
-  blocked?: Uint8Array;
+  walls?: Uint8Array;
 }
 
 const OFFSETS: Record<Direction, Tile> = {
@@ -48,6 +48,11 @@ export function step(from: Tile, direction: Direction): Tile {
   return { x: from.x + offset.x, y: from.y + offset.y };
 }
 
+/** Where a tile sits in `walls`: row by row, from the top left. */
+export function tileIndex(grid: Pick<Grid, 'width'>, tile: Tile): number {
+  return tile.y * grid.width + tile.x;
+}
+
 export function walkable(grid: Grid, tile: Tile): boolean {
   if (
     tile.x < 0 ||
@@ -57,5 +62,5 @@ export function walkable(grid: Grid, tile: Tile): boolean {
   ) {
     return false;
   }
-  return !grid.blocked?.[tile.y * grid.width + tile.x];
+  return !grid.walls?.[tileIndex(grid, tile)];
 }

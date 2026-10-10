@@ -4,6 +4,7 @@ import { allowedOrigins, loadEnv, mediaCredentials } from './env.js';
 
 const minimal = {
   AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+  DEPLOYMENT_ENVIRONMENT: 'development',
   DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/campus',
 } as NodeJS.ProcessEnv;
 
@@ -28,6 +29,7 @@ describe('loadEnv', () => {
     expect(() =>
       loadEnv({
         AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+        DEPLOYMENT_ENVIRONMENT: 'development',
       } as NodeJS.ProcessEnv),
     ).toThrow(/DATABASE_URL/);
   });
@@ -80,6 +82,21 @@ describe('loadEnv', () => {
     ).toBe(1020);
   });
 
+  /**
+   * `development` is what lets world run with no walls, so it is never
+   * assumed: a deployed service that lost the variable must not boot as one.
+   */
+  it('refuses to start without being told which deployment it is', () => {
+    const { DEPLOYMENT_ENVIRONMENT: _, ...unnamed } = minimal;
+
+    expect(() => loadEnv(unnamed as NodeJS.ProcessEnv)).toThrow(
+      /DEPLOYMENT_ENVIRONMENT/,
+    );
+    expect(() =>
+      loadEnv({ ...minimal, DEPLOYMENT_ENVIRONMENT: ' ' } as NodeJS.ProcessEnv),
+    ).toThrow(/DEPLOYMENT_ENVIRONMENT/);
+  });
+
   /** Development may run without a published map; nothing else may. */
   it('needs somewhere to load the map from, outside development', () => {
     const development = loadEnv(minimal);
@@ -91,14 +108,16 @@ describe('loadEnv', () => {
         DEPLOYMENT_ENVIRONMENT: 'staging',
       } as NodeJS.ProcessEnv),
     ).toThrow(/SANITY_PROJECT_ID/);
-    // A blank line in a .env file is not a project.
-    expect(() =>
-      loadEnv({
-        ...minimal,
-        DEPLOYMENT_ENVIRONMENT: 'staging',
-        SANITY_PROJECT_ID: '',
-      } as NodeJS.ProcessEnv),
-    ).toThrow(/SANITY_PROJECT_ID/);
+    // A blank line in a .env file is not a project, and neither is a space.
+    for (const blank of ['', '  ']) {
+      expect(() =>
+        loadEnv({
+          ...minimal,
+          DEPLOYMENT_ENVIRONMENT: 'staging',
+          SANITY_PROJECT_ID: blank,
+        } as NodeJS.ProcessEnv),
+      ).toThrow(/SANITY_PROJECT_ID/);
+    }
     expect(
       loadEnv({
         ...minimal,

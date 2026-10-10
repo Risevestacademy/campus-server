@@ -31,7 +31,12 @@ const optionalText = z
 const schema = z
   .object({
     PORT: z.coerce.number().int().min(1).default(3001),
-    DEPLOYMENT_ENVIRONMENT: z.string().default('development'),
+    /**
+     * Which deployment this is. No default: `development` is what lets world
+     * run without a published map, so a deployed service that lost the
+     * variable must refuse to boot rather than be taken for a laptop.
+     */
+    DEPLOYMENT_ENVIRONMENT: z.string().trim().min(1),
 
     FF_LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
     FF_LOG_PRETTY: flag.default(false),
@@ -79,10 +84,7 @@ const schema = z
      * the dataset is public. Required outside development, where a world with
      * no walls would be worse than one that is down. Empty counts as unset.
      */
-    SANITY_PROJECT_ID: z
-      .string()
-      .optional()
-      .transform((value) => (value ? value : undefined)),
+    SANITY_PROJECT_ID: optionalText,
     SANITY_DATASET: z.string().min(1).default('production'),
 
     /**
@@ -194,10 +196,7 @@ const schema = z
       });
     }
 
-    if (
-      env.DEPLOYMENT_ENVIRONMENT !== 'development' &&
-      !env.SANITY_PROJECT_ID
-    ) {
+    if (!isDevelopment(env) && !env.SANITY_PROJECT_ID) {
       ctx.addIssue({
         code: 'custom',
         path: ['SANITY_PROJECT_ID'],
@@ -217,6 +216,17 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     throw new Error(`Invalid environment variables: ${detail}`);
   }
   return parsed.data;
+}
+
+/**
+ * The one place that says what counts as development: only the word itself,
+ * set on purpose. Everything that is allowed there and nowhere else — running
+ * without a published map — asks this.
+ */
+export function isDevelopment(env: {
+  DEPLOYMENT_ENVIRONMENT: string;
+}): boolean {
+  return env.DEPLOYMENT_ENVIRONMENT === 'development';
 }
 
 /** Undefined when this deployment has no media server. */

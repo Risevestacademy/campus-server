@@ -22,6 +22,8 @@ const API_START =
 const WORLD_START =
   'node --max-old-space-size=96 --max-semi-space-size=2 apps/world/dist/index.js';
 
+const SANITY_PROJECT_ID = 'sj3zsz66';
+
 export default defineRailway((ctx) => {
   // Staging only. Production has a different shape (no Redis, its own
   // domains, the main branch) that this file does not describe, so applying
@@ -83,13 +85,13 @@ export default defineRailway((ctx) => {
       AUTH_SESSION_SECRET: preserve(),
       CORS_ORIGINS: preserve(),
       DATABASE_URL: preserve(),
-      DEPLOYMENT_ENVIRONMENT: preserve(),
+      DEPLOYMENT_ENVIRONMENT: 'staging',
       LIVEKIT_API_KEY: preserve(),
       LIVEKIT_API_SECRET: preserve(),
       LIVEKIT_URL: preserve(),
       REDIS_URL: preserve(),
       SANITY_DATASET: 'staging',
-      SANITY_PROJECT_ID: 'sj3zsz66',
+      SANITY_PROJECT_ID,
       WORLD_HEARTBEAT_SECONDS: preserve(),
       WORLD_MAX_MESSAGE_BYTES: preserve(),
     },
@@ -154,7 +156,7 @@ export default defineRailway((ctx) => {
       RESEND_INVITE_GUEST_TEMPLATE_ID: preserve(),
       RESEND_INVITE_TEMPLATE_ID: preserve(),
       SANITY_DATASET: 'staging',
-      SANITY_PROJECT_ID: 'sj3zsz66',
+      SANITY_PROJECT_ID,
       TRUST_PROXY_HOPS: preserve(),
     },
   });

@@ -74,7 +74,7 @@ describe('Players', () => {
         width: 3,
         height: 1,
         spawn: { x: 0, y: 0 },
-        blocked: Uint8Array.from([0, 1, 0]),
+        walls: Uint8Array.from([0, 1, 0]),
       },
       STEP_MS,
     );
@@ -365,7 +365,7 @@ describe('Players', () => {
           width: 3,
           height: 1,
           spawn: { x: 0, y: 0 },
-          blocked: Uint8Array.from([0, 1, 0]),
+          walls: Uint8Array.from([0, 1, 0]),
         },
         STEP_MS,
       );

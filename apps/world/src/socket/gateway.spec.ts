@@ -18,6 +18,7 @@ import { buildWorld, type World } from '../app.js';
 import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';
+import { tileIndex } from '../movement/grid.js';
 import type { WorldMap } from '../movement/world-map.js';
 import {
   DISPLACED_CHANNEL,
@@ -142,6 +143,7 @@ const presence = {
 
 const env = loadEnv({
   AUTH_SESSION_SECRET: SECRET,
+  DEPLOYMENT_ENVIRONMENT: 'development',
   DATABASE_URL: 'postgres://unused',
   CORS_ORIGINS: `${ORIGIN},http://localhost:3000`,
   WORLD_HEARTBEAT_SECONDS: '1',
@@ -160,12 +162,12 @@ const env = loadEnv({
  * two steps below the spawn.
  */
 const WALL = { x: 0, y: 2 };
-const blocked = new Uint8Array(5 * 5);
-blocked[WALL.y * 5 + WALL.x] = 1;
+const walls = new Uint8Array(5 * 5);
+walls[tileIndex({ width: 5 }, WALL)] = 1;
 const map: WorldMap = {
   id: 'campus',
   version: 'v-test',
-  grid: { width: 5, height: 5, spawn: { x: 0, y: 0 }, blocked },
+  grid: { width: 5, height: 5, spawn: { x: 0, y: 0 }, walls },
 };
 
 let world: World;
@@ -1991,6 +1993,7 @@ const redisUrl = process.env.WORLD_TEST_REDIS_URL;
 describe.skipIf(!redisUrl)('across instances', () => {
   const shared = loadEnv({
     AUTH_SESSION_SECRET: SECRET,
+    DEPLOYMENT_ENVIRONMENT: 'development',
     DATABASE_URL: 'postgres://unused',
     CORS_ORIGINS: ORIGIN,
     REDIS_URL: redisUrl,

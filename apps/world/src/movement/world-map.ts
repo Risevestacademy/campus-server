@@ -1,6 +1,6 @@
 import { blocked, type MapLayout } from 'campus-world-map';
 
-import type { Grid } from './grid.js';
+import { tileIndex, type Grid } from './grid.js';
 
 /**
  * The map this process enforces, and which published version of it. Loaded
@@ -39,9 +39,9 @@ export function gridFrom(layout: MapLayout): Grid {
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       if (blocked(layout, { x, y })) {
-        walls[y * width + x] = 1;
+        walls[tileIndex({ width }, { x, y })] = 1;
       }
     }
   }
-  return { width, height, spawn: layout.spawn, blocked: walls };
+  return { width, height, spawn: layout.spawn, walls };
 }

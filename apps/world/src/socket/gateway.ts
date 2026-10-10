@@ -287,8 +287,8 @@ export function registerGateway(
 
   /**
    * For arrivals and departures, which are rare enough to send at once.
-   * Everybody in this process is on the one placeholder map, so everybody
-   * hears everything; scoped to a map once maps exist (W6).
+   * Everybody in this process is on the one map it loaded, so everybody
+   * hears everything; scoped to a map once there is more than one.
    */
   function broadcast(message: ServerMessage): void {
     const frame = encode(message);

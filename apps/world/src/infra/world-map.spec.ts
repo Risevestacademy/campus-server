@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { walkable } from '../movement/grid.js';
 import { PLACEHOLDER_MAP } from '../movement/world-map.js';
-import { fetchEntryMap, loadWorldMap } from './world-map.js';
+import {
+  MapUnavailableError,
+  fetchEntryMap,
+  loadWorldMap,
+  withTimeout,
+} from './world-map.js';
 
 const sanity = { SANITY_PROJECT_ID: 'abc123', SANITY_DATASET: 'production' };
 
@@ -123,19 +128,98 @@ describe('fetchEntryMap', () => {
     ).rejects.toThrow(/no spawn/);
   });
 
-  it('refuses when nothing has been published', async () => {
+  /**
+   * "No map to load" is its own error, apart from a map that is wrong:
+   * development may run without the first and must not hide the second.
+   */
+  describe('with no map to load', () => {
+    it('says so when nothing has been published', async () => {
+      await expect(
+        fetchEntryMap(sanity, published([], tiled([]))),
+      ).rejects.toBeInstanceOf(MapUnavailableError);
+    });
+
+    it('says so when no project is configured, without asking anybody', async () => {
+      const fetcher = vi.fn();
+
+      await expect(
+        fetchEntryMap({ ...sanity, SANITY_PROJECT_ID: undefined }, fetcher),
+      ).rejects.toBeInstanceOf(MapUnavailableError);
+      expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    it('says so when Sanity cannot be reached, or refuses', async () => {
+      await expect(
+        fetchEntryMap(sanity, (async () => {
+          throw new TypeError('fetch failed');
+        }) as typeof fetch),
+      ).rejects.toBeInstanceOf(MapUnavailableError);
+      await expect(
+        fetchEntryMap(
+          sanity,
+          (async () => new Response('', { status: 503 })) as typeof fetch,
+        ),
+      ).rejects.toBeInstanceOf(MapUnavailableError);
+    });
+
+    /** The manifest arrived; it is the map file behind it that is missing. */
+    it('says so when the map file cannot be fetched', async () => {
+      const answer = published([manifest('campus', true)], tiled([]));
+
+      await expect(
+        fetchEntryMap(sanity, (async (input: string | URL | Request) =>
+          String(input).includes('/data/query/')
+            ? answer(input)
+            : new Response('', { status: 404 })) as typeof fetch),
+      ).rejects.toBeInstanceOf(MapUnavailableError);
+    });
+
+    it('does not say so for a map that was found and is wrong', async () => {
+      const wrong = [
+        // No spawn.
+        published([manifest('campus', true)], tiled([collisions])),
+        // No entry map.
+        published([manifest('library', false)], tiled([collisions])),
+        // A layout the reader refuses: no collisions layer.
+        published([manifest('campus', true)], tiled([spawn])),
+      ];
+
+      for (const fetcher of wrong) {
+        const failure = await fetchEntryMap(sanity, fetcher).catch(
+          (err: unknown) => err,
+        );
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).not.toBeInstanceOf(MapUnavailableError);
+      }
+    });
+  });
+});
+
+describe('withTimeout', () => {
+  /** A request that never answers must not keep world from ever starting. */
+  it('gives up on a request that hangs', async () => {
+    const hanging = ((_input, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(init.signal?.reason as Error),
+        );
+      })) as typeof fetch;
+
     await expect(
-      fetchEntryMap(sanity, published([], tiled([]))),
-    ).rejects.toThrow(/No maps have been published/);
+      withTimeout(20, hanging)('https://example.com'),
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
+    await expect(
+      fetchEntryMap(sanity, withTimeout(20, hanging)),
+    ).rejects.toBeInstanceOf(MapUnavailableError);
   });
 
-  it('refuses when no project is configured, without asking anybody', async () => {
-    const fetcher = vi.fn();
+  it('leaves a request that answers alone', async () => {
+    const response = await withTimeout(
+      1_000,
+      (async () => new Response('ok')) as typeof fetch,
+    )('https://example.com');
 
-    await expect(
-      fetchEntryMap({ ...sanity, SANITY_PROJECT_ID: undefined }, fetcher),
-    ).rejects.toThrow(/SANITY_PROJECT_ID/);
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(await response.text()).toBe('ok');
   });
 });
 
@@ -168,6 +252,53 @@ describe('loadWorldMap', () => {
       ),
     ).resolves.toBe(PLACEHOLDER_MAP);
     expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
+  it('falls back in development when nothing is configured or published', async () => {
+    await expect(
+      loadWorldMap(
+        {
+          SANITY_PROJECT_ID: undefined,
+          SANITY_DATASET: 'production',
+          DEPLOYMENT_ENVIRONMENT: 'development',
+        },
+        log(),
+      ),
+    ).resolves.toBe(PLACEHOLDER_MAP);
+    await expect(
+      loadWorldMap(
+        { ...sanity, DEPLOYMENT_ENVIRONMENT: 'development' },
+        log(),
+        published([], tiled([])),
+      ),
+    ).resolves.toBe(PLACEHOLDER_MAP);
+  });
+
+  /** Somebody's mistake in the map; a placeholder would hide it. */
+  it('stops the boot in development too when the published map is wrong', async () => {
+    const logger = log();
+
+    await expect(
+      loadWorldMap(
+        { ...sanity, DEPLOYMENT_ENVIRONMENT: 'development' },
+        logger,
+        published([manifest('campus', true)], tiled([collisions])),
+      ),
+    ).rejects.toThrow(/could not load the published map/);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  /** Only the word itself, set on purpose, is development. */
+  it('does not take an unfamiliar environment for development', async () => {
+    for (const name of ['', 'dev', 'Development', 'local']) {
+      await expect(
+        loadWorldMap(
+          { ...sanity, DEPLOYMENT_ENVIRONMENT: name },
+          log(),
+          unreachable,
+        ),
+      ).rejects.toThrow(/could not load the published map/);
+    }
   });
 
   it('uses the published map in development when there is one', async () => {

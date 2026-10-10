@@ -275,6 +275,7 @@ describe('createPositionStore with Redis unavailable', () => {
 
   const env = loadEnv({
     AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+    DEPLOYMENT_ENVIRONMENT: 'development',
     DATABASE_URL: 'postgres://unused',
     REDIS_URL: 'redis://unreachable.invalid:6379',
   } as NodeJS.ProcessEnv);
@@ -375,6 +376,7 @@ describe('createPositionStore with Redis connected but not answering', () => {
 
   const env = loadEnv({
     AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+    DEPLOYMENT_ENVIRONMENT: 'development',
     DATABASE_URL: 'postgres://unused',
     REDIS_URL: 'redis://stalled.invalid:6379',
   } as NodeJS.ProcessEnv);

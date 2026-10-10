@@ -115,9 +115,10 @@ it. The map's edge blocks too. `width` and `height` are in tiles.
 One map for now, the one people enter the campus on. Spaces and portals are
 read from it by the client but mean nothing to the server yet.
 
-In local development only, a server that cannot load a published map runs on a
-placeholder instead: `id` and `version` are both `"placeholder"`, there is
-nothing to load, and only the edge of `width` × `height` blocks.
+In local development only, a server with no published map to load (none
+configured, none published, or Sanity out of reach) runs on a placeholder
+instead: `id` and `version` are both `"placeholder"`, there is nothing to
+load, and only the edge of `width` × `height` blocks.
 
 Two people can stand on the same tile. Nobody blocks anybody.
 
