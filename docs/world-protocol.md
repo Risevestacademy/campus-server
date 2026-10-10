@@ -213,6 +213,12 @@ Refreshing only after an API call fails would let the socket close with
 `session_ended` during a quiet stretch. See
 [auth-flow.md](./auth-flow.md#how-world-follows-a-sign-in).
 
+**A visit can run out too.** The cohort membership the socket named is asked
+again at every heartbeat, so a guest whose visit ends while they are in the
+world is closed with `not_a_member` at the next one — the same reason an
+upgrade into that cohort would now be refused. Admins are excepted, as at the
+upgrade.
+
 ## Errors and closing
 
 An `error` with code `BAD_MESSAGE` means the frame was not valid JSON or not a
@@ -241,8 +247,9 @@ When the socket closes:
 
 When the connection is refused at the start, an `error` frame with the same
 reason as its `message` arrives just before the close. A socket closed later
-— `session_ended`, `session_expired`, `session_revoked`, or a suspension
-that reaches an open socket — gets the close alone, so read the reason from the close event, not from an `error`.
+— `session_ended`, `session_expired`, `session_revoked`, `not_a_member`, or
+a suspension that reaches an open socket — gets the close alone, so read the
+reason from the close event, not from an `error`.
 
 **A reconnect resumes where you stood** if it comes within
 `WORLD_RECONNECT_GRACE_SECONDS` (30 by default) of your socket closing.
