@@ -323,10 +323,12 @@ of a space's room (open on first entry, close on last exit). So the LiveKit
 key and secret belong to world, and campus-api never holds them.
 
 The minting itself lives in `packages/media` (`@campus/media`). Its secret
-must be at least 32 characters, and it refuses anything shorter. world will
-read `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` once rooms per
-space or the pre-join network check land; until then, set them on world's
-Railway service so they are ready.
+must be at least 32 characters, and it refuses anything shorter. world reads
+`LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` for the pre-join
+connection check (`POST /media/connection-check`, see
+[world's README](../apps/world/README.md#the-connection-check)), and will for
+rooms per space. All three or none: world refuses to boot with only some set.
+With none, it boots, and the check answers `503 MEDIA_NOT_CONFIGURED`.
 
 To try the media server by hand, mint a token and join from any LiveKit
 client, such as LiveKit's hosted Meet page:

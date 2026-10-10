@@ -66,6 +66,7 @@ export default defineRailway((ctx) => {
       builder: 'RAILPACK',
       watchPatterns: [
         '/apps/world/**',
+        '/packages/media/**',
         '/packages/session/**',
         '/package.json',
         '/pnpm-lock.yaml',
