@@ -79,6 +79,50 @@ describe('fetchEntryMap', () => {
     expect(walkable(map.grid, { x: 2, y: 0 })).toBe(true);
   });
 
+  /**
+   * Most of a campus's walls are not in the collisions layer: they are shapes
+   * drawn on the wall and furniture tiles themselves, which block wherever
+   * such a tile is laid.
+   */
+  it('walls off the tiles whose artwork carries a collision shape', async () => {
+    const withWallTile = {
+      ...tiled([collisions, spawn]),
+      tilesets: [
+        {
+          firstgid: 1,
+          name: 'walls',
+          tilewidth: 32,
+          tileheight: 32,
+          tilecount: 1,
+          columns: 1,
+          tiles: [
+            {
+              id: 0,
+              objectgroup: {
+                objects: [{ id: 1, x: 0, y: 0, width: 32, height: 32 }],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    // The wall tile laid once, at (2, 1); every other cell is empty.
+    const data = Array.from({ length: 4 * 3 }, () => 0);
+    data[1 * 4 + 2] = 1;
+    withWallTile.layers = [
+      { type: 'tilelayer', name: 'furniture', width: 4, height: 3, data },
+      ...withWallTile.layers,
+    ];
+
+    const map = await fetchEntryMap(
+      sanity,
+      published([manifest('campus', true)], withWallTile),
+    );
+
+    expect(walkable(map.grid, { x: 2, y: 1 })).toBe(false);
+    expect(walkable(map.grid, { x: 2, y: 2 })).toBe(true);
+  });
+
   it('asks the project and dataset it was given, past the CDN', async () => {
     const asked: string[] = [];
     const answer = published(
@@ -309,5 +353,27 @@ describe('loadWorldMap', () => {
     );
 
     expect(map).toMatchObject({ id: 'campus', version: 'campus-v1' });
+  });
+
+  /** So a publish that lost its walls shows in the boot log. */
+  it('logs which map loaded, and how many of its tiles are walls', async () => {
+    const logger = log();
+
+    await loadWorldMap(
+      { ...sanity, DEPLOYMENT_ENVIRONMENT: 'staging' },
+      logger,
+      published([manifest('campus', true)], tiled([collisions, spawn])),
+    );
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        mapId: 'campus',
+        version: 'campus-v1',
+        width: 4,
+        height: 3,
+        wallTiles: 1,
+      },
+      'map loaded',
+    );
   });
 });
