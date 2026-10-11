@@ -82,8 +82,8 @@ sequenceDiagram
 - **`welcome`** carries your `userId` and the timings to play by:
   `stepMs` (walking speed), `tickMs` (how often others' moves arrive) and
   `heartbeatSeconds`.
-- **`snapshot`** carries which map this is and every player on it, you
-  included. Draw from it; everything after is a change to it.
+- **`snapshot`** carries which map this is and every player in your cohort
+  on it, you included. Draw from it; everything after is a change to it.
 
 You can send as soon as the socket opens. Frames sent while the server is
 still checking the session are held, not lost, and answered in order.
@@ -164,6 +164,11 @@ The client says which way, never where to. The server decides every position.
 
 ## Everybody else
 
+**Everybody else means everybody in your cohort.** Each cohort is its own
+campus: the cohort named when the socket opened decides whose avatars you are
+told about, and nobody in another cohort appears in your `snapshot`, `joined`,
+`left` or `moved`, or you in theirs.
+
 | Message  | When                                              | What to do              |
 | -------- | ------------------------------------------------- | ----------------------- |
 | `joined` | Somebody arrived                                  | Add their avatar        |
@@ -195,8 +200,8 @@ closes it with **4000 `entered_elsewhere`**.
 - **Entering the same cohort again**, from another tab or device, leaves the
   avatar exactly where it stood. Nobody is told anybody left or arrived.
 - **Entering a different cohort** takes the avatar out of the old one — others
-  there see `left` — and puts it into the new one, at the same position for
-  now.
+  there see `left` — and puts it into the new one, where others see `joined`.
+  It starts where they last stood in that cohort, or at the spawn.
 
 > **Do not reconnect on `entered_elsewhere`.** This is the one close the
 > client must not retry. Two tabs that both reconnected would replace each

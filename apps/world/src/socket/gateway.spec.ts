@@ -1246,6 +1246,177 @@ describe('movement', () => {
   });
 
   /** One cohort, one device, one tab: the newest connection wins. */
+  /**
+   * Each cohort is its own campus. Two of them may share this process and
+   * the map it loaded, and still nobody in one sees or hears of anybody in
+   * the other.
+   */
+  describe('cohorts kept apart', () => {
+    const ofCohort = (conn: { messages: Record<string, unknown>[] }) =>
+      conn.messages.filter((m) =>
+        ['joined', 'left', 'moved'].includes(m.type as string),
+      );
+
+    it('shows an arrival only the people in the cohort they entered', async () => {
+      const ada = person();
+      const grace = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const inBackend = await arrive(grace, 'cohort-backend');
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toEqual([
+        { userId: grace, x: 0, y: 0, facing: 'down' },
+      ]);
+      await quiet();
+      expect(ofCohort(inFrontend)).toEqual([]);
+
+      await leave(inFrontend);
+      await leave(inBackend);
+    });
+
+    it('tells a move, and a departure, to nobody in another cohort', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const sameCohort = await arrive(person(), 'cohort-frontend');
+      const otherCohort = await arrive(person(), 'cohort-backend');
+
+      move(inFrontend, 'right', 1);
+      await expect(
+        waitFor(sameCohort, (m) => m.type === 'moved'),
+      ).resolves.toEqual({
+        type: 'moved',
+        players: [{ userId: ada, x: 1, y: 0, facing: 'right' }],
+      });
+      await leave(inFrontend);
+      await expect(
+        waitFor(sameCohort, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+
+      await quiet();
+      expect(ofCohort(otherCohort)).toEqual([]);
+
+      await leave(sameCohort);
+      await leave(otherCohort);
+    });
+
+    /**
+     * A step is sent on the next tick, and names only who took it. Switching
+     * cohort inside that tick must not turn it into a move in the new one.
+     */
+    it('does not carry a step not yet sent into the cohort switched to', async () => {
+      const ada = person();
+      const backendWatcher = await arrive(person(), 'cohort-backend');
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      // Straight away, before the tick that would have sent the step.
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      await expect(
+        waitFor(backendWatcher, (m) => m.type === 'joined'),
+      ).resolves.toMatchObject({
+        player: { userId: ada, x: 0, y: 0, facing: 'down' },
+      });
+      // Through at least one tick: the arrival is all Backend hears.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(backendWatcher.messages.some((m) => m.type === 'moved')).toBe(
+        false,
+      );
+
+      await leave(inBackend);
+      await leave(backendWatcher);
+    });
+
+    /** The same, for somebody who closed their socket first. */
+    it('does not carry it in after leaving and coming back elsewhere', async () => {
+      const ada = person();
+      const backendWatcher = await arrive(person(), 'cohort-backend');
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      await leave(inFrontend);
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      await waitFor(backendWatcher, (m) => m.type === 'joined');
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(backendWatcher.messages.some((m) => m.type === 'moved')).toBe(
+        false,
+      );
+
+      await leave(inBackend);
+      await leave(backendWatcher);
+    });
+
+    /**
+     * Back in the same cohort inside the tick, `joined` already says where
+     * they stand; the step they took before leaving is not news after it.
+     */
+    it('does not repeat a step as a move once they have left and come back', async () => {
+      const ada = person();
+      const watcher = await arrive(person(), 'cohort-frontend');
+      const first = await arrive(ada, 'cohort-frontend');
+
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      const second = await arrive(ada, 'cohort-frontend');
+
+      // The second `joined` for them, one tile right of where the first was.
+      const rejoined = (m: Record<string, unknown>) =>
+        m.type === 'joined' && (m.player as { x: number }).x === 1;
+      await expect(waitFor(watcher, rejoined)).resolves.toBeDefined();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const after = watcher.messages.slice(
+        watcher.messages.findIndex(rejoined),
+      );
+      expect(after.some((m) => m.type === 'moved')).toBe(false);
+
+      await leave(second);
+      await leave(watcher);
+    });
+
+    /** One tick may carry moves from several cohorts; each hears its own. */
+    it('sorts the moves of one tick by cohort', async () => {
+      const ada = person();
+      const grace = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const inBackend = await arrive(grace, 'cohort-backend');
+      const frontendWatcher = await arrive(person(), 'cohort-frontend');
+      const backendWatcher = await arrive(person(), 'cohort-backend');
+
+      move(inFrontend, 'right', 1);
+      move(inBackend, 'down', 1);
+
+      await expect(
+        waitFor(frontendWatcher, (m) => m.type === 'moved'),
+      ).resolves.toEqual({
+        type: 'moved',
+        players: [{ userId: ada, x: 1, y: 0, facing: 'right' }],
+      });
+      await expect(
+        waitFor(backendWatcher, (m) => m.type === 'moved'),
+      ).resolves.toEqual({
+        type: 'moved',
+        players: [{ userId: grace, x: 0, y: 1, facing: 'down' }],
+      });
+      // Each mover has its own answer, and hears nothing of the other.
+      await quiet();
+      expect(inFrontend.messages.some((m) => m.type === 'moved')).toBe(false);
+      expect(inBackend.messages.some((m) => m.type === 'moved')).toBe(false);
+
+      for (const conn of [
+        inFrontend,
+        inBackend,
+        frontendWatcher,
+        backendWatcher,
+      ]) {
+        await leave(conn);
+      }
+    });
+  });
+
   describe('one place at a time', () => {
     const entryOf = (message: Record<string, unknown>) =>
       message.player as { userId: string; x: number; y: number };
@@ -1320,7 +1491,10 @@ describe('movement', () => {
 
     it('switches into a cohort with a saved position, starting there', async () => {
       const ada = person();
-      const watcher = await arrive(person());
+      // Somebody in each campus: the one left sees a departure, the one
+      // entered an arrival, and neither sees the other half.
+      const frontendWatcher = await arrive(person(), 'cohort-frontend');
+      const backendWatcher = await arrive(person(), 'cohort-backend');
       const inFrontend = await arrive(ada, 'cohort-frontend');
       move(inFrontend, 'right', 1);
       await waitFor(inFrontend, (m) => m.type === 'moveResult');
@@ -1343,17 +1517,28 @@ describe('movement', () => {
       });
 
       await expect(
-        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+        waitFor(frontendWatcher, (m) => m.type === 'left' && m.userId === ada),
       ).resolves.toBeDefined();
       await expect(
         waitFor(
-          watcher,
+          backendWatcher,
           (m) =>
             m.type === 'joined' &&
             entryOf(m).userId === ada &&
             entryOf(m).x === 3,
         ),
       ).resolves.toMatchObject({ player: { userId: ada, x: 3, y: 2 } });
+      await quiet();
+      expect(
+        backendWatcher.messages.some(
+          (m) => m.type === 'left' && m.userId === ada,
+        ),
+      ).toBe(false);
+      expect(
+        frontendWatcher.messages.some(
+          (m) => m.type === 'joined' && entryOf(m).x === 3,
+        ),
+      ).toBe(false);
 
       // The cohort left is saved where they stood; the destination keeps its
       // own saved position, untouched by the switch.
@@ -1367,7 +1552,8 @@ describe('movement', () => {
       });
 
       await leave(inBackend);
-      await leave(watcher);
+      await leave(frontendWatcher);
+      await leave(backendWatcher);
     });
 
     it('switches into a cohort with no saved position, starting at the spawn', async () => {
