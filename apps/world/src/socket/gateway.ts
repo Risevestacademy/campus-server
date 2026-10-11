@@ -79,37 +79,41 @@ export function registerGateway(
     if (pendingMoves.size === 0) {
       return;
     }
-    const moved: Player[] = [];
-    const movedIds = new Set<string>();
+    // Grouped by cohort: each is its own campus, and a move is news only to
+    // the people standing in the same one.
+    const movedIn = new Map<string, Player[]>();
     for (const userId of pendingMoves) {
       const player = players.get(userId);
+      const cohortId = connections.forUser(userId)?.cohortId;
       // Left since the step: `left` has already gone out, and an entry now
       // would put back an avatar the client has just taken away.
-      if (!player) continue;
-      moved.push(player);
-      movedIds.add(userId);
+      if (!player || cohortId === undefined) continue;
+      const moved = movedIn.get(cohortId);
+      if (moved) moved.push(player);
+      else movedIn.set(cohortId, [player]);
     }
     pendingMoves.clear();
-    if (moved.length === 0) {
-      return;
-    }
 
-    // Encoded once for everybody who did not move; somebody who did needs
-    // their own, without the entry their `moveResult` already answered.
-    const shared = encode({ type: 'moved', players: moved });
-    for (const connection of connections.all()) {
-      if (!movedIds.has(connection.userId)) {
-        sendFrame(connection.socket, shared);
-        continue;
-      }
-      const others = moved.filter(
-        (player) => player.userId !== connection.userId,
-      );
-      if (others.length > 0) {
-        sendFrame(
-          connection.socket,
-          encode({ type: 'moved', players: others }),
+    for (const [cohortId, moved] of movedIn) {
+      const movedIds = new Set(moved.map((player) => player.userId));
+      // Encoded once for everybody who did not move; somebody who did needs
+      // their own, without the entry their `moveResult` already answered.
+      const shared = encode({ type: 'moved', players: moved });
+      for (const connection of connections.all()) {
+        if (connection.cohortId !== cohortId) continue;
+        if (!movedIds.has(connection.userId)) {
+          sendFrame(connection.socket, shared);
+          continue;
+        }
+        const others = moved.filter(
+          (player) => player.userId !== connection.userId,
         );
+        if (others.length > 0) {
+          sendFrame(
+            connection.socket,
+            encode({ type: 'moved', players: others }),
+          );
+        }
       }
     }
   }
@@ -272,7 +276,13 @@ export function registerGateway(
         connection.cohortId,
       )
     ) {
-      broadcast({ type: 'left', userId: connection.userId });
+      // With them goes any step of theirs the tick has not sent yet: should
+      // they be back before it runs, `joined` already says where they stand.
+      pendingMoves.delete(connection.userId);
+      broadcast(connection.cohortId, {
+        type: 'left',
+        userId: connection.userId,
+      });
     }
     // Kept for the next visit only when they may come back; after shutdown
     // began, everybody has been written already. Access taken away forgets
@@ -286,15 +296,27 @@ export function registerGateway(
   }
 
   /**
-   * For arrivals and departures, which are rare enough to send at once.
-   * Everybody in this process is on the one map it loaded, so everybody
-   * hears everything; scoped to a map once there is more than one.
+   * For arrivals and departures, which are rare enough to send at once. Only
+   * to the cohort it happened in: each cohort is its own campus, and nobody
+   * in one sees or hears of anybody in another, though they share this
+   * process and the one map it loaded.
    */
-  function broadcast(message: ServerMessage): void {
+  function broadcast(cohortId: string, message: ServerMessage): void {
     const frame = encode(message);
     for (const connection of connections.all()) {
-      sendFrame(connection.socket, frame);
+      if (connection.cohortId === cohortId) {
+        sendFrame(connection.socket, frame);
+      }
     }
+  }
+
+  /** Everybody standing in one cohort's campus. */
+  function playersIn(cohortId: string): Player[] {
+    return players
+      .all()
+      .filter(
+        (player) => connections.forUser(player.userId)?.cohortId === cohortId,
+      );
   }
 
   /**
@@ -673,6 +695,14 @@ export function registerGateway(
     registered = connection;
 
     if (switchingCohort) {
+      // A step taken in the cohort being left and not yet sent stays unsent.
+      // The tick names only who moved and reads the rest when it runs, by
+      // which time they stand in the new cohort: it would tell that cohort
+      // of a move that happened in another, after its `joined`. The old one
+      // is about to see them leave, so it loses nothing. drop() does the
+      // same for a socket that closes; this is the switch made with the old
+      // socket still open, which leaves the map without going through it.
+      pendingMoves.delete(connection.userId);
       const standing = players.get(connection.userId);
       if (standing && heldCohort !== undefined) {
         // The old cohort's position is written before the switch below takes
@@ -688,8 +718,11 @@ export function registerGateway(
       // because this connection names a different one, so the destination
       // starts from its own saved position or the spawn. Before the new place
       // exists, so the old cohort sees a departure.
-      if (players.leave(connection.userId, Date.now(), true, heldCohort)) {
-        broadcast({ type: 'left', userId: connection.userId });
+      if (
+        players.leave(connection.userId, Date.now(), true, heldCohort) &&
+        heldCohort !== undefined
+      ) {
+        broadcast(heldCohort, { type: 'left', userId: connection.userId });
       }
     }
 
@@ -703,9 +736,9 @@ export function registerGateway(
       connection.cohortId,
     );
     if (arriving) {
-      // Told to everyone already here; the arrival learns of itself from the
-      // snapshot.
-      broadcast({ type: 'joined', player });
+      // Told to everyone already in this cohort; the arrival learns of itself
+      // from the snapshot.
+      broadcast(connection.cohortId, { type: 'joined', player });
     }
 
     // Registered before the old socket is closed: drop() decides whether the
@@ -822,7 +855,7 @@ export function registerGateway(
         width: map.grid.width,
         height: map.grid.height,
       },
-      players: players.all(),
+      players: playersIn(connection.cohortId),
     });
 
     // Handlers are on: whatever arrived during authentication is delivered
