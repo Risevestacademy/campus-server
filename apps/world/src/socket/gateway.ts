@@ -276,6 +276,9 @@ export function registerGateway(
         connection.cohortId,
       )
     ) {
+      // With them goes any step of theirs the tick has not sent yet: should
+      // they be back before it runs, `joined` already says where they stand.
+      pendingMoves.delete(connection.userId);
       broadcast(connection.cohortId, {
         type: 'left',
         userId: connection.userId,
@@ -692,6 +695,14 @@ export function registerGateway(
     registered = connection;
 
     if (switchingCohort) {
+      // A step taken in the cohort being left and not yet sent stays unsent.
+      // The tick names only who moved and reads the rest when it runs, by
+      // which time they stand in the new cohort: it would tell that cohort
+      // of a move that happened in another, after its `joined`. The old one
+      // is about to see them leave, so it loses nothing. drop() does the
+      // same for a socket that closes; this is the switch made with the old
+      // socket still open, which leaves the map without going through it.
+      pendingMoves.delete(connection.userId);
       const standing = players.get(connection.userId);
       if (standing && heldCohort !== undefined) {
         // The old cohort's position is written before the switch below takes

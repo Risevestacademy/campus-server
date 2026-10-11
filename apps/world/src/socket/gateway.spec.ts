@@ -1299,6 +1299,84 @@ describe('movement', () => {
       await leave(otherCohort);
     });
 
+    /**
+     * A step is sent on the next tick, and names only who took it. Switching
+     * cohort inside that tick must not turn it into a move in the new one.
+     */
+    it('does not carry a step not yet sent into the cohort switched to', async () => {
+      const ada = person();
+      const backendWatcher = await arrive(person(), 'cohort-backend');
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      // Straight away, before the tick that would have sent the step.
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      await expect(
+        waitFor(backendWatcher, (m) => m.type === 'joined'),
+      ).resolves.toMatchObject({
+        player: { userId: ada, x: 0, y: 0, facing: 'down' },
+      });
+      // Through at least one tick: the arrival is all Backend hears.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(backendWatcher.messages.some((m) => m.type === 'moved')).toBe(
+        false,
+      );
+
+      await leave(inBackend);
+      await leave(backendWatcher);
+    });
+
+    /** The same, for somebody who closed their socket first. */
+    it('does not carry it in after leaving and coming back elsewhere', async () => {
+      const ada = person();
+      const backendWatcher = await arrive(person(), 'cohort-backend');
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      await leave(inFrontend);
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      await waitFor(backendWatcher, (m) => m.type === 'joined');
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(backendWatcher.messages.some((m) => m.type === 'moved')).toBe(
+        false,
+      );
+
+      await leave(inBackend);
+      await leave(backendWatcher);
+    });
+
+    /**
+     * Back in the same cohort inside the tick, `joined` already says where
+     * they stand; the step they took before leaving is not news after it.
+     */
+    it('does not repeat a step as a move once they have left and come back', async () => {
+      const ada = person();
+      const watcher = await arrive(person(), 'cohort-frontend');
+      const first = await arrive(ada, 'cohort-frontend');
+
+      move(first, 'right', 1);
+      await waitFor(first, (m) => m.type === 'moveResult');
+      await leave(first);
+      const second = await arrive(ada, 'cohort-frontend');
+
+      // The second `joined` for them, one tile right of where the first was.
+      const rejoined = (m: Record<string, unknown>) =>
+        m.type === 'joined' && (m.player as { x: number }).x === 1;
+      await expect(waitFor(watcher, rejoined)).resolves.toBeDefined();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const after = watcher.messages.slice(
+        watcher.messages.findIndex(rejoined),
+      );
+      expect(after.some((m) => m.type === 'moved')).toBe(false);
+
+      await leave(second);
+      await leave(watcher);
+    });
+
     /** One tick may carry moves from several cohorts; each hears its own. */
     it('sorts the moves of one tick by cohort', async () => {
       const ada = person();
