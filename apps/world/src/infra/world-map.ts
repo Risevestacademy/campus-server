@@ -81,13 +81,11 @@ export async function fetchEntryMap(
     // Only the layout is read, but the published loader is what checks the
     // map is whole, and it is the one campus-web loads the same version
     // through.
-    const map = await loadPublishedMap<TiledMap>(manifest, {
-      fetch: reaching,
-    });
+    const map = await loadPublishedMap(manifest, { fetch: reaching });
     return {
       id: manifest.mapId,
       version: manifest.version,
-      grid: gridFrom(readMapLayout(map)),
+      grid: gridFrom(readMapLayout(map as TiledMap)),
     };
   } catch (err) {
     if (unreachable !== undefined) {
@@ -137,6 +135,9 @@ export async function loadWorldMap(
         version: map.version,
         width: map.grid.width,
         height: map.grid.height,
+        // A map that loads with far fewer walls than it had is a broken
+        // publish that nothing else here would notice.
+        wallTiles: map.grid.walls?.reduce((sum, wall) => sum + wall, 0) ?? 0,
       },
       'map loaded',
     );
