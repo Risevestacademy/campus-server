@@ -44,6 +44,8 @@ server decides every position.
     the `snapshot` tells clients which map and version that is
   - the server enforces walking speed
   - one avatar per account, walked by whichever socket holds its place
+  - each cohort is its own campus: nobody sees, or is told about, anybody in
+    another cohort, though they share the process and the map
   - other players' moves are sent once per tick
   - a reconnect within a grace period resumes where the player stood
   - between visits, players start where they last stood in that cohort, kept

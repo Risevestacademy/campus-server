@@ -147,12 +147,13 @@ export const ServerMessage = z
       .meta({
         id: 'SnapshotMessage',
         description:
-          'Sent once, right after `welcome`: the map, and everybody on it, you included.',
+          'Sent once, right after `welcome`: the map, and everybody in your cohort ' +
+          'on it, you included. Nobody from another cohort is ever in it.',
       }),
     z.object({ type: z.literal('joined'), player: Player }).meta({
       id: 'JoinedMessage',
       description:
-        'Somebody arrived. Not sent when a socket is replaced within the same cohort, ' +
+        'Somebody arrived in your cohort. Not sent when a socket is replaced within the same cohort, ' +
         'because the avatar never left.',
     }),
     z.object({ type: z.literal('left'), userId: z.string() }).meta({
@@ -172,7 +173,7 @@ export const ServerMessage = z
     z.object({ type: z.literal('moved'), players: z.array(Player) }).meta({
       id: 'MovedMessage',
       description:
-        'Everybody who moved or turned since the last tick, once each, as they stand ' +
+        'Everybody in your cohort who moved or turned since the last tick, once each, as they stand ' +
         'now: two steps inside one tick arrive as the second, so an entry can be more ' +
         'than one tile from where they were. Sent once per tick, and not at all when ' +
         'nobody moved. You are never in your own `moved` frame — your `moveResult` ' +
