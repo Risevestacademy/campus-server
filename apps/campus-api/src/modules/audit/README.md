@@ -75,7 +75,7 @@ the table. The test suites use it to reset between tests.
 | `action`         | What happened: one of `AuditAction`. A `varchar`, not a Postgres enum, so a new action is a code change and not a migration.                                                              |
 | `subject_type`   | The kind of thing it happened to: one of `AuditSubjectType`.                                                                                                                              |
 | `subject_id`     | That thing's id. Not a foreign key, on purpose: an entry outlives the row it is about, which is the point of recording a delete.                                                          |
-| `space_id`       | Reserved for entries about a space. Nothing writes it yet, and it has no foreign key because `spaces` does not exist.                                                                     |
+| `space_id`       | Reserved for entries about a space, and a foreign key to `spaces`. Nothing writes it yet.                                                                                                 |
 | `details`        | What the action needs beyond its subject, as JSON. The shape is fixed per action (see [Actions](#actions)). Dates are stored as ISO 8601 strings.                                         |
 | `correlation_id` | The request's correlation id, so an entry leads to its log lines. The same value as the log lines and the `x-correlation-id` response header. Null for entries written outside a request. |
 | `created_at`     | When the entry was written, which is when the change committed.                                                                                                                           |

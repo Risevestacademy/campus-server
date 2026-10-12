@@ -1,7 +1,7 @@
 %% =====================================================================
 %% Campus by Rise — full ERD
 %% GENERATED — do not hand-edit.
-%% 34 tables, 27 enums.
+%% 33 tables, 26 enums.
 %% -
 %% Mermaid ER cannot express nullability, defaults, column lengths,
 %% partial indexes or CHECK constraints. Those are listed at the
@@ -116,14 +116,10 @@ erDiagram
 
     MAPS {
         uuid id PK
-        varchar key UK
+        varchar key UK "The map's ID in Sanity: what it is published as, and what…"
         varchar name
-        map_kind_enum kind "main | faculty | admin_block | resource_centre | meeting_…"
-        uuid track_id FK
-        varchar asset_key "Versioned tilemap asset; doubles as the client's cache-bu…"
-        int width_tiles
-        int height_tiles
         boolean is_entry
+        timestamptz retired_at "Set when the map is no longer published. Never deleted."
         timestamptz created_at
         timestamptz updated_at
     }
@@ -133,16 +129,17 @@ erDiagram
         uuid map_id FK
         varchar key
         varchar name
-        space_kind_enum kind "open | classroom | meeting_room | mentor_pod | live_codin…"
+        space_kind_enum kind "Set by an admin. Null until then: not set up, admins only."
+        boolean is_map_default "The one space every map has for tiles inside no drawn spa…"
         audio_mode_enum audio_mode "the five independent behaviour dimensions"
         space_access_enum access "open | cohort | invite | request"
         outsider_visibility_enum outsider_visibility "hidden | avatars_visible | full"
         int capacity "null = uncapped"
         publish_policy_enum publish_policy "all | staff | grant_only"
-        jsonb bounds "geometry + radii, all in TILES relative to the parent map"
-        numeric audible_radius "Gain falls 1.0 -> 0 across this radius, applied client-si…"
+        numeric audible_radius "In tiles. Gain falls 1.0 -> 0 across this radius, applied…"
         numeric subscribe_radius "Slightly larger than audible_radius, and THE COST LEVER:…"
         numeric hysteresis_factor
+        timestamptz retired_at "Set when the space is no longer on its map. Never deleted."
         timestamptz created_at
         timestamptz updated_at
     }
@@ -155,18 +152,6 @@ erDiagram
         uuid granted_by FK
         timestamptz valid_from
         timestamptz valid_to
-        timestamptz created_at
-    }
-
-    PORTALS {
-        uuid id PK
-        uuid from_map_id FK
-        uuid from_space_id FK
-        jsonb from_region
-        uuid to_map_id FK
-        uuid to_space_id FK
-        jsonb to_position
-        varchar label
         timestamptz created_at
     }
 
@@ -437,16 +422,11 @@ erDiagram
     MENTORSHIP_GROUPS ||--o{ MENTORSHIP_GROUP_STUDENTS : "includes"
     COHORT_MEMBERS ||--o{ MENTORSHIP_GROUP_STUDENTS : "joins_as_student"
 
-    TRACKS ||--o{ MAPS : "has_faculty_map"
     MAPS ||--o{ SPACES : "contains"
     SPACES ||--o{ SPACE_MEMBERSHIPS : "gated_by"
     COHORT_TRACKS ||--o{ SPACE_MEMBERSHIPS : "grants"
     USERS ||--o{ SPACE_MEMBERSHIPS : "granted_to"
     USERS ||--o{ SPACE_MEMBERSHIPS : "granted_by"
-    MAPS ||--o{ PORTALS : "exits_from"
-    SPACES ||--o{ PORTALS : "departs"
-    MAPS ||--o{ PORTALS : "arrives_at"
-    SPACES ||--o{ PORTALS : "admits_to"
     SPACES ||--o{ ACCESS_REQUESTS : "knocked_on"
     USERS ||--o{ ACCESS_REQUESTS : "requests"
     USERS ||--o{ ACCESS_REQUESTS : "decides"
@@ -504,10 +484,10 @@ erDiagram
 %% -
 %% PARTIAL UNIQUE
 %%   invites(email)                      WHERE status = 'pending'
-%%   maps(is_entry)                      WHERE is_entry
-%%   maps(track_id)                      WHERE kind = 'faculty'
-%%   spaces(kind)                        WHERE kind = 'town_hall'
-%%   spaces(kind)                        WHERE kind = 'notice_board'
+%%   maps(is_entry)                      WHERE is_entry and retired_at is null
+%%   spaces(map_id)                      WHERE is_map_default
+%%   spaces(kind)                        WHERE kind = 'town_hall' and retired_at is null
+%%   spaces(kind)                        WHERE kind = 'notice_board' and retired_at is null
 %%   access_requests(space_id, user_id)  WHERE status = 'pending'
 %%   desk_claims(desk_id)                WHERE released_at is null
 %%   desk_claims(user_id)                WHERE released_at is null
@@ -537,10 +517,11 @@ erDiagram
 %%   conversation_participants(conversation_id, user_id)
 %% -
 %% CHECK
-%%   portals: from_map_id <> to_map_id
 %%   spaces: audio_mode <> 'broadcast' OR publish_policy <> 'all'
+%%   spaces: NOT is_map_default OR access = 'open'
+%%   spaces: capacity IS NULL OR capacity > 0
 %%   space_memberships: (cohort_track_id IS NULL) <> (user_id IS NULL)
-%%   maps: kind <> 'faculty' OR track_id IS NOT NULL
+%%   space_memberships: valid_to IS NULL OR valid_to > valid_from
 %%   cohort_members: role = 'student' OR status IS NULL
 %%   cohort_members: role <> 'student' OR cohort_track_id IS NOT NULL
 %%   invites: (cohort_id IS NULL) = (cohort_role IS NULL)

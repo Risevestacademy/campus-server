@@ -102,3 +102,41 @@ describe('0002 against data the old schema permitted', () => {
     expect(res.rows[0].dismissal_reason).toBeNull();
   });
 });
+
+/**
+ * 0013 gives audit_log.space_id a foreign key to the new spaces table. The
+ * audit log already holds rows in deployed databases, and it is append-only
+ * by trigger, so the constraint has to go on without touching a row.
+ */
+describe('0013 against an audit log that already has entries', () => {
+  let pg: PGlite;
+
+  beforeEach(async () => {
+    pg = new PGlite();
+    for (const f of files().slice(0, 13)) {
+      await apply(pg, f);
+    }
+    await pg.query(
+      "insert into audit_log (action, subject_type) values ('track_created', 'track')",
+    );
+  });
+
+  it('applies, leaving the entries as they were', async () => {
+    await apply(pg, files()[13]);
+
+    const res = await pg.query<{ action: string; space_id: string | null }>(
+      'select action, space_id from audit_log',
+    );
+    expect(res.rows).toEqual([{ action: 'track_created', space_id: null }]);
+  });
+
+  it('from then on refuses an entry about a space that does not exist', async () => {
+    await apply(pg, files()[13]);
+
+    await expect(
+      pg.query(
+        "insert into audit_log (action, space_id) values ('x', '00000000-0000-4000-8000-000000000000')",
+      ),
+    ).rejects.toThrow(/audit_log_space_id_spaces_id_fk/);
+  });
+});
