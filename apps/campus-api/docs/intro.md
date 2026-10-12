@@ -365,6 +365,11 @@ List endpoints accept the following query parameters:
 
 `page` must be at least 1 and `perPage` is capped at 100.
 
+In the OpenAPI document each list has a page schema of its own, named after
+its item: `GET /v1/tracks` returns `PaginatedTrackResponseDto`, whose `items`
+are `TrackResponseDto`. A generated client gets a named type per list. There
+is no generic `PaginatedResponseDto` schema.
+
 ## Client checklist
 
 1. Always check `error.code` (never an HTTP status alone) to classify failures.
