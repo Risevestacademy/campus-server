@@ -141,9 +141,12 @@ export const spaces = pgTable(
      */
     kind: spaceKindEnum('kind'),
     /**
-     * The one space every map has for every tile inside no drawn space, so
-     * the corridors and the grounds have an audio room too. It is drawn
-     * nowhere; it is whatever is left.
+     * Marks a map's default space: the one for every tile inside no drawn
+     * space, so the corridors and the grounds have an audio room too. It is
+     * drawn nowhere; it is whatever is left.
+     *
+     * A map has at most one, which is all the database can say. That every
+     * map has one is for whatever writes its rows to see to.
      */
     isMapDefault: boolean('is_map_default').notNull().default(false),
 
@@ -193,6 +196,10 @@ export const spaces = pgTable(
     // Retired or not: a key that comes back is the same space coming back,
     // with the settings it had.
     uniqueIndex('spaces_map_key_unique').on(table.mapId, table.key),
+    // Retired ones count, unlike the town hall and notice board below: a
+    // map's default keeps one key for good, is retired only with its map and
+    // comes back as the same row, so there is never a second to make room
+    // for.
     uniqueIndex('spaces_one_default_per_map')
       .on(table.mapId)
       .where(sql`${table.isMapDefault}`),

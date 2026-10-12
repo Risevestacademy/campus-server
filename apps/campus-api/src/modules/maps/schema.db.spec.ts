@@ -178,7 +178,7 @@ describe('spaces', () => {
     await expectViolation(space(), 'spaces_map_key_unique');
   });
 
-  it('gives a map one default space, and each map its own', async () => {
+  it('gives a map at most one default space, and each map its own', async () => {
     await space({ key: 'grounds', isMapDefault: true });
     await expectViolation(
       space({ key: 'more-grounds', isMapDefault: true }),
@@ -192,6 +192,30 @@ describe('spaces', () => {
     await expect(
       space({ mapId: other.id, key: 'grounds', isMapDefault: true }),
     ).resolves.toBeDefined();
+  });
+
+  /**
+   * At most one is all the database can say. Seeing that a map has its
+   * default is for whatever writes the map's rows.
+   */
+  it('does not itself give a map a default space', async () => {
+    await space();
+
+    const defaults = await db
+      .select()
+      .from(spaces)
+      .where(sql`${spaces.mapId} = ${mapId} and ${spaces.isMapDefault}`);
+    expect(defaults).toEqual([]);
+  });
+
+  /** It keeps one key for good, and comes back as the same row. */
+  it('keeps a retired default space the place of its map', async () => {
+    await space({ key: 'grounds', isMapDefault: true, retiredAt: new Date() });
+
+    await expectViolation(
+      space({ key: 'new-grounds', isMapDefault: true }),
+      'spaces_one_default_per_map',
+    );
   });
 
   /** It is the way to everywhere else; gating it shuts people out of that. */
@@ -316,6 +340,10 @@ describe('space_memberships', () => {
     await expectViolation(
       grant({ cohortTrackId: nobody }),
       'space_memberships_cohort_track_id_cohort_tracks_id_fk',
+    );
+    await expectViolation(
+      grant({ userId, grantedBy: nobody }),
+      'space_memberships_granted_by_users_id_fk',
     );
   });
 });

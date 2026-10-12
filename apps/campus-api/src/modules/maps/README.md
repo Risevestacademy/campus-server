@@ -40,9 +40,19 @@ The designer draws the rooms. Everything else on a map (the corridors, the
 grounds) is inside no drawn space, and on the first campus map that is
 about three quarters of the floor.
 
-So every map has one space with `is_map_default` set: it is drawn nowhere,
+So a map has a default space, marked `is_map_default`: it is drawn nowhere,
 and is whatever is left. It gives those tiles an audio room, and it is
 always open, because it is the way to everywhere else.
+
+**The database stops a map having two. It does not make a map have one.**
+A map row can exist with no default space, and nothing here will object.
+Giving every map its default is the job of whatever writes the map's rows,
+and until one exists the tiles outside the drawn spaces have no room at all.
+
+The default space keeps one key for as long as its map exists. It is only
+retired with its map, and comes back with it as the same row, so a retired
+one still holds the map's place: a second default under another key is
+refused.
 
 ## Rules the database enforces
 
@@ -51,7 +61,7 @@ always open, because it is the way to everywhere else.
 | A map is known by its key, once                            | `maps_key_unique`                                       |
 | One entry map, not counting retired ones                   | `maps_single_entry`                                     |
 | A space is known by its key, once per map                  | `spaces_map_key_unique`                                 |
-| One default space per map                                  | `spaces_one_default_per_map`                            |
+| At most one default space per map, retired or not          | `spaces_one_default_per_map`                            |
 | The default space is open to everybody                     | `spaces_default_is_open`                                |
 | One town hall and one notice board on the campus           | `spaces_single_town_hall`, `spaces_single_notice_board` |
 | A broadcast is not one if everybody may speak              | `spaces_broadcast_restricts_publish`                    |
