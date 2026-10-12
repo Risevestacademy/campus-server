@@ -43,9 +43,8 @@ const pageSchemas = new Map<ItemType, new () => unknown>();
 /**
  * The page of one kind of item, as a schema of its own: `items` typed as
  * that item, beside `meta`. Named after the item (`PaginatedTrackResponseDto`)
- * so a generated client gets a real, named type for every list. The name is
- * given to the schema with `@ApiSchema`; the class itself stays
- * `PaginatedPage`, whichever item it was made for.
+ * so a generated client gets a real, named type for every list. The class
+ * itself stays `PaginatedPage`, whichever item it was made for.
  *
  * One class per item type, made once: two routes listing the same thing
  * share a schema rather than registering the name twice.
