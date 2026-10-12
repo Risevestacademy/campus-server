@@ -1,5 +1,10 @@
 import { applyDecorators } from '@nestjs/common';
-import { ApiExtraModels, ApiOkResponse, ApiProperty } from '@nestjs/swagger';
+import {
+  ApiExtraModels,
+  ApiOkResponse,
+  ApiProperty,
+  ApiSchema,
+} from '@nestjs/swagger';
 
 export class PaginationMetaDto {
   @ApiProperty({ description: 'Current page number (1-based).', example: 1 })
@@ -38,7 +43,8 @@ const pageSchemas = new Map<ItemType, new () => unknown>();
 /**
  * The page of one kind of item, as a schema of its own: `items` typed as
  * that item, beside `meta`. Named after the item (`PaginatedTrackResponseDto`)
- * so a generated client gets a real, named type for every list.
+ * so a generated client gets a real, named type for every list. The class
+ * itself stays `PaginatedPage`, whichever item it was made for.
  *
  * One class per item type, made once: two routes listing the same thing
  * share a schema rather than registering the name twice.
@@ -49,6 +55,7 @@ function pageSchemaFor(itemType: ItemType): new () => unknown {
     return existing;
   }
 
+  @ApiSchema({ name: `Paginated${itemType.name}` })
   class PaginatedPage {
     @ApiProperty({
       description: 'The page of items.',
@@ -62,9 +69,6 @@ function pageSchemaFor(itemType: ItemType): new () => unknown {
     })
     meta: PaginationMetaDto;
   }
-  Object.defineProperty(PaginatedPage, 'name', {
-    value: `Paginated${itemType.name}`,
-  });
 
   pageSchemas.set(itemType, PaginatedPage);
   return PaginatedPage;
