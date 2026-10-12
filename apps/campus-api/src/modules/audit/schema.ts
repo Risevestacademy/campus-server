@@ -25,6 +25,17 @@ export enum AuditAction {
   /** An account's system_role changed; `details` has `from` and `to`. */
   SystemRoleChanged = 'system_role_changed',
   /**
+   * An admin suspended an account. `details` keeps what the admin wrote,
+   * when they wrote anything, because nowhere else on the account does —
+   * the status itself says only that it is suspended now.
+   */
+  UserSuspended = 'user_suspended',
+  /**
+   * An admin put a suspended account back to active. Sessions are not
+   * restored with it: the person signs in again.
+   */
+  UserReinstated = 'user_reinstated',
+  /**
    * An admin offered somebody a place. `details` has what was offered — the
    * cohort, the roles — and never the address, which stays on the invite.
    */

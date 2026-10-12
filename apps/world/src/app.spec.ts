@@ -9,6 +9,7 @@ import { loadEnv } from './infra/env.js';
 
 const env = loadEnv({
   AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+  DEPLOYMENT_ENVIRONMENT: 'development',
   DATABASE_URL: 'postgres://unused',
   FF_LOG_LEVEL: 'fatal',
 } as NodeJS.ProcessEnv);
@@ -155,6 +156,7 @@ describe('with the position store failing', () => {
     const world = await buildWorld(
       loadEnv({
         AUTH_SESSION_SECRET: secret,
+        DEPLOYMENT_ENVIRONMENT: 'development',
         DATABASE_URL: 'postgres://unused',
         CORS_ORIGINS: 'https://campus.example.com',
         FF_LOG_LEVEL: 'fatal',

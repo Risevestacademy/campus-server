@@ -67,6 +67,26 @@ describe('Players', () => {
     });
   });
 
+  it('stops at a wall as it does at the edge, turning to face it', () => {
+    // 3 × 1 with the middle tile walled off.
+    const world = new Players(
+      {
+        width: 3,
+        height: 1,
+        spawn: { x: 0, y: 0 },
+        walls: Uint8Array.from([0, 1, 0]),
+      },
+      STEP_MS,
+    );
+    world.join('ada', 0);
+
+    expect(world.move('ada', 'right', 1_000)).toMatchObject({
+      outcome: 'blocked',
+      player: { x: 0, y: 0, facing: 'right' },
+      changed: true,
+    });
+  });
+
   it('stops at the far edges too', () => {
     const world = players();
     world.join('ada', 0);
@@ -335,6 +355,25 @@ describe('Players', () => {
         x: 3,
         y: 2,
         facing: 'left',
+      });
+    });
+
+    /** A map published since their last visit may have built over it. */
+    it('starts at the spawn when the tile is now a wall', () => {
+      const world = new Players(
+        {
+          width: 3,
+          height: 1,
+          spawn: { x: 0, y: 0 },
+          walls: Uint8Array.from([0, 1, 0]),
+        },
+        STEP_MS,
+      );
+
+      expect(world.join('ada', 0, { x: 1, y: 0, facing: 'up' })).toMatchObject({
+        x: 0,
+        y: 0,
+        facing: 'down',
       });
     });
 

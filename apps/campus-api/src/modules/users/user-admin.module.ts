@@ -4,6 +4,7 @@ import { AdminGuard } from '../../shared/auth/admin.guard.js';
 import { SessionModule } from '../auth/session.module.js';
 import { UserDirectoryService } from './user-directory.service.js';
 import { UserRolesService } from './user-roles.service.js';
+import { UserStatusService } from './user-status.service.js';
 import { UsersController } from './users.controller.js';
 
 /**
@@ -15,6 +16,11 @@ import { UsersController } from './users.controller.js';
 @Module({
   imports: [SessionModule],
   controllers: [UsersController],
-  providers: [UserDirectoryService, UserRolesService, AdminGuard],
+  providers: [
+    UserDirectoryService,
+    UserRolesService,
+    UserStatusService,
+    AdminGuard,
+  ],
 })
 export class UserAdminModule {}

@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   uuid,
   varchar,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
 import { SystemRole, hasAdminPowers } from '@campus/session';
@@ -43,6 +44,17 @@ export const users = pgTable(
       .notNull()
       .default(SystemRole.User),
     status: userStatusEnum('status').notNull().default(UserStatus.Active),
+    /**
+     * Who suspended this account, and the system_role that account held
+     * when they did. On the row rather than in the audit log alone because
+     * reinstate has to read it: a suspension made by a super admin is
+     * lifted only by a super admin, and a plain admin's only by an admin of
+     * either rank. The role is the one held at the time, so a promotion
+     * later does not change who may lift what they suspended. Both null
+     * while the account is not suspended.
+     */
+    suspendedBy: uuid('suspended_by').references((): AnyPgColumn => users.id),
+    suspendedByRole: systemRoleEnum('suspended_by_role'),
     /**
      * Counts the times this account's sessions have been ended on purpose.
      * Every session token is signed with the value it found here, and is

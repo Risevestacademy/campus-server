@@ -18,6 +18,7 @@ const MEDIA = {
 function envWith(extra: Record<string, string> = {}) {
   return loadEnv({
     AUTH_SESSION_SECRET: SECRET,
+    DEPLOYMENT_ENVIRONMENT: 'development',
     DATABASE_URL: 'postgres://unused',
     CORS_ORIGINS: ORIGIN,
     FF_LOG_LEVEL: 'fatal',

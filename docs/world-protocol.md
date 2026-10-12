@@ -82,8 +82,8 @@ sequenceDiagram
 - **`welcome`** carries your `userId` and the timings to play by:
   `stepMs` (walking speed), `tickMs` (how often others' moves arrive) and
   `heartbeatSeconds`.
-- **`snapshot`** carries the map size and every player on it, you included.
-  Draw from it; everything after is a change to it.
+- **`snapshot`** carries which map this is and every player in your cohort
+  on it, you included. Draw from it; everything after is a change to it.
 
 You can send as soon as the socket opens. Frames sent while the server is
 still checking the session are held, not lost, and answered in order.
@@ -94,9 +94,31 @@ Positions are **tiles**, never pixels: `x` is the column from 0 at the left,
 `y` the row from 0 at the top, so `up` is `y - 1`. The tile's pixel size is
 entirely the client's — multiply by it to draw. The server never sees it.
 
-For now the map is a placeholder rectangle of `snapshot.map.width` ×
-`height`, and its edge is the only thing that blocks. Real maps, with walls,
-spaces and portals, replace it later.
+The map is the one published from the Studio, loaded once when the server
+starts. `snapshot.map` says which:
+
+```json
+{ "id": "campus", "version": "…", "width": 60, "height": 40 }
+```
+
+Load **that version**, with `fetchWorldMapManifest({ mapId: id, version })`
+from `campus-world-map`, not the current one. A map published since the server
+started has walls the server does not enforce, and every step into one would
+come back `moved` while you drew it `blocked`, or the other way round. The
+server picks up a new version only when it restarts, which closes every socket;
+the `snapshot` after you reconnect carries the new version.
+
+A tile is a wall when a collision shape covers its middle: `blocked(layout,
+tile)` from the same package gives the answer the server uses, so predict with
+it. The map's edge blocks too. `width` and `height` are in tiles.
+
+One map for now, the one people enter the campus on. Spaces and portals are
+read from it by the client but mean nothing to the server yet.
+
+In local development only, a server with no published map to load (none
+configured, none published, or Sanity out of reach) runs on a placeholder
+instead: `id` and `version` are both `"placeholder"`, there is nothing to
+load, and only the edge of `width` × `height` blocks.
 
 Two people can stand on the same tile. Nobody blocks anybody.
 
@@ -142,6 +164,11 @@ The client says which way, never where to. The server decides every position.
 
 ## Everybody else
 
+**Everybody else means everybody in your cohort.** Each cohort is its own
+campus: the cohort named when the socket opened decides whose avatars you are
+told about, and nobody in another cohort appears in your `snapshot`, `joined`,
+`left` or `moved`, or you in theirs.
+
 | Message  | When                                              | What to do              |
 | -------- | ------------------------------------------------- | ----------------------- |
 | `joined` | Somebody arrived                                  | Add their avatar        |
@@ -173,8 +200,8 @@ closes it with **4000 `entered_elsewhere`**.
 - **Entering the same cohort again**, from another tab or device, leaves the
   avatar exactly where it stood. Nobody is told anybody left or arrived.
 - **Entering a different cohort** takes the avatar out of the old one — others
-  there see `left` — and puts it into the new one, at the same position for
-  now.
+  there see `left` — and puts it into the new one, where others see `joined`.
+  It starts where they last stood in that cohort, or at the spawn.
 
 > **Do not reconnect on `entered_elsewhere`.** This is the one close the
 > client must not retry. Two tabs that both reconnected would replace each

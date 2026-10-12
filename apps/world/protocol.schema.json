@@ -182,18 +182,30 @@
         "map": {
           "type": "object",
           "properties": {
+            "id": {
+              "type": "string",
+              "description": "Which published map this is. With `version`, what to load: the server enforces exactly that one."
+            },
+            "version": {
+              "type": "string",
+              "description": "The published version the server loaded. Load this version, not the current one: a map published since would have walls the server does not."
+            },
             "width": {
               "type": "integer",
               "minimum": -9007199254740991,
-              "maximum": 9007199254740991
+              "maximum": 9007199254740991,
+              "description": "In tiles."
             },
             "height": {
               "type": "integer",
               "minimum": -9007199254740991,
-              "maximum": 9007199254740991
+              "maximum": 9007199254740991,
+              "description": "In tiles."
             }
           },
           "required": [
+            "id",
+            "version",
             "width",
             "height"
           ],
@@ -212,7 +224,7 @@
         "players"
       ],
       "additionalProperties": false,
-      "description": "Sent once, right after `welcome`: the map, and everybody on it, you included."
+      "description": "Sent once, right after `welcome`: the map, and everybody in your cohort on it, you included. Nobody from another cohort is ever in it."
     },
     "JoinedMessage": {
       "type": "object",
@@ -230,7 +242,7 @@
         "player"
       ],
       "additionalProperties": false,
-      "description": "Somebody arrived. Not sent when a socket is replaced within the same cohort, because the avatar never left."
+      "description": "Somebody arrived in your cohort. Not sent when a socket is replaced within the same cohort, because the avatar never left."
     },
     "LeftMessage": {
       "type": "object",
@@ -283,7 +295,7 @@
         "players"
       ],
       "additionalProperties": false,
-      "description": "Everybody who moved or turned since the last tick, once each, as they stand now: two steps inside one tick arrive as the second, so an entry can be more than one tile from where they were. Sent once per tick, and not at all when nobody moved. You are never in your own `moved` frame — your `moveResult` already says where you ended up."
+      "description": "Everybody in your cohort who moved or turned since the last tick, once each, as they stand now: two steps inside one tick arrive as the second, so an entry can be more than one tile from where they were. Sent once per tick, and not at all when nobody moved. You are never in your own `moved` frame — your `moveResult` already says where you ended up."
     },
     "MoveResultMessage": {
       "type": "object",
