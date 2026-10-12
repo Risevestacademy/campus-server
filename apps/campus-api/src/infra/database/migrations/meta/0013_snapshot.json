@@ -1,5 +1,5 @@
 {
-  "id": "e64b7c00-84fc-4741-ae1d-e8682bf1b402",
+  "id": "425139fe-ffc5-4679-bc00-1b8c224d57d6",
   "prevId": "499c04fb-e4ed-4963-90a6-030f49c0de14",
   "version": "7",
   "dialect": "postgresql",
@@ -137,6 +137,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "actor_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "audit_log_space_id_spaces_id_fk": {
+          "name": "audit_log_space_id_spaces_id_fk",
+          "tableFrom": "audit_log",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
           ],
           "columnsTo": [
             "id"

@@ -8,6 +8,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { CORRELATION_ID_MAX_LENGTH } from '../../shared/http/correlation-id.js';
+import { spaces } from '../maps/schema.js';
 import { users } from '../users/schema.js';
 
 /**
@@ -113,8 +114,11 @@ export const auditLog = pgTable(
     action: varchar('action', { length: 64 }).notNull(),
     subjectType: varchar('subject_type', { length: 64 }),
     subjectId: uuid('subject_id'),
-    /** No FK yet: spaces does not exist. */
-    spaceId: uuid('space_id'),
+    /**
+     * Reserved for entries about a space; nothing writes it yet. A space is
+     * retired, never deleted, so an entry keeps pointing at one that exists.
+     */
+    spaceId: uuid('space_id').references(() => spaces.id),
     details: jsonb('details'),
     /**
      * The request's correlation id, so an entry leads to its log lines. As

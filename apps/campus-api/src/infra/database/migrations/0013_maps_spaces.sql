@@ -62,4 +62,5 @@ CREATE INDEX "space_memberships_cohort_track_idx" ON "space_memberships" USING b
 CREATE UNIQUE INDEX "spaces_map_key_unique" ON "spaces" USING btree ("map_id","key");--> statement-breakpoint
 CREATE UNIQUE INDEX "spaces_one_default_per_map" ON "spaces" USING btree ("map_id") WHERE "spaces"."is_map_default";--> statement-breakpoint
 CREATE UNIQUE INDEX "spaces_single_town_hall" ON "spaces" USING btree ("kind") WHERE "spaces"."kind" = 'town_hall' and "spaces"."retired_at" is null;--> statement-breakpoint
-CREATE UNIQUE INDEX "spaces_single_notice_board" ON "spaces" USING btree ("kind") WHERE "spaces"."kind" = 'notice_board' and "spaces"."retired_at" is null;
+CREATE UNIQUE INDEX "spaces_single_notice_board" ON "spaces" USING btree ("kind") WHERE "spaces"."kind" = 'notice_board' and "spaces"."retired_at" is null;--> statement-breakpoint
+ALTER TABLE "audit_log" ADD CONSTRAINT "audit_log_space_id_spaces_id_fk" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;

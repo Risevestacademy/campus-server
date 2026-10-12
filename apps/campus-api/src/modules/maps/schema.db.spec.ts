@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
+import { auditLog } from '../audit/schema.js';
 import { cohortTracks, cohorts } from '../cohorts/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { users } from '../users/schema.js';
@@ -66,7 +67,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await db.execute(
-    sql`truncate space_memberships, spaces, maps, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate audit_log, space_memberships, spaces, maps, cohort_tracks, cohorts, tracks, users cascade`,
   );
   const [map] = await db
     .insert(maps)
@@ -281,6 +282,42 @@ describe('spaces', () => {
     await expectViolation(
       space({ mapId: '00000000-0000-4000-8000-000000000000' }),
       'spaces_map_id_maps_id_fk',
+    );
+  });
+});
+
+/**
+ * audit_log.space_id was a bare id until there were spaces to point at. An
+ * entry about a space is evidence, and one naming a space that never existed
+ * is evidence of nothing.
+ */
+describe('an audit entry about a space', () => {
+  const entry = (spaceId: string) =>
+    db.insert(auditLog).values({ action: 'space_updated', spaceId });
+
+  it('names a space that exists', async () => {
+    const [{ id }] = await space();
+
+    await expect(entry(id)).resolves.toBeDefined();
+    await expectViolation(
+      entry('00000000-0000-4000-8000-000000000000'),
+      'audit_log_space_id_spaces_id_fk',
+    );
+  });
+
+  /** A space is retired, never deleted, so the entry keeps something to name. */
+  it('still names it once the space is retired', async () => {
+    const [{ id }] = await space();
+    await entry(id);
+
+    await db
+      .update(spaces)
+      .set({ retiredAt: new Date() })
+      .where(sql`${spaces.id} = ${id}`);
+
+    await expectViolation(
+      db.delete(spaces).where(sql`${spaces.id} = ${id}`),
+      'audit_log_space_id_spaces_id_fk',
     );
   });
 });

@@ -67,6 +67,7 @@ refused.
 | A broadcast is not one if everybody may speak              | `spaces_broadcast_restricts_publish`                    |
 | A capacity, when there is one, is at least 1               | `spaces_capacity_positive`                              |
 | A grant is to one person or one track, not both or neither | `space_memberships_one_subject`                         |
+| An audit entry about a space names one that exists         | `audit_log_space_id_spaces_id_fk`                       |
 | A grant does not end before it starts                      | `space_memberships_valid_window`                        |
 
 They are tested against a real PostgreSQL engine, with the committed
@@ -75,8 +76,8 @@ migrations applied, in `schema.db.spec.ts`.
 ## Nothing is deleted
 
 A map or a space that is no longer published is **retired** (`retired_at`),
-not removed: memberships, and later sessions and schedules, still point at
-it. A key that comes back is the same row coming back, with the settings it
+not removed: memberships, audit entries, and later sessions and schedules,
+still point at it. A key that comes back is the same row coming back, with the settings it
 had, which is why the key stays unique whether or not the row is retired. A
 retired town hall, notice board or entry map does not stop another taking
 its place.
