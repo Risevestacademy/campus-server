@@ -79,8 +79,15 @@ const store = {
   failLoad: false,
   failSave: false,
   loads: 0,
+  /**
+   * Loads a test holds open, by cohort, so a second connection for the same
+   * account can take its place while one waits on its saved position.
+   */
+  heldLoads: new Map<string, Promise<void>>(),
   load: async (userId: string, cohortId: string) => {
     store.loads += 1;
+    const held = store.heldLoads.get(cohortId);
+    if (held) await held;
     if (store.failLoad) throw new Error('redis is down');
     return store.positions.get(positionKey(userId, cohortId)) as
       | { x: number; y: number; facing: 'up' | 'down' | 'left' | 'right' }
@@ -246,6 +253,7 @@ beforeEach(() => {
   store.failLoad = false;
   store.failSave = false;
   store.loads = 0;
+  store.heldLoads.clear();
   presence.entries.clear();
   presence.heldElsewhere.clear();
   presence.failing = false;
@@ -1708,6 +1716,362 @@ describe('movement', () => {
       ).resolves.toMatchObject({ outcome: 'moved', player: { x: 0, y: 1 } });
 
       await leave(second);
+    });
+  });
+
+  /**
+   * The upgrade loads the account's saved position for the cohort it is
+   * entering, and that read is the one step that waits. A second connection
+   * for the same account can take its place while it does: these tests hold a
+   * cohort's load open to make that race reliable.
+   */
+  describe('a connection that waits while the account moves', () => {
+    const cookie = async (userId: string) =>
+      `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`;
+
+    /**
+     * Holds every load for one cohort until `release`. A load already waiting
+     * still gets the release; later loads for that cohort do not wait.
+     */
+    function hold(cohortId: string) {
+      const gate = deferred<void>();
+      store.heldLoads.set(cohortId, gate.promise);
+      return {
+        release: () => {
+          store.heldLoads.delete(cohortId);
+          gate.resolve();
+        },
+      };
+    }
+
+    it('starts the winner in its own cohort, saving the one it left, when another takes the account during the load', async () => {
+      const ada = person();
+      const backend = hold('cohort-backend');
+
+      // A socket for Backend, whose load we hold. It waits there.
+      const inBackend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      await expect.poll(() => store.loads).toBe(1);
+
+      // Meanwhile the same account enters Frontend and moves.
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      backend.release();
+
+      // Backend ends up holding the account, at its own saved position or the
+      // spawn — never where it stood in Frontend.
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual(
+        expect.objectContaining({ userId: ada, x: 0, y: 0 }),
+      );
+      expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
+        'cohort-backend',
+      );
+
+      // Frontend's live position is saved under Frontend; the switch writes
+      // nothing under Backend.
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
+        false,
+      );
+
+      // The connection Backend displaced goes, as any replaced one does.
+      await inFrontend.settled;
+
+      // A step taken in Backend now updates only the Backend key.
+      move(inBackend, 'down', 1);
+      await waitFor(inBackend, (m) => m.type === 'moveResult');
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-backend')), {
+          timeout: 3_000,
+        })
+        .toEqual({ x: 0, y: 1, facing: 'down' });
+      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
+
+      await leave(inBackend);
+    });
+
+    it("starts at the destination's saved position when the switch is found only after the load", async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      const backend = hold('cohort-backend');
+
+      const inBackend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      await expect.poll(() => store.loads).toBe(1);
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      backend.release();
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      // The destination keeps its own saved position.
+      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
+      await inFrontend.settled;
+      await leave(inBackend);
+    });
+
+    it('keeps the cohort left saved when the connection that moved in it closes during the load', async () => {
+      const ada = person();
+      const backend = hold('cohort-backend');
+
+      const inBackend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      await expect.poll(() => store.loads).toBe(1);
+
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      await leave(inFrontend);
+      // Only a reconnect memory for Frontend remains, and it saved where the
+      // account stood there.
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+
+      backend.release();
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual(
+        expect.objectContaining({ userId: ada, x: 0, y: 0 }),
+      );
+      // The Frontend memory is discarded; Frontend's position is still saved.
+      expect(world.gateway.players.isRemembered(ada)).toBe(false);
+      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
+        x: 1,
+        y: 0,
+        facing: 'right',
+      });
+
+      await leave(inBackend);
+    });
+
+    it('replaces without an extra save when the second connection is the same cohort', async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      const backend = hold('cohort-backend');
+
+      const first = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      const second = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      await expect.poll(() => store.loads).toBe(2);
+
+      backend.release();
+
+      const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      await first.settled;
+      expect(
+        world.gateway.connections.all().filter((c) => c.userId === ada),
+      ).toHaveLength(1);
+      // Same-cohort replacement leaves the avatar untouched and writes
+      // nothing: the store still holds only Backend's own saved position.
+      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+
+      await leave(second);
+    });
+
+    it('aborts a socket that closes while its load is in flight, with no avatar and no write', async () => {
+      const ada = person();
+      const backend = hold('cohort-backend');
+
+      const dying = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      await expect.poll(() => store.loads).toBe(1);
+
+      // The socket is paused while it waits, so a close handshake cannot
+      // finish; dropping the connection is how the server learns it is gone.
+      dying.ws.terminate();
+      await dying.settled;
+      await quiet();
+
+      backend.release();
+      await quiet();
+
+      expect(world.gateway.connections.forUser(ada)).toBeUndefined();
+      expect(world.gateway.players.has(ada)).toBe(false);
+      expect(store.positions.size).toBe(0);
+    });
+
+    it('starts at the spawn when the load fails during the race', async () => {
+      const ada = person();
+      const backend = hold('cohort-backend');
+
+      const inBackend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      await expect.poll(() => store.loads).toBe(1);
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      store.failLoad = true;
+      backend.release();
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual({
+        userId: ada,
+        x: 0,
+        y: 0,
+        facing: 'down',
+      });
+      // The switch still saves the cohort left; the failed read only means
+      // the destination starts at the spawn.
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+
+      await inFrontend.settled;
+      await leave(inBackend);
+    });
+
+    it("is still correct when the second connection's load completes first", async () => {
+      const ada = person();
+      const frontend = hold('cohort-frontend');
+      const backend = hold('cohort-backend');
+
+      const inBackend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      const inFrontend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-frontend',
+      );
+      await expect.poll(() => store.loads).toBe(2);
+
+      // Frontend's load answers first: it joins there and moves.
+      frontend.release();
+      await waitFor(inFrontend, (m) => m.type === 'snapshot');
+      move(inFrontend, 'right', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+
+      // Backend's load then answers, finding the account in Frontend.
+      backend.release();
+
+      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual(
+        expect.objectContaining({ userId: ada, x: 0, y: 0 }),
+      );
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
+        false,
+      );
+
+      await inFrontend.settled;
+      await leave(inBackend);
+    });
+
+    it('keeps one avatar and both saved positions when both connections wait', async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada, 'cohort-backend'), {
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      store.positions.set(positionKey(ada, 'cohort-frontend'), {
+        x: 4,
+        y: 1,
+        facing: 'right',
+      });
+      const frontend = hold('cohort-frontend');
+      const backend = hold('cohort-backend');
+
+      const inBackend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-backend',
+      );
+      const inFrontend = connect(
+        { origin: ORIGIN, cookie: await cookie(ada) },
+        'cohort-frontend',
+      );
+      await expect.poll(() => store.loads).toBe(2);
+
+      backend.release();
+      frontend.release();
+
+      await expect
+        .poll(() => world.gateway.connections.forUser(ada) !== undefined)
+        .toBe(true);
+      await quiet();
+
+      // Exactly one connection, one avatar, and neither cohort's saved
+      // position lost or overwritten by the switch.
+      expect(
+        world.gateway.connections.all().filter((c) => c.userId === ada),
+      ).toHaveLength(1);
+      expect(
+        world.gateway.players.all().filter((p) => p.userId === ada),
+      ).toHaveLength(1);
+      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
+        x: 3,
+        y: 2,
+        facing: 'left',
+      });
+      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
+        x: 4,
+        y: 1,
+        facing: 'right',
+      });
+
+      world.gateway.connections.forUser(ada)?.socket.close();
+      await Promise.all([inBackend.settled, inFrontend.settled]);
     });
   });
 
