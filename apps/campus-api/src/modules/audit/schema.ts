@@ -89,6 +89,13 @@ export enum AuditAction {
    * and where are read from the row rather than repeated here.
    */
   GuestVisitExtended = 'guest_visit_extended',
+  /**
+   * An admin marked a piece of feedback dealt with, or put it back to open.
+   * `details` is empty: what a member wrote is theirs, and often about
+   * somebody else, so it stays on the feedback and never comes here.
+   */
+  FeedbackResolved = 'feedback_resolved',
+  FeedbackReopened = 'feedback_reopened',
 }
 
 export enum AuditSubjectType {
@@ -98,6 +105,7 @@ export enum AuditSubjectType {
   Cohort = 'cohort',
   CohortTrack = 'cohort_track',
   Track = 'track',
+  Feedback = 'feedback',
 }
 
 /**
