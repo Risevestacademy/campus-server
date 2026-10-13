@@ -89,6 +89,18 @@ export enum AuditAction {
    * and where are read from the row rather than repeated here.
    */
   GuestVisitExtended = 'guest_visit_extended',
+  /**
+   * An admin's sync changed what the database holds of a map: the map was
+   * new, came back, became or stopped being the entry map, or gained, lost
+   * or regained spaces. `details` says which, by key, and the published
+   * version the sync read. A sync that changed nothing writes nothing.
+   */
+  MapSynced = 'map_synced',
+  /**
+   * A sync found a map no longer published and retired it, with every space
+   * on it. The rows stay; `details` lists the spaces that went with it.
+   */
+  MapRetired = 'map_retired',
 }
 
 export enum AuditSubjectType {
@@ -98,6 +110,7 @@ export enum AuditSubjectType {
   Cohort = 'cohort',
   CohortTrack = 'cohort_track',
   Track = 'track',
+  Map = 'map',
 }
 
 /**

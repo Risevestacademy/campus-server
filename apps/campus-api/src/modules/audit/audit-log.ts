@@ -142,6 +142,25 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.Invite;
     details: { cohortId: string | null; invitedBy: string };
   };
+  [AuditAction.MapSynced]: {
+    subject: AuditSubjectType.Map;
+    details: {
+      key: string;
+      /** The published version the sync read. */
+      version: string;
+      /** `created`, `restored` after being retired, or `updated`. */
+      outcome: string;
+      isEntry: boolean;
+      /** Space keys, in the order the map has them. */
+      spacesAdded: string[];
+      spacesRestored: string[];
+      spacesRetired: string[];
+    };
+  };
+  [AuditAction.MapRetired]: {
+    subject: AuditSubjectType.Map;
+    details: { key: string; spacesRetired: string[] };
+  };
   [AuditAction.CohortCreated]: {
     subject: AuditSubjectType.Cohort;
     details: CohortSnapshot;

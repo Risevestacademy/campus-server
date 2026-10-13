@@ -67,6 +67,7 @@ describe('OpenAPI security (e2e)', () => {
     ['/v1/invites/flag', 'post'],
     ['/v1/users', 'get'],
     ['/v1/audit-log', 'get'],
+    ['/v1/maps/sync', 'post'],
     ['/v1/users/me', 'get'],
     ['/v1/users/me', 'patch'],
     ['/v1/users/{id}/profile', 'get'],
