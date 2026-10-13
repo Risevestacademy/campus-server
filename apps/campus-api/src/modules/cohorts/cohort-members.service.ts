@@ -4,13 +4,22 @@ import { type SQL, and, eq, gt, isNull, ne, not, or, sql } from 'drizzle-orm';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { tracks } from '../tracks/schema.js';
+import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
   CohortConflictException,
   CohortInvalidArgumentException,
   CohortMemberNotFoundException,
 } from './cohorts.exceptions.js';
 import type { CohortMemberResponseDto } from './dto/cohort-response.dto.js';
-import { CohortRole, StudentStatus, cohortMembers, cohorts } from './schema.js';
+import type { MoveMemberTrackResponseDto } from './dto/move-track.dto.js';
+import {
+  CohortRole,
+  StudentStatus,
+  cohortMembers,
+  cohorts,
+  cohortTracks,
+} from './schema.js';
 
 /**
  * What a live place on the roster is, as one expression.
@@ -258,6 +267,137 @@ export class CohortMembersService {
         // Straight back what was written: the row repeats it as nullable,
         // and a guest's is never null.
         accessExpiresAt,
+      };
+    });
+  }
+
+  /**
+   * Moves a student to another track the same cohort runs.
+   *
+   * One row, one transaction: the track the membership is on is replaced and
+   * the entry appended together, so neither lands without the other. The row
+   * is read under a lock, so two moves racing each see the track the other
+   * left rather than both deciding against the same one.
+   *
+   * Only a student has a track to move: staff and guests are refused with a
+   * 409. The target has to be a track this cohort actually runs — one another
+   * cohort runs is refused, and a track id that names nothing is a 404 — and
+   * the move has to change something, so the track they are already on is a
+   * 409 too. Nothing about the membership but its track is touched: status,
+   * end date and joined date stay as they were.
+   *
+   * Refusals: no such membership is a 404; one that has ended, is not a
+   * student, is already on the target, or names a track this cohort does not
+   * run is a 409; a track id that names no catalogue track is a 404.
+   */
+  async moveMemberTrack(
+    cohortId: string,
+    userId: string,
+    trackId: string,
+    audit: AuditContext,
+  ): Promise<MoveMemberTrackResponseDto> {
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(cohortMembers)
+        .where(
+          and(
+            eq(cohortMembers.cohortId, cohortId),
+            eq(cohortMembers.userId, userId),
+          ),
+        )
+        .for('update');
+      if (!existing) {
+        throw new CohortMemberNotFoundException(
+          `No membership for ${userId} in cohort ${cohortId}`,
+          { cohortId, userId },
+        );
+      }
+      if (existing.leftAt !== null) {
+        throw new CohortConflictException('That membership has already ended', {
+          cohortId,
+          userId,
+          leftAt: existing.leftAt,
+        });
+      }
+      if (existing.role !== CohortRole.Student) {
+        throw new CohortConflictException(
+          'Only a student has a track to move',
+          {
+            cohortId,
+            userId,
+            role: existing.role,
+          },
+        );
+      }
+
+      // The catalogue track, then the cohort's own link to it. Checked in
+      // that order so an id that names nothing is its own 404, while a real
+      // track this cohort does not run is the conflict it is.
+      const [track] = await tx
+        .select()
+        .from(tracks)
+        .where(eq(tracks.id, trackId))
+        .limit(1);
+      if (!track) {
+        throw new TrackNotFoundException(`Track ${trackId} not found`, {
+          trackId,
+        });
+      }
+      const [link] = await tx
+        .select()
+        .from(cohortTracks)
+        .where(
+          and(
+            eq(cohortTracks.cohortId, cohortId),
+            eq(cohortTracks.trackId, trackId),
+          ),
+        )
+        .limit(1);
+      if (!link) {
+        throw new CohortConflictException(
+          `Track ${track.code} is not run by this cohort`,
+          { cohortId, trackId },
+        );
+      }
+      if (existing.cohortTrackId === link.id) {
+        throw new CohortConflictException(
+          `The student is already on track ${track.code}`,
+          { cohortId, userId, trackId },
+        );
+      }
+
+      // What the entry records the move replaced. The CHECK makes a
+      // student's track non-null, so this is only null for a row the schema
+      // could not have written; read it rather than assume.
+      let previousTrackId: string | null = null;
+      if (existing.cohortTrackId !== null) {
+        const [previousLink] = await tx
+          .select({ trackId: cohortTracks.trackId })
+          .from(cohortTracks)
+          .where(eq(cohortTracks.id, existing.cohortTrackId))
+          .limit(1);
+        previousTrackId = previousLink?.trackId ?? null;
+      }
+
+      const [row] = await tx
+        .update(cohortMembers)
+        .set({ cohortTrackId: link.id })
+        .where(eq(cohortMembers.id, existing.id))
+        .returning();
+      await writeAuditEntry(tx, {
+        ...audit,
+        action: AuditAction.MemberTrackChanged,
+        subject: { type: AuditSubjectType.CohortMember, id: row.id },
+        details: { cohortId, trackId, previousTrackId },
+      });
+
+      return {
+        id: row.id,
+        cohortId: row.cohortId,
+        userId: row.userId,
+        role: row.role,
+        track: { id: track.id, name: track.name, code: track.code },
       };
     });
   }

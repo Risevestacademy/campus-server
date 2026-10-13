@@ -1,5 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,7 @@ const repository = new CohortMembersService(pglite as unknown as Db);
 let userId: string;
 let cohortId: string;
 let cohortTrackId: string;
+let baseTrackId: string;
 
 beforeAll(async () => {
   await migrate(pglite, { migrationsFolder: MIGRATIONS });
@@ -52,6 +53,7 @@ beforeEach(async () => {
     .insert(tracks)
     .values({ name: 'Backend', code: 'BACKEND' })
     .returning({ trackId: tracks.id });
+  baseTrackId = trackId;
 
   [{ cohortTrackId }] = await pglite
     .insert(cohortTracks)
@@ -357,5 +359,270 @@ describe('extendGuestVisit', () => {
     ).rejects.toThrow(/No membership/);
 
     expect(await pglite.select().from(auditLog)).toHaveLength(0);
+  });
+});
+
+describe('moveMemberTrack', () => {
+  let adminId: string;
+
+  const actor = () => ({ actorUserId: adminId });
+
+  const membershipOf = async (id = userId, cohort = cohortId) => {
+    const [row] = await pglite
+      .select()
+      .from(cohortMembers)
+      .where(
+        and(eq(cohortMembers.userId, id), eq(cohortMembers.cohortId, cohort)),
+      );
+    return row;
+  };
+
+  // Only the moves, so the cohort fixture's own setup does not have to be
+  // accounted for.
+  const entries = () =>
+    pglite
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, AuditAction.MemberTrackChanged))
+      .orderBy(auditLog.createdAt);
+
+  /** A fresh catalogue track, attached to a cohort, so it is one it runs. */
+  const attachTrack = async (
+    options: { cohort?: string; name?: string; code?: string } = {},
+  ) => {
+    const [{ id: trackId }] = await pglite
+      .insert(tracks)
+      .values({
+        name: options.name ?? 'Data',
+        code: options.code ?? 'DATA',
+      })
+      .returning({ id: tracks.id });
+    const [{ id: linkId }] = await pglite
+      .insert(cohortTracks)
+      .values({ cohortId: options.cohort ?? cohortId, trackId })
+      .returning({ id: cohortTracks.id });
+    return { trackId, linkId };
+  };
+
+  beforeEach(async () => {
+    [{ userId: adminId }] = await pglite
+      .insert(users)
+      .values({ email: 'admin@campus.local' })
+      .returning({ userId: users.id });
+  });
+
+  it('moves the student, and records the old and new track once', async () => {
+    const target = await attachTrack({ name: 'Data', code: 'DATA' });
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    const before = await membershipOf();
+
+    const row = await repository.moveMemberTrack(
+      cohortId,
+      userId,
+      target.trackId,
+      actor(),
+    );
+
+    expect(row).toEqual({
+      id: before.id,
+      cohortId,
+      userId,
+      role: CohortRole.Student,
+      track: { id: target.trackId, name: 'Data', code: 'DATA' },
+    });
+    expect(await membershipOf()).toMatchObject({
+      cohortTrackId: target.linkId,
+      role: CohortRole.Student,
+      status: StudentStatus.Active,
+      leftAt: null,
+      joinedAt: before.joinedAt,
+    });
+
+    expect(await entries()).toEqual([
+      expect.objectContaining({
+        actorUserId: adminId,
+        action: AuditAction.MemberTrackChanged,
+        subjectType: AuditSubjectType.CohortMember,
+        subjectId: before.id,
+        details: {
+          cohortId,
+          trackId: target.trackId,
+          previousTrackId: baseTrackId,
+        },
+      }),
+    ]);
+  });
+
+  it('refuses a track this cohort does not run, even a real one', async () => {
+    const [{ id: otherCohort }] = await pglite
+      .insert(cohorts)
+      .values({ name: 'Cohort 3', code: 'C3' })
+      .returning({ id: cohorts.id });
+    const target = await attachTrack({
+      cohort: otherCohort,
+      name: 'Data',
+      code: 'DATA',
+    });
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+
+    await expect(
+      repository.moveMemberTrack(cohortId, userId, target.trackId, actor()),
+    ).rejects.toMatchObject({
+      code: ExceptionCode.Conflict,
+      details: { cohortId, trackId: target.trackId },
+    });
+
+    expect((await membershipOf()).cohortTrackId).toBe(cohortTrackId);
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('refuses a track id that names no track, and writes nothing', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    const missing = '99999999-9999-4999-8999-999999999999';
+
+    await expect(
+      repository.moveMemberTrack(cohortId, userId, missing, actor()),
+    ).rejects.toMatchObject({ code: ExceptionCode.NotFound });
+
+    expect((await membershipOf()).cohortTrackId).toBe(cohortTrackId);
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('refuses someone with no membership in the cohort', async () => {
+    const missing = '99999999-9999-4999-8999-999999999999';
+
+    await expect(
+      repository.moveMemberTrack(cohortId, missing, baseTrackId, actor()),
+    ).rejects.toMatchObject({ code: ExceptionCode.NotFound });
+
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('refuses a membership that has already ended', async () => {
+    const target = await attachTrack();
+    await pglite.insert(cohortMembers).values({
+      ...student(StudentStatus.Active),
+      leftAt: new Date(),
+    });
+
+    await expect(
+      repository.moveMemberTrack(cohortId, userId, target.trackId, actor()),
+    ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+    expect((await membershipOf()).cohortTrackId).toBe(cohortTrackId);
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it.each([CohortRole.Professor, CohortRole.Mentor])(
+    'refuses a %s, who has no student track to move',
+    async (role) => {
+      const target = await attachTrack();
+      await pglite
+        .insert(cohortMembers)
+        .values({ cohortId, userId, role, status: null });
+
+      await expect(
+        repository.moveMemberTrack(cohortId, userId, target.trackId, actor()),
+      ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+      expect(await entries()).toHaveLength(0);
+    },
+  );
+
+  it('refuses a guest', async () => {
+    const target = await attachTrack();
+    await pglite.insert(cohortMembers).values({
+      cohortId,
+      userId,
+      role: CohortRole.Guest,
+      accessExpiresAt: new Date(Date.now() + 86_400_000),
+    });
+
+    await expect(
+      repository.moveMemberTrack(cohortId, userId, target.trackId, actor()),
+    ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('refuses moving to the track they are already on', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+
+    await expect(
+      repository.moveMemberTrack(cohortId, userId, baseTrackId, actor()),
+    ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+    expect((await membershipOf()).cohortTrackId).toBe(cohortTrackId);
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it("leaves the same student's membership in another cohort alone", async () => {
+    const [{ id: otherCohort }] = await pglite
+      .insert(cohorts)
+      .values({ name: 'Cohort 3', code: 'C3' })
+      .returning({ id: cohorts.id });
+    const other = await attachTrack({
+      cohort: otherCohort,
+      name: 'Design',
+      code: 'PD',
+    });
+    const target = await attachTrack();
+    await pglite.insert(cohortMembers).values([
+      student(StudentStatus.Active),
+      {
+        cohortId: otherCohort,
+        userId,
+        cohortTrackId: other.linkId,
+        role: CohortRole.Student,
+        status: StudentStatus.Active,
+      },
+    ]);
+
+    await repository.moveMemberTrack(cohortId, userId, target.trackId, actor());
+
+    expect((await membershipOf(userId, otherCohort)).cohortTrackId).toBe(
+      other.linkId,
+    );
+    expect(await entries()).toHaveLength(1);
+  });
+
+  /**
+   * The entry commits with the change, so a fault writing it takes the move
+   * with it. The actor id is a foreign key, so one that names no account is a
+   * real failure of the same insert, after the row was updated.
+   */
+  it('rolls the move back when the entry cannot be written', async () => {
+    const target = await attachTrack();
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    const missing = '99999999-9999-4999-8999-999999999999';
+
+    await expect(
+      repository.moveMemberTrack(cohortId, userId, target.trackId, {
+        actorUserId: missing,
+      }),
+    ).rejects.toThrow();
+
+    expect((await membershipOf()).cohortTrackId).toBe(cohortTrackId);
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('records the second move against the first move’s new track', async () => {
+    const first = await attachTrack({ name: 'Data', code: 'DATA' });
+    const second = await attachTrack({ name: 'Design', code: 'PD' });
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+
+    await repository.moveMemberTrack(cohortId, userId, first.trackId, actor());
+    await repository.moveMemberTrack(cohortId, userId, second.trackId, actor());
+
+    const written = await entries();
+    expect(written).toHaveLength(2);
+    expect(written[0].details).toMatchObject({
+      trackId: first.trackId,
+      previousTrackId: baseTrackId,
+    });
+    expect(written[1].details).toMatchObject({
+      trackId: second.trackId,
+      previousTrackId: first.trackId,
+    });
   });
 });

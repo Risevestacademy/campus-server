@@ -89,6 +89,12 @@ export enum AuditAction {
    * and where are read from the row rather than repeated here.
    */
   GuestVisitExtended = 'guest_visit_extended',
+  /**
+   * An admin moved a student to another track the same cohort runs.
+   * `details` has the track before and after, as catalogue ids; the subject
+   * says which membership, so who and where are read from the row.
+   */
+  MemberTrackChanged = 'member_track_changed',
 }
 
 export enum AuditSubjectType {
