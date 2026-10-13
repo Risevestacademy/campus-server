@@ -632,6 +632,19 @@ export function registerGateway(
       }
     }
 
+    /**
+     * The cohort this account occupies in this process right now, if any: the
+     * open tab's, or the one a reconnect memory was left in. Asked more than
+     * once because the load below waits, and another connection for the same
+     * account can take its place while it does.
+     */
+    const heldCohortOf = (userId: string): string | undefined => {
+      const previous = connections.forUser(userId);
+      return players.has(userId)
+        ? previous?.cohortId
+        : players.rememberedCohort(userId);
+    };
+
     // The cohort this account occupies here, if any: the open tab's, or the
     // one a reconnect memory was left in. A connection naming another cohort
     // is a switch, and starts from the cohort it is entering — never from
@@ -645,10 +658,7 @@ export function registerGateway(
     // this same cohort — another tab, or a reconnect within the grace.
     let saved: SavedPosition | undefined;
     if (decision.ok) {
-      const previous = connections.forUser(decision.claims.userId);
-      heldCohort = players.has(decision.claims.userId)
-        ? previous?.cohortId
-        : players.rememberedCohort(decision.claims.userId);
+      heldCohort = heldCohortOf(decision.claims.userId);
       switchingCohort =
         heldCohort !== undefined && heldCohort !== decision.cohortId;
 
@@ -679,6 +689,16 @@ export function registerGateway(
       refuse(ws, decision.refusal);
       return;
     }
+
+    // Asked again, now the load has returned: another connection for the same
+    // account may have taken its place while it waited, in this cohort or
+    // another. The answer from before the load no longer describes what the
+    // account holds: reusing it would start this connection from the cohort it
+    // is leaving and never save that cohort. No await from here to the join, so
+    // this stands until the avatar is placed.
+    heldCohort = heldCohortOf(decision.claims.userId);
+    switchingCohort =
+      heldCohort !== undefined && heldCohort !== decision.cohortId;
 
     const connection: Connection = {
       id: randomUUID(),
