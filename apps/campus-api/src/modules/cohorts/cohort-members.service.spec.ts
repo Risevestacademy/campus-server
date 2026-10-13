@@ -464,6 +464,21 @@ describe('endMembership', () => {
       leftAt: now,
       dismissalReason: 'Left the programme',
     });
+
+    const written = await entries();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      action: AuditAction.MembershipEnded,
+      subjectType: AuditSubjectType.CohortMember,
+      subjectId: row.id,
+      actorUserId: adminId,
+      details: {
+        cohortId,
+        role: CohortRole.Student,
+        status: null,
+        reason: 'Left the programme',
+      },
+    });
   });
 
   it('removes staff', async () => {
@@ -483,6 +498,21 @@ describe('endMembership', () => {
 
     expect(row).toMatchObject({ role: CohortRole.Professor, status: null });
     expect(await membershipOf()).toMatchObject({ status: null, leftAt: now });
+
+    const written = await entries();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      action: AuditAction.MembershipEnded,
+      subjectType: AuditSubjectType.CohortMember,
+      subjectId: row.id,
+      actorUserId: adminId,
+      details: {
+        cohortId,
+        role: CohortRole.Professor,
+        status: null,
+        reason: null,
+      },
+    });
   });
 
   it('removes a guest', async () => {
@@ -509,6 +539,21 @@ describe('endMembership', () => {
       leftAt: now,
     });
     expect(await membershipOf()).toMatchObject({ leftAt: now });
+
+    const written = await entries();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({
+      action: AuditAction.MembershipEnded,
+      subjectType: AuditSubjectType.CohortMember,
+      subjectId: row.id,
+      actorUserId: adminId,
+      details: {
+        cohortId,
+        role: CohortRole.Guest,
+        status: null,
+        reason: null,
+      },
+    });
   });
 
   it('refuses a membership nobody in that cohort has, and records nothing', async () => {

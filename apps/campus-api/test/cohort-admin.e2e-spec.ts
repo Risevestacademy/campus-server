@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { ThrottlerStorage } from '@nestjs/throttler';
 import { eq, and, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -41,6 +42,20 @@ const MIGRATIONS = fileURLToPath(
 const SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
 const MISSING = '99999999-9999-4999-8999-999999999999';
 const ORIGIN = 'http://localhost:3000';
+/**
+ * A rate limiter that never counts. These routes are hammered by the tests —
+ * five actions across setup, success, roster and revocation — which a real
+ * 100-a-minute bucket would run through. The limit has its own test, against
+ * an app that keeps the real one (rate-limit.e2e-spec.ts).
+ */
+const unlimited = {
+  increment: async () => ({
+    totalHits: 1,
+    timeToExpire: 0,
+    isBlocked: false,
+    timeToBlockExpire: 0,
+  }),
+};
 const db = drizzle(new PGlite(), { schema });
 
 /**
@@ -97,6 +112,8 @@ describe('cohort and track admin routes (e2e)', () => {
       .useValue(db)
       .overrideProvider(EMAIL_SENDER)
       .useValue(disabledEmailSender)
+      .overrideProvider(ThrottlerStorage)
+      .useValue(unlimited)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -1252,12 +1269,14 @@ describe('cohort and track admin routes (e2e)', () => {
       ['remove', null],
     ] as const;
 
+    const reasonFor = (action: string) =>
+      action === 'dismiss' ? 'Posted the answer' : 'No longer attending';
+
     it.each(ACTIONS)(
       '%s ends the membership and records the admin',
       async (action, status) => {
         const member = await makeStudent();
-        const reason =
-          action === 'dismiss' ? 'Posted the answer' : 'No longer attending';
+        const reason = reasonFor(action);
 
         const res = await end(action, member.id, { reason }).expect(200);
 
@@ -1300,41 +1319,46 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(res.body.error.code).toBe('FORBIDDEN');
     });
 
-    it('refuses the member’s next request with the session they already held', async () => {
-      const member = await makeStudent();
-      await as(memberCookie).get('/v1/auth/me').expect(200);
+    it.each(ACTIONS)(
+      '%s refuses the member’s next request with the session they already held',
+      async (action) => {
+        const member = await makeStudent();
+        await as(memberCookie).get('/v1/auth/me').expect(200);
 
-      await end('withdraw', member.id).expect(200);
+        await end(action, member.id, { reason: reasonFor(action) }).expect(200);
 
-      const res = await as(memberCookie).get('/v1/auth/me');
-      expect(res.status).toBe(401);
-    });
+        const res = await as(memberCookie).get('/v1/auth/me');
+        expect(res.status).toBe(401);
+      },
+    );
 
-    it('lists the ended member under state=ended, and drops them from the default roster', async () => {
-      const member = await makeStudent();
+    it.each(ACTIONS)(
+      '%s leaves the member under state=ended with the status and reason, and off the default roster',
+      async (action, status) => {
+        const member = await makeStudent();
+        const reason = reasonFor(action);
 
-      await end('dismiss', member.id, { reason: 'Posted the answer' }).expect(
-        200,
-      );
+        await end(action, member.id, { reason }).expect(200);
 
-      const ended = await as(adminCookie)
-        .get(`/v1/cohorts/${cohortId}/members?state=ended`)
-        .expect(200);
-      expect(ended.body.items).toEqual([
-        expect.objectContaining({
-          user: expect.objectContaining({ email: 'member@campus.local' }),
-          role: CohortRole.Student,
-          status: StudentStatus.Dismissed,
-          state: 'ended',
-          dismissalReason: 'Posted the answer',
-        }),
-      ]);
+        const ended = await as(adminCookie)
+          .get(`/v1/cohorts/${cohortId}/members?state=ended`)
+          .expect(200);
+        expect(ended.body.items).toEqual([
+          expect.objectContaining({
+            user: expect.objectContaining({ email: 'member@campus.local' }),
+            role: CohortRole.Student,
+            status,
+            state: 'ended',
+            dismissalReason: reason,
+          }),
+        ]);
 
-      const live = await as(adminCookie)
-        .get(`/v1/cohorts/${cohortId}/members`)
-        .expect(200);
-      expect(live.body.items).toEqual([]);
-    });
+        const live = await as(adminCookie)
+          .get(`/v1/cohorts/${cohortId}/members`)
+          .expect(200);
+        expect(live.body.items).toEqual([]);
+      },
+    );
 
     it('answers 400 for a bad id and 404 for no such membership', async () => {
       const member = await makeStudent();
@@ -1371,11 +1395,12 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(new Date(res.body.leftAt).getFullYear()).toBeGreaterThan(2020);
     });
 
-    it('refuses a second end with a 409', async () => {
+    it.each(ACTIONS)('%s refuses a second end with a 409', async (action) => {
       const member = await makeStudent();
-      await end('withdraw', member.id).expect(200);
+      const reason = reasonFor(action);
+      await end(action, member.id, { reason }).expect(200);
 
-      const res = await end('withdraw', member.id).expect(409);
+      const res = await end(action, member.id, { reason }).expect(409);
       expect(res.body.error).toMatchObject({
         code: 'CONFLICT',
         message: 'That membership has already ended',
@@ -1496,44 +1521,53 @@ describe('cohort and track admin routes (e2e)', () => {
 
     // Revocation is deliberately after the commit. A refused end never
     // reaches it, so the session the member held keeps working.
-    it('does not revoke sessions when the end is refused', async () => {
-      const member = await makeStudent();
-      await db
-        .update(schema.cohortMembers)
-        .set({ leftAt: new Date(), status: StudentStatus.Withdrawn })
-        .where(eq(schema.cohortMembers.userId, member.id));
+    it.each(ACTIONS)(
+      'does not revoke sessions when a %s end is refused',
+      async (action) => {
+        const member = await makeStudent();
+        await db
+          .update(schema.cohortMembers)
+          .set({ leftAt: new Date(), status: StudentStatus.Withdrawn })
+          .where(eq(schema.cohortMembers.userId, member.id));
 
-      await as(memberCookie).get('/v1/auth/me').expect(200);
-      await end('withdraw', member.id).expect(409);
-      await as(memberCookie).get('/v1/auth/me').expect(200);
-    });
+        await as(memberCookie).get('/v1/auth/me').expect(200);
+        await end(action, member.id, { reason: reasonFor(action) }).expect(409);
+        await as(memberCookie).get('/v1/auth/me').expect(200);
+      },
+    );
 
     /**
      * The end has already committed when the revocation runs, so a revocation
-     * that fails must not undo it: the caller hears 500, and the roster still
-     * files the membership as ended.
+     * that fails must not undo it: the caller hears a 5xx carrying the code
+     * that says the membership ended and its sessions did not, and the roster
+     * still files the membership as ended.
      */
-    it('keeps the end committed when revocation fails, and answers 500', async () => {
-      const member = await makeStudent();
-      const spy = vi
-        .spyOn(app.get(SessionIssuer), 'revokeAllSessions')
-        .mockRejectedValueOnce(new Error('revocation failed'));
+    it.each(ACTIONS)(
+      'keeps a %s end committed when revocation fails, with its own code',
+      async (action, status) => {
+        const member = await makeStudent();
+        const spy = vi
+          .spyOn(app.get(SessionIssuer), 'revokeAllSessions')
+          .mockRejectedValueOnce(new Error('revocation failed'));
 
-      try {
-        const res = await end('withdraw', member.id).expect(500);
-        expect(res.body.error.code).toBe('INTERNAL_ERROR');
-      } finally {
-        spy.mockRestore();
-      }
+        try {
+          const res = await end(action, member.id, {
+            reason: reasonFor(action),
+          }).expect(500);
+          expect(res.body.error.code).toBe('SESSION_REVOCATION_FAILED');
+        } finally {
+          spy.mockRestore();
+        }
 
-      const [row] = await db
-        .select()
-        .from(schema.cohortMembers)
-        .where(eq(schema.cohortMembers.userId, member.id));
-      expect(row.leftAt).not.toBeNull();
-      expect(row.status).toBe(StudentStatus.Withdrawn);
-      expect(await endedEntries()).toHaveLength(1);
-    });
+        const [row] = await db
+          .select()
+          .from(schema.cohortMembers)
+          .where(eq(schema.cohortMembers.userId, member.id));
+        expect(row.leftAt).not.toBeNull();
+        expect(row.status).toBe(status);
+        expect(await endedEntries()).toHaveLength(1);
+      },
+    );
   });
 
   /**

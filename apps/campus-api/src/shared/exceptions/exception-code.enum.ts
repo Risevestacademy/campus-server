@@ -22,6 +22,13 @@ export enum ExceptionCode {
   InviteRequired = 'INVITE_REQUIRED',
   AccountSuspended = 'ACCOUNT_SUSPENDED',
   RateLimited = 'RATE_LIMITED',
+  /**
+   * A change committed but the sessions it should have ended did not. 500
+   * like INTERNAL_ERROR, but its own code so a caller can tell a total
+   * failure from this half-done one — the membership ended, the sessions
+   * were left alive — and act on it without reading the message.
+   */
+  SessionRevocationFailed = 'SESSION_REVOCATION_FAILED',
   InternalError = 'INTERNAL_ERROR',
 }
 
@@ -46,6 +53,7 @@ export function mapExceptionCodeToStatus(code: ExceptionCode): number {
       return 409;
     case ExceptionCode.RateLimited:
       return 429;
+    case ExceptionCode.SessionRevocationFailed:
     case ExceptionCode.InternalError:
     default:
       return 500;
