@@ -89,6 +89,13 @@ export enum AuditAction {
    * and where are read from the row rather than repeated here.
    */
   GuestVisitExtended = 'guest_visit_extended',
+  /**
+   * An admin ended a membership: dismissed, withdrew, deferred or graduated
+   * a student, or removed any member. `details` keeps the role, the student
+   * status it was given (null for a removal, which carries none) and the
+   * reason the admin wrote, or null. The subject says which membership.
+   */
+  MembershipEnded = 'membership_ended',
 }
 
 export enum AuditSubjectType {

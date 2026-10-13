@@ -142,14 +142,18 @@ export const cohortMembers = pgTable(
       'cohort_members_student_status',
       sql`${table.role} = ${sql.raw(`'${CohortRole.Student}'`)} or ${table.status} is null`,
     ),
-    // A reason explains a dismissal and nothing else. Reviving a membership
-    // clears it, and this is what stops the next writer forgetting: without
-    // it a student dismissed for cause and later re-invited as a professor
+    // A reason explains why a membership ended and nothing else. It is
+    // written whenever a membership is ended by an admin — dismissed,
+    // withdrawn, deferred, graduated, or removed — and the column keeps its
+    // dismissal-era name. Keyed to `left_at` rather than a list of statuses,
+    // because a removal carries no student status at all. Reviving a
+    // membership clears it, and this is what stops the next writer
+    // forgetting: without it a student ended for cause and later re-invited
     // keeps the old reason on a live row, where any roster view would read
     // it as current.
     check(
       'cohort_members_dismissal_reason',
-      sql`${table.dismissalReason} is null or ${table.status} = ${sql.raw(`'${StudentStatus.Dismissed}'`)}`,
+      sql`${table.dismissalReason} is null or ${table.leftAt} is not null`,
     ),
     // An end date is what makes a guest a guest: they always have one, and
     // nobody else does. A visiting speaker who is never removed is a hole

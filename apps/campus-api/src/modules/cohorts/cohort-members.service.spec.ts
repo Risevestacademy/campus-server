@@ -10,6 +10,7 @@ import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { users } from '../users/schema.js';
 import { CohortMembersService } from './cohort-members.service.js';
+import { MembershipEndAction } from './dto/end-membership.dto.js';
 import {
   CohortRole,
   StudentStatus,
@@ -357,5 +358,369 @@ describe('extendGuestVisit', () => {
     ).rejects.toThrow(/No membership/);
 
     expect(await pglite.select().from(auditLog)).toHaveLength(0);
+  });
+});
+
+describe('endMembership', () => {
+  let adminId: string;
+
+  const actor = () => ({ actorUserId: adminId });
+
+  const membershipOf = async (id = userId) => {
+    const [row] = await pglite
+      .select()
+      .from(cohortMembers)
+      .where(eq(cohortMembers.userId, id));
+    return row;
+  };
+  const entries = () => pglite.select().from(auditLog);
+
+  beforeEach(async () => {
+    const [{ id }] = await pglite
+      .insert(users)
+      .values({ email: 'admin@campus.local' })
+      .returning({ id: users.id });
+    adminId = id;
+  });
+
+  const STUDENT_ENDS = [
+    [MembershipEndAction.Dismiss, StudentStatus.Dismissed],
+    [MembershipEndAction.Withdraw, StudentStatus.Withdrawn],
+    [MembershipEndAction.Defer, StudentStatus.Deferred],
+    [MembershipEndAction.Graduate, StudentStatus.Graduated],
+  ] as const;
+
+  it.each(STUDENT_ENDS)(
+    '%s sets the status and end date and records it once',
+    async (action, status) => {
+      await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+      const now = new Date();
+      const reason =
+        action === MembershipEndAction.Dismiss
+          ? 'Posted the answer'
+          : undefined;
+
+      const row = await repository.endMembership(
+        cohortId,
+        userId,
+        action,
+        reason,
+        actor(),
+        now,
+      );
+
+      expect(row).toMatchObject({
+        cohortId,
+        userId,
+        role: CohortRole.Student,
+        status,
+        leftAt: now,
+        reason: reason ?? null,
+      });
+      expect(await membershipOf()).toMatchObject({
+        status,
+        leftAt: now,
+        dismissalReason: reason ?? null,
+      });
+
+      const written = await entries();
+      expect(written).toHaveLength(1);
+      expect(written[0]).toMatchObject({
+        action: AuditAction.MembershipEnded,
+        subjectType: AuditSubjectType.CohortMember,
+        subjectId: row.id,
+        actorUserId: adminId,
+        details: {
+          cohortId,
+          role: CohortRole.Student,
+          status,
+          reason: reason ?? null,
+        },
+      });
+    },
+  );
+
+  it('removes a student, carrying no student status', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    const now = new Date();
+
+    const row = await repository.endMembership(
+      cohortId,
+      userId,
+      MembershipEndAction.Remove,
+      'Left the programme',
+      actor(),
+      now,
+    );
+
+    expect(row).toMatchObject({
+      role: CohortRole.Student,
+      status: null,
+      leftAt: now,
+      reason: 'Left the programme',
+    });
+    expect(await membershipOf()).toMatchObject({
+      status: null,
+      leftAt: now,
+      dismissalReason: 'Left the programme',
+    });
+  });
+
+  it('removes staff', async () => {
+    await pglite
+      .insert(cohortMembers)
+      .values({ cohortId, userId, role: CohortRole.Professor });
+    const now = new Date();
+
+    const row = await repository.endMembership(
+      cohortId,
+      userId,
+      MembershipEndAction.Remove,
+      undefined,
+      actor(),
+      now,
+    );
+
+    expect(row).toMatchObject({ role: CohortRole.Professor, status: null });
+    expect(await membershipOf()).toMatchObject({ status: null, leftAt: now });
+  });
+
+  it('removes a guest', async () => {
+    await pglite.insert(cohortMembers).values({
+      cohortId,
+      userId,
+      role: CohortRole.Guest,
+      accessExpiresAt: new Date(Date.now() + 86_400_000),
+    });
+    const now = new Date();
+
+    const row = await repository.endMembership(
+      cohortId,
+      userId,
+      MembershipEndAction.Remove,
+      undefined,
+      actor(),
+      now,
+    );
+
+    expect(row).toMatchObject({
+      role: CohortRole.Guest,
+      status: null,
+      leftAt: now,
+    });
+    expect(await membershipOf()).toMatchObject({ leftAt: now });
+  });
+
+  it('refuses a membership nobody in that cohort has, and records nothing', async () => {
+    const [{ id: stranger }] = await pglite
+      .insert(users)
+      .values({ email: 'grace@campus.local' })
+      .returning({ id: users.id });
+
+    await expect(
+      repository.endMembership(
+        cohortId,
+        stranger,
+        MembershipEndAction.Withdraw,
+        undefined,
+        actor(),
+      ),
+    ).rejects.toMatchObject({ code: ExceptionCode.NotFound });
+
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('ends only the cohort named, leaving the same person elsewhere live', async () => {
+    const [{ id: otherCohort }] = await pglite
+      .insert(cohorts)
+      .values({ name: 'Cohort 1', code: 'C1' })
+      .returning({ id: cohorts.id });
+    const [{ trackId: otherTrack }] = await pglite
+      .insert(tracks)
+      .values({ name: 'Frontend', code: 'FRONTEND' })
+      .returning({ trackId: tracks.id });
+    const [{ cohortTrackId: otherLink }] = await pglite
+      .insert(cohortTracks)
+      .values({ cohortId: otherCohort, trackId: otherTrack })
+      .returning({ cohortTrackId: cohortTracks.id });
+    await pglite.insert(cohortMembers).values([
+      student(StudentStatus.Active),
+      {
+        cohortId: otherCohort,
+        userId,
+        cohortTrackId: otherLink,
+        role: CohortRole.Student,
+        status: StudentStatus.Active,
+      },
+    ]);
+
+    await repository.endMembership(
+      cohortId,
+      userId,
+      MembershipEndAction.Graduate,
+      undefined,
+      actor(),
+    );
+
+    expect(await repository.hasActiveMembership(userId)).toBe(true);
+    const [other] = await pglite
+      .select()
+      .from(cohortMembers)
+      .where(eq(cohortMembers.cohortId, otherCohort));
+    expect(other.leftAt).toBeNull();
+  });
+
+  it('refuses a membership that has already ended, and does not touch it', async () => {
+    const endedAt = new Date('2026-01-01T00:00:00Z');
+    await pglite.insert(cohortMembers).values({
+      ...student(StudentStatus.Withdrawn),
+      leftAt: endedAt,
+      dismissalReason: 'an earlier end',
+    });
+
+    await expect(
+      repository.endMembership(
+        cohortId,
+        userId,
+        MembershipEndAction.Withdraw,
+        undefined,
+        actor(),
+      ),
+    ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+    expect(await membershipOf()).toMatchObject({
+      status: StudentStatus.Withdrawn,
+      leftAt: endedAt,
+      dismissalReason: 'an earlier end',
+    });
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it.each([
+    ['staff', { role: CohortRole.Professor }],
+    [
+      'guest',
+      {
+        role: CohortRole.Guest,
+        accessExpiresAt: new Date(Date.now() + 86_400_000),
+      },
+    ],
+  ])(
+    'refuses a student-only end for a %s, and writes nothing',
+    async (_role, overrides) => {
+      await pglite
+        .insert(cohortMembers)
+        .values({ cohortId, userId, ...overrides });
+
+      await expect(
+        repository.endMembership(
+          cohortId,
+          userId,
+          MembershipEndAction.Defer,
+          undefined,
+          actor(),
+        ),
+      ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+      expect((await membershipOf()).leftAt).toBeNull();
+      expect(await entries()).toHaveLength(0);
+    },
+  );
+
+  it('refuses a dismissal with no reason, and records nothing', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+
+    await expect(
+      repository.endMembership(
+        cohortId,
+        userId,
+        MembershipEndAction.Dismiss,
+        undefined,
+        actor(),
+      ),
+    ).rejects.toMatchObject({
+      code: ExceptionCode.InvalidArgument,
+      details: {
+        fields: { reason: expect.stringMatching(/requires a reason/) },
+      },
+    });
+
+    expect((await membershipOf()).leftAt).toBeNull();
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('refuses an admin ending their own membership', async () => {
+    await pglite
+      .insert(cohortMembers)
+      .values({ cohortId, userId: adminId, role: CohortRole.Professor });
+
+    await expect(
+      repository.endMembership(
+        cohortId,
+        adminId,
+        MembershipEndAction.Remove,
+        undefined,
+        { actorUserId: adminId },
+      ),
+    ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+    expect((await membershipOf(adminId)).leftAt).toBeNull();
+    expect(await entries()).toHaveLength(0);
+  });
+
+  /**
+   * The entry commits with the change, so a fault writing it takes the end
+   * with it. The actor id is a foreign key, so one that names no account is
+   * a real failure of the same insert, after the row was updated.
+   */
+  it('rolls the end back when the entry cannot be written', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    const missing = '99999999-9999-4999-8999-999999999999';
+
+    await expect(
+      repository.endMembership(
+        cohortId,
+        userId,
+        MembershipEndAction.Withdraw,
+        undefined,
+        { actorUserId: missing },
+      ),
+    ).rejects.toThrow();
+
+    expect(await membershipOf()).toMatchObject({
+      status: StudentStatus.Active,
+      leftAt: null,
+    });
+    expect(await entries()).toHaveLength(0);
+  });
+
+  /**
+   * The row is read under `for update`, so a second end waits for the first
+   * and then sees the end it committed. PGlite serves a single connection, so
+   * the two cannot truly run at once the way they can in production; the
+   * lock, not the test, is what makes the race safe.
+   */
+  it('refuses a second end, leaving exactly one', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+
+    await repository.endMembership(
+      cohortId,
+      userId,
+      MembershipEndAction.Withdraw,
+      undefined,
+      actor(),
+    );
+    await expect(
+      repository.endMembership(
+        cohortId,
+        userId,
+        MembershipEndAction.Dismiss,
+        'again',
+        actor(),
+      ),
+    ).rejects.toMatchObject({ code: ExceptionCode.Conflict });
+
+    expect(await entries()).toHaveLength(1);
+    expect((await membershipOf()).status).toBe(StudentStatus.Withdrawn);
   });
 });

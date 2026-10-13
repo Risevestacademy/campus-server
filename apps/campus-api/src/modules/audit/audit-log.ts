@@ -138,6 +138,17 @@ interface AuditEntryShapes {
       previousAccessExpiresAt: Date;
     };
   };
+  [AuditAction.MembershipEnded]: {
+    subject: AuditSubjectType.CohortMember;
+    details: {
+      cohortId: string;
+      role: string;
+      /** The student status the end set, or null for a removal. */
+      status: string | null;
+      /** What the admin wrote as the reason, or null for none. */
+      reason: string | null;
+    };
+  };
   [AuditAction.InviteFlagged]: {
     subject: AuditSubjectType.Invite;
     details: { cohortId: string | null; invitedBy: string };

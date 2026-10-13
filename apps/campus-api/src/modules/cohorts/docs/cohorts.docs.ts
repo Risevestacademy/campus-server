@@ -19,7 +19,10 @@ import {
   CohortResponseDto,
   CohortTrackResponseDto,
 } from '../dto/cohort-response.dto.js';
-
+import {
+  EndMembershipResponseDto,
+  MembershipEndAction,
+} from '../dto/end-membership.dto.js';
 const cohortNotFound = {
   summary: 'No such cohort',
   value: {
@@ -485,4 +488,177 @@ export function ApiDeleteCohort(): MethodDecorator {
       },
     }),
   );
+}
+
+/** The summary and the past-tense verb each end route documents. */
+const END_MEMBER_DOCS: Record<
+  MembershipEndAction,
+  { summary: string; verb: string }
+> = {
+  [MembershipEndAction.Dismiss]: {
+    summary: 'Dismiss a student (admin only)',
+    verb: 'dismissed',
+  },
+  [MembershipEndAction.Withdraw]: {
+    summary: 'Withdraw a student (admin only)',
+    verb: 'withdrawn',
+  },
+  [MembershipEndAction.Defer]: {
+    summary: 'Defer a student (admin only)',
+    verb: 'deferred',
+  },
+  [MembershipEndAction.Graduate]: {
+    summary: 'Graduate a student (admin only)',
+    verb: 'graduated',
+  },
+  [MembershipEndAction.Remove]: {
+    summary: 'Remove a member (admin only)',
+    verb: 'removed',
+  },
+};
+
+/**
+ * One of the five ways a membership ends. The five share everything but a
+ * summary and the roles the status applies to, so they are built from one
+ * place and named by an exported function each, as the other routes are.
+ */
+function ApiEndMember(action: MembershipEndAction): MethodDecorator {
+  const { summary, verb } = END_MEMBER_DOCS[action];
+  const studentOnly = action !== MembershipEndAction.Remove;
+
+  return applyDecorators(
+    ApiOperation({
+      summary,
+      description:
+        `Ends a membership by marking it ${verb}. The cohort and the member ` +
+        'come from the URL; the status and the end date are the server’s, ' +
+        'and `status` or `endDate` in the body are ignored.\n\n' +
+        'The row is kept. The roster files it under `state=ended` with the ' +
+        'status and the reason, and the default roster no longer lists it.\n\n' +
+        (studentOnly
+          ? 'Students only: staff and guests are refused with a 409. '
+          : 'Applies to any member — student, staff or guest. ') +
+        (action === MembershipEndAction.Dismiss
+          ? 'A `reason` is required.\n\n'
+          : '`reason` is optional.\n\n') +
+        'The member’s sessions end once the change has committed, so their ' +
+        'next request is refused; an open `world` socket closes on the next ' +
+        'heartbeat.\n\n' +
+        'Refusals: a 404 when nobody in the cohort holds this membership; a ' +
+        '409 when it has already ended, when a student-only status is aimed ' +
+        'at staff or a guest, or when the caller targets their own ' +
+        'membership; a 400 for a malformed body, or a dismissal with no ' +
+        'reason.',
+    }),
+    ApiOkResponse({ type: EndMembershipResponseDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'cohortId or userId is not a UUID, reason is not a string of at ' +
+        'most 500 characters, or reason is missing on a dismissal.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'Nobody in that cohort holds this membership.',
+      content: {
+        'application/json': {
+          examples: {
+            memberNotFound: {
+              summary: 'No such membership',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message:
+                    'No membership for 44444444-4444-4444-8444-444444444444 in cohort 11111111-1111-4111-8111-111111111111',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The membership has already ended, the status does not apply to ' +
+        'its role, or the caller is ending their own membership.',
+      content: {
+        'application/json': {
+          examples: {
+            alreadyEnded: {
+              summary: 'Already ended',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'That membership has already ended',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                  },
+                },
+              },
+            },
+            ...(studentOnly
+              ? {
+                  notAStudent: {
+                    summary: 'Staff or guest',
+                    value: {
+                      error: {
+                        code: 'CONFLICT',
+                        message: `Only a student can be ${verb}`,
+                        details: {
+                          cohortId: '11111111-1111-4111-8111-111111111111',
+                          userId: '44444444-4444-4444-8444-444444444444',
+                          role: 'professor',
+                          action,
+                        },
+                      },
+                    },
+                  },
+                }
+              : {}),
+            self: {
+              summary: 'The caller’s own membership',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'You cannot end your own membership: ask another admin',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
+export function ApiDismissMember(): MethodDecorator {
+  return ApiEndMember(MembershipEndAction.Dismiss);
+}
+
+export function ApiWithdrawMember(): MethodDecorator {
+  return ApiEndMember(MembershipEndAction.Withdraw);
+}
+
+export function ApiDeferMember(): MethodDecorator {
+  return ApiEndMember(MembershipEndAction.Defer);
+}
+
+export function ApiGraduateMember(): MethodDecorator {
+  return ApiEndMember(MembershipEndAction.Graduate);
+}
+
+export function ApiRemoveMember(): MethodDecorator {
+  return ApiEndMember(MembershipEndAction.Remove);
 }
