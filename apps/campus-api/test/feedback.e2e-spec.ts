@@ -306,6 +306,9 @@ describe('feedback (e2e)', () => {
       await expect
         .poll(() => sent.map((email) => email.to).sort())
         .toEqual(['admin@campus.local', 'root@campus.local']);
+      // No cohort on this one, so the link is to the campus list.
+      expect(sent[0].text).toContain('/campus');
+      expect(sent[0].text).not.toContain('/overview');
       // A report is one member's account of another. None of it is mailed.
       for (const email of sent) {
         const whole = `${email.subject} ${email.text} ${email.html}`;

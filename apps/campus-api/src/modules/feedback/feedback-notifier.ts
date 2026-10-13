@@ -7,7 +7,10 @@ import {
   EMAIL_SENDER,
   type EmailSender,
 } from '../../infra/email/email-sender.js';
-import { renderFeedbackReportEmail } from './feedback-report-email.js';
+import {
+  adminReviewUrl,
+  renderFeedbackReportEmail,
+} from './feedback-report-email.js';
 import { FeedbackService } from './feedback.service.js';
 import { FeedbackType } from './schema.js';
 
@@ -17,6 +20,8 @@ export interface SavedFeedback {
   type: FeedbackType;
   /** The account a report names, who is the one admin not to tell. */
   reportedUserId?: string;
+  /** The cohort it was sent from, which decides where the email links. */
+  cohortId?: string;
 }
 
 /**
@@ -49,7 +54,9 @@ export class FeedbackNotifier {
       const recipients = await this.feedback.reportRecipients(
         saved.reportedUserId,
       );
-      const email = renderFeedbackReportEmail(this.config.APP_PUBLIC_URL);
+      const email = renderFeedbackReportEmail(
+        adminReviewUrl(this.config.APP_PUBLIC_URL, saved.cohortId),
+      );
       // One email each, so no admin sees who else was told, and one bad
       // address does not cost the others theirs. One at a time, so a long
       // list of admins is not a burst the provider refuses part of.

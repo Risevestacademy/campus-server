@@ -64,7 +64,9 @@ tests run on one connection, where nothing overlaps.
 When a `report` arrives, every active admin and super admin is emailed that
 there is one. The email says nothing of what the report says, and is not
 given it: mail is forwarded, searched and kept long after the matter is
-closed. It links to the app, where the report is read.
+closed. It links to where an admin reviews it: the administration overview
+of the cohort the report came from (`/campus/{cohortId}/overview` in the web
+app), or the campus list when it came from no cohort.
 
 A bug or an idea sends nothing. It waits in the list.
 
@@ -128,5 +130,6 @@ migrations applied, in `feedback.service.db.spec.ts`.
 - **Screenshots.** They need somewhere to be stored, which is not chosen.
 - **In-app notifications** for admins. Email is the only channel until
   notifications exist.
-- **A link straight to the report** in the email. It links to the app's
-  front page until the admin screen has an address to link to.
+- **A link straight to the one report** in the email. It links to the
+  cohort's administration overview; the web app has no page for a single
+  report to link to.

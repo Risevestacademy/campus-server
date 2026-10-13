@@ -4,6 +4,22 @@ import {
 } from '../../infra/email/rendered-email.js';
 
 /**
+ * Where an admin goes to deal with a report: the administration overview of
+ * the cohort it came from, which is where the web app lists what needs
+ * review. Without a cohort there is no such page to name, so it is the
+ * campus list, where an admin picks one.
+ *
+ * The paths are campus-web's. If its admin routes move, this is the one
+ * place that has to follow.
+ */
+export function adminReviewUrl(appUrl: string, cohortId?: string): string {
+  const base = appUrl.replace(/\/+$/, '');
+  return cohortId
+    ? `${base}/campus/${encodeURIComponent(cohortId)}/overview`
+    : `${base}/campus`;
+}
+
+/**
  * The email telling an admin a report has come in.
  *
  * It says that there is one and where to read it, and nothing of what it
@@ -11,16 +27,16 @@ import {
  * the place for it: mail is forwarded, searched and kept long after the
  * matter is closed.
  */
-export function renderFeedbackReportEmail(appUrl: string): RenderedEmail {
+export function renderFeedbackReportEmail(reviewUrl: string): RenderedEmail {
   const subject = 'A member has sent a report';
   const intro =
-    'A member has sent a report through Campus. It is waiting in the ' +
-    'feedback list for an admin to read.';
+    'A member has sent a report through Campus. It is waiting for an ' +
+    'admin to review.';
   const outro =
     'This email does not say what the report is about, on purpose. Sign in ' +
     'to read it.';
 
-  const text = ['Hi,', intro, appUrl, outro].join('\n\n');
+  const text = ['Hi,', intro, reviewUrl, outro].join('\n\n');
 
   const paragraph = (line: string) =>
     `<p style="margin:0 0 16px">${escapeHtml(line)}</p>`;
@@ -31,7 +47,7 @@ export function renderFeedbackReportEmail(appUrl: string): RenderedEmail {
       ${paragraph('Hi,')}
       ${paragraph(intro)}
       <p style="margin:0 0 16px">
-        <a href="${escapeHtml(appUrl)}" style="display:inline-block;padding:12px 20px;background:#1a1a1a;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold">Open Campus</a>
+        <a href="${escapeHtml(reviewUrl)}" style="display:inline-block;padding:12px 20px;background:#1a1a1a;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold">Review it in Campus</a>
       </p>
       <p style="margin:24px 0 0;font-size:14px;color:#555555">${escapeHtml(outro)}</p>
     </div>

@@ -67,6 +67,7 @@ export class FeedbackController {
       id: receipt.id,
       type: receipt.type,
       reportedUserId: dto.reportedUserId,
+      cohortId: dto.cohortId,
     });
     return receipt;
   }

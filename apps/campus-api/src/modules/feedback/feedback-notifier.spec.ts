@@ -3,7 +3,10 @@ import type { PinoLogger } from 'nestjs-pino';
 import type { Env } from '../../infra/config/env.js';
 import type { EmailSender } from '../../infra/email/email-sender.js';
 import { FeedbackNotifier } from './feedback-notifier.js';
-import { renderFeedbackReportEmail } from './feedback-report-email.js';
+import {
+  adminReviewUrl,
+  renderFeedbackReportEmail,
+} from './feedback-report-email.js';
 import type { FeedbackService } from './feedback.service.js';
 import { FeedbackType } from './schema.js';
 
@@ -148,6 +151,44 @@ describe('FeedbackNotifier', () => {
 
     await expect(subject.notify(REPORT)).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledOnce();
+  });
+});
+
+describe('where a report email links', () => {
+  const COHORT = '11111111-1111-4111-8111-111111111111';
+
+  it('is the administration overview of the cohort it came from', () => {
+    expect(adminReviewUrl(APP, COHORT)).toBe(
+      `${APP}/campus/${COHORT}/overview`,
+    );
+  });
+
+  /** No cohort, no cohort's page: the admin picks one from the list. */
+  it('is the campus list when it came from no cohort', () => {
+    expect(adminReviewUrl(APP)).toBe(`${APP}/campus`);
+  });
+
+  it('does not double the slash of an address that ends in one', () => {
+    expect(adminReviewUrl(`${APP}/`, COHORT)).toBe(
+      `${APP}/campus/${COHORT}/overview`,
+    );
+  });
+
+  it('is what the notifier puts in the email', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, id: 'email-1' });
+    const { subject } = notifier(
+      { enabled: true, send },
+      vi.fn().mockResolvedValue(['root@campus.local']),
+    );
+
+    await subject.notify({ ...REPORT, cohortId: COHORT });
+
+    expect(send.mock.calls[0][0].text).toContain(
+      `${APP}/campus/${COHORT}/overview`,
+    );
+    expect(send.mock.calls[0][0].html).toContain(
+      `href="${APP}/campus/${COHORT}/overview"`,
+    );
   });
 });
 
