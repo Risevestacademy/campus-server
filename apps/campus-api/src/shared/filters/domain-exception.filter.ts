@@ -26,7 +26,13 @@ export class DomainExceptionFilter implements ExceptionFilter {
     // message goes out. This is the same rule GlobalExceptionFilter applies
     // to non-domain exceptions; without it here, a DomainException carrying
     // INTERNAL_ERROR would bypass the one guarantee that rule exists to make.
-    const serverFault = status >= 500;
+    //
+    // SERVICE_UNAVAILABLE is the one 5xx that is not a bug: something this
+    // service depends on is not there, and it was raised on purpose to say
+    // so. Its message is written for the caller, who needs it to know
+    // whether to wait or to call somebody, so it goes out as written.
+    const unavailable = exception.code === ExceptionCode.ServiceUnavailable;
+    const serverFault = status >= 500 && !unavailable;
     const body: ErrorResponse = {
       error: {
         code: exception.code,
@@ -39,8 +45,14 @@ export class DomainExceptionFilter implements ExceptionFilter {
 
     // Swallowing the detail without recording it would trade a leak for an
     // invisible failure, so the diagnostic is logged instead of returned.
-    if (serverFault) {
-      this.log(exception, ctx.getRequest<Request & { id?: string }>());
+    // An unavailable dependency is logged too: it answers the caller, but
+    // somebody still has to go and look at it.
+    if (serverFault || unavailable) {
+      this.log(
+        exception,
+        ctx.getRequest<Request & { id?: string }>(),
+        unavailable ? 'Dependency unavailable' : 'Unhandled exception',
+      );
     }
 
     response.status(status).json(body);
@@ -48,7 +60,8 @@ export class DomainExceptionFilter implements ExceptionFilter {
 
   private log(
     exception: DomainException,
-    request?: Request & { id?: string },
+    request: (Request & { id?: string }) | undefined,
+    message: string,
   ): void {
     const payload: Record<string, unknown> = {
       err: exception,
@@ -60,10 +73,10 @@ export class DomainExceptionFilter implements ExceptionFilter {
     }
 
     if (this.logger) {
-      this.logger.error(payload, 'Unhandled exception');
+      this.logger.error(payload, message);
       return;
     }
-    console.error('Unhandled exception', payload);
+    console.error(message, payload);
   }
 
   protected mapCodeToStatus(code: ExceptionCode): number {
