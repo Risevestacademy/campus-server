@@ -19,6 +19,7 @@ const accounts = {
   find: async () => null,
   liveSessions: async () => new Set<string>(),
   liveMembership: async () => true,
+  onProfileChanged: async () => undefined,
   close: async () => undefined,
 };
 

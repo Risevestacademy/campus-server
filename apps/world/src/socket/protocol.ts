@@ -53,15 +53,14 @@ const appearance = {
 
 /**
  * Only where somebody first appears. `moved` and `moveResult` stay a bare
- * Player: they go out every tick, and what to draw does not change while a
- * socket is open.
+ * Player: they go out every tick, and what to draw changes rarely, so a
+ * change has a message of its own (`appearance`).
  */
 export const Avatar = z.object({ ...Player.shape, ...appearance }).meta({
   id: 'Avatar',
   description:
-    'Somebody on the map and what to draw for them. Their sprite and name are ' +
-    'as their profile had them when they entered; a change shows the next ' +
-    'time they enter.',
+    'Somebody on the map and what to draw for them. A later change to their ' +
+    'sprite or name arrives as an `appearance` message.',
 });
 
 export const MoveOutcome = z.enum(['moved', 'blocked', 'too_fast']).meta({
@@ -185,6 +184,18 @@ export const ServerMessage = z
         'Somebody arrived in your cohort. Not sent when a socket is replaced within the same cohort, ' +
         'because the avatar never left.',
     }),
+    z
+      .object({
+        type: z.literal('appearance'),
+        userId: z.string(),
+        ...appearance,
+      })
+      .meta({
+        id: 'AppearanceMessage',
+        description:
+          'Somebody in your cohort changed their sprite or display name, you included: ' +
+          'draw them with these from now on. Sent as soon as they save the change.',
+      }),
     z.object({ type: z.literal('left'), userId: z.string() }).meta({
       id: 'LeftMessage',
       description:

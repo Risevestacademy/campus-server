@@ -1,4 +1,8 @@
-import { hasAdminPowers } from '@campus/session';
+import {
+  PROFILE_CHANGED_CHANNEL,
+  hasAdminPowers,
+  spriteKeyOrNone,
+} from '@campus/session';
 import postgres from 'postgres';
 
 import type { Env } from './env.js';
@@ -22,6 +26,12 @@ export interface AccountLookup {
     now: Date,
   ): Promise<Set<string>>;
   liveMembership(userId: string, cohortId: string, now: Date): Promise<boolean>;
+  /**
+   * Calls `listener` with an account id whenever campus-api says that
+   * account's sprite or display name changed. Resolves once listening;
+   * rejects if it could not start.
+   */
+  onProfileChanged(listener: (userId: string) => void): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -32,8 +42,8 @@ export interface AccountLookup {
 export interface Appearance {
   displayName: string | null;
   /**
-   * campus-api checks it against its list when it is set; world passes it on
-   * as stored, so a key retired since is still sent.
+   * Null when none is picked, and for a stored key no longer on the list:
+   * clients draw their default for both.
    */
   spriteKey: string | null;
 }
@@ -137,7 +147,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             sessionEpoch: row.session_epoch,
             admin: hasAdminPowers(row.system_role),
             displayName: row.display_name,
-            spriteKey: row.sprite_key,
+            spriteKey: spriteKeyOrNone(row.sprite_key),
           }
         : null;
     },
@@ -151,6 +161,11 @@ export function createAccountLookup(env: Env): AccountLookup {
         [ids, refreshedSince, now],
       );
       return new Set(rows.map((row) => row.family_id));
+    },
+    async onProfileChanged(listener): Promise<void> {
+      // A connection of its own, kept open and re-listened on reconnect by
+      // the driver. The payload is the account id campus-api changed.
+      await sql.listen(PROFILE_CHANGED_CHANNEL, (userId) => listener(userId));
     },
     async liveMembership(userId, cohortId, now): Promise<boolean> {
       if (!looksLikeId(cohortId)) {

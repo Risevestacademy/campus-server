@@ -30,6 +30,7 @@ describe('protocol.schema.json', () => {
         'PongMessage',
         'SnapshotMessage',
         'JoinedMessage',
+        'AppearanceMessage',
         'LeftMessage',
         'ReplacedMessage',
         'MovedMessage',

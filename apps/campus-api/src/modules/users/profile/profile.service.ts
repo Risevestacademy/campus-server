@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/session';
+import { eq, sql } from 'drizzle-orm';
 
 import {
   DRIZZLE,
@@ -24,6 +25,9 @@ const EDITABLE = [
   'bio',
   'spriteKey',
 ] as const;
+
+/** The editable fields world shows to everybody in somebody's cohort. */
+const SEEN_BY_OTHERS = ['displayName', 'spriteKey'] as const;
 
 /**
  * A person's own profile, and the card other members see of them. Apart from UsersService, which is what sign-in resolves an identity
@@ -57,14 +61,25 @@ export class ProfileService {
       return this.getOwn(userId, now);
     }
 
-    const [row] = await this.db
-      .update(users)
-      .set(changes)
-      .where(eq(users.id, userId))
-      .returning();
-    if (!row) {
-      throw new ProfileNotFoundException('No such profile', { userId });
-    }
+    const row = await this.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(users)
+        .set(changes)
+        .where(eq(users.id, userId))
+        .returning();
+      if (!updated) {
+        throw new ProfileNotFoundException('No such profile', { userId });
+      }
+      // What others draw for them changed: world re-reads the account and
+      // tells their cohort. Postgres holds the notification until the commit,
+      // so world never reads the row before the change is in it.
+      if (SEEN_BY_OTHERS.some((field) => field in changes)) {
+        await tx.execute(
+          sql`select pg_notify(${PROFILE_CHANGED_CHANNEL}, ${userId})`,
+        );
+      }
+      return updated;
+    });
     return this.toOwnProfile(row, now);
   }
 
@@ -128,7 +143,7 @@ export class ProfileService {
       displayName: target.displayName,
       bio: target.bio,
       avatarUrl: target.avatarUrl,
-      spriteKey: target.spriteKey,
+      spriteKey: spriteKeyOrNone(target.spriteKey),
       memberships: shown.map(({ cohort, track, role }) => ({
         cohort,
         track,
@@ -160,7 +175,7 @@ export class ProfileService {
       phone: row.phone,
       bio: row.bio,
       avatarUrl: row.avatarUrl,
-      spriteKey: row.spriteKey,
+      spriteKey: spriteKeyOrNone(row.spriteKey),
       systemRole: row.systemRole,
       memberships: memberships.get(row.id) ?? [],
       createdAt: row.createdAt,

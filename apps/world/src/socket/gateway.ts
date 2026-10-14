@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import type { AccountLookup } from '../infra/accounts.js';
+import type { AccountLookup, Appearance } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import type {
   PositionStore,
@@ -46,6 +46,11 @@ const ENTERED_ELSEWHERE = 4000;
 export interface Gateway {
   connections: Connections;
   players: Players;
+  /**
+   * campus-api says this account's sprite or display name changed: read it
+   * again, and tell their cohort if what to draw is different.
+   */
+  appearanceChanged(userId: string): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -311,6 +316,32 @@ export function registerGateway(
     }
   }
 
+  /**
+   * Puts the account's sprite and name on its socket, and tells the cohort,
+   * itself included, when they differ from what was being drawn. Only for
+   * the socket that still holds the account's place: the read crossed an
+   * await, and a socket replaced meanwhile has nobody left to tell.
+   */
+  function showAppearance(connection: Connection, account: Appearance): void {
+    if (!connections.has(connection)) {
+      return;
+    }
+    const { displayName, spriteKey } = account;
+    if (
+      connection.appearance.displayName === displayName &&
+      connection.appearance.spriteKey === spriteKey
+    ) {
+      return;
+    }
+    connection.appearance = { displayName, spriteKey };
+    broadcast(connection.cohortId, {
+      type: 'appearance',
+      userId: connection.userId,
+      displayName,
+      spriteKey,
+    });
+  }
+
   /** Everybody standing in one cohort's campus, with what to draw for them. */
   function avatarsIn(cohortId: string): Avatar[] {
     return players.all().flatMap((player) => {
@@ -344,6 +375,10 @@ export function registerGateway(
       }
       if (account && !account.suspended) {
         dropIfRevoked(connection, account.sessionEpoch);
+        // The account was read anyway. A change whose notification this
+        // process missed, while it was reconnecting to the database, is
+        // caught here, a heartbeat late at worst.
+        showAppearance(connection, account);
         // The cohort is asked again for everybody but an admin, who is
         // admitted on their role alone — from the row, as at the upgrade, so
         // a demotion lands on the socket already open too.
@@ -921,6 +956,23 @@ export function registerGateway(
   return {
     connections,
     players,
+    async appearanceChanged(userId: string): Promise<void> {
+      const connection = connections.forUser(userId);
+      if (!connection) {
+        return; // Not on this process's campus: nobody here to tell.
+      }
+      let account;
+      try {
+        account = await accounts.find(userId);
+      } catch (err) {
+        // The heartbeat reads the account again and catches it then.
+        app.log.error({ err, userId }, 'could not re-read a changed profile');
+        return;
+      }
+      if (account) {
+        showAppearance(connection, account);
+      }
+    },
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       clearInterval(tick);

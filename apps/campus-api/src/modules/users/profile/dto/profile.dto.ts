@@ -16,7 +16,7 @@ import {
   UserMembershipDto,
   UserMembershipTrackDto,
 } from '../../dto/user-list-item.dto.js';
-import { SPRITE_KEYS, type SpriteKey } from '../sprite-keys.js';
+import { SPRITE_KEYS, type SpriteKey } from '@campus/session';
 
 /**
  * Trimmed, with an empty string read as "clear it". NUL goes too: Postgres
@@ -102,8 +102,8 @@ export class UpdateProfileDto {
     nullable: true,
     example: SPRITE_KEYS[0],
     description:
-      'The character they walk the campus as. Others see a change the next ' +
-      'time this person enters the campus.',
+      'The character they walk the campus as. Anybody in the campus with ' +
+      'them sees the change straight away.',
   })
   @Cleaned()
   @IsOptional()
@@ -148,8 +148,16 @@ export class OwnProfileDto {
   })
   avatarUrl: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
-  spriteKey: string | null;
+  @ApiProperty({
+    type: String,
+    enum: SPRITE_KEYS,
+    nullable: true,
+    example: null,
+    description:
+      'The character they walk the campus as. Null when they have picked ' +
+      'none, or picked one that is no longer offered.',
+  })
+  spriteKey: SpriteKey | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
   systemRole: SystemRole;
@@ -211,8 +219,16 @@ export class ProfileCardDto {
   @ApiProperty({ type: String, nullable: true, example: null })
   avatarUrl: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
-  spriteKey: string | null;
+  @ApiProperty({
+    type: String,
+    enum: SPRITE_KEYS,
+    nullable: true,
+    example: null,
+    description:
+      'The character they walk the campus as. Null when they have picked ' +
+      'none, or picked one that is no longer offered.',
+  })
+  spriteKey: SpriteKey | null;
 
   @ApiProperty({
     type: () => [ProfileCardMembershipDto],

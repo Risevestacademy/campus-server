@@ -80,6 +80,14 @@ export async function buildWorld(
   const store = positions ?? createPositionStore(env, app.log, worldMap.id);
   const present = presence ?? createPresenceStore(env, app.log);
   const gateway = registerGateway(app, env, accounts, store, present, worldMap);
+  // Not awaited: a database that will not take the listen must not stop the
+  // campus opening. The heartbeat re-reads every account, so a change still
+  // shows, a heartbeat late.
+  accounts
+    .onProfileChanged((userId) => void gateway.appearanceChanged(userId))
+    .catch((err: unknown) =>
+      app.log.error({ err }, 'could not listen for profile changes'),
+    );
   registerConnectionCheck(app, env, accounts);
 
   app.get('/health', async () => ({

@@ -170,11 +170,12 @@ campus: the cohort named when the socket opened decides whose avatars you are
 told about, and nobody in another cohort appears in your `snapshot`, `joined`,
 `left` or `moved`, or you in theirs.
 
-| Message  | When                                              | What to do                                 |
-| -------- | ------------------------------------------------- | ------------------------------------------ |
-| `joined` | Somebody arrived                                  | Add their avatar, with its sprite and name |
-| `left`   | Somebody's socket closed, or they left the cohort | Remove their avatar                        |
-| `moved`  | Once per tick, if anybody moved or turned         | Move each listed player                    |
+| Message      | When                                              | What to do                                 |
+| ------------ | ------------------------------------------------- | ------------------------------------------ |
+| `joined`     | Somebody arrived                                  | Add their avatar, with its sprite and name |
+| `appearance` | Somebody changed their sprite or name             | Redraw them with it                        |
+| `left`       | Somebody's socket closed, or they left the cohort | Remove their avatar                        |
+| `moved`      | Once per tick, if anybody moved or turned         | Move each listed player                    |
 
 About `moved`:
 
@@ -193,22 +194,30 @@ which is a `Player` plus two fields saying what to draw:
 
 - **`spriteKey`**: which character. One of the keys campus-api accepts on
   `PATCH /v1/users/me` (listed in its API docs), or `null` when the person has
-  picked none. Draw your default for `null`, and also for any key you have no
-  sprite for: world passes the key on as stored, so a key retired from the
-  list can still arrive.
+  picked none or picked one that is no longer offered. Draw your default for
+  `null`, and for any key you have no sprite for yet.
 - **`displayName`**: the name to show beside them, or `null` when they have
   set none.
 
 Keep both by `userId`. `moved` and `moveResult` carry a plain `Player` —
 position and facing only — so take what to draw from the `Avatar` and keep it
-until that person's `left`.
+until that person's `left`, or until an `appearance` replaces it.
 
-**A change shows the next time they enter.** World reads the sprite and name
-when somebody's socket opens and does not watch for changes after. Somebody
-who changes their sprite is seen with the new one by everybody once they
-leave and enter again — their own `welcome` and `snapshot` carry it too.
-Opening another tab in the same cohort does not count: nobody is told they
-arrived, so others keep the old sprite until they actually leave.
+**A change shows straight away.** When somebody saves a new sprite or display
+name, everybody in their cohort, themselves included, gets:
+
+```json
+{
+  "type": "appearance",
+  "userId": "…",
+  "displayName": "Ada L.",
+  "spriteKey": "placeholder-4"
+}
+```
+
+Redraw that person with it. Nothing is sent when what to draw did not change.
+campus-api tells world as it saves; should that notice be lost, world still
+picks the change up within one heartbeat.
 
 ## One place at a time
 

@@ -41,6 +41,7 @@ const accounts = {
         },
   liveSessions: async () => new Set<string>(),
   liveMembership: async () => false,
+  onProfileChanged: async () => undefined,
   close: async () => undefined,
 };
 

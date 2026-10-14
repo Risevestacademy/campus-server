@@ -74,6 +74,19 @@ const accounts = {
     const ends = accounts.visitEnds.get(key);
     return ends === undefined || ends > now;
   },
+  /** Who campus-api tells, through Postgres, when a profile changes. */
+  profileListeners: [] as ((userId: string) => void)[],
+  onProfileChanged: async (listener: (userId: string) => void) => {
+    accounts.profileListeners.push(listener);
+  },
+  /** campus-api saving a new sprite or name: the row, then the notification. */
+  changeLooks: (
+    userId: string,
+    looks: { displayName: string; spriteKey: string },
+  ) => {
+    accounts.looks.set(userId, looks);
+    for (const listener of accounts.profileListeners) listener(userId);
+  },
   close: async () => undefined,
 };
 
@@ -1167,29 +1180,91 @@ describe('movement', () => {
       await leave(watcher);
     });
 
-    it('shows a changed sprite to others the next time its owner enters', async () => {
+    /**
+     * campus-api notifies world in the same transaction as the save, so a
+     * change reaches everybody in the cohort, its owner's own tab included,
+     * without anybody leaving or entering.
+     */
+    it('shows a changed sprite to the whole cohort as soon as it is saved', async () => {
       const ada = person();
-      const watcher = await arrive(person());
       accounts.looks.set(ada, {
         displayName: 'Ada L.',
         spriteKey: 'placeholder-1',
       });
-      await leave(await arrive(ada));
-      watcher.messages.length = 0;
+      const own = await arrive(ada);
+      const watcher = await arrive(person());
+      const elsewhere = await arrive(person(), 'cohort-backend');
+      await quiet();
 
-      accounts.looks.set(ada, {
+      accounts.changeLooks(ada, {
         displayName: 'Ada L.',
         spriteKey: 'placeholder-4',
       });
-      const back = await arrive(ada);
 
-      await expect(
-        waitFor(watcher, (m) => m.type === 'joined'),
-      ).resolves.toMatchObject({
-        player: { userId: ada, spriteKey: 'placeholder-4' },
+      // Well inside one heartbeat, so it is the notification that did it.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const expected = {
+        type: 'appearance',
+        userId: ada,
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-4',
+      };
+      expect(watcher.messages).toContainEqual(expected);
+      expect(own.messages).toContainEqual(expected);
+      await quiet();
+      expect(elsewhere.messages.some((m) => m.type === 'appearance')).toBe(
+        false,
+      );
+
+      // And whoever comes in next draws the new one from the snapshot.
+      const late = await arrive(person());
+      const snapshot = await waitFor(late, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual(
+        expect.objectContaining({ userId: ada, spriteKey: 'placeholder-4' }),
+      );
+
+      await leave(own);
+      await leave(watcher);
+      await leave(elsewhere);
+      await leave(late);
+    });
+
+    it('says nothing when what is drawn did not change', async () => {
+      const ada = person();
+      const looks = { displayName: 'Ada L.', spriteKey: 'placeholder-2' };
+      accounts.looks.set(ada, looks);
+      const own = await arrive(ada);
+      const watcher = await arrive(person());
+      await quiet();
+
+      accounts.changeLooks(ada, { ...looks });
+      await quiet();
+
+      expect(watcher.messages.some((m) => m.type === 'appearance')).toBe(false);
+      await leave(own);
+      await leave(watcher);
+    });
+
+    /**
+     * A notification sent while this process was reconnecting to the
+     * database is lost. The heartbeat reads every account anyway, and shows
+     * the change then.
+     */
+    it('catches a change it was never told of on the next heartbeat', async () => {
+      const ada = person();
+      const own = await arrive(ada);
+      const watcher = await arrive(person());
+      await quiet();
+
+      accounts.looks.set(ada, {
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-3',
       });
 
-      await leave(back);
+      await expect(
+        waitFor(watcher, (m) => m.type === 'appearance'),
+      ).resolves.toMatchObject({ userId: ada, spriteKey: 'placeholder-3' });
+      await leave(own);
       await leave(watcher);
     });
   });

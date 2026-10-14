@@ -97,7 +97,7 @@
         "spriteKey"
       ],
       "additionalProperties": false,
-      "description": "Somebody on the map and what to draw for them. Their sprite and name are as their profile had them when they entered; a change shows the next time they enter."
+      "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message."
     },
     "MoveOutcome": {
       "type": "string",
@@ -307,6 +307,40 @@
       "additionalProperties": false,
       "description": "Somebody arrived in your cohort. Not sent when a socket is replaced within the same cohort, because the avatar never left."
     },
+    "AppearanceMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "appearance"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "displayName": {
+          "description": "The name to show beside them. Null when they have set none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spriteKey": {
+          "description": "Which character to draw them as. Null when they have picked none; draw the default then, and for a key you have no sprite for.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "displayName",
+        "spriteKey"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody in your cohort changed their sprite or display name, you included: draw them with these from now on. Sent as soon as they save the change."
+    },
     "LeftMessage": {
       "type": "object",
       "properties": {
@@ -427,6 +461,9 @@
         },
         {
           "$ref": "#/definitions/JoinedMessage"
+        },
+        {
+          "$ref": "#/definitions/AppearanceMessage"
         },
         {
           "$ref": "#/definitions/LeftMessage"

@@ -68,6 +68,7 @@ describe('the AsyncAPI document', () => {
       'PongMessage',
       'SnapshotMessage',
       'JoinedMessage',
+      'AppearanceMessage',
       'LeftMessage',
       'ReplacedMessage',
       'MovedMessage',
