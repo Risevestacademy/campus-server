@@ -147,6 +147,18 @@ describe('own profile', () => {
     expect(profile.firstName).toBe('Ada');
   });
 
+  it('changes the sprite, and clears it when sent null', async () => {
+    const ada = await person('ada@campus.local');
+
+    expect(
+      (await service.updateOwn(ada.id, { spriteKey: 'placeholder-2' }))
+        .spriteKey,
+    ).toBe('placeholder-2');
+    expect(
+      (await service.updateOwn(ada.id, { spriteKey: null })).spriteKey,
+    ).toBeNull();
+  });
+
   it('writes nothing for an update that names no field', async () => {
     const ada = await person('ada@campus.local');
 
@@ -211,6 +223,15 @@ describe('profile card', () => {
     });
     expect(card).not.toHaveProperty('phone');
     expect(JSON.stringify(card)).not.toContain('801 234');
+  });
+
+  it('shows a classmate the sprite they picked', async () => {
+    await join(grace.id, c1, CohortRole.Mentor);
+    await service.updateOwn(ada.id, { spriteKey: 'placeholder-3' });
+
+    const card = await service.getCard(viewerOf(grace), ada.id);
+
+    expect(card.spriteKey).toBe('placeholder-3');
   });
 
   it('shows only the cohorts the two share', async () => {

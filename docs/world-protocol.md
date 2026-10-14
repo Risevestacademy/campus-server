@@ -31,7 +31,7 @@ input.
 
 That gives `ClientMessage`, `ServerMessage`, one type per message
 (`MoveMessage`, `MovedMessage`, `MoveResultMessage`, …), and `Player`,
-`Direction` and `MoveOutcome`. This document covers what the schema cannot:
+`Avatar`, `Direction` and `MoveOutcome`. This document covers what the schema cannot:
 the order things happen in, and what the client is expected to do about them.
 
 ## Connecting
@@ -79,11 +79,12 @@ sequenceDiagram
     end
 ```
 
-- **`welcome`** carries your `userId` and the timings to play by:
-  `stepMs` (walking speed), `tickMs` (how often others' moves arrive) and
-  `heartbeatSeconds`.
+- **`welcome`** carries your `userId`, your own `spriteKey` and
+  `displayName`, and the timings to play by: `stepMs` (walking speed),
+  `tickMs` (how often others' moves arrive) and `heartbeatSeconds`.
 - **`snapshot`** carries which map this is and every player in your cohort
-  on it, you included. Draw from it; everything after is a change to it.
+  on it, you included, each with their sprite and name. Draw from it;
+  everything after is a change to it.
 
 You can send as soon as the socket opens. Frames sent while the server is
 still checking the session are held, not lost, and answered in order.
@@ -169,11 +170,11 @@ campus: the cohort named when the socket opened decides whose avatars you are
 told about, and nobody in another cohort appears in your `snapshot`, `joined`,
 `left` or `moved`, or you in theirs.
 
-| Message  | When                                              | What to do              |
-| -------- | ------------------------------------------------- | ----------------------- |
-| `joined` | Somebody arrived                                  | Add their avatar        |
-| `left`   | Somebody's socket closed, or they left the cohort | Remove their avatar     |
-| `moved`  | Once per tick, if anybody moved or turned         | Move each listed player |
+| Message  | When                                              | What to do                                 |
+| -------- | ------------------------------------------------- | ------------------------------------------ |
+| `joined` | Somebody arrived                                  | Add their avatar, with its sprite and name |
+| `left`   | Somebody's socket closed, or they left the cohort | Remove their avatar                        |
+| `moved`  | Once per tick, if anybody moved or turned         | Move each listed player                    |
 
 About `moved`:
 
@@ -184,6 +185,30 @@ About `moved`:
   maps exist.
 - **You are never in your own `moved` frame** — your `moveResult` already says
   where you ended up.
+
+### Drawing each person
+
+Somebody first appears as an `Avatar` — in the `snapshot`, or in `joined` —
+which is a `Player` plus two fields saying what to draw:
+
+- **`spriteKey`**: which character. One of the keys campus-api accepts on
+  `PATCH /v1/users/me` (listed in its API docs), or `null` when the person has
+  picked none. Draw your default for `null`, and also for any key you have no
+  sprite for: world passes the key on as stored, so a key retired from the
+  list can still arrive.
+- **`displayName`**: the name to show beside them, or `null` when they have
+  set none.
+
+Keep both by `userId`. `moved` and `moveResult` carry a plain `Player` —
+position and facing only — so take what to draw from the `Avatar` and keep it
+until that person's `left`.
+
+**A change shows the next time they enter.** World reads the sprite and name
+when somebody's socket opens and does not watch for changes after. Somebody
+who changes their sprite is seen with the new one by everybody once they
+leave and enter again — their own `welcome` and `snapshot` carry it too.
+Opening another tab in the same cohort does not count: nobody is told they
+arrived, so others keep the old sprite until they actually leave.
 
 ## One place at a time
 

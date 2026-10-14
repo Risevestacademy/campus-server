@@ -48,6 +48,8 @@ const accounts = {
   /** When each guest's visit runs out: `userId:cohortId` to the end date. */
   visitEnds: new Map<string, Date>(),
   admins: new Set<string>(),
+  /** Profiles with a name or sprite set. Everybody else has neither. */
+  looks: new Map<string, { displayName: string; spriteKey: string }>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
       ? null
@@ -56,6 +58,8 @@ const accounts = {
           suspended: accounts.suspended.has(userId),
           admin: accounts.admins.has(userId),
           sessionEpoch: accounts.epochs.get(userId) ?? 0,
+          displayName: accounts.looks.get(userId)?.displayName ?? null,
+          spriteKey: accounts.looks.get(userId)?.spriteKey ?? null,
         },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
@@ -238,6 +242,13 @@ async function waitFor(
   throw new Error('no matching message arrived');
 }
 
+/** Where everybody in a snapshot stands, leaving out what to draw for them. */
+function positionsIn(snapshot: Record<string, unknown>) {
+  return (snapshot.players as Record<string, unknown>[]).map(
+    ({ displayName: _name, spriteKey: _sprite, ...player }) => player,
+  );
+}
+
 beforeEach(() => {
   // A test that moves the clock must not leave it moved: every deadline
   // after it would be read against the wrong time.
@@ -249,6 +260,7 @@ beforeEach(() => {
   accounts.notMembers.clear();
   accounts.visitEnds.clear();
   accounts.admins.clear();
+  accounts.looks.clear();
   store.positions.clear();
   store.failLoad = false;
   store.failSave = false;
@@ -1036,7 +1048,7 @@ describe('movement', () => {
     expect(snapshot).toMatchObject({
       map: { id: 'campus', version: 'v-test', width: 5, height: 5 },
     });
-    expect(snapshot.players).toEqual(
+    expect(positionsIn(snapshot)).toEqual(
       expect.arrayContaining([
         { userId: ada, x: 0, y: 0, facing: 'down' },
         { userId: grace, x: 0, y: 0, facing: 'down' },
@@ -1055,7 +1067,14 @@ describe('movement', () => {
 
     await expect(waitFor(first, (m) => m.type === 'joined')).resolves.toEqual({
       type: 'joined',
-      player: { userId: grace, x: 0, y: 0, facing: 'down' },
+      player: {
+        userId: grace,
+        x: 0,
+        y: 0,
+        facing: 'down',
+        displayName: null,
+        spriteKey: null,
+      },
     });
     // Learns about themselves from the snapshot, not from a joined.
     await quiet();
@@ -1063,6 +1082,116 @@ describe('movement', () => {
 
     await leave(first);
     await leave(second);
+  });
+
+  describe('what to draw for each player', () => {
+    it('tells an arrival their own sprite and name in the welcome', async () => {
+      const ada = person();
+      accounts.looks.set(ada, {
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-2',
+      });
+
+      const conn = await arrive(ada);
+
+      await expect(
+        waitFor(conn, (m) => m.type === 'welcome'),
+      ).resolves.toMatchObject({
+        userId: ada,
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-2',
+      });
+      await leave(conn);
+    });
+
+    it('sends everybody’s sprite and name with the snapshot and with joined', async () => {
+      const ada = person();
+      const grace = person();
+      accounts.looks.set(ada, {
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-1',
+      });
+      accounts.looks.set(grace, {
+        displayName: 'Grace H.',
+        spriteKey: 'placeholder-3',
+      });
+      const first = await arrive(ada);
+      const second = await arrive(grace);
+
+      await expect(
+        waitFor(first, (m) => m.type === 'joined'),
+      ).resolves.toMatchObject({
+        player: {
+          userId: grace,
+          displayName: 'Grace H.',
+          spriteKey: 'placeholder-3',
+        },
+      });
+      const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            userId: ada,
+            displayName: 'Ada L.',
+            spriteKey: 'placeholder-1',
+          }),
+          expect.objectContaining({
+            userId: grace,
+            displayName: 'Grace H.',
+            spriteKey: 'placeholder-3',
+          }),
+        ]),
+      );
+
+      await leave(first);
+      await leave(second);
+    });
+
+    it('keeps moves to the position alone', async () => {
+      const ada = person();
+      accounts.looks.set(ada, {
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-1',
+      });
+      const walker = await arrive(ada);
+      const watcher = await arrive(person());
+
+      move(walker, 'right', 1);
+
+      const moved = await waitFor(watcher, (m) => m.type === 'moved');
+      expect(moved.players).toEqual([
+        { userId: ada, x: 1, y: 0, facing: 'right' },
+      ]);
+
+      await leave(walker);
+      await leave(watcher);
+    });
+
+    it('shows a changed sprite to others the next time its owner enters', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      accounts.looks.set(ada, {
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-1',
+      });
+      await leave(await arrive(ada));
+      watcher.messages.length = 0;
+
+      accounts.looks.set(ada, {
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-4',
+      });
+      const back = await arrive(ada);
+
+      await expect(
+        waitFor(watcher, (m) => m.type === 'joined'),
+      ).resolves.toMatchObject({
+        player: { userId: ada, spriteKey: 'placeholder-4' },
+      });
+
+      await leave(back);
+      await leave(watcher);
+    });
   });
 
   it('stops somebody at a wall, facing it', async () => {
@@ -1272,7 +1401,7 @@ describe('movement', () => {
       const inBackend = await arrive(grace, 'cohort-backend');
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toEqual([
+      expect(positionsIn(snapshot)).toEqual([
         { userId: grace, x: 0, y: 0, facing: 'down' },
       ]);
       await quiet();
@@ -1475,7 +1604,7 @@ describe('movement', () => {
       const second = await arrive(ada);
 
       const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 1,
         y: 0,
@@ -1517,7 +1646,7 @@ describe('movement', () => {
       const inBackend = await arrive(ada, 'cohort-backend');
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 3,
         y: 2,
@@ -1573,7 +1702,7 @@ describe('movement', () => {
       const inBackend = await arrive(ada, 'cohort-backend');
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 0,
         y: 0,
@@ -1645,7 +1774,7 @@ describe('movement', () => {
       // The memory from Frontend is not resumed; Backend's own saved position
       // is, and the stale memory is gone.
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 3,
         y: 2,
@@ -1669,7 +1798,7 @@ describe('movement', () => {
       // position, and Redis being down must not keep anybody out. With no
       // saved position for the destination, they start at the spawn.
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 0,
         y: 0,
@@ -1765,7 +1894,7 @@ describe('movement', () => {
       // Backend ends up holding the account, at its own saved position or the
       // spawn — never where it stood in Frontend.
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual(
+      expect(positionsIn(snapshot)).toContainEqual(
         expect.objectContaining({ userId: ada, x: 0, y: 0 }),
       );
       expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
@@ -1822,7 +1951,7 @@ describe('movement', () => {
       backend.release();
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 3,
         y: 2,
@@ -1865,7 +1994,7 @@ describe('movement', () => {
       backend.release();
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual(
+      expect(positionsIn(snapshot)).toContainEqual(
         expect.objectContaining({ userId: ada, x: 0, y: 0 }),
       );
       // The Frontend memory is discarded; Frontend's position is still saved.
@@ -1901,7 +2030,7 @@ describe('movement', () => {
       backend.release();
 
       const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 3,
         y: 2,
@@ -1963,7 +2092,7 @@ describe('movement', () => {
       backend.release();
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 0,
         y: 0,
@@ -2004,7 +2133,7 @@ describe('movement', () => {
       backend.release();
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual(
+      expect(positionsIn(snapshot)).toContainEqual(
         expect.objectContaining({ userId: ada, x: 0, y: 0 }),
       );
       await expect
@@ -2091,7 +2220,7 @@ describe('movement', () => {
       const again = await arrive(ada);
 
       const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 1,
         y: 1,
@@ -2137,7 +2266,7 @@ describe('movement', () => {
       accounts.suspended.delete(ada);
       const again = await arrive(ada);
       const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 0,
         y: 0,
@@ -2268,7 +2397,7 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 2,
         y: 3,
@@ -2284,7 +2413,7 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 0,
         y: 0,
@@ -2300,7 +2429,7 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 0,
         y: 0,
@@ -2316,7 +2445,7 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 0,
         y: 0,
@@ -2366,7 +2495,7 @@ describe('movement', () => {
 
       expect(store.loads).toBe(loadsBefore);
       const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
-      expect(snapshot.players).toContainEqual({
+      expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
         x: 1,
         y: 0,

@@ -201,17 +201,45 @@ describe('profile routes (e2e)', () => {
       expect(res.body.bio).toBe('Hello');
     });
 
+    it('takes a sprite from the allowed list, and clears it', async () => {
+      const picked = await as(adaToken)
+        .patch('/v1/users/me', { spriteKey: 'placeholder-2' })
+        .expect(200);
+      expect(picked.body.spriteKey).toBe('placeholder-2');
+
+      const cleared = await as(adaToken)
+        .patch('/v1/users/me', { spriteKey: null })
+        .expect(200);
+      expect(cleared.body.spriteKey).toBeNull();
+    });
+
     it.each([
       ['phone', { phone: 'call me' }],
       ['phone', { phone: '+1' }],
       ['bio', { bio: 'x'.repeat(501) }],
       ['firstName', { firstName: 'x'.repeat(81) }],
       ['displayName', { displayName: 42 }],
+      ['spriteKey', { spriteKey: 'dragon' }],
+      ['spriteKey', { spriteKey: 'PLACEHOLDER-1' }],
+      ['spriteKey', { spriteKey: 7 }],
     ])('rejects a bad %s', async (field, body) => {
       const res = await as(adaToken).patch('/v1/users/me', body);
 
       expect(res.status).toBe(400);
       expect(res.body.error.details.fields[field]).toEqual(expect.any(String));
+    });
+
+    it('keeps the sprite it had when a new one is refused', async () => {
+      await as(adaToken)
+        .patch('/v1/users/me', { spriteKey: 'placeholder-1' })
+        .expect(200);
+
+      await as(adaToken)
+        .patch('/v1/users/me', { spriteKey: 'dragon' })
+        .expect(400);
+
+      const [row] = await db.select().from(users).where(eq(users.id, ada.id));
+      expect(row.spriteKey).toBe('placeholder-1');
     });
 
     it('ignores fields that are not the person’s to change', async () => {
@@ -254,6 +282,9 @@ describe('profile routes (e2e)', () => {
         .update(users)
         .set({ phone: '+234 801 234 5678' })
         .where(eq(users.id, ada.id));
+      await as(adaToken)
+        .patch('/v1/users/me', { spriteKey: 'placeholder-3' })
+        .expect(200);
 
       const res = await as(graceToken)
         .get(`/v1/users/${ada.id}/profile`)
@@ -262,6 +293,7 @@ describe('profile routes (e2e)', () => {
       expect(res.body).toMatchObject({
         id: ada.id,
         email: 'ada@campus.local',
+        spriteKey: 'placeholder-3',
         memberships: [{ role: 'student', cohort: { code: 'C1' } }],
       });
       expect(JSON.stringify(res.body)).not.toContain('801 234');

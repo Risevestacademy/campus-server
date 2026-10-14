@@ -22,7 +22,7 @@ export type Refusal =
   | 'not_a_member';
 
 export type UpgradeDecision =
-  | { ok: true; claims: SessionClaims; cohortId: string }
+  | { ok: true; claims: SessionClaims; account: Account; cohortId: string }
   | {
       ok: false;
       refusal: Refusal;
@@ -112,7 +112,12 @@ export async function decideUpgrade(
     return { ok: false, refusal: 'not_a_member' };
   }
 
-  return { ok: true, claims: caller.claims, cohortId };
+  return {
+    ok: true,
+    claims: caller.claims,
+    account: checked.account,
+    cohortId,
+  };
 }
 
 export interface CallerHeaders {

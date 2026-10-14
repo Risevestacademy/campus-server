@@ -168,6 +168,8 @@ describe('with the position store failing', () => {
           suspended: false,
           admin: false,
           sessionEpoch: 0,
+          displayName: null,
+          spriteKey: null,
         }),
       },
       failing,
@@ -198,7 +200,14 @@ describe('with the position store failing', () => {
     });
 
     expect(snapshot.players).toEqual([
-      { userId: 'ada', x: 20, y: 15, facing: 'down' },
+      {
+        userId: 'ada',
+        x: 20,
+        y: 15,
+        facing: 'down',
+        displayName: null,
+        spriteKey: null,
+      },
     ]);
 
     const closed = new Promise((resolve) => ws.on('close', resolve));

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -15,6 +16,7 @@ import {
   UserMembershipDto,
   UserMembershipTrackDto,
 } from '../../dto/user-list-item.dto.js';
+import { SPRITE_KEYS, type SpriteKey } from '../sprite-keys.js';
 
 /**
  * Trimmed, with an empty string read as "clear it". NUL goes too: Postgres
@@ -93,6 +95,22 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(500)
   bio?: string | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    enum: SPRITE_KEYS,
+    nullable: true,
+    example: SPRITE_KEYS[0],
+    description:
+      'The character they walk the campus as. Others see a change the next ' +
+      'time this person enters the campus.',
+  })
+  @Cleaned()
+  @IsOptional()
+  @IsIn(SPRITE_KEYS, {
+    message: `spriteKey must be one of: ${SPRITE_KEYS.join(', ')}`,
+  })
+  spriteKey?: SpriteKey | null;
 }
 
 /** The caller's own profile: everything, since it is theirs. */

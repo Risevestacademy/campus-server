@@ -36,6 +36,7 @@ describe('protocol.schema.json', () => {
         'MoveResultMessage',
         'ErrorMessage',
         'Player',
+        'Avatar',
         'Direction',
         'MoveOutcome',
       ].sort(),

@@ -22,6 +22,7 @@ const EDITABLE = [
   'displayName',
   'phone',
   'bio',
+  'spriteKey',
 ] as const;
 
 /**

@@ -34,7 +34,7 @@ export function ApiUpdateOwnProfile(): MethodDecorator {
     ApiOperation({
       summary: 'Update your own profile',
       description:
-        'A partial update: names, display name, phone and bio. Leave a ' +
+        'A partial update: names, display name, phone, bio and sprite. Leave a ' +
         'field out to keep it; send `null` or an empty string to clear it. ' +
         'Values are trimmed.\n\n' +
         'The address cannot be changed here: it is the Google account the ' +
@@ -44,7 +44,9 @@ export function ApiUpdateOwnProfile(): MethodDecorator {
     ApiOkResponse({ type: OwnProfileDto }),
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
-      description: 'A field is too long, or the phone is not a phone number.',
+      description:
+        'A field is too long, the phone is not a phone number, or the sprite ' +
+        'is not one of the allowed keys.',
     }),
     noSession,
   );

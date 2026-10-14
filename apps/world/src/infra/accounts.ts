@@ -25,7 +25,20 @@ export interface AccountLookup {
   close(): Promise<void>;
 }
 
-export interface Account {
+/**
+ * What everybody else draws for them, as their profile has it when they
+ * enter. Read once per socket, so a change shows the next time they enter.
+ */
+export interface Appearance {
+  displayName: string | null;
+  /**
+   * campus-api checks it against its list when it is set; world passes it on
+   * as stored, so a key retired since is still sent.
+   */
+  spriteKey: string | null;
+}
+
+export interface Account extends Appearance {
   id: string;
   suspended: boolean;
   /**
@@ -45,7 +58,7 @@ export interface Account {
  * perfectly good session.
  */
 export const ACCOUNT_QUERY =
-  'select id, status, system_role, session_epoch from users where id = $1 limit 1';
+  'select id, status, system_role, session_epoch, display_name, sprite_key from users where id = $1 limit 1';
 
 /**
  * A login is live while its refresh family holds a token that is neither
@@ -112,6 +125,8 @@ export function createAccountLookup(env: Env): AccountLookup {
           status: string;
           system_role: string;
           session_epoch: number;
+          display_name: string | null;
+          sprite_key: string | null;
         }[]
       >(ACCOUNT_QUERY, [userId]);
       const row = rows[0];
@@ -121,6 +136,8 @@ export function createAccountLookup(env: Env): AccountLookup {
             suspended: row.status === 'suspended',
             sessionEpoch: row.session_epoch,
             admin: hasAdminPowers(row.system_role),
+            displayName: row.display_name,
+            spriteKey: row.sprite_key,
           }
         : null;
     },
