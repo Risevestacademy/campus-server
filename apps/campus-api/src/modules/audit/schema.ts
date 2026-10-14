@@ -96,6 +96,13 @@ export enum AuditAction {
    * reason the admin wrote, or null. The subject says which membership.
    */
   MembershipEnded = 'membership_ended',
+  /**
+   * An admin marked a piece of feedback dealt with, or put it back to open.
+   * `details` is empty: what a member wrote is theirs, and often about
+   * somebody else, so it stays on the feedback and never comes here.
+   */
+  FeedbackResolved = 'feedback_resolved',
+  FeedbackReopened = 'feedback_reopened',
 }
 
 export enum AuditSubjectType {
@@ -105,6 +112,7 @@ export enum AuditSubjectType {
   Cohort = 'cohort',
   CohortTrack = 'cohort_track',
   Track = 'track',
+  Feedback = 'feedback',
 }
 
 /**

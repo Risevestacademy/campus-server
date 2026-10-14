@@ -14,6 +14,7 @@ NestJS backend for the campus application.
 - [Environment variables](#environment-variables)
 - [Databases & infra](#databases--infra)
 - [Audit log](#audit-log)
+- [Feedback](#feedback)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
 - [Integration guide](#integration-guide)
@@ -131,6 +132,13 @@ Changes to the admin setup and to people's access are recorded in the
 `audit_log` table, in the same transaction as the change. What is recorded,
 what each field means, the personal-data rules, retention and rollout notes
 are in [src/modules/audit/README.md](src/modules/audit/README.md).
+
+## Feedback
+
+Any member can send a bug, an idea or a report, and admins read them. The
+routes, the limit on how much one account may send, who is told about a
+report and the personal-data rules are in
+[src/modules/feedback/README.md](src/modules/feedback/README.md).
 
 ## Logging
 

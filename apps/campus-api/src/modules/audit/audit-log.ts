@@ -153,6 +153,15 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.Invite;
     details: { cohortId: string | null; invitedBy: string };
   };
+  [AuditAction.FeedbackResolved]: {
+    subject: AuditSubjectType.Feedback;
+    /** Nothing beyond the subject: what was written stays on the feedback. */
+    details: Record<string, never>;
+  };
+  [AuditAction.FeedbackReopened]: {
+    subject: AuditSubjectType.Feedback;
+    details: Record<string, never>;
+  };
   [AuditAction.CohortCreated]: {
     subject: AuditSubjectType.Cohort;
     details: CohortSnapshot;

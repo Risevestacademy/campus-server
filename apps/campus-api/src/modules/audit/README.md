@@ -118,6 +118,8 @@ actor (`actor_user_id, created_at`) and by subject
 | `system_role_changed`   | `user`          | invitee, admin, or nobody | `from`, `to`, and one of: `inviteId` + `invitedBy` (an accepted invite granted admin), `source: "admin"` (an admin granted or revoked it through the API), `source: "seed"` (the seed made a super admin) | An account's system role changes. Nothing is written when it already had the role.                                                                                                                                                          |
 | `user_suspended`        | `user`          | admin                     | `reason`: what the admin wrote, or null when they wrote nothing; `actorRole`: the actor's system role at the time                                                                                         | An admin suspends an account. No entry for a refusal: a 409 for the caller's own account or one already suspended, a 403 for a super admin's account or an actor no longer active.                                                          |
 | `user_reinstated`       | `user`          | admin                     | `actorRole`: the actor's system role at the time; `suspendedBy`: who suspended the account; `suspendedByRole`: the role that account held then                                                            | An admin puts a suspended account back to active. No entry for a refusal: a 409 for an account that is not suspended, a 403 for a suspension a plain admin may not lift, or an actor no longer active.                                      |
+| `feedback_resolved`     | `feedback`      | admin                     | nothing — an empty object; what the member wrote stays on the feedback                                                                                                                                    | An admin marks a piece of feedback dealt with. Nothing is written when it already was.                                                                                                                                                      |
+| `feedback_reopened`     | `feedback`      | admin                     | nothing — an empty object                                                                                                                                                                                 | An admin puts a resolved piece of feedback back to open.                                                                                                                                                                                    |
 
 What is not recorded, so nobody goes looking for it:
 
@@ -127,6 +129,8 @@ What is not recorded, so nobody goes looking for it:
 - An invite lapsing. Nobody does that; the status flips when something reads
   it.
 - Sign-ins, sign-outs and token refreshes.
+- A member sending feedback. The feedback row says who sent it and when, and
+  nothing a member wrote is copied here.
 - Reads of any kind.
 
 ## Personal data

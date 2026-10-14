@@ -1,5 +1,5 @@
 {
-  "id": "6dc349d4-8d12-453e-8b80-4be06a9f9107",
+  "id": "32831e0c-332a-476a-833c-c731ad73719c",
   "prevId": "425139fe-ffc5-4679-bc00-1b8c224d57d6",
   "version": "7",
   "dialect": "postgresql",
@@ -325,7 +325,7 @@
         },
         "cohort_members_dismissal_reason": {
           "name": "cohort_members_dismissal_reason",
-          "value": "\"cohort_members\".\"dismissal_reason\" is null or \"cohort_members\".\"left_at\" is not null"
+          "value": "\"cohort_members\".\"dismissal_reason\" is null or \"cohort_members\".\"status\" = 'dismissed'"
         },
         "cohort_members_guest_expiry": {
           "name": "cohort_members_guest_expiry",
@@ -499,6 +499,251 @@
         "cohorts_code_uppercase": {
           "name": "cohorts_code_uppercase",
           "value": "\"cohorts\".\"code\" = upper(\"cohorts\".\"code\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.feedback": {
+      "name": "feedback",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "type": {
+          "name": "type",
+          "type": "feedback_type",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(120)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "details": {
+          "name": "details",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "about": {
+          "name": "about",
+          "type": "varchar(200)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reported_user_id": {
+          "name": "reported_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submitted_by": {
+          "name": "submitted_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cohort_id": {
+          "name": "cohort_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "context": {
+          "name": "context",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "user_agent": {
+          "name": "user_agent",
+          "type": "varchar(512)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "feedback_status",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "resolved_by": {
+          "name": "resolved_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "feedback_created_idx": {
+          "name": "feedback_created_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "feedback_type_status_idx": {
+          "name": "feedback_type_status_idx",
+          "columns": [
+            {
+              "expression": "type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "feedback_submitted_by_idx": {
+          "name": "feedback_submitted_by_idx",
+          "columns": [
+            {
+              "expression": "submitted_by",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "feedback_reported_user_id_users_id_fk": {
+          "name": "feedback_reported_user_id_users_id_fk",
+          "tableFrom": "feedback",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reported_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "feedback_submitted_by_users_id_fk": {
+          "name": "feedback_submitted_by_users_id_fk",
+          "tableFrom": "feedback",
+          "tableTo": "users",
+          "columnsFrom": [
+            "submitted_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "feedback_cohort_id_cohorts_id_fk": {
+          "name": "feedback_cohort_id_cohorts_id_fk",
+          "tableFrom": "feedback",
+          "tableTo": "cohorts",
+          "columnsFrom": [
+            "cohort_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "feedback_resolved_by_users_id_fk": {
+          "name": "feedback_resolved_by_users_id_fk",
+          "tableFrom": "feedback",
+          "tableTo": "users",
+          "columnsFrom": [
+            "resolved_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "feedback_title_not_blank": {
+          "name": "feedback_title_not_blank",
+          "value": "\"feedback\".\"title\" ~ '[^ \\t\\n\\r\\f\\v]'"
+        },
+        "feedback_details_not_blank": {
+          "name": "feedback_details_not_blank",
+          "value": "\"feedback\".\"details\" ~ '[^ \\t\\n\\r\\f\\v]'"
+        },
+        "feedback_details_length": {
+          "name": "feedback_details_length",
+          "value": "length(\"feedback\".\"details\") <= 4000"
+        },
+        "feedback_reported_user_on_reports": {
+          "name": "feedback_reported_user_on_reports",
+          "value": "\"feedback\".\"reported_user_id\" is null or \"feedback\".\"type\" = 'report'"
+        },
+        "feedback_resolution": {
+          "name": "feedback_resolution",
+          "value": "(\"feedback\".\"status\" = 'resolved') = (\"feedback\".\"resolved_at\" is not null) and (\"feedback\".\"resolved_at\" is null) = (\"feedback\".\"resolved_by\" is null)"
         }
       },
       "isRLSEnabled": false
@@ -1673,6 +1918,23 @@
         "graduated",
         "withdrawn",
         "deferred"
+      ]
+    },
+    "public.feedback_status": {
+      "name": "feedback_status",
+      "schema": "public",
+      "values": [
+        "open",
+        "resolved"
+      ]
+    },
+    "public.feedback_type": {
+      "name": "feedback_type",
+      "schema": "public",
+      "values": [
+        "bug",
+        "idea",
+        "report"
       ]
     },
     "public.invite_status": {
