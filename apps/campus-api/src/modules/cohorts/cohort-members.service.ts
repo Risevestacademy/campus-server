@@ -1,7 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { type SQL, and, eq, gt, isNull, ne, not, or, sql } from 'drizzle-orm';
 
-import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import {
+  DRIZZLE,
+  type Db,
+  type Tx,
+} from '../../infra/database/database.constants.js';
 import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import {
@@ -12,6 +16,7 @@ import {
 import type { CohortMemberResponseDto } from './dto/cohort-response.dto.js';
 import { MembershipEndAction } from './dto/end-membership.dto.js';
 import type { EndMembershipResponseDto } from './dto/end-membership.dto.js';
+import { hasAdminPowers, users } from '../users/schema.js';
 import { CohortRole, StudentStatus, cohortMembers, cohorts } from './schema.js';
 
 /**
@@ -275,9 +280,15 @@ export class CohortMembersService {
    * committed.
    *
    * An end is not a revive. The row stays, `left_at` is set, and the roster
-   * files it under `state=ended` with the status and reason. Sessions are
-   * revoked by the caller once this has committed — deliberately outside the
-   * transaction, so a revocation that fails cannot roll the end back.
+   * files it under `state=ended` with the status and reason.
+   *
+   * The member's sessions are ended in the same transaction, through
+   * `endSessions` (the session issuer, which this module cannot import
+   * without a cycle). If that fails the end rolls back with it, so there is
+   * never a membership ended with its sessions still alive, and the admin can
+   * simply try again. An admin's sessions are left alone: an admin is let in
+   * on their role, not on this membership, so ending it takes nothing from
+   * them, and revoking would only let any admin sign any other out.
    *
    * Refusals: no such membership is a 404; one that already ended, or a
    * student-only status aimed at staff or a guest, is a 409; a dismissal
@@ -289,6 +300,7 @@ export class CohortMembersService {
     action: MembershipEndAction,
     reason: string | undefined,
     audit: AuditContext,
+    endSessions: (tx: Tx) => Promise<unknown>,
     now: Date = new Date(),
   ): Promise<EndMembershipResponseDto> {
     if (audit.actorUserId === userId) {
@@ -349,6 +361,14 @@ export class CohortMembersService {
         subject: { type: AuditSubjectType.CohortMember, id: row.id },
         details: { cohortId, role: row.role, status, reason: reason ?? null },
       });
+
+      const [account] = await tx
+        .select({ systemRole: users.systemRole })
+        .from(users)
+        .where(eq(users.id, userId));
+      if (account && !hasAdminPowers(account.systemRole)) {
+        await endSessions(tx);
+      }
 
       return {
         id: row.id,

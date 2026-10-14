@@ -541,9 +541,12 @@ function ApiEndMember(action: MembershipEndAction): MethodDecorator {
         (action === MembershipEndAction.Dismiss
           ? 'A `reason` is required.\n\n'
           : '`reason` is optional.\n\n') +
-        'The member’s sessions end once the change has committed, so their ' +
-        'next request is refused; an open `world` socket closes on the next ' +
-        'heartbeat.\n\n' +
+        'The member’s sessions end with the change, in the same ' +
+        'transaction, so their next request is refused; an open `world` ' +
+        'socket closes on the next heartbeat. If they cannot be ended, ' +
+        'nothing changes and the call answers 500, and it can be tried ' +
+        'again. An admin’s sessions are left alone: admins are let in on ' +
+        'their role, not on a membership.\n\n' +
         'Refusals: a 404 when nobody in the cohort holds this membership; a ' +
         '409 when it has already ended, when a student-only status is aimed ' +
         'at staff or a guest, or when the caller targets their own ' +

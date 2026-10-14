@@ -1207,9 +1207,9 @@ describe('cohort and track admin routes (e2e)', () => {
   });
 
   /**
-   * The five ways an admin ends a membership. Each one writes the end and an
-   * entry in one transaction, then revokes the member's sessions, so the next
-   * request with the session they already held is refused.
+   * The five ways an admin ends a membership. Each one writes the end, an
+   * entry and the revocation of the member's sessions in one transaction, so
+   * the next request with the session they already held is refused.
    */
   describe('ending memberships', () => {
     let cohortId: string;
@@ -1519,8 +1519,8 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(res.body.reason).toBeNull();
     });
 
-    // Revocation is deliberately after the commit. A refused end never
-    // reaches it, so the session the member held keeps working.
+    // A refused end never reaches the revocation, so the session the member
+    // held keeps working.
     it.each(ACTIONS)(
       'does not revoke sessions when a %s end is refused',
       async (action) => {
@@ -1537,13 +1537,13 @@ describe('cohort and track admin routes (e2e)', () => {
     );
 
     /**
-     * The end has already committed when the revocation runs, so a revocation
-     * that fails must not undo it: the caller hears a 5xx carrying the code
-     * that says the membership ended and its sessions did not, and the roster
-     * still files the membership as ended.
+     * The end, its entry and the revocation are one transaction. A revocation
+     * that fails takes the end with it, so nothing is left half done: the
+     * member is still on the roster, their session still works, and the
+     * admin can try again.
      */
     it.each(ACTIONS)(
-      'keeps a %s end committed when revocation fails, with its own code',
+      'rolls a %s end back when revocation fails, and takes a retry',
       async (action, status) => {
         const member = await makeStudent();
         const spy = vi
@@ -1554,7 +1554,7 @@ describe('cohort and track admin routes (e2e)', () => {
           const res = await end(action, member.id, {
             reason: reasonFor(action),
           }).expect(500);
-          expect(res.body.error.code).toBe('SESSION_REVOCATION_FAILED');
+          expect(res.body.error.code).toBe('INTERNAL_ERROR');
         } finally {
           spy.mockRestore();
         }
@@ -1563,11 +1563,43 @@ describe('cohort and track admin routes (e2e)', () => {
           .select()
           .from(schema.cohortMembers)
           .where(eq(schema.cohortMembers.userId, member.id));
-        expect(row.leftAt).not.toBeNull();
-        expect(row.status).toBe(status);
+        expect(row.leftAt).toBeNull();
+        expect(row.status).toBe(StudentStatus.Active);
+        expect(await endedEntries()).toHaveLength(0);
+        await as(memberCookie).get('/v1/auth/me').expect(200);
+
+        await end(action, member.id, { reason: reasonFor(action) }).expect(200);
+        const [ended] = await db
+          .select()
+          .from(schema.cohortMembers)
+          .where(eq(schema.cohortMembers.userId, member.id));
+        expect(ended.status).toBe(status);
         expect(await endedEntries()).toHaveLength(1);
+        await as(memberCookie).get('/v1/auth/me').expect(401);
       },
     );
+
+    /**
+     * An admin is let in on their role, not on a membership, so ending one
+     * takes nothing from them. Revoking would only let any admin sign any
+     * other out, a super admin included.
+     */
+    it('leaves an admin signed in when their membership is removed', async () => {
+      const member = await memberOf();
+      await db
+        .update(users)
+        .set({ systemRole: SystemRole.Admin })
+        .where(eq(users.id, member.id));
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: member.id,
+        role: CohortRole.Mentor,
+      });
+
+      await end('remove', member.id).expect(200);
+
+      await as(memberCookie).get('/v1/auth/me').expect(200);
+    });
   });
 
   /**

@@ -12,7 +12,6 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { PinoLogger } from 'nestjs-pino';
 
 import { AdminGuard } from '../../shared/auth/admin.guard.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
@@ -26,7 +25,6 @@ import { SessionGuard } from '../auth/session.guard.js';
 import { SessionIssuer } from '../auth/session-issuer.js';
 import { CohortMembersService } from './cohort-members.service.js';
 import { CohortRosterService } from './cohort-roster.service.js';
-import { MembershipSessionsNotRevokedException } from './cohorts.exceptions.js';
 import { CohortsService } from './cohorts.service.js';
 import {
   ApiAttachTrack,
@@ -80,10 +78,7 @@ export class CohortsController {
     private readonly members: CohortMembersService,
     private readonly roster: CohortRosterService,
     private readonly sessions: SessionIssuer,
-    private readonly logger: PinoLogger,
-  ) {
-    this.logger.setContext(CohortsController.name);
-  }
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -255,52 +250,27 @@ export class CohortsController {
   }
 
   /**
-   * Every end route shares this: the members service owns the transaction
-   * that writes the end, and the revocation happens here, after it has
-   * committed, so a revocation that fails cannot roll the end back.
-   *
-   * A revocation that fails leaves the membership ended — the commit stands —
-   * and is reported as its own 5xx, so the caller is told the real state
-   * rather than either a success that hides a live session or a generic
-   * failure that hides what did happen.
+   * Every end route shares this. The members service writes the end, the
+   * audit entry and the revocation of the member's sessions in one
+   * transaction, so either all of it happens or none does.
    */
-  private async end(
+  private end(
     params: MemberParamDto,
     dto: EndMembershipDto,
     admin: AuthenticatedUser,
     correlationId: string | undefined,
     action: MembershipEndAction,
   ): Promise<EndMembershipResponseDto> {
-    const result = await this.members.endMembership(
+    const now = new Date();
+    return this.members.endMembership(
       params.cohortId,
       params.userId,
       action,
       dto.reason,
       { actorUserId: admin.id, correlationId },
+      (tx) => this.sessions.revokeAllSessions(params.userId, now, tx),
+      now,
     );
-    try {
-      await this.sessions.revokeAllSessions(params.userId);
-    } catch (err) {
-      // Log the fault with the membership it was about, and never the
-      // tokens: revoking takes none. The end is already committed, so this
-      // does not roll back — it names the half-done state for whoever reads
-      // the logs.
-      this.logger.error(
-        {
-          err,
-          userId: params.userId,
-          cohortId: params.cohortId,
-          membershipId: result.id,
-        },
-        'membership ended but its sessions were not revoked',
-      );
-      throw new MembershipSessionsNotRevokedException(
-        params.cohortId,
-        params.userId,
-        result.id,
-      );
-    }
-    return result;
   }
 
   @Patch(':id')
