@@ -1,7 +1,7 @@
 %% =====================================================================
 %% Campus by Rise — full ERD
 %% GENERATED — do not hand-edit.
-%% 33 tables, 26 enums.
+%% 34 tables, 28 enums.
 %% -
 %% Mermaid ER cannot express nullability, defaults, column lengths,
 %% partial indexes or CHECK constraints. Those are listed at the
@@ -404,6 +404,24 @@ erDiagram
         timestamptz created_at
     }
 
+    FEEDBACK {
+        uuid id PK
+        feedback_type_enum type "bug | idea | report"
+        varchar title
+        text details
+        varchar about "Who or where, in the member's words. Optional on every ty…"
+        uuid reported_user_id FK "The account a report is about. Reports only."
+        uuid submitted_by FK "From the session, never from the request."
+        uuid cohort_id FK
+        jsonb context "Where the member's client said they were. Checked against…"
+        varchar user_agent
+        feedback_status_enum status "open | resolved"
+        uuid resolved_by FK
+        timestamptz resolved_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
     %% ----------------------------------------------------- relationships
 
     COHORTS ||--o{ COHORT_TRACKS : "runs"
@@ -473,6 +491,10 @@ erDiagram
     USERS ||--o{ NOTIFICATIONS : "receives"
 
     USERS ||--o{ AUDIT_LOG : "acts"
+    USERS ||--o{ FEEDBACK : "sends"
+    USERS ||--o{ FEEDBACK : "reported_in"
+    USERS ||--o{ FEEDBACK : "resolves"
+    COHORTS ||--o{ FEEDBACK : "sent_from"
     SPACES ||--o{ AUDIT_LOG : "subject_of"
 
 %% =====================================================================
@@ -522,6 +544,9 @@ erDiagram
 %%   spaces: capacity IS NULL OR capacity > 0
 %%   space_memberships: (cohort_track_id IS NULL) <> (user_id IS NULL)
 %%   space_memberships: valid_to IS NULL OR valid_to > valid_from
+%%   feedback: reported_user_id IS NULL OR type = 'report'
+%%   feedback: (status = 'resolved') = (resolved_at IS NOT NULL) = (resolved_by IS NOT NULL)
+%%   feedback: title and details hold something other than white space
 %%   cohort_members: role = 'student' OR status IS NULL
 %%   cohort_members: role <> 'student' OR cohort_track_id IS NOT NULL
 %%   invites: (cohort_id IS NULL) = (cohort_role IS NULL)

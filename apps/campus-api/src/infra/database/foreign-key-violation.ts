@@ -1,3 +1,5 @@
+import { isConstraintViolation } from './constraint-violation.js';
+
 /**
  * Whether a failed write was Postgres refusing a foreign key on `constraint`.
  *
@@ -11,23 +13,5 @@ export function isForeignKeyViolation(
   err: unknown,
   constraint?: string,
 ): boolean {
-  const code =
-    (err as { code?: unknown } | null)?.code ??
-    (err as { cause?: { code?: unknown } } | null)?.cause?.code;
-  if (code !== '23503') return false;
-  if (!constraint) return true;
-
-  let current: unknown = err;
-  for (let depth = 0; depth < 4 && current; depth++) {
-    if (typeof current !== 'object') break;
-    const record = current as Record<string, unknown>;
-    for (const key of ['constraint', 'constraint_name', 'message']) {
-      const value = record[key];
-      if (typeof value === 'string' && value.includes(constraint)) {
-        return true;
-      }
-    }
-    current = record['cause'];
-  }
-  return false;
+  return isConstraintViolation(err, '23503', constraint);
 }

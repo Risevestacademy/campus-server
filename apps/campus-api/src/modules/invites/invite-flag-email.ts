@@ -1,6 +1,10 @@
 import { CohortRole } from '../cohorts/schema.js';
 import { SystemRole } from '../users/schema.js';
-import { escapeHtml, formatDate, type RenderedEmail } from './invite-email.js';
+import {
+  escapeHtml,
+  type RenderedEmail,
+} from '../../infra/email/rendered-email.js';
+import { formatDate } from './invite-email.js';
 
 /** What a flag email says, read from the invite that was flagged. */
 export interface InviteFlagNotice {
