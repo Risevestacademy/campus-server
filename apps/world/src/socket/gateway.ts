@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import type { AccountLookup } from '../infra/accounts.js';
+import type { AccountLookup, Appearance } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import type {
   PositionStore,
@@ -29,6 +29,7 @@ import {
   ServerErrorCode,
   decode,
   encode,
+  type Avatar,
   type ServerMessage,
 } from './protocol.js';
 
@@ -45,6 +46,11 @@ const ENTERED_ELSEWHERE = 4000;
 export interface Gateway {
   connections: Connections;
   players: Players;
+  /**
+   * campus-api says this account's sprite or display name changed: read it
+   * again, and tell their cohort if what to draw is different.
+   */
+  appearanceChanged(userId: string): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -310,13 +316,40 @@ export function registerGateway(
     }
   }
 
-  /** Everybody standing in one cohort's campus. */
-  function playersIn(cohortId: string): Player[] {
-    return players
-      .all()
-      .filter(
-        (player) => connections.forUser(player.userId)?.cohortId === cohortId,
-      );
+  /**
+   * Puts the account's sprite and name on its socket, and tells the cohort,
+   * itself included, when they differ from what was being drawn. Only for
+   * the socket that still holds the account's place: the read crossed an
+   * await, and a socket replaced meanwhile has nobody left to tell.
+   */
+  function showAppearance(connection: Connection, account: Appearance): void {
+    if (!connections.has(connection)) {
+      return;
+    }
+    const { displayName, spriteKey } = account;
+    if (
+      connection.appearance.displayName === displayName &&
+      connection.appearance.spriteKey === spriteKey
+    ) {
+      return;
+    }
+    connection.appearance = { displayName, spriteKey };
+    broadcast(connection.cohortId, {
+      type: 'appearance',
+      userId: connection.userId,
+      displayName,
+      spriteKey,
+    });
+  }
+
+  /** Everybody standing in one cohort's campus, with what to draw for them. */
+  function avatarsIn(cohortId: string): Avatar[] {
+    return players.all().flatMap((player) => {
+      const connection = connections.forUser(player.userId);
+      return connection?.cohortId === cohortId
+        ? [avatarOf(player, connection)]
+        : [];
+    });
   }
 
   /**
@@ -342,6 +375,10 @@ export function registerGateway(
       }
       if (account && !account.suspended) {
         dropIfRevoked(connection, account.sessionEpoch);
+        // The account was read anyway. A change whose notification this
+        // process missed, while it was reconnecting to the database, is
+        // caught here, a heartbeat late at worst.
+        showAppearance(connection, account);
         // The cohort is asked again for everybody but an admin, who is
         // admitted on their role alone — from the row, as at the upgrade, so
         // a demotion lands on the socket already open too.
@@ -705,6 +742,10 @@ export function registerGateway(
       userId: decision.claims.userId,
       email: decision.claims.email,
       cohortId: decision.cohortId,
+      appearance: {
+        displayName: decision.account.displayName,
+        spriteKey: decision.account.spriteKey,
+      },
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
       epoch: decision.claims.epoch,
@@ -758,7 +799,10 @@ export function registerGateway(
     if (arriving) {
       // Told to everyone already in this cohort; the arrival learns of itself
       // from the snapshot.
-      broadcast(connection.cohortId, { type: 'joined', player });
+      broadcast(connection.cohortId, {
+        type: 'joined',
+        player: avatarOf(player, connection),
+      });
     }
 
     // Registered before the old socket is closed: drop() decides whether the
@@ -866,6 +910,7 @@ export function registerGateway(
       heartbeatSeconds: env.WORLD_HEARTBEAT_SECONDS,
       stepMs: env.WORLD_STEP_MS,
       tickMs: env.WORLD_TICK_MS,
+      ...connection.appearance,
     });
     send(ws, {
       type: 'snapshot',
@@ -875,7 +920,7 @@ export function registerGateway(
         width: map.grid.width,
         height: map.grid.height,
       },
-      players: playersIn(connection.cohortId),
+      players: avatarsIn(connection.cohortId),
     });
 
     // Handlers are on: whatever arrived during authentication is delivered
@@ -911,6 +956,23 @@ export function registerGateway(
   return {
     connections,
     players,
+    async appearanceChanged(userId: string): Promise<void> {
+      const connection = connections.forUser(userId);
+      if (!connection) {
+        return; // Not on this process's campus: nobody here to tell.
+      }
+      let account;
+      try {
+        account = await accounts.find(userId);
+      } catch (err) {
+        // The heartbeat reads the account again and catches it then.
+        app.log.error({ err, userId }, 'could not re-read a changed profile');
+        return;
+      }
+      if (account) {
+        showAppearance(connection, account);
+      }
+    },
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       clearInterval(tick);
@@ -941,6 +1003,10 @@ export function registerGateway(
       }
     },
   };
+}
+
+function avatarOf(player: Player, connection: Connection): Avatar {
+  return { ...player, ...connection.appearance };
 }
 
 /** A store write for one player, in the cohort named. */

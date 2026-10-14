@@ -52,6 +52,53 @@
       "additionalProperties": false,
       "description": "Somebody on the map, as the server has them. Positions are tiles, never pixels."
     },
+    "Avatar": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Tile column, from 0 at the left edge."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Tile row, from 0 at the top edge."
+        },
+        "facing": {
+          "$ref": "#/definitions/Direction"
+        },
+        "displayName": {
+          "description": "The name to show beside them. Null when they have set none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spriteKey": {
+          "description": "Which character to draw them as. Null when they have picked none; draw the default then, and for a key you have no sprite for.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "userId",
+        "x",
+        "y",
+        "facing",
+        "displayName",
+        "spriteKey"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message."
+    },
     "MoveOutcome": {
       "type": "string",
       "enum": [
@@ -145,6 +192,20 @@
           "minimum": -9007199254740991,
           "maximum": 9007199254740991,
           "description": "How often `moved` arrives while anybody is moving."
+        },
+        "displayName": {
+          "description": "The name to show beside them. Null when they have set none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spriteKey": {
+          "description": "Which character to draw them as. Null when they have picked none; draw the default then, and for a key you have no sprite for.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -153,7 +214,9 @@
         "connectionId",
         "heartbeatSeconds",
         "stepMs",
-        "tickMs"
+        "tickMs",
+        "displayName",
+        "spriteKey"
       ],
       "additionalProperties": false,
       "description": "First frame on a socket that was let in."
@@ -214,7 +277,7 @@
         "players": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Player"
+            "$ref": "#/definitions/Avatar"
           }
         }
       },
@@ -234,7 +297,7 @@
           "const": "joined"
         },
         "player": {
-          "$ref": "#/definitions/Player"
+          "$ref": "#/definitions/Avatar"
         }
       },
       "required": [
@@ -243,6 +306,40 @@
       ],
       "additionalProperties": false,
       "description": "Somebody arrived in your cohort. Not sent when a socket is replaced within the same cohort, because the avatar never left."
+    },
+    "AppearanceMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "appearance"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "displayName": {
+          "description": "The name to show beside them. Null when they have set none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spriteKey": {
+          "description": "Which character to draw them as. Null when they have picked none; draw the default then, and for a key you have no sprite for.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "displayName",
+        "spriteKey"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody in your cohort changed their sprite or display name, you included: draw them with these from now on. Sent as soon as they save the change."
     },
     "LeftMessage": {
       "type": "object",
@@ -364,6 +461,9 @@
         },
         {
           "$ref": "#/definitions/JoinedMessage"
+        },
+        {
+          "$ref": "#/definitions/AppearanceMessage"
         },
         {
           "$ref": "#/definitions/LeftMessage"

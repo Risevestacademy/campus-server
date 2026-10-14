@@ -1,4 +1,8 @@
-import { hasAdminPowers } from '@campus/session';
+import {
+  PROFILE_CHANGED_CHANNEL,
+  hasAdminPowers,
+  spriteKeyOrNone,
+} from '@campus/session';
 import postgres from 'postgres';
 
 import type { Env } from './env.js';
@@ -22,10 +26,29 @@ export interface AccountLookup {
     now: Date,
   ): Promise<Set<string>>;
   liveMembership(userId: string, cohortId: string, now: Date): Promise<boolean>;
+  /**
+   * Calls `listener` with an account id whenever campus-api says that
+   * account's sprite or display name changed. Resolves once listening;
+   * rejects if it could not start.
+   */
+  onProfileChanged(listener: (userId: string) => void): Promise<void>;
   close(): Promise<void>;
 }
 
-export interface Account {
+/**
+ * What everybody else draws for them, as their profile has it when they
+ * enter. Read once per socket, so a change shows the next time they enter.
+ */
+export interface Appearance {
+  displayName: string | null;
+  /**
+   * Null when none is picked, and for a stored key no longer on the list:
+   * clients draw their default for both.
+   */
+  spriteKey: string | null;
+}
+
+export interface Account extends Appearance {
   id: string;
   suspended: boolean;
   /**
@@ -45,7 +68,7 @@ export interface Account {
  * perfectly good session.
  */
 export const ACCOUNT_QUERY =
-  'select id, status, system_role, session_epoch from users where id = $1 limit 1';
+  'select id, status, system_role, session_epoch, display_name, sprite_key from users where id = $1 limit 1';
 
 /**
  * A login is live while its refresh family holds a token that is neither
@@ -112,6 +135,8 @@ export function createAccountLookup(env: Env): AccountLookup {
           status: string;
           system_role: string;
           session_epoch: number;
+          display_name: string | null;
+          sprite_key: string | null;
         }[]
       >(ACCOUNT_QUERY, [userId]);
       const row = rows[0];
@@ -121,6 +146,8 @@ export function createAccountLookup(env: Env): AccountLookup {
             suspended: row.status === 'suspended',
             sessionEpoch: row.session_epoch,
             admin: hasAdminPowers(row.system_role),
+            displayName: row.display_name,
+            spriteKey: spriteKeyOrNone(row.sprite_key),
           }
         : null;
     },
@@ -134,6 +161,11 @@ export function createAccountLookup(env: Env): AccountLookup {
         [ids, refreshedSince, now],
       );
       return new Set(rows.map((row) => row.family_id));
+    },
+    async onProfileChanged(listener): Promise<void> {
+      // A connection of its own, kept open and re-listened on reconnect by
+      // the driver. The payload is the account id campus-api changed.
+      await sql.listen(PROFILE_CHANGED_CHANNEL, (userId) => listener(userId));
     },
     async liveMembership(userId, cohortId, now): Promise<boolean> {
       if (!looksLikeId(cohortId)) {

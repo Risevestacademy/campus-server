@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { Appearance } from '../infra/accounts.js';
 import { Direction } from '../movement/grid.js';
 import type {
   MoveOutcome as MovementOutcome,
@@ -35,6 +36,32 @@ export const Player = z
     description:
       'Somebody on the map, as the server has them. Positions are tiles, never pixels.',
   });
+
+const appearance = {
+  displayName: z
+    .string()
+    .nullable()
+    .describe('The name to show beside them. Null when they have set none.'),
+  spriteKey: z
+    .string()
+    .nullable()
+    .describe(
+      'Which character to draw them as. Null when they have picked none; ' +
+        'draw the default then, and for a key you have no sprite for.',
+    ),
+};
+
+/**
+ * Only where somebody first appears. `moved` and `moveResult` stay a bare
+ * Player: they go out every tick, and what to draw changes rarely, so a
+ * change has a message of its own (`appearance`).
+ */
+export const Avatar = z.object({ ...Player.shape, ...appearance }).meta({
+  id: 'Avatar',
+  description:
+    'Somebody on the map and what to draw for them. A later change to their ' +
+    'sprite or name arrives as an `appearance` message.',
+});
 
 export const MoveOutcome = z.enum(['moved', 'blocked', 'too_fast']).meta({
   id: 'MoveOutcome',
@@ -113,6 +140,7 @@ export const ServerMessage = z
           .number()
           .int()
           .describe('How often `moved` arrives while anybody is moving.'),
+        ...appearance,
       })
       .meta({
         id: 'WelcomeMessage',
@@ -142,7 +170,7 @@ export const ServerMessage = z
           width: z.number().int().describe('In tiles.'),
           height: z.number().int().describe('In tiles.'),
         }),
-        players: z.array(Player),
+        players: z.array(Avatar),
       })
       .meta({
         id: 'SnapshotMessage',
@@ -150,12 +178,24 @@ export const ServerMessage = z
           'Sent once, right after `welcome`: the map, and everybody in your cohort ' +
           'on it, you included. Nobody from another cohort is ever in it.',
       }),
-    z.object({ type: z.literal('joined'), player: Player }).meta({
+    z.object({ type: z.literal('joined'), player: Avatar }).meta({
       id: 'JoinedMessage',
       description:
         'Somebody arrived in your cohort. Not sent when a socket is replaced within the same cohort, ' +
         'because the avatar never left.',
     }),
+    z
+      .object({
+        type: z.literal('appearance'),
+        userId: z.string(),
+        ...appearance,
+      })
+      .meta({
+        id: 'AppearanceMessage',
+        description:
+          'Somebody in your cohort changed their sprite or display name, you included: ' +
+          'draw them with these from now on. Sent as soon as they save the change.',
+      }),
     z.object({ type: z.literal('left'), userId: z.string() }).meta({
       id: 'LeftMessage',
       description:
@@ -225,6 +265,11 @@ export type PlayerMatchesMovement = Assert<
 export type OutcomeMatchesMovement = Assert<
   Same<z.infer<typeof MoveOutcome>, MovementOutcome>
 >;
+export type AvatarMatchesAccount = Assert<
+  Same<z.infer<typeof Avatar>, MovementPlayer & Appearance>
+>;
+
+export type Avatar = z.infer<typeof Avatar>;
 
 export function encode(message: ServerMessage): string {
   return JSON.stringify(message);

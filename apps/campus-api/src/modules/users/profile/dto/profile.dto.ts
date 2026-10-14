@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -15,6 +16,7 @@ import {
   UserMembershipDto,
   UserMembershipTrackDto,
 } from '../../dto/user-list-item.dto.js';
+import { SPRITE_KEYS, type SpriteKey } from '@campus/session';
 
 /**
  * Trimmed, with an empty string read as "clear it". NUL goes too: Postgres
@@ -93,6 +95,22 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(500)
   bio?: string | null;
+
+  @ApiPropertyOptional({
+    type: String,
+    enum: SPRITE_KEYS,
+    nullable: true,
+    example: SPRITE_KEYS[0],
+    description:
+      'The character they walk the campus as. Anybody in the campus with ' +
+      'them sees the change straight away.',
+  })
+  @Cleaned()
+  @IsOptional()
+  @IsIn(SPRITE_KEYS, {
+    message: `spriteKey must be one of: ${SPRITE_KEYS.join(', ')}`,
+  })
+  spriteKey?: SpriteKey | null;
 }
 
 /** The caller's own profile: everything, since it is theirs. */
@@ -130,8 +148,16 @@ export class OwnProfileDto {
   })
   avatarUrl: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
-  spriteKey: string | null;
+  @ApiProperty({
+    type: String,
+    enum: SPRITE_KEYS,
+    nullable: true,
+    example: null,
+    description:
+      'The character they walk the campus as. Null when they have picked ' +
+      'none, or picked one that is no longer offered.',
+  })
+  spriteKey: SpriteKey | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
   systemRole: SystemRole;
@@ -193,8 +219,16 @@ export class ProfileCardDto {
   @ApiProperty({ type: String, nullable: true, example: null })
   avatarUrl: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
-  spriteKey: string | null;
+  @ApiProperty({
+    type: String,
+    enum: SPRITE_KEYS,
+    nullable: true,
+    example: null,
+    description:
+      'The character they walk the campus as. Null when they have picked ' +
+      'none, or picked one that is no longer offered.',
+  })
+  spriteKey: SpriteKey | null;
 
   @ApiProperty({
     type: () => [ProfileCardMembershipDto],

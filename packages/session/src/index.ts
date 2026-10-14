@@ -8,3 +8,5 @@ export * from './session-token.js';
 export * from './session-policy.js';
 // The other thing both services read off an account: its system role.
 export * from './system-role.js';
+// And what both draw somebody as: their sprite, and where a change is announced.
+export * from './profile.js';
