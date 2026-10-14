@@ -31,9 +31,10 @@ And three things the client fills in, not the member:
   person rather than typing a name. Only on a `report`: an account id is an
   accusation pointed at somebody, and a bug or an idea has no business making
   one. The database refuses it too (`feedback_reported_user_on_reports`).
-- `cohortId`: the cohort they were in. It has to be one the sender is in
-  (an admin may name any), and it never holds the cohort in place: deleting
-  the cohort empties it.
+- `cohortId`: the cohort they were in. It has to be one the sender is in.
+  An admin may name any cohort that exists, because admins enter any
+  cohort's campus without being in it. It never holds the cohort in place:
+  deleting the cohort empties it.
 - `context`: the page, and the map, its version and their tile if they were
   on one.
 

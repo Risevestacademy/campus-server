@@ -133,6 +133,10 @@ export class FeedbackService {
           );
         }
 
+        // Not asked of an admin. Admins enter any cohort's campus without
+        // being in it, as they pass campus-api's sign-in gate and world's
+        // cohort check, so any cohort may be where they were. The foreign
+        // key still refuses one that does not exist.
         if (dto.cohortId && !hasAdminPowers(author.systemRole)) {
           const [membership] = await tx
             .select({ id: cohortMembers.id })

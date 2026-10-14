@@ -149,7 +149,9 @@ export class CreateFeedbackDto {
   @ApiPropertyOptional({
     format: 'uuid',
     example: '11111111-1111-4111-8111-111111111111',
-    description: 'The cohort they were in when they sent it.',
+    description:
+      'The cohort they were in when they sent it. One the sender is in, or ' +
+      'any cohort from an admin.',
   })
   @IsOptional()
   @IsUUID()

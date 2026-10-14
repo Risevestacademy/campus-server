@@ -38,7 +38,9 @@ export function ApiSendFeedback(): MethodDecorator {
         'Who sent it is taken from the session and cannot be set. ' +
         '`context` and `cohortId` are for the client to fill in, not the ' +
         'member: where they were when they sent it. `cohortId` has to be ' +
-        'a cohort the sender is in.\n\n' +
+        'a cohort the sender is in, unless the sender is an admin: admins ' +
+        'enter any cohort’s campus without being in it, so any cohort that ' +
+        'exists is taken from them.\n\n' +
         'A `report` may also name an account with `reportedUserId`. That ' +
         'person is not told, and nobody but an admin can read what was ' +
         'sent. Admins are emailed that a report has arrived, without what ' +
@@ -53,7 +55,8 @@ export function ApiSendFeedback(): MethodDecorator {
       description:
         'A field is missing, blank or too long; `type` is not one of the ' +
         'three; `reportedUserId` is on something that is not a report or ' +
-        'names no account; `cohortId` is not a cohort the sender is in; or ' +
+        'names no account; `cohortId` names no cohort, or, from anybody but ' +
+        'an admin, a cohort the sender is not in; or ' +
         '`context` is not one object.',
     }),
     ApiUnauthorizedResponse({
