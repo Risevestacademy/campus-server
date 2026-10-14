@@ -124,6 +124,10 @@ const store = {
 };
 
 /** Stands in for presence in Redis, and for the other instances behind it. */
+/** One presence entry per account and cohort, as the real stores keep them. */
+const presenceKeyOf = (userId: string, cohortId = COHORT) =>
+  `${userId}:${cohortId}`;
+
 const presence = {
   instanceId: 'this-instance',
   entries: new Map<string, Presence>(),
@@ -133,7 +137,7 @@ const presence = {
   listeners: [] as ((displaced: Displacement) => void)[],
   enter: async (entry: Presence) => {
     if (presence.failing) throw new Error('redis is down');
-    presence.entries.set(entry.userId, entry);
+    presence.entries.set(presenceKeyOf(entry.userId, entry.cohortId), entry);
   },
   renew: async (entries: readonly Presence[]) => {
     if (presence.failing) throw new Error('redis is down');
@@ -142,15 +146,19 @@ const presence = {
       if (presence.heldElsewhere.has(entry.connectionId)) {
         displaced.push(entry);
       } else {
-        presence.entries.set(entry.userId, entry);
+        presence.entries.set(
+          presenceKeyOf(entry.userId, entry.cohortId),
+          entry,
+        );
       }
     }
     return displaced;
   },
   leave: async (entries: readonly Presence[]) => {
-    for (const { userId, connectionId } of entries) {
-      if (presence.entries.get(userId)?.connectionId === connectionId) {
-        presence.entries.delete(userId);
+    for (const { userId, cohortId, connectionId } of entries) {
+      const key = presenceKeyOf(userId, cohortId);
+      if (presence.entries.get(key)?.connectionId === connectionId) {
+        presence.entries.delete(key);
       }
     }
   },
@@ -606,7 +614,7 @@ describe('sockets that go wrong', () => {
       await conn.settled;
 
       await expect
-        .poll(() => world.gateway.players.isRemembered(REVOKED))
+        .poll(() => world.gateway.players.isRemembered(REVOKED, COHORT))
         .toBe(true);
     }, 15_000);
 
@@ -726,7 +734,7 @@ describe('a socket following its login', () => {
       closeReason: 'session_ended',
     });
     await expect
-      .poll(() => world.gateway.players.isRemembered('user-3'))
+      .poll(() => world.gateway.players.isRemembered('user-3', COHORT))
       .toBe(true);
   }, 15_000);
 
@@ -807,7 +815,7 @@ describe('re-checking the cohort a socket named', () => {
     // A visit that runs out is not access being taken away: the position is
     // kept, for the visit an admin may extend, as an upgrade refused for
     // not_a_member keeps it too.
-    expect(world.gateway.players.isRemembered(GUEST)).toBe(true);
+    expect(world.gateway.players.isRemembered(GUEST, COHORT)).toBe(true);
   }, 15_000);
 
   /** Campus-api's sign-in gate admits an admin on their role alone; so does this. */
@@ -998,7 +1006,7 @@ describe('an open socket', () => {
   it('counts the connection while it is open, and forgets it after', async () => {
     const conn = await open();
     expect(world.gateway.connections.size).toBe(1);
-    expect(world.gateway.connections.forUser('user-1')).toBeDefined();
+    expect(world.gateway.connections.forUser('user-1')).toHaveLength(1);
 
     conn.ws.close();
     await conn.settled;
@@ -1012,7 +1020,7 @@ describe('an open socket', () => {
     const two = await open();
 
     await one.settled;
-    expect(world.gateway.connections.forUser('user-1')).toBeDefined();
+    expect(world.gateway.connections.forUser('user-1')).toHaveLength(1);
     expect(world.gateway.connections.size).toBe(1);
     expect(world.gateway.connections.users).toBe(1);
 
@@ -1452,7 +1460,7 @@ describe('movement', () => {
       type: 'left',
       userId: ada,
     });
-    expect(world.gateway.players.has(ada)).toBe(false);
+    expect(world.gateway.players.has(ada, COHORT)).toBe(false);
 
     await leave(staying);
   });
@@ -1512,32 +1520,44 @@ describe('movement', () => {
     });
 
     /**
-     * A step is sent on the next tick, and names only who took it. Switching
-     * cohort inside that tick must not turn it into a move in the new one.
+     * Somebody standing in two cohorts at once has an avatar in each, and a
+     * step in one is news only to the people in that one.
      */
-    it('does not carry a step not yet sent into the cohort switched to', async () => {
+    it('keeps a step in one cohort out of the other, for somebody in both', async () => {
       const ada = person();
+      const frontendWatcher = await arrive(person(), 'cohort-frontend');
       const backendWatcher = await arrive(person(), 'cohort-backend');
       const inFrontend = await arrive(ada, 'cohort-frontend');
-
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-      // Straight away, before the tick that would have sent the step.
       const inBackend = await arrive(ada, 'cohort-backend');
 
+      move(inFrontend, 'right', 1);
+
       await expect(
-        waitFor(backendWatcher, (m) => m.type === 'joined'),
-      ).resolves.toMatchObject({
-        player: { userId: ada, x: 0, y: 0, facing: 'down' },
+        waitFor(frontendWatcher, (m) => m.type === 'moved'),
+      ).resolves.toEqual({
+        type: 'moved',
+        players: [{ userId: ada, x: 1, y: 0, facing: 'right' }],
       });
-      // Through at least one tick: the arrival is all Backend hears.
+      // Through at least one tick: Backend hears nothing of it, and its
+      // avatar for them has not moved.
       await new Promise((resolve) => setTimeout(resolve, 400));
       expect(backendWatcher.messages.some((m) => m.type === 'moved')).toBe(
         false,
       );
+      expect(inBackend.messages.some((m) => m.type === 'moved')).toBe(false);
+      expect(world.gateway.players.get(ada, 'cohort-backend')).toMatchObject({
+        x: 0,
+        y: 0,
+      });
 
-      await leave(inBackend);
-      await leave(backendWatcher);
+      for (const conn of [
+        inFrontend,
+        inBackend,
+        frontendWatcher,
+        backendWatcher,
+      ]) {
+        await leave(conn);
+      }
     });
 
     /** The same, for somebody who closed their socket first. */
@@ -1629,11 +1649,11 @@ describe('movement', () => {
     });
   });
 
-  describe('one place at a time', () => {
+  describe('one socket per account in each cohort', () => {
     const entryOf = (message: Record<string, unknown>) =>
       message.player as { userId: string; x: number; y: number };
 
-    it('holds one socket for the account, however many were opened', async () => {
+    it('holds one socket for the account in a cohort, however many were opened', async () => {
       const ada = person();
       const first = await arrive(ada);
       const second = await arrive(ada);
@@ -1641,12 +1661,9 @@ describe('movement', () => {
       await first.settled;
       await second.settled;
 
+      expect(world.gateway.connections.forUser(ada)).toHaveLength(1);
       expect(
-        world.gateway.connections.all().filter((c) => c.userId === ada),
-      ).toHaveLength(1);
-      expect(world.gateway.connections.forUser(ada)).toBeDefined();
-      expect(
-        world.gateway.players.all().filter((p) => p.userId === ada),
+        world.gateway.players.in(COHORT).filter((p) => p.userId === ada),
       ).toHaveLength(1);
 
       await leave(third);
@@ -1701,16 +1718,17 @@ describe('movement', () => {
       await leave(watcher);
     });
 
-    it('switches into a cohort with a saved position, starting there', async () => {
+    /**
+     * A second cohort is a second campus to stand in, not a move out of the
+     * first: nobody is replaced, and nobody in the first sees them leave.
+     */
+    it('enters a second cohort without leaving the first', async () => {
       const ada = person();
-      // Somebody in each campus: the one left sees a departure, the one
-      // entered an arrival, and neither sees the other half.
       const frontendWatcher = await arrive(person(), 'cohort-frontend');
       const backendWatcher = await arrive(person(), 'cohort-backend');
       const inFrontend = await arrive(ada, 'cohort-frontend');
       move(inFrontend, 'right', 1);
       await waitFor(inFrontend, (m) => m.type === 'moveResult');
-
       // Backend already knows where they stood last time.
       store.positions.set(positionKey(ada, 'cohort-backend'), {
         x: 3,
@@ -1727,163 +1745,237 @@ describe('movement', () => {
         y: 2,
         facing: 'left',
       });
+      await expect(
+        waitFor(
+          backendWatcher,
+          (m) => m.type === 'joined' && entryOf(m).userId === ada,
+        ),
+      ).resolves.toMatchObject({ player: { userId: ada, x: 3, y: 2 } });
+
+      await quiet();
+      expect(inFrontend.ws.readyState).toBe(WebSocket.OPEN);
+      expect(inFrontend.messages.some((m) => m.type === 'replaced')).toBe(
+        false,
+      );
+      expect(
+        frontendWatcher.messages.some(
+          (m) => m.type === 'left' && m.userId === ada,
+        ),
+      ).toBe(false);
+      expect(world.gateway.connections.forUser(ada)).toHaveLength(2);
+      expect(world.gateway.players.get(ada, 'cohort-frontend')).toMatchObject({
+        x: 1,
+        y: 0,
+      });
+
+      // And the first still walks.
+      move(inFrontend, 'down', 2);
+      await expect(
+        waitFor(inFrontend, (m) => m.type === 'moveResult' && m.seq === 2),
+      ).resolves.toMatchObject({ outcome: 'moved', player: { x: 1, y: 1 } });
+
+      for (const conn of [
+        inFrontend,
+        inBackend,
+        frontendWatcher,
+        backendWatcher,
+      ]) {
+        await leave(conn);
+      }
+    });
+
+    it('saves each cohort where they stand in it', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const inBackend = await arrive(ada, 'cohort-backend');
+      move(inFrontend, 'right', 1);
+      move(inBackend, 'down', 1);
+      await waitFor(inFrontend, (m) => m.type === 'moveResult');
+      await waitFor(inBackend, (m) => m.type === 'moveResult');
+
+      await leave(inFrontend);
+      await leave(inBackend);
+
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .toEqual({ x: 1, y: 0, facing: 'right' });
+      await expect
+        .poll(() => store.positions.get(positionKey(ada, 'cohort-backend')))
+        .toEqual({ x: 0, y: 1, facing: 'down' });
+    });
+
+    it('closing one cohort leaves the other standing', async () => {
+      const ada = person();
+      const frontendWatcher = await arrive(person(), 'cohort-frontend');
+      const backendWatcher = await arrive(person(), 'cohort-backend');
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      await leave(inFrontend);
 
       await expect(
         waitFor(frontendWatcher, (m) => m.type === 'left' && m.userId === ada),
       ).resolves.toBeDefined();
-      await expect(
-        waitFor(
-          backendWatcher,
-          (m) =>
-            m.type === 'joined' &&
-            entryOf(m).userId === ada &&
-            entryOf(m).x === 3,
-        ),
-      ).resolves.toMatchObject({ player: { userId: ada, x: 3, y: 2 } });
       await quiet();
       expect(
         backendWatcher.messages.some(
           (m) => m.type === 'left' && m.userId === ada,
         ),
       ).toBe(false);
-      expect(
-        frontendWatcher.messages.some(
-          (m) => m.type === 'joined' && entryOf(m).x === 3,
-        ),
-      ).toBe(false);
-
-      // The cohort left is saved where they stood; the destination keeps its
-      // own saved position, untouched by the switch.
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
-        .toEqual({ x: 1, y: 0, facing: 'right' });
-      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
+      expect(world.gateway.players.has(ada, 'cohort-backend')).toBe(true);
+      expect(world.gateway.players.isRemembered(ada, 'cohort-frontend')).toBe(
+        true,
+      );
 
       await leave(inBackend);
       await leave(frontendWatcher);
       await leave(backendWatcher);
     });
 
-    it('switches into a cohort with no saved position, starting at the spawn', async () => {
+    /** A suspension is about the account, so it reaches every campus it is in. */
+    it('closes every cohort the account is in when it is suspended', async () => {
       const ada = person();
+      const backendWatcher = await arrive(person(), 'cohort-backend');
       const inFrontend = await arrive(ada, 'cohort-frontend');
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-
       const inBackend = await arrive(ada, 'cohort-backend');
 
-      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(positionsIn(snapshot)).toContainEqual({
-        userId: ada,
-        x: 0,
-        y: 0,
-        facing: 'down',
-      });
+      accounts.suspended.add(ada);
 
-      // Saved under the cohort left; nothing carried into the new one.
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
-        .toEqual({ x: 1, y: 0, facing: 'right' });
-      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
-        false,
+      for (const conn of [inFrontend, inBackend]) {
+        await expect(conn.settled).resolves.toMatchObject({
+          closeCode: 1008,
+          closeReason: 'account_suspended',
+        });
+      }
+      await expect(
+        waitFor(backendWatcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+      expect(world.gateway.connections.forUser(ada)).toEqual([]);
+
+      accounts.suspended.delete(ada);
+      await leave(backendWatcher);
+    }, 15_000);
+
+    /** The same, caught when another socket for the account is refused. */
+    it('closes every cohort the account is in when a new socket is refused for suspension', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const inBackend = await arrive(ada, 'cohort-backend');
+
+      // The heartbeat would close them too, a second later at most. The
+      // refusal does it at once, before it answers the socket it refuses.
+      const closedAt = (conn: { settled: Promise<unknown> }) =>
+        conn.settled.then(() => Date.now());
+      const frontendClosed = closedAt(inFrontend);
+      const backendClosed = closedAt(inBackend);
+      accounts.suspended.add(ada);
+      const refused = connect(
+        {
+          origin: ORIGIN,
+          cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
+        },
+        'cohort-design',
       );
 
-      await leave(inBackend);
-    });
+      const refusedAt = await closedAt(refused);
+      for (const conn of [inFrontend, inBackend]) {
+        await expect(conn.settled).resolves.toMatchObject({
+          closeCode: 1008,
+          closeReason: 'account_suspended',
+        });
+      }
+      for (const closed of [frontendClosed, backendClosed]) {
+        expect(await closed).toBeLessThanOrEqual(refusedAt + 100);
+      }
+      expect(world.gateway.connections.forUser(ada)).toEqual([]);
 
-    it('after a switch, a move updates only the destination cohort key', async () => {
+      accounts.suspended.delete(ada);
+    }, 15_000);
+
+    it('shows a changed look in every cohort they are in, each once', async () => {
       const ada = person();
+      const frontendWatcher = await arrive(person(), 'cohort-frontend');
+      const backendWatcher = await arrive(person(), 'cohort-backend');
       const inFrontend = await arrive(ada, 'cohort-frontend');
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-      store.positions.set(positionKey(ada, 'cohort-backend'), {
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
-
       const inBackend = await arrive(ada, 'cohort-backend');
-      await waitFor(inBackend, (m) => m.type === 'snapshot');
-      move(inBackend, 'right', 1);
-      await waitFor(inBackend, (m) => m.type === 'moveResult');
+      await quiet();
 
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-backend')), {
-          timeout: 3_000,
-        })
-        .toEqual({ x: 4, y: 2, facing: 'right' });
-      // The cohort left keeps where they stood.
-      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
-        x: 1,
-        y: 0,
-        facing: 'right',
+      accounts.changeLooks(ada, {
+        displayName: 'Ada L.',
+        spriteKey: 'placeholder-2',
       });
+      await quiet();
 
-      await leave(inBackend);
+      for (const conn of [
+        frontendWatcher,
+        backendWatcher,
+        inFrontend,
+        inBackend,
+      ]) {
+        expect(
+          conn.messages.filter(
+            (m) => m.type === 'appearance' && m.userId === ada,
+          ),
+        ).toHaveLength(1);
+      }
+
+      for (const conn of [
+        inFrontend,
+        inBackend,
+        frontendWatcher,
+        backendWatcher,
+      ]) {
+        await leave(conn);
+      }
     });
 
-    it('discards reconnect memory left in another cohort', async () => {
+    /** The heartbeat asks the database about an account, not about each of its sockets. */
+    it('reads an account once a sweep, however many cohorts it is in', async () => {
       const ada = person();
+      const grace = person();
+      const sockets = [
+        await arrive(ada, 'cohort-frontend'),
+        await arrive(ada, 'cohort-backend'),
+        await arrive(ada, 'cohort-design'),
+        await arrive(grace, 'cohort-frontend'),
+      ];
+      const find = vi.spyOn(accounts, 'find');
+      try {
+        // Across a few heartbeats: whatever number of sweeps ran, ada was
+        // asked about exactly as often as grace, who has one socket.
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        const askedAbout = (userId: string) =>
+          find.mock.calls.filter(([id]) => id === userId).length;
+        expect(askedAbout(grace)).toBeGreaterThan(0);
+        expect(askedAbout(ada)).toBe(askedAbout(grace));
+      } finally {
+        find.mockRestore();
+      }
+      for (const conn of sockets) await leave(conn);
+    }, 15_000);
+
+    /** A reconnect within the grace resumes in its own cohort, whatever else they are in. */
+    it('resumes a cohort where they left it while standing in another', async () => {
+      const ada = person();
+      const inBackend = await arrive(ada, 'cohort-backend');
       const first = await arrive(ada, 'cohort-frontend');
       move(first, 'right', 1);
       await waitFor(first, (m) => m.type === 'moveResult');
       await leave(first);
       await expect
-        .poll(() => world.gateway.players.isRemembered(ada))
+        .poll(() => world.gateway.players.isRemembered(ada, 'cohort-frontend'))
         .toBe(true);
-      expect(world.gateway.players.rememberedCohort(ada)).toBe(
-        'cohort-frontend',
-      );
 
-      store.positions.set(positionKey(ada, 'cohort-backend'), {
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
-      const inBackend = await arrive(ada, 'cohort-backend');
+      const again = await arrive(ada, 'cohort-frontend');
 
-      // The memory from Frontend is not resumed; Backend's own saved position
-      // is, and the stale memory is gone.
-      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
       expect(positionsIn(snapshot)).toContainEqual({
         userId: ada,
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
-      expect(world.gateway.players.isRemembered(ada)).toBe(false);
-
-      await leave(inBackend);
-    });
-
-    it('enters the new cohort even when the leaving position cannot be saved', async () => {
-      const ada = person();
-      const inFrontend = await arrive(ada, 'cohort-frontend');
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-
-      store.failSave = true;
-      const inBackend = await arrive(ada, 'cohort-backend');
-
-      // The switch goes ahead: a dropped write only loses the old cohort's
-      // position, and Redis being down must not keep anybody out. With no
-      // saved position for the destination, they start at the spawn.
-      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(positionsIn(snapshot)).toContainEqual({
-        userId: ada,
-        x: 0,
+        x: 1,
         y: 0,
-        facing: 'down',
+        facing: 'right',
       });
-      expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
-        'cohort-backend',
-      );
-
-      store.failSave = false;
+      await leave(again);
       await leave(inBackend);
     });
 
@@ -1895,7 +1987,7 @@ describe('movement', () => {
       await first.settled;
 
       await quiet();
-      expect(world.gateway.players.has(ada)).toBe(true);
+      expect(world.gateway.players.has(ada, COHORT)).toBe(true);
       expect(
         watcher.messages.some((m) => m.type === 'left' && m.userId === ada),
       ).toBe(false);
@@ -1929,7 +2021,13 @@ describe('movement', () => {
    * for the same account can take its place while it does: these tests hold a
    * cohort's load open to make that race reliable.
    */
-  describe('a connection that waits while the account moves', () => {
+  /**
+   * The upgrade loads the account's saved position for the cohort it is
+   * entering, and that read is the one step that waits. Another connection
+   * for the same account can arrive while it does: these tests hold a
+   * cohort's load open to make that reliable.
+   */
+  describe('a connection that waits for its saved position', () => {
     const cookie = async (userId: string) =>
       `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`;
 
@@ -1947,141 +2045,6 @@ describe('movement', () => {
         },
       };
     }
-
-    it('starts the winner in its own cohort, saving the one it left, when another takes the account during the load', async () => {
-      const ada = person();
-      const backend = hold('cohort-backend');
-
-      // A socket for Backend, whose load we hold. It waits there.
-      const inBackend = connect(
-        { origin: ORIGIN, cookie: await cookie(ada) },
-        'cohort-backend',
-      );
-      await expect.poll(() => store.loads).toBe(1);
-
-      // Meanwhile the same account enters Frontend and moves.
-      const inFrontend = await arrive(ada, 'cohort-frontend');
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-
-      backend.release();
-
-      // Backend ends up holding the account, at its own saved position or the
-      // spawn — never where it stood in Frontend.
-      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(positionsIn(snapshot)).toContainEqual(
-        expect.objectContaining({ userId: ada, x: 0, y: 0 }),
-      );
-      expect(world.gateway.connections.forUser(ada)?.cohortId).toBe(
-        'cohort-backend',
-      );
-
-      // Frontend's live position is saved under Frontend; the switch writes
-      // nothing under Backend.
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
-        .toEqual({ x: 1, y: 0, facing: 'right' });
-      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
-        false,
-      );
-
-      // The connection Backend displaced goes, as any replaced one does.
-      await inFrontend.settled;
-
-      // A step taken in Backend now updates only the Backend key.
-      move(inBackend, 'down', 1);
-      await waitFor(inBackend, (m) => m.type === 'moveResult');
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-backend')), {
-          timeout: 3_000,
-        })
-        .toEqual({ x: 0, y: 1, facing: 'down' });
-      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
-        x: 1,
-        y: 0,
-        facing: 'right',
-      });
-
-      await leave(inBackend);
-    });
-
-    it("starts at the destination's saved position when the switch is found only after the load", async () => {
-      const ada = person();
-      store.positions.set(positionKey(ada, 'cohort-backend'), {
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
-      const backend = hold('cohort-backend');
-
-      const inBackend = connect(
-        { origin: ORIGIN, cookie: await cookie(ada) },
-        'cohort-backend',
-      );
-      await expect.poll(() => store.loads).toBe(1);
-      const inFrontend = await arrive(ada, 'cohort-frontend');
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-
-      backend.release();
-
-      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(positionsIn(snapshot)).toContainEqual({
-        userId: ada,
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
-        .toEqual({ x: 1, y: 0, facing: 'right' });
-      // The destination keeps its own saved position.
-      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
-
-      await inFrontend.settled;
-      await leave(inBackend);
-    });
-
-    it('keeps the cohort left saved when the connection that moved in it closes during the load', async () => {
-      const ada = person();
-      const backend = hold('cohort-backend');
-
-      const inBackend = connect(
-        { origin: ORIGIN, cookie: await cookie(ada) },
-        'cohort-backend',
-      );
-      await expect.poll(() => store.loads).toBe(1);
-
-      const inFrontend = await arrive(ada, 'cohort-frontend');
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-      await leave(inFrontend);
-      // Only a reconnect memory for Frontend remains, and it saved where the
-      // account stood there.
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
-        .toEqual({ x: 1, y: 0, facing: 'right' });
-
-      backend.release();
-
-      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(positionsIn(snapshot)).toContainEqual(
-        expect.objectContaining({ userId: ada, x: 0, y: 0 }),
-      );
-      // The Frontend memory is discarded; Frontend's position is still saved.
-      expect(world.gateway.players.isRemembered(ada)).toBe(false);
-      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
-        x: 1,
-        y: 0,
-        facing: 'right',
-      });
-
-      await leave(inBackend);
-    });
 
     it('replaces without an extra save when the second connection is the same cohort', async () => {
       const ada = person();
@@ -2112,9 +2075,7 @@ describe('movement', () => {
         facing: 'left',
       });
       await first.settled;
-      expect(
-        world.gateway.connections.all().filter((c) => c.userId === ada),
-      ).toHaveLength(1);
+      expect(world.gateway.connections.forUser(ada)).toHaveLength(1);
       // Same-cohort replacement leaves the avatar untouched and writes
       // nothing: the store still holds only Backend's own saved position.
       expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
@@ -2145,25 +2106,25 @@ describe('movement', () => {
       backend.release();
       await quiet();
 
-      expect(world.gateway.connections.forUser(ada)).toBeUndefined();
-      expect(world.gateway.players.has(ada)).toBe(false);
+      expect(world.gateway.connections.forUser(ada)).toEqual([]);
+      expect(world.gateway.players.has(ada, 'cohort-backend')).toBe(false);
       expect(store.positions.size).toBe(0);
     });
 
-    it('starts at the spawn when the load fails during the race', async () => {
+    /** Another cohort meanwhile is another campus: nothing to wait for or undo. */
+    it('enters its cohort as it would have, whatever the account did elsewhere meanwhile', async () => {
       const ada = person();
       const backend = hold('cohort-backend');
-
       const inBackend = connect(
         { origin: ORIGIN, cookie: await cookie(ada) },
         'cohort-backend',
       );
       await expect.poll(() => store.loads).toBe(1);
+
       const inFrontend = await arrive(ada, 'cohort-frontend');
       move(inFrontend, 'right', 1);
       await waitFor(inFrontend, (m) => m.type === 'moveResult');
 
-      store.failLoad = true;
       backend.release();
 
       const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
@@ -2173,56 +2134,19 @@ describe('movement', () => {
         y: 0,
         facing: 'down',
       });
-      // The switch still saves the cohort left; the failed read only means
-      // the destination starts at the spawn.
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
-        .toEqual({ x: 1, y: 0, facing: 'right' });
+      await quiet();
+      expect(inFrontend.ws.readyState).toBe(WebSocket.OPEN);
+      expect(world.gateway.connections.forUser(ada)).toHaveLength(2);
+      expect(world.gateway.players.get(ada, 'cohort-frontend')).toMatchObject({
+        x: 1,
+        y: 0,
+      });
 
-      await inFrontend.settled;
+      await leave(inFrontend);
       await leave(inBackend);
     });
 
-    it("is still correct when the second connection's load completes first", async () => {
-      const ada = person();
-      const frontend = hold('cohort-frontend');
-      const backend = hold('cohort-backend');
-
-      const inBackend = connect(
-        { origin: ORIGIN, cookie: await cookie(ada) },
-        'cohort-backend',
-      );
-      const inFrontend = connect(
-        { origin: ORIGIN, cookie: await cookie(ada) },
-        'cohort-frontend',
-      );
-      await expect.poll(() => store.loads).toBe(2);
-
-      // Frontend's load answers first: it joins there and moves.
-      frontend.release();
-      await waitFor(inFrontend, (m) => m.type === 'snapshot');
-      move(inFrontend, 'right', 1);
-      await waitFor(inFrontend, (m) => m.type === 'moveResult');
-
-      // Backend's load then answers, finding the account in Frontend.
-      backend.release();
-
-      const snapshot = await waitFor(inBackend, (m) => m.type === 'snapshot');
-      expect(positionsIn(snapshot)).toContainEqual(
-        expect.objectContaining({ userId: ada, x: 0, y: 0 }),
-      );
-      await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
-        .toEqual({ x: 1, y: 0, facing: 'right' });
-      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
-        false,
-      );
-
-      await inFrontend.settled;
-      await leave(inBackend);
-    });
-
-    it('keeps one avatar and both saved positions when both connections wait', async () => {
+    it('places both when two cohorts wait at once, each at its own saved position', async () => {
       const ada = person();
       store.positions.set(positionKey(ada, 'cohort-backend'), {
         x: 3,
@@ -2250,32 +2174,19 @@ describe('movement', () => {
       backend.release();
       frontend.release();
 
-      await expect
-        .poll(() => world.gateway.connections.forUser(ada) !== undefined)
-        .toBe(true);
-      await quiet();
-
-      // Exactly one connection, one avatar, and neither cohort's saved
-      // position lost or overwritten by the switch.
-      expect(
-        world.gateway.connections.all().filter((c) => c.userId === ada),
-      ).toHaveLength(1);
-      expect(
-        world.gateway.players.all().filter((p) => p.userId === ada),
-      ).toHaveLength(1);
-      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
+      await waitFor(inBackend, (m) => m.type === 'snapshot');
+      await waitFor(inFrontend, (m) => m.type === 'snapshot');
+      expect(world.gateway.players.get(ada, 'cohort-backend')).toMatchObject({
         x: 3,
         y: 2,
-        facing: 'left',
       });
-      expect(store.positions.get(positionKey(ada, 'cohort-frontend'))).toEqual({
+      expect(world.gateway.players.get(ada, 'cohort-frontend')).toMatchObject({
         x: 4,
         y: 1,
-        facing: 'right',
       });
 
-      world.gateway.connections.forUser(ada)?.socket.close();
-      await Promise.all([inBackend.settled, inFrontend.settled]);
+      await leave(inBackend);
+      await leave(inFrontend);
     });
   });
 
@@ -2317,7 +2228,7 @@ describe('movement', () => {
       await leave(first);
       // The client sees its close before the server has handled it.
       await expect
-        .poll(() => world.gateway.players.isRemembered(ada))
+        .poll(() => world.gateway.players.isRemembered(ada, COHORT))
         .toBe(true);
       await expect
         .poll(() => store.positions.get(positionKey(ada)))
@@ -2332,7 +2243,7 @@ describe('movement', () => {
         message: 'account_suspended',
       });
       await refused.settled;
-      expect(world.gateway.players.isRemembered(ada)).toBe(false);
+      expect(world.gateway.players.isRemembered(ada, COHORT)).toBe(false);
       await expect
         .poll(() => store.positions.has(positionKey(ada)))
         .toBe(false);
@@ -2433,8 +2344,8 @@ describe('movement', () => {
     ).resolves.toMatchObject({
       userId: ada,
     });
-    expect(world.gateway.players.has(ada)).toBe(false);
-    expect(world.gateway.connections.forUser(ada)).toBeUndefined();
+    expect(world.gateway.players.has(ada, COHORT)).toBe(false);
+    expect(world.gateway.connections.forUser(ada)).toEqual([]);
 
     await leave(watcher);
   }, 15_000);
@@ -2453,9 +2364,9 @@ describe('movement', () => {
     ).resolves.toMatchObject({
       userId: ada,
     });
-    expect(world.gateway.players.has(ada)).toBe(false);
+    expect(world.gateway.players.has(ada, COHORT)).toBe(false);
     // Access taken away: nothing kept to come back to.
-    expect(world.gateway.players.isRemembered(ada)).toBe(false);
+    expect(world.gateway.players.isRemembered(ada, COHORT)).toBe(false);
 
     await leave(watcher);
   }, 15_000);
@@ -2562,7 +2473,7 @@ describe('movement', () => {
       await waitFor(first, (m) => m.type === 'moveResult');
       await leave(first);
       await expect
-        .poll(() => world.gateway.players.isRemembered(ada))
+        .poll(() => world.gateway.players.isRemembered(ada, COHORT))
         .toBe(true);
       const loadsBefore = store.loads;
 
@@ -2607,11 +2518,13 @@ describe('movement', () => {
       const connectionId = await connectionIdOf(conn);
 
       await expect
-        .poll(() => presence.entries.get(ada))
+        .poll(() => presence.entries.get(presenceKeyOf(ada, 'cohort-frontend')))
         .toMatchObject({ connectionId, cohortId: 'cohort-frontend' });
 
       await leave(conn);
-      await expect.poll(() => presence.entries.has(ada)).toBe(false);
+      await expect
+        .poll(() => presence.entries.has(presenceKeyOf(ada, 'cohort-frontend')))
+        .toBe(false);
     });
 
     it('keeps the replacing socket present once the one it replaced closes', async () => {
@@ -2622,7 +2535,9 @@ describe('movement', () => {
       await first.settled;
 
       await quiet();
-      expect(presence.entries.get(ada)?.connectionId).toBe(connectionId);
+      expect(presence.entries.get(presenceKeyOf(ada))?.connectionId).toBe(
+        connectionId,
+      );
 
       await leave(second);
     });
@@ -2648,7 +2563,7 @@ describe('movement', () => {
       await expect(
         waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
       ).resolves.toBeDefined();
-      expect(world.gateway.players.has(ada)).toBe(false);
+      expect(world.gateway.players.has(ada, COHORT)).toBe(false);
 
       await leave(watcher);
     });
@@ -2686,11 +2601,13 @@ describe('movement', () => {
 
       const conn = await arrive(ada);
       await quiet();
-      expect(presence.entries.has(ada)).toBe(false);
+      expect(presence.entries.has(presenceKeyOf(ada))).toBe(false);
 
       presence.failing = false;
       await expect
-        .poll(() => presence.entries.has(ada), { timeout: 3_000 })
+        .poll(() => presence.entries.has(presenceKeyOf(ada)), {
+          timeout: 3_000,
+        })
         .toBe(true);
       await leave(conn);
     });
@@ -2818,7 +2735,7 @@ describe.skipIf(!redisUrl)('across instances', () => {
 
     await expect(onFirst.closed).resolves.toEqual([4000, 'entered_elsewhere']);
     expect(onFirst.messages).toContainEqual({ type: 'replaced' });
-    expect(first.gateway.players.has(userId)).toBe(false);
+    expect(first.gateway.players.has(userId, cohortId)).toBe(false);
     const welcome = onSecond.messages.find((m) => m.type === 'welcome');
     await expect(second.presence.online(cohortId)).resolves.toEqual([
       expect.objectContaining({
