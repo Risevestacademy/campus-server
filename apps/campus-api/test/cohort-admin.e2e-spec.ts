@@ -1,7 +1,8 @@
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { eq, sql } from 'drizzle-orm';
+import { ThrottlerStorage } from '@nestjs/throttler';
+import { eq, and, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +27,7 @@ import {
   SESSION_COOKIE,
 } from './../src/modules/auth/session-cookie.js';
 import { SessionScope, signSessionToken } from '@campus/session';
-import { CohortRole } from './../src/modules/cohorts/schema.js';
+import { CohortRole, StudentStatus } from './../src/modules/cohorts/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
@@ -41,6 +42,20 @@ const MIGRATIONS = fileURLToPath(
 const SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
 const MISSING = '99999999-9999-4999-8999-999999999999';
 const ORIGIN = 'http://localhost:3000';
+/**
+ * A rate limiter that never counts. These routes are hammered by the tests —
+ * five actions across setup, success, roster and revocation — which a real
+ * 100-a-minute bucket would run through. The limit has its own test, against
+ * an app that keeps the real one (rate-limit.e2e-spec.ts).
+ */
+const unlimited = {
+  increment: async () => ({
+    totalHits: 1,
+    timeToExpire: 0,
+    isBlocked: false,
+    timeToBlockExpire: 0,
+  }),
+};
 const db = drizzle(new PGlite(), { schema });
 
 /**
@@ -97,6 +112,8 @@ describe('cohort and track admin routes (e2e)', () => {
       .useValue(db)
       .overrideProvider(EMAIL_SENDER)
       .useValue(disabledEmailSender)
+      .overrideProvider(ThrottlerStorage)
+      .useValue(unlimited)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -1186,6 +1203,402 @@ describe('cohort and track admin routes (e2e)', () => {
       const expiresAt = new Date(response.body.expiresAt).getTime();
       expect(expiresAt).toBeGreaterThan(visitEnd.getTime());
       expect(expiresAt).toBeLessThanOrEqual(extended.getTime());
+    });
+  });
+
+  /**
+   * The five ways an admin ends a membership. Each one writes the end, an
+   * entry and the revocation of the member's sessions in one transaction, so
+   * the next request with the session they already held is refused.
+   */
+  describe('ending memberships', () => {
+    let cohortId: string;
+    let linkId: string;
+
+    beforeEach(async () => {
+      const track = (await createTrack().expect(201)).body;
+      const cohort = (await createCohort().expect(201)).body;
+      const link = (
+        await as(adminCookie)
+          .post(`/v1/cohorts/${cohort.id}/tracks`, { trackId: track.id })
+          .expect(201)
+      ).body;
+      cohortId = cohort.id;
+      linkId = link.id;
+    });
+
+    const memberOf = async (email = 'member@campus.local') => {
+      const [row] = await db.select().from(users).where(eq(users.email, email));
+      return row;
+    };
+
+    const makeStudent = async (email = 'member@campus.local') => {
+      const user = await memberOf(email);
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: user.id,
+        cohortTrackId: linkId,
+        role: CohortRole.Student,
+        status: StudentStatus.Active,
+      });
+      return user;
+    };
+
+    const end = (
+      action: string,
+      userId: string,
+      body: object = {},
+      cookie = adminCookie,
+    ) =>
+      as(cookie).post(
+        `/v1/cohorts/${cohortId}/members/${userId}/${action}`,
+        body,
+      );
+
+    const endedEntries = () =>
+      db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.MembershipEnded));
+
+    const ACTIONS = [
+      ['dismiss', StudentStatus.Dismissed],
+      ['withdraw', StudentStatus.Withdrawn],
+      ['defer', StudentStatus.Deferred],
+      ['graduate', StudentStatus.Graduated],
+      ['remove', null],
+    ] as const;
+
+    const reasonFor = (action: string) =>
+      action === 'dismiss' ? 'Posted the answer' : 'No longer attending';
+
+    it.each(ACTIONS)(
+      '%s ends the membership and records the admin',
+      async (action, status) => {
+        const member = await makeStudent();
+        const reason = reasonFor(action);
+
+        const res = await end(action, member.id, { reason }).expect(200);
+
+        expect(res.body).toEqual({
+          id: expect.any(String),
+          cohortId,
+          userId: member.id,
+          role: CohortRole.Student,
+          status,
+          leftAt: expect.any(String),
+          reason,
+        });
+
+        expect(await endedEntries()).toEqual([
+          expect.objectContaining({
+            actorUserId: adminId,
+            subjectType: AuditSubjectType.CohortMember,
+            subjectId: res.body.id,
+            details: {
+              cohortId,
+              role: CohortRole.Student,
+              status,
+              reason,
+            },
+          }),
+        ]);
+      },
+    );
+
+    it.each(ACTIONS)('%s is admin only', async (action) => {
+      const member = await makeStudent();
+
+      await request(app.getHttpServer())
+        .post(`/v1/cohorts/${cohortId}/members/${member.id}/${action}`)
+        .send({ reason: 'x' })
+        .expect(401);
+
+      const res = await end(action, member.id, { reason: 'x' }, memberCookie);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it.each(ACTIONS)(
+      '%s refuses the member’s next request with the session they already held',
+      async (action) => {
+        const member = await makeStudent();
+        await as(memberCookie).get('/v1/auth/me').expect(200);
+
+        await end(action, member.id, { reason: reasonFor(action) }).expect(200);
+
+        const res = await as(memberCookie).get('/v1/auth/me');
+        expect(res.status).toBe(401);
+      },
+    );
+
+    it.each(ACTIONS)(
+      '%s leaves the member under state=ended with the status and reason, and off the default roster',
+      async (action, status) => {
+        const member = await makeStudent();
+        const reason = reasonFor(action);
+
+        await end(action, member.id, { reason }).expect(200);
+
+        const ended = await as(adminCookie)
+          .get(`/v1/cohorts/${cohortId}/members?state=ended`)
+          .expect(200);
+        expect(ended.body.items).toEqual([
+          expect.objectContaining({
+            user: expect.objectContaining({ email: 'member@campus.local' }),
+            role: CohortRole.Student,
+            status,
+            state: 'ended',
+            dismissalReason: reason,
+          }),
+        ]);
+
+        const live = await as(adminCookie)
+          .get(`/v1/cohorts/${cohortId}/members`)
+          .expect(200);
+        expect(live.body.items).toEqual([]);
+      },
+    );
+
+    it('answers 400 for a bad id and 404 for no such membership', async () => {
+      const member = await makeStudent();
+
+      await end('dismiss', member.id, { reason: 'x' }, adminCookie);
+      await as(adminCookie)
+        .post(`/v1/cohorts/not-a-uuid/members/${member.id}/dismiss`, {
+          reason: 'x',
+        })
+        .expect(400);
+      await as(adminCookie)
+        .post(`/v1/cohorts/${cohortId}/members/not-a-uuid/dismiss`, {
+          reason: 'x',
+        })
+        .expect(400);
+      await as(adminCookie)
+        .post(`/v1/cohorts/${cohortId}/members/${MISSING}/remove`, {})
+        .expect(404);
+    });
+
+    // The action is the URL, so a status or an end date in the body is a
+    // different kind of end being attempted and must not reach the row.
+    it('ignores status and endDate in the body', async () => {
+      const member = await makeStudent();
+
+      const res = await end('dismiss', member.id, {
+        reason: 'Posted the answer',
+        status: StudentStatus.Graduated,
+        endDate: '2020-01-01T00:00:00.000Z',
+        unknown: 'ignored',
+      }).expect(200);
+
+      expect(res.body.status).toBe(StudentStatus.Dismissed);
+      expect(new Date(res.body.leftAt).getFullYear()).toBeGreaterThan(2020);
+    });
+
+    it.each(ACTIONS)('%s refuses a second end with a 409', async (action) => {
+      const member = await makeStudent();
+      const reason = reasonFor(action);
+      await end(action, member.id, { reason }).expect(200);
+
+      const res = await end(action, member.id, { reason }).expect(409);
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message: 'That membership has already ended',
+      });
+      expect(await endedEntries()).toHaveLength(1);
+    });
+
+    it('refuses a student-only end for staff and for a guest', async () => {
+      const member = await memberOf();
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: member.id,
+        role: CohortRole.Professor,
+      });
+
+      const staff = await end('defer', member.id).expect(409);
+      expect(staff.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message: 'Only a student can be deferred',
+      });
+
+      await db.execute(sql`delete from cohort_members`);
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: member.id,
+        role: CohortRole.Guest,
+        accessExpiresAt: new Date(Date.now() + 86_400_000),
+      });
+
+      const guest = await end('defer', member.id).expect(409);
+      expect(guest.body.error.code).toBe('CONFLICT');
+    });
+
+    it('refuses an admin ending their own membership', async () => {
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: adminId,
+        role: CohortRole.Mentor,
+      });
+
+      const res = await end('remove', adminId).expect(409);
+      expect(res.body.error.message).toBe(
+        'You cannot end your own membership: ask another admin',
+      );
+    });
+
+    it('ends only the cohort named, leaving the member live in another', async () => {
+      const member = await makeStudent();
+      const other = (
+        await createCohort({ name: 'Cohort 2', code: 'c2' }).expect(201)
+      ).body;
+      await db.insert(schema.cohortMembers).values({
+        cohortId: other.id,
+        userId: member.id,
+        role: CohortRole.Mentor,
+      });
+
+      await end('graduate', member.id).expect(200);
+
+      const [row] = await db
+        .select()
+        .from(schema.cohortMembers)
+        .where(
+          and(
+            eq(schema.cohortMembers.cohortId, other.id),
+            eq(schema.cohortMembers.userId, member.id),
+          ),
+        );
+      expect(row.leftAt).toBeNull();
+    });
+
+    it('requires a reason to dismiss, refusing a blank one', async () => {
+      const member = await makeStudent();
+
+      const missing = await end('dismiss', member.id).expect(400);
+      expect(missing.body.error).toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        details: {
+          fields: { reason: expect.stringMatching(/requires a reason/) },
+        },
+      });
+
+      const blank = await end('dismiss', member.id, { reason: '   ' }).expect(
+        400,
+      );
+      expect(blank.body.error.code).toBe('INVALID_ARGUMENT');
+    });
+
+    it('trims the reason and refuses one over the limit', async () => {
+      const member = await makeStudent();
+
+      const res = await end('dismiss', member.id, {
+        reason: '  Posted the answer  ',
+      }).expect(200);
+      expect(res.body.reason).toBe('Posted the answer');
+
+      const other = (
+        await createCohort({ name: 'Cohort 2', code: 'c2' }).expect(201)
+      ).body;
+      await db.insert(schema.cohortMembers).values({
+        cohortId: other.id,
+        userId: member.id,
+        role: CohortRole.Mentor,
+      });
+      await as(adminCookie)
+        .post(`/v1/cohorts/${other.id}/members/${member.id}/remove`, {
+          reason: 'x'.repeat(501),
+        })
+        .expect(400);
+    });
+
+    it('allows a withdrawal with no reason', async () => {
+      const member = await makeStudent();
+
+      const res = await end('withdraw', member.id).expect(200);
+      expect(res.body.reason).toBeNull();
+    });
+
+    // A refused end never reaches the revocation, so the session the member
+    // held keeps working.
+    it.each(ACTIONS)(
+      'does not revoke sessions when a %s end is refused',
+      async (action) => {
+        const member = await makeStudent();
+        await db
+          .update(schema.cohortMembers)
+          .set({ leftAt: new Date(), status: StudentStatus.Withdrawn })
+          .where(eq(schema.cohortMembers.userId, member.id));
+
+        await as(memberCookie).get('/v1/auth/me').expect(200);
+        await end(action, member.id, { reason: reasonFor(action) }).expect(409);
+        await as(memberCookie).get('/v1/auth/me').expect(200);
+      },
+    );
+
+    /**
+     * The end, its entry and the revocation are one transaction. A revocation
+     * that fails takes the end with it, so nothing is left half done: the
+     * member is still on the roster, their session still works, and the
+     * admin can try again.
+     */
+    it.each(ACTIONS)(
+      'rolls a %s end back when revocation fails, and takes a retry',
+      async (action, status) => {
+        const member = await makeStudent();
+        const spy = vi
+          .spyOn(app.get(SessionIssuer), 'revokeAllSessions')
+          .mockRejectedValueOnce(new Error('revocation failed'));
+
+        try {
+          const res = await end(action, member.id, {
+            reason: reasonFor(action),
+          }).expect(500);
+          expect(res.body.error.code).toBe('INTERNAL_ERROR');
+        } finally {
+          spy.mockRestore();
+        }
+
+        const [row] = await db
+          .select()
+          .from(schema.cohortMembers)
+          .where(eq(schema.cohortMembers.userId, member.id));
+        expect(row.leftAt).toBeNull();
+        expect(row.status).toBe(StudentStatus.Active);
+        expect(await endedEntries()).toHaveLength(0);
+        await as(memberCookie).get('/v1/auth/me').expect(200);
+
+        await end(action, member.id, { reason: reasonFor(action) }).expect(200);
+        const [ended] = await db
+          .select()
+          .from(schema.cohortMembers)
+          .where(eq(schema.cohortMembers.userId, member.id));
+        expect(ended.status).toBe(status);
+        expect(await endedEntries()).toHaveLength(1);
+        await as(memberCookie).get('/v1/auth/me').expect(401);
+      },
+    );
+
+    /**
+     * An admin is let in on their role, not on a membership, so ending one
+     * takes nothing from them. Revoking would only let any admin sign any
+     * other out, a super admin included.
+     */
+    it('leaves an admin signed in when their membership is removed', async () => {
+      const member = await memberOf();
+      await db
+        .update(users)
+        .set({ systemRole: SystemRole.Admin })
+        .where(eq(users.id, member.id));
+      await db.insert(schema.cohortMembers).values({
+        cohortId,
+        userId: member.id,
+        role: CohortRole.Mentor,
+      });
+
+      await end('remove', member.id).expect(200);
+
+      await as(memberCookie).get('/v1/auth/me').expect(200);
     });
   });
 

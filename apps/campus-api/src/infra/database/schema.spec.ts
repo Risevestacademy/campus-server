@@ -453,4 +453,30 @@ describe('cohort members', () => {
     await member();
     await member({ cohortId: fixtures.otherCohortId });
   });
+
+  /**
+   * A reason says why a membership ended, so it needs the end. Keyed to
+   * `left_at` and not to a status: a removal sets no status, and a live row
+   * left holding an old reason would read on any roster as current.
+   */
+  it('keeps a reason only on a membership that has ended', async () => {
+    await expectViolation(
+      member({ dismissalReason: 'Plagiarism.' }),
+      'cohort_members_dismissal_reason',
+    );
+
+    // Any end may carry one, a removal with no status included.
+    await member({
+      dismissalReason: 'Left the programme.',
+      leftAt: new Date(),
+    });
+    await member({
+      cohortId: fixtures.otherCohortId,
+      role: CohortRole.Student,
+      cohortTrackId: fixtures.otherCohortTrackId,
+      status: StudentStatus.Withdrawn,
+      dismissalReason: 'Moved abroad.',
+      leftAt: new Date(),
+    });
+  });
 });

@@ -90,6 +90,13 @@ export enum AuditAction {
    */
   GuestVisitExtended = 'guest_visit_extended',
   /**
+   * An admin ended a membership: dismissed, withdrew, deferred or graduated
+   * a student, or removed any member. `details` keeps the role, the student
+   * status it was given (null for a removal, which carries none) and the
+   * reason the admin wrote, or null. The subject says which membership.
+   */
+  MembershipEnded = 'membership_ended',
+  /**
    * An admin marked a piece of feedback dealt with, or put it back to open.
    * `details` is empty: what a member wrote is theirs, and often about
    * somebody else, so it stays on the feedback and never comes here.
