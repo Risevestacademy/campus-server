@@ -1,7 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { type SQL, and, eq, gt, isNull, ne, not, or, sql } from 'drizzle-orm';
 
-import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import {
+  DRIZZLE,
+  type Db,
+  type Tx,
+} from '../../infra/database/database.constants.js';
 import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import {
@@ -10,6 +14,9 @@ import {
   CohortMemberNotFoundException,
 } from './cohorts.exceptions.js';
 import type { CohortMemberResponseDto } from './dto/cohort-response.dto.js';
+import { MembershipEndAction } from './dto/end-membership.dto.js';
+import type { EndMembershipResponseDto } from './dto/end-membership.dto.js';
+import { hasAdminPowers, users } from '../users/schema.js';
 import { CohortRole, StudentStatus, cohortMembers, cohorts } from './schema.js';
 
 /**
@@ -261,4 +268,140 @@ export class CohortMembersService {
       };
     });
   }
+
+  /**
+   * Ends a place on the roster: dismisses, withdraws, defers or graduates a
+   * student, or removes a member of any role.
+   *
+   * One row, one transaction: the status and end date are written and the
+   * entry appended together, so neither lands without the other. The row is
+   * read under a lock, and its current state decides, so two ends of one
+   * membership cannot both succeed — the second sees the end the first
+   * committed.
+   *
+   * An end is not a revive. The row stays, `left_at` is set, and the roster
+   * files it under `state=ended` with the status and reason.
+   *
+   * The member's sessions are ended in the same transaction, through
+   * `endSessions` (the session issuer, which this module cannot import
+   * without a cycle). If that fails the end rolls back with it, so there is
+   * never a membership ended with its sessions still alive, and the admin can
+   * simply try again. An admin's sessions are left alone: an admin is let in
+   * on their role, not on this membership, so ending it takes nothing from
+   * them, and revoking would only let any admin sign any other out.
+   *
+   * Refusals: no such membership is a 404; one that already ended, or a
+   * student-only status aimed at staff or a guest, is a 409; a dismissal
+   * with no reason is a 400.
+   */
+  async endMembership(
+    cohortId: string,
+    userId: string,
+    action: MembershipEndAction,
+    reason: string | undefined,
+    audit: AuditContext,
+    endSessions: (tx: Tx) => Promise<unknown>,
+    now: Date = new Date(),
+  ): Promise<EndMembershipResponseDto> {
+    if (audit.actorUserId === userId) {
+      throw new CohortConflictException(
+        'You cannot end your own membership: ask another admin',
+        { cohortId, userId },
+      );
+    }
+    const status = END_STATUS[action];
+    if (action === MembershipEndAction.Dismiss && reason === undefined) {
+      throw new CohortInvalidArgumentException('Request validation failed', {
+        fields: { reason: `${action} requires a reason` },
+      });
+    }
+
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(cohortMembers)
+        .where(
+          and(
+            eq(cohortMembers.cohortId, cohortId),
+            eq(cohortMembers.userId, userId),
+          ),
+        )
+        .for('update');
+      if (!existing) {
+        throw new CohortMemberNotFoundException(
+          `No membership for ${userId} in cohort ${cohortId}`,
+          { cohortId, userId },
+        );
+      }
+      if (existing.leftAt !== null) {
+        throw new CohortConflictException('That membership has already ended', {
+          cohortId,
+          userId,
+          leftAt: existing.leftAt,
+        });
+      }
+      // A student status is the student half of the table; the other roles
+      // never carry one, so aiming it at one is refused rather than written.
+      // `remove` sets no status at all and so applies to any member.
+      if (status !== null && existing.role !== CohortRole.Student) {
+        throw new CohortConflictException(
+          `Only a student can be ${END_LABEL[action]}`,
+          { cohortId, userId, role: existing.role, action },
+        );
+      }
+
+      const [row] = await tx
+        .update(cohortMembers)
+        .set({ status, leftAt: now, dismissalReason: reason ?? null })
+        .where(eq(cohortMembers.id, existing.id))
+        .returning();
+      await writeAuditEntry(tx, {
+        ...audit,
+        action: AuditAction.MembershipEnded,
+        subject: { type: AuditSubjectType.CohortMember, id: row.id },
+        details: { cohortId, role: row.role, status, reason: reason ?? null },
+      });
+
+      const [account] = await tx
+        .select({ systemRole: users.systemRole })
+        .from(users)
+        .where(eq(users.id, userId));
+      if (account && !hasAdminPowers(account.systemRole)) {
+        await endSessions(tx);
+      }
+
+      return {
+        id: row.id,
+        cohortId: row.cohortId,
+        userId: row.userId,
+        role: row.role,
+        // Straight back what was written, not the row's nullable column.
+        status,
+        leftAt: now,
+        reason: reason ?? null,
+      };
+    });
+  }
 }
+
+/**
+ * The student status each end sets, or null for a removal, which carries
+ * none. Written out in full so an action added without a status to set fails
+ * to compile rather than defaulting to something silent.
+ */
+const END_STATUS: Record<MembershipEndAction, StudentStatus | null> = {
+  [MembershipEndAction.Dismiss]: StudentStatus.Dismissed,
+  [MembershipEndAction.Withdraw]: StudentStatus.Withdrawn,
+  [MembershipEndAction.Defer]: StudentStatus.Deferred,
+  [MembershipEndAction.Graduate]: StudentStatus.Graduated,
+  [MembershipEndAction.Remove]: null,
+};
+
+/** How each action reads in the refusal for the roles it does not apply to. */
+const END_LABEL: Record<MembershipEndAction, string> = {
+  [MembershipEndAction.Dismiss]: 'dismissed',
+  [MembershipEndAction.Withdraw]: 'withdrawn',
+  [MembershipEndAction.Defer]: 'deferred',
+  [MembershipEndAction.Graduate]: 'graduated',
+  [MembershipEndAction.Remove]: 'removed',
+};

@@ -22,19 +22,25 @@ import {
 } from '../../shared/dto/index.js';
 import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
+import { SessionIssuer } from '../auth/session-issuer.js';
 import { CohortMembersService } from './cohort-members.service.js';
 import { CohortRosterService } from './cohort-roster.service.js';
 import { CohortsService } from './cohorts.service.js';
 import {
   ApiAttachTrack,
   ApiCreateCohort,
+  ApiDeferMember,
   ApiDeleteCohort,
   ApiDetachTrack,
+  ApiDismissMember,
   ApiExtendGuestVisit,
   ApiGetCohort,
+  ApiGraduateMember,
   ApiListCohorts,
   ApiListRoster,
+  ApiRemoveMember,
   ApiUpdateCohort,
+  ApiWithdrawMember,
 } from './docs/cohorts.docs.js';
 import {
   AttachTrackDto,
@@ -52,6 +58,11 @@ import {
   RosterMemberDto,
 } from './dto/cohort-roster.dto.js';
 import { CreateCohortDto } from './dto/create-cohort.dto.js';
+import {
+  EndMembershipDto,
+  MembershipEndAction,
+} from './dto/end-membership.dto.js';
+import type { EndMembershipResponseDto } from './dto/end-membership.dto.js';
 import { ExtendGuestVisitDto, MemberParamDto } from './dto/extend-visit.dto.js';
 import { UpdateCohortDto } from './dto/update-cohort.dto.js';
 
@@ -66,6 +77,7 @@ export class CohortsController {
     private readonly cohorts: CohortsService,
     private readonly members: CohortMembersService,
     private readonly roster: CohortRosterService,
+    private readonly sessions: SessionIssuer,
   ) {}
 
   @Post()
@@ -144,6 +156,120 @@ export class CohortsController {
       params.userId,
       new Date(dto.accessExpiresAt),
       { actorUserId: admin.id, correlationId },
+    );
+  }
+
+  @Post(':cohortId/members/:userId/dismiss')
+  @HttpCode(HttpStatus.OK)
+  @ApiDismissMember()
+  dismiss(
+    @Param() params: MemberParamDto,
+    @Body() dto: EndMembershipDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<EndMembershipResponseDto> {
+    return this.end(
+      params,
+      dto,
+      admin,
+      correlationId,
+      MembershipEndAction.Dismiss,
+    );
+  }
+
+  @Post(':cohortId/members/:userId/withdraw')
+  @HttpCode(HttpStatus.OK)
+  @ApiWithdrawMember()
+  withdraw(
+    @Param() params: MemberParamDto,
+    @Body() dto: EndMembershipDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<EndMembershipResponseDto> {
+    return this.end(
+      params,
+      dto,
+      admin,
+      correlationId,
+      MembershipEndAction.Withdraw,
+    );
+  }
+
+  @Post(':cohortId/members/:userId/defer')
+  @HttpCode(HttpStatus.OK)
+  @ApiDeferMember()
+  defer(
+    @Param() params: MemberParamDto,
+    @Body() dto: EndMembershipDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<EndMembershipResponseDto> {
+    return this.end(
+      params,
+      dto,
+      admin,
+      correlationId,
+      MembershipEndAction.Defer,
+    );
+  }
+
+  @Post(':cohortId/members/:userId/graduate')
+  @HttpCode(HttpStatus.OK)
+  @ApiGraduateMember()
+  graduate(
+    @Param() params: MemberParamDto,
+    @Body() dto: EndMembershipDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<EndMembershipResponseDto> {
+    return this.end(
+      params,
+      dto,
+      admin,
+      correlationId,
+      MembershipEndAction.Graduate,
+    );
+  }
+
+  @Post(':cohortId/members/:userId/remove')
+  @HttpCode(HttpStatus.OK)
+  @ApiRemoveMember()
+  removeMember(
+    @Param() params: MemberParamDto,
+    @Body() dto: EndMembershipDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<EndMembershipResponseDto> {
+    return this.end(
+      params,
+      dto,
+      admin,
+      correlationId,
+      MembershipEndAction.Remove,
+    );
+  }
+
+  /**
+   * Every end route shares this. The members service writes the end, the
+   * audit entry and the revocation of the member's sessions in one
+   * transaction, so either all of it happens or none does.
+   */
+  private end(
+    params: MemberParamDto,
+    dto: EndMembershipDto,
+    admin: AuthenticatedUser,
+    correlationId: string | undefined,
+    action: MembershipEndAction,
+  ): Promise<EndMembershipResponseDto> {
+    const now = new Date();
+    return this.members.endMembership(
+      params.cohortId,
+      params.userId,
+      action,
+      dto.reason,
+      { actorUserId: admin.id, correlationId },
+      (tx) => this.sessions.revokeAllSessions(params.userId, now, tx),
+      now,
     );
   }
 
