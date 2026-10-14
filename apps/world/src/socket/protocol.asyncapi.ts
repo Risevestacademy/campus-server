@@ -79,7 +79,7 @@ export function protocolAsyncApi(server: AsyncApiServer): JsonObject {
     channels: {
       [SOCKET_PATH]: {
         description:
-          'One socket per account, in the cohort it names. The upgrade must ' +
+          'One socket per account in each cohort, the one it names. The upgrade must ' +
           `carry the \`${SESSION_COOKIE}\` cookie and an \`Origin\` world allows; a ` +
           'refusal arrives as a close code, not an HTTP status.',
         bindings: {

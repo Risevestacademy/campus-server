@@ -16,17 +16,20 @@ server decides every position.
   and last the cohort the socket names (`/socket?cohortId=…`), which the
   account must hold a live membership in — the same rule campus-api applies
   at sign-in, admins included: their role alone admits them anywhere.
-- **One place at a time:** an account is in the world in one cohort, on one
-  device, in one tab. A new connection displaces the old one, which is sent
-  `{ "type": "replaced" }` and closed with 4000 `entered_elsewhere`. Entering
-  the same cohort leaves the avatar untouched; entering a different one moves
-  it across. See [the protocol doc](../../docs/world-protocol.md#one-place-at-a-time).
+- **One connection per cohort:** an account may be in several cohorts'
+  campuses at once, with an avatar in each, but has one connection in each. A
+  new connection to a cohort it is already in displaces the old one, which is
+  sent `{ "type": "replaced" }` and closed with 4000 `entered_elsewhere`; the
+  avatar stays where it stood. See
+  [the protocol doc](../../docs/world-protocol.md#one-connection-per-cohort).
   This holds across instances too: see presence, below.
 - **Presence in Redis:** who is online, in which cohort (and later which
-  space), per account: the live connection and the instance holding it. Each
+  space), per account and cohort: the live connection and the instance
+  holding it. Each
   entry expires `WORLD_PRESENCE_TTL_SECONDS` after its instance stops renewing
   it, so a crashed instance's people drop out on their own. When a connection
-  takes the place of one on another instance, world publishes that on
+  takes the place of one in the same cohort on another instance, world
+  publishes that on
   `world:presence:displaced`, and the other instance closes the old socket
   with `entered_elsewhere`. Without `REDIS_URL`, presence is kept in memory,
   which only works for a single instance.

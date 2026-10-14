@@ -199,16 +199,17 @@ export const ServerMessage = z
     z.object({ type: z.literal('left'), userId: z.string() }).meta({
       id: 'LeftMessage',
       description:
-        "Somebody's socket closed, or they entered a different cohort.",
+        "Somebody's socket in your cohort closed. Entering another cohort is not leaving this one.",
     }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',
       description:
-        'This account opened the campus somewhere else — another cohort, device or tab — ' +
-        'and that connection has taken its place. The socket closes immediately ' +
-        'afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections ' +
-        'would replace each other for as long as both stayed open. Show that they are ' +
-        'in the campus elsewhere, and reconnect only when they ask to come back here.',
+        "This account opened this cohort's campus somewhere else — another device or tab — " +
+        'and that connection has taken its place. Being in another cohort never causes this. ' +
+        'The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT ' +
+        'reconnect: the two connections would replace each other for as long as both ' +
+        'stayed open. Show that they are in this campus elsewhere, and reconnect only when ' +
+        'they ask to come back here.',
     }),
     z.object({ type: z.literal('moved'), players: z.array(Player) }).meta({
       id: 'MovedMessage',

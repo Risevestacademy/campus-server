@@ -170,12 +170,12 @@ campus: the cohort named when the socket opened decides whose avatars you are
 told about, and nobody in another cohort appears in your `snapshot`, `joined`,
 `left` or `moved`, or you in theirs.
 
-| Message      | When                                              | What to do                                 |
-| ------------ | ------------------------------------------------- | ------------------------------------------ |
-| `joined`     | Somebody arrived                                  | Add their avatar, with its sprite and name |
-| `appearance` | Somebody changed their sprite or name             | Redraw them with it                        |
-| `left`       | Somebody's socket closed, or they left the cohort | Remove their avatar                        |
-| `moved`      | Once per tick, if anybody moved or turned         | Move each listed player                    |
+| Message      | When                                      | What to do                                 |
+| ------------ | ----------------------------------------- | ------------------------------------------ |
+| `joined`     | Somebody arrived                          | Add their avatar, with its sprite and name |
+| `appearance` | Somebody changed their sprite or name     | Redraw them with it                        |
+| `left`       | Somebody's socket in this cohort closed   | Remove their avatar                        |
+| `moved`      | Once per tick, if anybody moved or turned | Move each listed player                    |
 
 About `moved`:
 
@@ -219,29 +219,29 @@ Redraw that person with it. Nothing is sent when what to draw did not change.
 campus-api tells world as it saves; should that notice be lost, world still
 picks the change up within one heartbeat.
 
-## One place at a time
+## One connection per cohort
 
-**An account is inside the campus world in one place: one cohort, one device,
-one tab.** The newest connection wins. Opening a second one does not give the
-person two views of their avatar; it takes the first one's place.
+**An account has one connection in each cohort's campus.** Somebody who
+belongs to several cohorts can be in all of them at once, with an avatar in
+each: everybody in each cohort sees them there, and online means online in
+that cohort.
+
+- **Entering another cohort** leaves the first exactly as it was. Nobody is
+  replaced, and nobody in the first cohort sees them leave. The new cohort
+  sees `joined`, at where they last stood there, or at the spawn.
+- **Entering the same cohort again**, from another tab or device, takes the
+  first connection's place. The avatar stays exactly where it stood, and
+  nobody is told anybody left or arrived. World sends the displaced connection
+  `{ "type": "replaced" }` and closes it with **4000 `entered_elsewhere`**.
 
 Other pages are unaffected. The cohort picker, a profile screen and an invite
 screen hold no socket, so they keep working in as many tabs as you like.
 
-When a connection is displaced, world sends it `{ "type": "replaced" }` and
-closes it with **4000 `entered_elsewhere`**.
-
-- **Entering the same cohort again**, from another tab or device, leaves the
-  avatar exactly where it stood. Nobody is told anybody left or arrived.
-- **Entering a different cohort** takes the avatar out of the old one — others
-  there see `left` — and puts it into the new one, where others see `joined`.
-  It starts where they last stood in that cohort, or at the spawn.
-
 > **Do not reconnect on `entered_elsewhere`.** This is the one close the
-> client must not retry. Two tabs that both reconnected would replace each
-> other for as long as both stayed open, and neither would be usable. Show
-> **"You opened the campus somewhere else"** with an **"Enter here"** button,
-> and reconnect only when the person presses it.
+> client must not retry. Two tabs on the same cohort that both reconnected
+> would replace each other for as long as both stayed open, and neither would
+> be usable. Show **"You opened this campus somewhere else"** with an
+> **"Enter here"** button, and reconnect only when the person presses it.
 
 ## Limits
 
@@ -288,23 +288,23 @@ bug, so log it.
 
 When the socket closes:
 
-| Code | Reason                                | Meaning                                                                                    | What to do                                                             |
-| ---- | ------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| 1008 | `no_token`                            | No session was sent                                                                        | Send them to sign in                                                   |
-| 1008 | `token_not_usable`, `session_expired` | The session sent is not usable: expired, or signed before a change to what a token carries | Try a refresh; if that fails, send them to sign in                     |
-| 1008 | `session_ended`                       | Signed out, or the sign-in stopped being refreshed                                         | Try a refresh; if that fails, send them to sign in                     |
-| 1008 | `session_revoked`                     | The account's sessions were ended on purpose                                               | Send them to sign in; a refresh will not work                          |
-| 1008 | `wrong_scope`                         | Still in onboarding                                                                        | Send them to onboarding                                                |
-| 1008 | `account_suspended`, `account_gone`   | Not welcome any more                                                                       | Sign them out; do not reconnect                                        |
-| 1008 | `origin_not_allowed`                  | This page's origin is not on world's list                                                  | Configuration — do not retry                                           |
-| 1008 | `no_cohort`                           | The upgrade named no `cohortId`                                                            | Client bug; do not retry without one                                   |
-| 1008 | `not_a_member`                        | No live membership in the cohort named; admins excepted                                    | Back to the cohort picker; do not retry                                |
-| 1008 | `rate_limited`                        | Sustained sending over the message budget                                                  | Client bug; reconnect with backoff                                     |
-| 4000 | `entered_elsewhere`                   | This account opened the campus somewhere else                                              | **Do not reconnect** — see [One place at a time](#one-place-at-a-time) |
-| 1001 | `server shutting down`                | A deploy or restart                                                                        | Reconnect                                                              |
-| 1009 | —                                     | A frame over the size limit (16 KB by default)                                             | Client bug; reconnect                                                  |
-| 1011 | `internal_error`                      | The server could not check the session                                                     | Reconnect with backoff                                                 |
-| 1006 | —                                     | Connection lost, a missed heartbeat, or not reading fast enough                            | Reconnect with backoff                                                 |
+| Code | Reason                                | Meaning                                                                                    | What to do                                                                         |
+| ---- | ------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| 1008 | `no_token`                            | No session was sent                                                                        | Send them to sign in                                                               |
+| 1008 | `token_not_usable`, `session_expired` | The session sent is not usable: expired, or signed before a change to what a token carries | Try a refresh; if that fails, send them to sign in                                 |
+| 1008 | `session_ended`                       | Signed out, or the sign-in stopped being refreshed                                         | Try a refresh; if that fails, send them to sign in                                 |
+| 1008 | `session_revoked`                     | The account's sessions were ended on purpose                                               | Send them to sign in; a refresh will not work                                      |
+| 1008 | `wrong_scope`                         | Still in onboarding                                                                        | Send them to onboarding                                                            |
+| 1008 | `account_suspended`, `account_gone`   | Not welcome any more                                                                       | Sign them out; do not reconnect                                                    |
+| 1008 | `origin_not_allowed`                  | This page's origin is not on world's list                                                  | Configuration — do not retry                                                       |
+| 1008 | `no_cohort`                           | The upgrade named no `cohortId`                                                            | Client bug; do not retry without one                                               |
+| 1008 | `not_a_member`                        | No live membership in the cohort named; admins excepted                                    | Back to the cohort picker; do not retry                                            |
+| 1008 | `rate_limited`                        | Sustained sending over the message budget                                                  | Client bug; reconnect with backoff                                                 |
+| 4000 | `entered_elsewhere`                   | This account opened this cohort's campus somewhere else                                    | **Do not reconnect** — see [One connection per cohort](#one-connection-per-cohort) |
+| 1001 | `server shutting down`                | A deploy or restart                                                                        | Reconnect                                                                          |
+| 1009 | —                                     | A frame over the size limit (16 KB by default)                                             | Client bug; reconnect                                                              |
+| 1011 | `internal_error`                      | The server could not check the session                                                     | Reconnect with backoff                                                             |
+| 1006 | —                                     | Connection lost, a missed heartbeat, or not reading fast enough                            | Reconnect with backoff                                                             |
 
 When the connection is refused at the start, an `error` frame with the same
 reason as its `message` arrives just before the close. A socket closed later
