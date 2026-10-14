@@ -273,7 +273,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
   the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
   `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
-  `WORLD_PRESENCE_TTL_SECONDS`, the session refresh
+  `WORLD_PRESENCE_TTL_SECONDS`, going Away when idle
+  `WORLD_AWAY_AFTER_SECONDS`, the session refresh
   window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
   and `SANITY_DATASET` (`production` unless set; staging reads `staging`).
 - `SANITY_PROJECT_ID`: the Sanity project the campus maps are published to,

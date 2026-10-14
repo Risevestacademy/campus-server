@@ -16,6 +16,7 @@ import type {
 } from '../infra/presence.js';
 import { Players, type Player } from '../movement/players.js';
 import type { WorldMap } from '../movement/world-map.js';
+import { Availability, Status } from '../status/availability.js';
 import {
   decideUpgrade,
   sessionRefreshedSince,
@@ -192,7 +193,37 @@ export function registerGateway(
       connectionId: connection.id,
       cohortId: connection.cohortId,
       since: connection.openedAt,
+      status: connection.availability.shown,
     };
+  }
+
+  const awayAfterMs = env.WORLD_AWAY_AFTER_SECONDS * 1000;
+
+  /**
+   * For any change to what a connection's cohort sees of its status: sent at
+   * once, like an arrival, since it is as rare, and to them as well, which is
+   * how they learn the server took them for away. Into presence without
+   * holding anybody up; a write that fails is put right by the next renewal,
+   * which carries the status too.
+   */
+  function statusChanged(connection: Connection): void {
+    broadcast(connection.cohortId, {
+      type: 'statusChanged',
+      userId: connection.userId,
+      status: connection.availability.shown,
+    });
+    presence.setStatus(presenceOf(connection)).catch((err: unknown) => {
+      app.log.warn(
+        { err, userId: connection.userId },
+        'could not record status, the next renewal will',
+      );
+    });
+  }
+
+  function noteActivity(connection: Connection): void {
+    if (connection.availability.active(Date.now())) {
+      statusChanged(connection);
+    }
   }
 
   /**
@@ -302,10 +333,14 @@ export function registerGateway(
    * in one sees or hears of anybody in another, though they share this
    * process and the one map it loaded.
    */
-  function broadcast(cohortId: string, message: ServerMessage): void {
+  function broadcast(
+    cohortId: string,
+    message: ServerMessage,
+    except?: Connection,
+  ): void {
     const frame = encode(message);
     for (const connection of connections.all()) {
-      if (connection.cohortId === cohortId) {
+      if (connection.cohortId === cohortId && connection !== except) {
         sendFrame(connection.socket, frame);
       }
     }
@@ -540,6 +575,9 @@ export function registerGateway(
         connection.socket.terminate();
         continue;
       }
+      if (connection.availability.checkIdle(now, awayAfterMs)) {
+        statusChanged(connection);
+      }
       connection.alive = false;
       connection.socket.ping();
     }
@@ -702,6 +740,10 @@ export function registerGateway(
     switchingCohort =
       heldCohort !== undefined && heldCohort !== decision.cohortId;
 
+    // A tab replacing another in the same cohort keeps the status chosen
+    // there, as the avatar keeps its place: nobody saw it leave. Anything
+    // else is a fresh arrival, and starts Available.
+    const replacing = connections.forUser(decision.claims.userId);
     const connection: Connection = {
       id: randomUUID(),
       userId: decision.claims.userId,
@@ -711,6 +753,12 @@ export function registerGateway(
         displayName: decision.account.displayName,
         spriteKey: decision.account.spriteKey,
       },
+      availability: new Availability(
+        replacing?.cohortId === decision.cohortId
+          ? replacing.availability.chosen
+          : Status.Available,
+        Date.now(),
+      ),
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
       epoch: decision.claims.epoch,
@@ -787,6 +835,22 @@ export function registerGateway(
       );
       send(displaced.socket, { type: 'replaced' });
       displaced.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
+      // Only an idle tab replaced by an active one changes what is shown. Not
+      // to the new tab, whose welcome has to come first: its snapshot says.
+      if (
+        displaced.cohortId === connection.cohortId &&
+        displaced.availability.shown !== connection.availability.shown
+      ) {
+        broadcast(
+          connection.cohortId,
+          {
+            type: 'statusChanged',
+            userId: connection.userId,
+            status: connection.availability.shown,
+          },
+          connection,
+        );
+      }
     }
 
     presence.enter(presenceOf(connection)).catch((err: unknown) => {
@@ -850,7 +914,18 @@ export function registerGateway(
           connection.alive = true;
           send(ws, { type: 'pong' });
           return;
+        case 'active':
+          noteActivity(connection);
+          return;
+        case 'setStatus':
+          if (
+            connection.availability.choose(result.message.status, Date.now())
+          ) {
+            statusChanged(connection);
+          }
+          return;
         case 'move': {
+          noteActivity(connection);
           const { direction, seq } = result.message;
           const moved = players.move(connection.userId, direction, Date.now());
           send(ws, {
@@ -875,6 +950,7 @@ export function registerGateway(
       heartbeatSeconds: env.WORLD_HEARTBEAT_SECONDS,
       stepMs: env.WORLD_STEP_MS,
       tickMs: env.WORLD_TICK_MS,
+      awayAfterSeconds: env.WORLD_AWAY_AFTER_SECONDS,
       ...connection.appearance,
     });
     send(ws, {
@@ -954,7 +1030,11 @@ export function registerGateway(
 }
 
 function avatarOf(player: Player, connection: Connection): Avatar {
-  return { ...player, ...connection.appearance };
+  return {
+    ...player,
+    ...connection.appearance,
+    status: connection.availability.shown,
+  };
 }
 
 /** A store write for one player, in the cohort named. */

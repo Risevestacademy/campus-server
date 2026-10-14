@@ -6,6 +6,7 @@ import type {
   MoveOutcome as MovementOutcome,
   Player as MovementPlayer,
 } from '../movement/players.js';
+import { Status } from '../status/availability.js';
 
 /*
  * The wire contract, both directions, as zod schemas. Client frames are
@@ -51,18 +52,30 @@ const appearance = {
     ),
 };
 
+export const StatusSchema = z.enum(Status).meta({
+  id: 'Status',
+  description:
+    'Whether somebody can be approached. available: the default. busy: they ' +
+    'would rather not be. away: not at the keyboard — chosen, or set for them ' +
+    'by the server once they have done nothing for `awayAfterSeconds`, and ' +
+    'cleared when they do something again. Lasts as long as their connection.',
+});
+
 /**
  * Only where somebody first appears. `moved` and `moveResult` stay a bare
  * Player: they go out every tick, and what to draw does not change while a
- * socket is open.
+ * socket is open. Status does, and has its own message.
  */
-export const Avatar = z.object({ ...Player.shape, ...appearance }).meta({
-  id: 'Avatar',
-  description:
-    'Somebody on the map and what to draw for them. Their sprite and name are ' +
-    'as their profile had them when they entered; a change shows the next ' +
-    'time they enter.',
-});
+export const Avatar = z
+  .object({ ...Player.shape, ...appearance, status: StatusSchema })
+  .meta({
+    id: 'Avatar',
+    description:
+      'Somebody on the map and what to draw for them. Their sprite and name are ' +
+      'as their profile had them when they entered; a change shows the next ' +
+      'time they enter. Their status is as it is now; `statusChanged` follows ' +
+      'every change.',
+  });
 
 export const MoveOutcome = z.enum(['moved', 'blocked', 'too_fast']).meta({
   id: 'MoveOutcome',
@@ -117,6 +130,26 @@ export const ClientMessage = z
         id: 'MoveMessage',
         description: 'One step. Always answered with a `moveResult`.',
       }),
+    z
+      .object({
+        type: z.literal('setStatus'),
+        status: StatusSchema,
+      })
+      .meta({
+        id: 'SetStatusMessage',
+        description:
+          'Choose your status. Answered, if it changes what your cohort sees, ' +
+          'by the `statusChanged` everybody in it gets, you included. Counts ' +
+          'as activity.',
+      }),
+    z.object({ type: z.literal('active') }).meta({
+      id: 'ActiveMessage',
+      description:
+        'The person did something the server cannot see — a key, a click, a ' +
+        'word in a call. Keeps them from going away while idle, and brings ' +
+        'them back if they had. A `move` or `setStatus` counts already; a ' +
+        '`ping` does not. No answer.',
+    }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
 
@@ -141,6 +174,14 @@ export const ServerMessage = z
           .number()
           .int()
           .describe('How often `moved` arrives while anybody is moving.'),
+        awayAfterSeconds: z
+          .number()
+          .int()
+          .describe(
+            'How long you may do nothing before the server shows you away. ' +
+              'Send `active` well within it while the person is there. 0 when ' +
+              'this deployment never does.',
+          ),
         ...appearance,
       })
       .meta({
@@ -190,6 +231,19 @@ export const ServerMessage = z
       description:
         "Somebody's socket closed, or they entered a different cohort.",
     }),
+    z
+      .object({
+        type: z.literal('statusChanged'),
+        userId: z.string(),
+        status: StatusSchema,
+      })
+      .meta({
+        id: 'StatusChangedMessage',
+        description:
+          "Somebody in your cohort's status changed: chosen, or set to away " +
+          'while idle and back again. Sent to everybody in the cohort, you ' +
+          'included when it is yours.',
+      }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',
       description:
@@ -255,7 +309,7 @@ export type OutcomeMatchesMovement = Assert<
   Same<z.infer<typeof MoveOutcome>, MovementOutcome>
 >;
 export type AvatarMatchesAccount = Assert<
-  Same<z.infer<typeof Avatar>, MovementPlayer & Appearance>
+  Same<z.infer<typeof Avatar>, MovementPlayer & Appearance & { status: Status }>
 >;
 
 export type Avatar = z.infer<typeof Avatar>;

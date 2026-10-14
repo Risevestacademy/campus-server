@@ -25,12 +25,15 @@ describe('protocol.schema.json', () => {
         'ClientMessage',
         'PingMessage',
         'MoveMessage',
+        'SetStatusMessage',
+        'ActiveMessage',
         'ServerMessage',
         'WelcomeMessage',
         'PongMessage',
         'SnapshotMessage',
         'JoinedMessage',
         'LeftMessage',
+        'StatusChangedMessage',
         'ReplacedMessage',
         'MovedMessage',
         'MoveResultMessage',
@@ -39,6 +42,7 @@ describe('protocol.schema.json', () => {
         'Avatar',
         'Direction',
         'MoveOutcome',
+        'Status',
       ].sort(),
     );
   });

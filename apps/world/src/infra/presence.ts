@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
 
+import { Status } from '../status/availability.js';
 import type { Env } from './env.js';
 import {
   FAIL_FAST,
@@ -20,6 +21,8 @@ export interface Presence {
   spaceId?: string;
   /** When the connection opened, in ms. The newest connection holds the place. */
   since: number;
+  /** As their cohort sees it, idle included. Goes with the entry. */
+  status: Status;
 }
 
 export interface PresenceEntry extends Presence {
@@ -34,7 +37,8 @@ export interface Displacement {
 }
 
 /**
- * Who is online, in which cohort and space, across every world instance — in
+ * Who is online, in which cohort and space, and whether they are available,
+ * across every world instance — in
  * Redis, so that more than one instance can run, and so chat can work out
  * who to send to.
  *
@@ -60,6 +64,11 @@ export interface PresenceStore {
   renew(presences: readonly Presence[]): Promise<Displacement[]>;
   /** Only for connections still holding their account's place. */
   leave(presences: readonly Presence[]): Promise<void>;
+  /**
+   * Only for a connection still holding its account's place. An entry that
+   * has lapsed is left lapsed: the next renewal puts it back, status and all.
+   */
+  setStatus(presence: Presence): Promise<void>;
   online(cohortId: string): Promise<PresenceEntry[]>;
   /** Hears about every displacement, including of connections held elsewhere. */
   onDisplaced(listener: (displaced: Displacement) => void): void;
@@ -112,6 +121,13 @@ export class MemoryPresenceStore implements PresenceStore {
       if (this.byUser.get(userId)?.connectionId === connectionId) {
         this.byUser.delete(userId);
       }
+    }
+  }
+
+  async setStatus({ userId, connectionId, status }: Presence): Promise<void> {
+    const held = this.byUser.get(userId);
+    if (held?.connectionId === connectionId) {
+      this.byUser.set(userId, { ...held, status });
     }
   }
 
@@ -179,15 +195,16 @@ export function createPresenceStore(
 const CLAIM = `
 local held = redis.call('HMGET', KEYS[1], 'connectionId', 'instanceId', 'since')
 local holder = held[1]
-local userId, connectionId, instanceId, cohortId, spaceId, since, ttl, lapses, force =
-  ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8], ARGV[9]
+local userId, connectionId, instanceId, cohortId, spaceId, since, ttl, lapses, force, status =
+  ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8], ARGV[9], ARGV[10]
 if holder and holder ~= connectionId and force ~= '1'
   and (tonumber(held[3]) or 0) > tonumber(since) then
   return {'newer'}
 end
 redis.call('DEL', KEYS[1])
 redis.call('HSET', KEYS[1], 'connectionId', connectionId,
-  'instanceId', instanceId, 'cohortId', cohortId, 'since', since)
+  'instanceId', instanceId, 'cohortId', cohortId, 'since', since,
+  'status', status)
 if spaceId ~= '' then
   redis.call('HSET', KEYS[1], 'spaceId', spaceId)
 end
@@ -209,11 +226,20 @@ end
 return 0
 `;
 
+/** Never writes a key that is not there: a lapsed entry has no TTL to keep. */
+const SET_STATUS = `
+if redis.call('HGET', KEYS[1], 'connectionId') == ARGV[1] then
+  redis.call('HSET', KEYS[1], 'status', ARGV[2])
+end
+return 0
+`;
+
 type ClaimReply = ['newer'] | ['held'] | ['took', string, string | null];
 
 interface PresenceScripts {
   claimPresence(...args: (string | number)[]): Promise<ClaimReply>;
   releasePresence(...args: (string | number)[]): Promise<number>;
+  setPresenceStatus(...args: (string | number)[]): Promise<number>;
 }
 
 const storedEntry = z.object({
@@ -222,6 +248,8 @@ const storedEntry = z.object({
   cohortId: z.string(),
   spaceId: z.string().optional(),
   since: z.coerce.number().int(),
+  // An instance deployed before statuses existed writes none.
+  status: z.enum(Status).default(Status.Available),
 });
 
 const displacedMessage = z.object({
@@ -248,6 +276,10 @@ export class RedisPresenceStore implements PresenceStore {
     this.ttlMs = ttlSeconds * 1000;
     redis.defineCommand('claimPresence', { numberOfKeys: 2, lua: CLAIM });
     redis.defineCommand('releasePresence', { numberOfKeys: 2, lua: RELEASE });
+    redis.defineCommand('setPresenceStatus', {
+      numberOfKeys: 1,
+      lua: SET_STATUS,
+    });
     this.scripts = redis as unknown as PresenceScripts;
 
     subscriber.on('message', (channel: string, raw: string) => {
@@ -286,6 +318,14 @@ export class RedisPresenceStore implements PresenceStore {
           connectionId,
         ),
       ),
+    );
+  }
+
+  async setStatus({ userId, connectionId, status }: Presence): Promise<void> {
+    await this.scripts.setPresenceStatus(
+      presenceKey(userId),
+      connectionId,
+      status,
     );
   }
 
@@ -331,7 +371,7 @@ export class RedisPresenceStore implements PresenceStore {
     presence: Presence,
     force: boolean,
   ): Promise<ClaimReply[0]> {
-    const { userId, connectionId, cohortId, spaceId, since } = presence;
+    const { userId, connectionId, cohortId, spaceId, since, status } = presence;
     const reply = await this.scripts.claimPresence(
       presenceKey(userId),
       cohortPresenceKey(cohortId),
@@ -344,6 +384,7 @@ export class RedisPresenceStore implements PresenceStore {
       this.ttlMs,
       Date.now() + this.ttlMs,
       force ? '1' : '0',
+      status,
     );
     // A holder on this instance was displaced here already, by the gateway.
     if (reply[0] === 'took' && reply[2] !== this.instanceId) {

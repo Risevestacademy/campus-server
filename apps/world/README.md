@@ -30,6 +30,11 @@ server decides every position.
   `world:presence:displaced`, and the other instance closes the old socket
   with `entered_elsewhere`. Without `REDIS_URL`, presence is kept in memory,
   which only works for a single instance.
+- **Status:** each member is available, busy or away, chosen with
+  `setStatus` and shown to everybody in their cohort. Somebody idle for
+  `WORLD_AWAY_AFTER_SECONDS` shows as away until they do something again. It
+  is kept on the presence entry, so it goes when the connection does; nothing
+  is written to Postgres. See [the protocol doc](../../docs/world-protocol.md#status).
 - **Keeps sockets honest:**
   - a heartbeat drops sockets that stopped answering
   - follows the sign-in behind each socket rather than its fifteen-minute
@@ -91,6 +96,7 @@ src/
   infra/                env, logger, account lookup, Redis (positions, presence), the published map
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
+  status/               available, busy or away, and going away while idle — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages
     authenticate.ts     who may open a socket
