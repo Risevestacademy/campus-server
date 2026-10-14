@@ -15,6 +15,7 @@ NestJS backend for the campus application.
 - [Databases & infra](#databases--infra)
 - [Audit log](#audit-log)
 - [Maps](#maps)
+- [Feedback](#feedback)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
 - [Integration guide](#integration-guide)
@@ -142,6 +143,13 @@ holds a row per map and per space, with each space's settings, and an admin
 brings those rows level with what is published by calling
 `POST /v1/maps/sync`. What lives where, and what the sync does and refuses,
 are in [src/modules/maps/README.md](src/modules/maps/README.md).
+
+## Feedback
+
+Any member can send a bug, an idea or a report, and admins read them. The
+routes, the limit on how much one account may send, who is told about a
+report and the personal-data rules are in
+[src/modules/feedback/README.md](src/modules/feedback/README.md).
 
 ## Logging
 

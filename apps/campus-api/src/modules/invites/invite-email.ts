@@ -1,13 +1,11 @@
 import type { EmailTemplate } from '../../infra/email/email-sender.js';
+import {
+  escapeHtml,
+  type RenderedEmail,
+} from '../../infra/email/rendered-email.js';
 import { CohortRole } from '../cohorts/schema.js';
 import { SystemRole } from '../users/schema.js';
 import type { InvitePreviewResponseDto } from './dto/invite-preview.dto.js';
-
-export interface RenderedEmail {
-  subject: string;
-  html: string;
-  text: string;
-}
 
 const PRODUCT = 'Campus by Rise';
 /** Shown in a template tile the invite has nothing for. */
@@ -201,13 +199,4 @@ export function formatDate(value: Date): string {
     timeZone: 'UTC',
   }).format(value);
   return `${date}, ${time} UTC`;
-}
-
-export function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
 }

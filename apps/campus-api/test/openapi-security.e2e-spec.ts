@@ -68,11 +68,20 @@ describe('OpenAPI security (e2e)', () => {
     ['/v1/users', 'get'],
     ['/v1/audit-log', 'get'],
     ['/v1/maps/sync', 'post'],
+    ['/v1/feedback', 'post'],
+    ['/v1/feedback', 'get'],
+    ['/v1/feedback/{id}', 'get'],
+    ['/v1/feedback/{id}', 'patch'],
     ['/v1/users/me', 'get'],
     ['/v1/users/me', 'patch'],
     ['/v1/users/{id}/profile', 'get'],
     ['/v1/auth/me', 'get'],
     ['/v1/cohorts/{cohortId}/members/{userId}', 'patch'],
+    ['/v1/cohorts/{cohortId}/members/{userId}/dismiss', 'post'],
+    ['/v1/cohorts/{cohortId}/members/{userId}/withdraw', 'post'],
+    ['/v1/cohorts/{cohortId}/members/{userId}/defer', 'post'],
+    ['/v1/cohorts/{cohortId}/members/{userId}/graduate', 'post'],
+    ['/v1/cohorts/{cohortId}/members/{userId}/remove', 'post'],
   ])('still marks %s (%s) as needing a session', (path, method) => {
     expect(security(path, method)).toEqual([{ bearer: [] }]);
   });

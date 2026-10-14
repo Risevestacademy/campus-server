@@ -1,3 +1,4 @@
+import { PROFILE_CHANGED_CHANNEL } from '@campus/session';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -147,6 +148,75 @@ describe('own profile', () => {
     expect(profile.firstName).toBe('Ada');
   });
 
+  it('changes the sprite, and clears it when sent null', async () => {
+    const ada = await person('ada@campus.local');
+
+    expect(
+      (await service.updateOwn(ada.id, { spriteKey: 'placeholder-2' }))
+        .spriteKey,
+    ).toBe('placeholder-2');
+    expect(
+      (await service.updateOwn(ada.id, { spriteKey: null })).spriteKey,
+    ).toBeNull();
+  });
+
+  /**
+   * world listens on this channel to show the change to the person's cohort
+   * straight away. Only for what others see: a new phone number is nobody
+   * else's business, and world has nothing to redraw for it.
+   */
+  it('tells world when the sprite or display name changes, and not otherwise', async () => {
+    const ada = await person('ada@campus.local');
+    const heard: string[] = [];
+    const stop = await db.$client.listen(PROFILE_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    try {
+      await service.updateOwn(ada.id, { spriteKey: 'placeholder-2' });
+      await service.updateOwn(ada.id, { displayName: 'Ada L.' });
+      await service.updateOwn(ada.id, { phone: '+2348012345678', bio: 'Hi' });
+      await vi.waitFor(() => expect(heard).toEqual([ada.id, ada.id]));
+    } finally {
+      await stop();
+    }
+  });
+
+  it('says nothing to world when the update fails', async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(PROFILE_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    try {
+      await expect(
+        service.updateOwn('00000000-0000-4000-8000-000000000000', {
+          spriteKey: 'placeholder-1',
+        }),
+      ).rejects.toThrow('No such profile');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(heard).toEqual([]);
+    } finally {
+      await stop();
+    }
+  });
+
+  /**
+   * When the list changes, what people picked from the old one is not
+   * cleaned up. It reads as no sprite, so clients draw their default.
+   */
+  it('shows a sprite no longer on the list as none', async () => {
+    const ada = await person('ada@campus.local', {
+      spriteKey: 'retired-knight',
+    });
+    const grace = await person('grace@campus.local');
+    await join(ada.id, c1, CohortRole.Mentor);
+    await join(grace.id, c1, CohortRole.Mentor);
+
+    expect((await service.getOwn(ada.id)).spriteKey).toBeNull();
+    expect(
+      (await service.getCard(viewerOf(grace), ada.id)).spriteKey,
+    ).toBeNull();
+  });
+
   it('writes nothing for an update that names no field', async () => {
     const ada = await person('ada@campus.local');
 
@@ -211,6 +281,15 @@ describe('profile card', () => {
     });
     expect(card).not.toHaveProperty('phone');
     expect(JSON.stringify(card)).not.toContain('801 234');
+  });
+
+  it('shows a classmate the sprite they picked', async () => {
+    await join(grace.id, c1, CohortRole.Mentor);
+    await service.updateOwn(ada.id, { spriteKey: 'placeholder-3' });
+
+    const card = await service.getCard(viewerOf(grace), ada.id);
+
+    expect(card.spriteKey).toBe('placeholder-3');
   });
 
   it('shows only the cohorts the two share', async () => {

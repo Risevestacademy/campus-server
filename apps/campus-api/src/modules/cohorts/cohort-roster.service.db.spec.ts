@@ -235,6 +235,8 @@ describe('CohortRosterService', () => {
       await join(await person('dismissed@campus.local'), CohortRole.Student, {
         status: StudentStatus.Dismissed,
         dismissalReason: 'Plagiarism.',
+        // The reason keys off left_at: a membership with a reason has ended.
+        leftAt: new Date('2026-01-01T00:00:00Z'),
       });
       await join(await person('left@campus.local'), CohortRole.Mentor, {
         leftAt: new Date('2026-01-01T00:00:00Z'),

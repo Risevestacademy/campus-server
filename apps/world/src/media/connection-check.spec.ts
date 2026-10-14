@@ -31,9 +31,17 @@ const accounts = {
   find: async (id: string): Promise<Account | null> =>
     id === 'gone'
       ? null
-      : { id, suspended: suspended.has(id), sessionEpoch: 0, admin: false },
+      : {
+          id,
+          suspended: suspended.has(id),
+          sessionEpoch: 0,
+          admin: false,
+          displayName: null,
+          spriteKey: null,
+        },
   liveSessions: async () => new Set<string>(),
   liveMembership: async () => false,
+  onProfileChanged: async () => undefined,
   close: async () => undefined,
 };
 

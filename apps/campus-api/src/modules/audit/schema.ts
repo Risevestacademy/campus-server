@@ -101,6 +101,20 @@ export enum AuditAction {
    * on it. The rows stay; `details` lists the spaces that went with it.
    */
   MapRetired = 'map_retired',
+  /**
+   * An admin ended a membership: dismissed, withdrew, deferred or graduated
+   * a student, or removed any member. `details` keeps the role, the student
+   * status it was given (null for a removal, which carries none) and the
+   * reason the admin wrote, or null. The subject says which membership.
+   */
+  MembershipEnded = 'membership_ended',
+  /**
+   * An admin marked a piece of feedback dealt with, or put it back to open.
+   * `details` is empty: what a member wrote is theirs, and often about
+   * somebody else, so it stays on the feedback and never comes here.
+   */
+  FeedbackResolved = 'feedback_resolved',
+  FeedbackReopened = 'feedback_reopened',
 }
 
 export enum AuditSubjectType {
@@ -111,6 +125,7 @@ export enum AuditSubjectType {
   CohortTrack = 'cohort_track',
   Track = 'track',
   Map = 'map',
+  Feedback = 'feedback',
 }
 
 /**

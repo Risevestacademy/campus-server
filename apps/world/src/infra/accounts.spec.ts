@@ -27,6 +27,8 @@ async function accountRow(userId: string) {
     status: string;
     system_role: string;
     session_epoch: number;
+    display_name: string | null;
+    sprite_key: string | null;
   }>(ACCOUNT_QUERY, [userId]);
   return result.rows[0];
 }
@@ -98,6 +100,27 @@ describe("world's account lookup, against campus-api's schema", () => {
     );
 
     expect((await accountRow(id))?.session_epoch).toBe(1);
+  });
+
+  // What every other client draws for them.
+  it('reads the display name and sprite, and nulls when unset', async () => {
+    const id = '77777777-7777-4777-8777-777777777777';
+    await db.exec(
+      `insert into users (id, email) values ('${id}', 'sprite@campus.local')`,
+    );
+    expect(await accountRow(id)).toMatchObject({
+      display_name: null,
+      sprite_key: null,
+    });
+
+    await db.exec(
+      `update users set display_name = 'Ada L.', sprite_key = 'placeholder-2' where id = '${id}'`,
+    );
+
+    expect(await accountRow(id)).toMatchObject({
+      display_name: 'Ada L.',
+      sprite_key: 'placeholder-2',
+    });
   });
 
   it('returns nothing for an id that is not there', async () => {
