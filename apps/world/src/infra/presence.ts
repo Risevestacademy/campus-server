@@ -11,14 +11,17 @@ import {
   type ConnectRedis,
 } from './redis.js';
 
-/** One account's place in the world, held by one connection. */
+/** One account's place in one cohort's campus, held by one connection. */
 export interface Presence {
   userId: string;
   connectionId: string;
   cohortId: string;
   /** Unset until spaces exist (W6). */
   spaceId?: string;
-  /** When the connection opened, in ms. The newest connection holds the place. */
+  /**
+   * When the connection opened, in ms. The newest connection in a cohort
+   * holds the account's place there.
+   */
   since: number;
 }
 
@@ -27,7 +30,7 @@ export interface PresenceEntry extends Presence {
   instanceId: string;
 }
 
-/** A connection whose account entered the campus somewhere newer. */
+/** A connection whose account entered the same cohort somewhere newer. */
 export interface Displacement {
   userId: string;
   connectionId: string;
@@ -36,7 +39,8 @@ export interface Displacement {
 /**
  * Who is online, in which cohort and space, across every world instance — in
  * Redis, so that more than one instance can run, and so chat can work out
- * who to send to.
+ * who to send to. One entry per account and cohort: somebody in two cohorts'
+ * campuses at once is online in both.
  *
  * Each entry expires unless its instance keeps renewing it, so a crashed
  * instance's people drop out on their own.
@@ -48,14 +52,14 @@ export interface Displacement {
 export interface PresenceStore {
   readonly instanceId: string;
   /**
-   * Takes the account's place for this connection, whoever held it. A holder
-   * on another instance is told to close (onDisplaced there).
+   * Takes the account's place in this connection's cohort, whoever held it.
+   * A holder on another instance is told to close (onDisplaced there).
    */
   enter(presence: Presence): Promise<void>;
   /**
    * Keeps these connections present, putting back any entry that lapsed.
-   * Returns those whose account a newer connection now holds: the message
-   * telling this instance so may have been missed.
+   * Returns those whose place a newer connection in the same cohort now
+   * holds: the message telling this instance so may have been missed.
    */
   renew(presences: readonly Presence[]): Promise<Displacement[]>;
   /** Only for connections still holding their account's place. */
@@ -66,8 +70,12 @@ export interface PresenceStore {
   close(): Promise<void>;
 }
 
-export function presenceKey(userId: string): string {
-  return `world:presence:user:${userId}`;
+export function presenceKey(userId: string, cohortId: string): string {
+  return `world:presence:user:${userId}:cohort:${cohortId}`;
+}
+
+function keyOf({ userId, cohortId }: Presence): string {
+  return presenceKey(userId, cohortId);
 }
 
 export function cohortPresenceKey(cohortId: string): string {
@@ -83,17 +91,18 @@ export const DISPLACED_CHANNEL = 'world:presence:displaced';
  */
 export class MemoryPresenceStore implements PresenceStore {
   readonly instanceId = randomUUID();
-  private readonly byUser = new Map<string, Presence>();
+  /** By presenceKey: one entry per account and cohort. */
+  private readonly entries = new Map<string, Presence>();
 
   async enter(presence: Presence): Promise<void> {
-    this.byUser.set(presence.userId, presence);
+    this.entries.set(keyOf(presence), presence);
   }
 
   async renew(presences: readonly Presence[]): Promise<Displacement[]> {
     const displaced: Displacement[] = [];
     for (const presence of presences) {
       const { userId, connectionId } = presence;
-      const held = this.byUser.get(userId);
+      const held = this.entries.get(keyOf(presence));
       if (
         held &&
         held.connectionId !== connectionId &&
@@ -101,22 +110,23 @@ export class MemoryPresenceStore implements PresenceStore {
       ) {
         displaced.push({ userId, connectionId });
       } else {
-        this.byUser.set(userId, presence);
+        this.entries.set(keyOf(presence), presence);
       }
     }
     return displaced;
   }
 
   async leave(presences: readonly Presence[]): Promise<void> {
-    for (const { userId, connectionId } of presences) {
-      if (this.byUser.get(userId)?.connectionId === connectionId) {
-        this.byUser.delete(userId);
+    for (const presence of presences) {
+      const key = keyOf(presence);
+      if (this.entries.get(key)?.connectionId === presence.connectionId) {
+        this.entries.delete(key);
       }
     }
   }
 
   async online(cohortId: string): Promise<PresenceEntry[]> {
-    return [...this.byUser.values()]
+    return [...this.entries.values()]
       .filter((presence) => presence.cohortId === cohortId)
       .map((presence) => ({ ...presence, instanceId: this.instanceId }));
   }
@@ -169,12 +179,12 @@ export function createPresenceStore(
 
 /**
  * Writes this connection's entry, unless a newer connection holds the
- * account and this is only a renewal. Returns what it did, and the
+ * account's place in this cohort and this is only a renewal. Returns what it did, and the
  * connection it took the place of, if any, so that one can be told.
  *
  * The cohort index is a sorted set scored by when each entry lapses. It is
- * only an index: a reader confirms each member against the account's entry,
- * so a member left behind by somebody changing cohort reads as nothing.
+ * only an index: a reader confirms each member against the account's entry
+ * for that cohort, so a member whose entry lapsed reads as nothing.
  */
 const CLAIM = `
 local held = redis.call('HMGET', KEYS[1], 'connectionId', 'instanceId', 'since')
@@ -280,7 +290,7 @@ export class RedisPresenceStore implements PresenceStore {
     await Promise.all(
       presences.map(({ userId, connectionId, cohortId }) =>
         this.scripts.releasePresence(
-          presenceKey(userId),
+          presenceKey(userId, cohortId),
           cohortPresenceKey(cohortId),
           userId,
           connectionId,
@@ -299,14 +309,16 @@ export class RedisPresenceStore implements PresenceStore {
       return [];
     }
     const batch = this.redis.pipeline();
-    for (const userId of userIds) batch.hgetall(presenceKey(userId));
+    for (const userId of userIds) {
+      batch.hgetall(presenceKey(userId, cohortId));
+    }
     const replies = (await batch.exec()) ?? [];
 
     const entries: PresenceEntry[] = [];
     for (const [i, [err, value]] of replies.entries()) {
       if (err) throw err;
       const parsed = storedEntry.safeParse(value);
-      // Gone since the index was read, or moved to another cohort.
+      // Gone since the index was read.
       if (!parsed.success || parsed.data.cohortId !== cohortId) continue;
       entries.push({ userId: userIds[i] as string, ...parsed.data });
     }
@@ -333,7 +345,7 @@ export class RedisPresenceStore implements PresenceStore {
   ): Promise<ClaimReply[0]> {
     const { userId, connectionId, cohortId, spaceId, since } = presence;
     const reply = await this.scripts.claimPresence(
-      presenceKey(userId),
+      presenceKey(userId, cohortId),
       cohortPresenceKey(cohortId),
       userId,
       connectionId,
