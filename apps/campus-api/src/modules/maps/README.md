@@ -106,10 +106,11 @@ It reads every published map from Sanity (`SANITY_PROJECT_ID`,
 
 A Tiled class that names no known kind leaves the space with no kind, so it
 is closed to everybody but admins until one is set. The response lists
-those under `needsKind`. The same happens to a second town hall or notice
-board: the campus has one of each, so the first keeps the kind and any
-other is left for an admin to decide. The settings each kind starts with
-are in [`space-defaults.ts`](./space-defaults.ts).
+those under `needsKind`. The same happens to a new space suggested as a
+second town hall or notice board: the campus has one of each, so the first
+keeps the kind and any other is left for an admin to decide. A space that
+already _had_ the kind is different: see the refusals below. The settings
+each kind starts with are in [`space-defaults.ts`](./space-defaults.ts).
 
 `?dryRun=true` answers with what would change and changes nothing.
 
@@ -121,11 +122,18 @@ SERVICE_UNAVAILABLE`, with `details.reason` of `unreachable` or
 - What is published cannot be used: `409 CONFLICT`, with every problem
   listed in `details.problems`. That is no map at all, not exactly one entry
   map, a map that fails `campus-world-map`'s own checks, or a key or name
-  too long for its column.
+  too long for its column. Every problem is listed: each map's own, by map
+  key, then how the maps fit together. It is also a retired
+  town hall or notice board published again while another space holds that
+  kind: restoring it would mean a second, or taking away the kind it was
+  given, so the sync refuses and names both. Unpublish one of them.
+- Another sync is running: `409 CONFLICT`. Nothing waits for it; try again
+  once it is done.
 
 So a publish that went wrong can never retire the campus.
 
-Two syncs at once take turns. Each map that changed writes a `map_synced`
+One sync runs at a time, and it reads Sanity only once it holds the lock, so
+a slow sync cannot write a publish older than one already written. Each map that changed writes a `map_synced`
 audit entry, and each one retired a `map_retired`; a sync that changes
 nothing writes none.
 

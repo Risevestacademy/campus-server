@@ -49,10 +49,12 @@ export function ApiSyncMaps(): MethodDecorator {
       type: ApiErrorResponseDto,
       description:
         'The published maps were read and cannot be adopted: nothing is ' +
-        'published, a map is broken, the maps do not fit together, or a ' +
-        'key is too long or kept for something else. `details.problems` ' +
-        'lists what is wrong, for whoever publishes maps to put right. ' +
-        'Nothing was changed.',
+        'published, a map is broken, the maps do not fit together, a key ' +
+        'is too long or kept for something else, or a retired town hall or ' +
+        'notice board is published again while another space is one. ' +
+        '`details.problems` lists everything wrong, map by map, for whoever ' +
+        'publishes maps to put right. Also answered, with no details, when ' +
+        'another sync is running. Nothing was changed.',
       content: {
         'application/json': {
           examples: {
