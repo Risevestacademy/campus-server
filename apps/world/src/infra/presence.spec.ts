@@ -40,8 +40,8 @@ describe('MemoryPresenceStore', () => {
 
   it('leaves only for the connection holding the place', async () => {
     const store = new MemoryPresenceStore();
-    const older = presenceOf('ada');
-    const newer = presenceOf('ada');
+    const older = presenceOf('ada', { since: 1 });
+    const newer = presenceOf('ada', { since: 2 });
     await store.enter(older);
     await store.enter(newer);
 
@@ -201,10 +201,10 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     const a = instance();
     const b = instance();
     await allSubscribed();
-    const older = presenceOf(user, { cohortId: cohort });
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
     await a.store.enter(older);
 
-    await b.store.enter(presenceOf(user, { cohortId: cohort }));
+    await b.store.enter(presenceOf(user, { cohortId: cohort, since: 2 }));
 
     await expect
       .poll(() => a.heard)
@@ -217,9 +217,9 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     const { user, cohort } = fresh();
     const a = instance();
     await allSubscribed();
-    await a.store.enter(presenceOf(user, { cohortId: cohort }));
+    await a.store.enter(presenceOf(user, { cohortId: cohort, since: 1 }));
 
-    await a.store.enter(presenceOf(user, { cohortId: cohort }));
+    await a.store.enter(presenceOf(user, { cohortId: cohort, since: 2 }));
 
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(a.heard).toEqual([]);
@@ -228,8 +228,8 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
   it('leaves only for the connection holding the place', async () => {
     const { user, cohort } = fresh();
     const { store } = instance();
-    const older = presenceOf(user, { cohortId: cohort });
-    const newer = presenceOf(user, { cohortId: cohort });
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+    const newer = presenceOf(user, { cohortId: cohort, since: 2 });
     await store.enter(older);
     await store.enter(newer);
 
