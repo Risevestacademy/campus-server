@@ -45,8 +45,13 @@ server decides every position.
   - the map is the published entry map, loaded from Sanity once at startup
     through `campus-world-map`; its collision shapes become blocked tiles, and
     the `snapshot` tells clients which map and version that is
+  - every tile is known to be in one space: the drawn space covering its
+    middle (the smaller, where two overlap, then the key that sorts first),
+    or the map's default space, `_default`, for the corridors and grounds.
+    Worked out once at load (`movement/spaces.ts`)
   - the server enforces walking speed
-  - one avatar per account, walked by whichever socket holds its place
+  - one avatar per account in each cohort, walked by whichever socket holds
+    its place there
   - each cohort is its own campus: nobody sees, or is told about, anybody in
     another cohort, though they share the process and the map
   - other players' moves are sent once per tick
