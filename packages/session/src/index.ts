@@ -10,3 +10,5 @@ export * from './session-policy.js';
 export * from './system-role.js';
 // And what both draw somebody as: their sprite, and where a change is announced.
 export * from './profile.js';
+// And the one space both know of that no map draws.
+export * from './spaces.js';
