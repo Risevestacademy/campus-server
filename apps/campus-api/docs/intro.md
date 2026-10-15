@@ -363,7 +363,9 @@ List endpoints accept the following query parameters:
 | `page`    | number | `1`     | Page to fetch (1-based).  |
 | `perPage` | number | `20`    | Number of items per page. |
 
-`page` must be at least 1 and `perPage` is capped at 100.
+`page` must be from 1 to 10,000 and `perPage` from 1 to 100; anything else is
+a 400 `INVALID_ARGUMENT`. A page past the last one is an empty page, not an
+error. To reach further into a list than 10,000 pages, filter it instead.
 
 In the OpenAPI document each list has a page schema of its own, named after
 its item: `GET /v1/tracks` returns `PaginatedTrackResponseDto`, whose `items`

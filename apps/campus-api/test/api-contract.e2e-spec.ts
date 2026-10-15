@@ -74,6 +74,23 @@ describe('API contract (e2e)', () => {
       .expect({ page: 2, perPage: 50 });
   });
 
+  it('GET /v1/list rejects a page past the last it will fetch', () => {
+    return request(app.getHttpServer())
+      .get('/v1/list?page=1e30')
+      .expect(400)
+      .expect({
+        error: {
+          code: 'INVALID_ARGUMENT',
+          message: 'Request validation failed',
+          details: {
+            fields: {
+              page: 'page must not be greater than 10000',
+            },
+          },
+        },
+      });
+  });
+
   it('GET /v1/list rejects out-of-range perPage with our error contract', () => {
     return request(app.getHttpServer())
       .get('/v1/list?perPage=500')
