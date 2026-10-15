@@ -136,7 +136,9 @@ SERVICE_UNAVAILABLE`, with `details.reason` of `unreachable` or
 So a publish that went wrong can never retire the campus.
 
 One sync runs at a time, and it reads Sanity only once it holds the lock, so
-a slow sync cannot write a publish older than one already written. Each map that changed writes a `map_synced`
+a slow sync cannot write a publish older than one already written. That is
+tested with two syncs on separate connections to a real PostgreSQL, in
+`map-sync.service.pg.spec.ts`. Each map that changed writes a `map_synced`
 audit entry, and each one retired a `map_retired`; a sync that changes
 nothing writes none.
 
