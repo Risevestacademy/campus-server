@@ -46,8 +46,10 @@ interface Held {
  * change many times a second and are worthless a moment later, which is why
  * the TRD keeps them out of Postgres.
  *
- * Keyed by user rather than by socket: an account stands in one place, and
- * the socket standing for it may be replaced without the avatar moving.
+ * Keyed by account and cohort: somebody may stand in several cohorts' campuses
+ * at once, one avatar in each, and each cohort is its own campus. Within one
+ * cohort an account has one avatar, and the socket standing for it may be
+ * replaced without the avatar moving.
  *
  * The server decides every position. A client says which way it wants to go,
  * never where it is, so there is no destination to validate and no way to
@@ -55,18 +57,16 @@ interface Held {
  *
  * Somebody who drops out is remembered for a grace period, invisibly: a
  * connection that blips, or that the server cut for sending too fast or
- * reading too slowly, comes back where it was rather than at the spawn.
+ * reading too slowly, comes back where it was rather than at the spawn. The
+ * memory is per cohort too, so it only ever resumes in the campus it was left.
  */
 export class Players {
-  private readonly byUser = new Map<string, Held>();
-  /**
-   * Left recently, and may come back to where they stood until `until`. The
-   * cohort they left in is kept with it: a position only resumes in the same
-   * campus, never carried into another.
-   */
+  /** Cohort, then account. */
+  private readonly standing = new Map<string, Map<string, Held>>();
+  /** Left recently, and may come back to where they stood until `until`. */
   private readonly departed = new Map<
     string,
-    { held: Held; until: number; cohortId?: string }
+    Map<string, { held: Held; until: number }>
   >();
 
   constructor(
@@ -78,36 +78,28 @@ export class Players {
   ) {}
 
   /**
-   * Places somebody on the map: where they stood if they left within the
-   * grace period and in the same cohort, else where they last stood on an
-   * earlier visit (`saved`, if that tile is still walkable), else at the
-   * spawn. Returns the existing player if they are already here.
+   * Places somebody on one cohort's map: where they stood there if they left
+   * within the grace period, else where they last stood on an earlier visit
+   * (`saved`, if that tile is still walkable), else at the spawn. Returns the
+   * existing player if they are already standing in this cohort.
    */
   join(
     userId: string,
+    cohortId: string,
     now: number,
     saved?: Pick<Player, 'x' | 'y' | 'facing'>,
-    cohortId?: string,
   ): Player {
-    const existing = this.byUser.get(userId);
+    const existing = this.standing.get(cohortId)?.get(userId);
     if (existing) {
       return { ...existing.player };
     }
 
-    const remembered = this.departed.get(userId);
-    this.departed.delete(userId);
-    // A position is resumed only in the cohort it was left in: a memory from
-    // another campus, or one that names no cohort at all, would put somebody
-    // where they never stood here. The destination starts from its own saved
-    // position or the spawn instead.
-    if (
-      remembered &&
-      remembered.until > now &&
-      remembered.cohortId === cohortId
-    ) {
+    const remembered = this.departed.get(cohortId)?.get(userId);
+    deleteIn(this.departed, cohortId, userId);
+    if (remembered && remembered.until > now) {
       // The step allowance comes back as it was: leaving and rejoining must
       // not be a way to refill it.
-      this.byUser.set(userId, remembered.held);
+      setIn(this.standing, cohortId, userId, remembered.held);
       return { ...remembered.held.player };
     }
 
@@ -123,34 +115,42 @@ export class Players {
             y: this.grid.spawn.y,
             facing: Direction.Down,
           };
-    this.byUser.set(userId, { player, steps: STEP_BURST, refilledAt: now });
+    setIn(this.standing, cohortId, userId, {
+      player,
+      steps: STEP_BURST,
+      refilledAt: now,
+    });
     return { ...player };
   }
 
   /**
-   * Takes somebody off the map. True if they were on it.
+   * Takes somebody off one cohort's map. True if they were on it. Their
+   * avatars in other cohorts are untouched.
    *
-   * With `remember`, where they stood is kept for the grace period, tagged
-   * with the cohort they left in, so a reconnect in that same cohort resumes
-   * there. Without it they are forgotten entirely — for access being taken
-   * away, where there is nothing to come back to.
+   * With `remember`, where they stood is kept for the grace period, so a
+   * reconnect to this cohort resumes there. Without it they are forgotten in
+   * this cohort entirely — for access being taken away, where there is
+   * nothing to come back to.
    */
   leave(
     userId: string,
+    cohortId: string,
     now: number,
     remember: boolean,
-    cohortId?: string,
   ): boolean {
-    const held = this.byUser.get(userId);
+    const held = this.standing.get(cohortId)?.get(userId);
     if (!remember) {
-      this.departed.delete(userId);
+      deleteIn(this.departed, cohortId, userId);
     }
     if (!held) {
       return false;
     }
-    this.byUser.delete(userId);
+    deleteIn(this.standing, cohortId, userId);
     if (remember && this.graceMs > 0) {
-      this.departed.set(userId, { held, until: now + this.graceMs, cohortId });
+      setIn(this.departed, cohortId, userId, {
+        held,
+        until: now + this.graceMs,
+      });
     }
     return true;
   }
@@ -161,29 +161,23 @@ export class Players {
    * being held in memory for good.
    */
   forgetExpired(now: number): void {
-    for (const [userId, remembered] of this.departed) {
-      if (remembered.until <= now) {
-        this.departed.delete(userId);
+    for (const [cohortId, inCohort] of this.departed) {
+      for (const [userId, remembered] of inCohort) {
+        if (remembered.until <= now) {
+          deleteIn(this.departed, cohortId, userId);
+        }
       }
     }
   }
 
   /**
-   * Whether a position is still held for somebody who left. May be true for
-   * a moment after their grace has run out, until the next `forgetExpired`;
-   * `join` checks the time itself, so that never resumes anybody late.
+   * Whether a position is still held in this cohort for somebody who left
+   * it. May be true for a moment after their grace has run out, until the
+   * next `forgetExpired`; `join` checks the time itself, so that never
+   * resumes anybody late.
    */
-  isRemembered(userId: string): boolean {
-    return this.departed.has(userId);
-  }
-
-  /**
-   * The cohort a position is being held for, if any. Undefined when nothing
-   * is held, or when the memory predates cohorts — which a caller comparing
-   * it against an incoming cohort treats as a mismatch.
-   */
-  rememberedCohort(userId: string): string | undefined {
-    return this.departed.get(userId)?.cohortId;
+  isRemembered(userId: string, cohortId: string): boolean {
+    return this.departed.get(cohortId)?.has(userId) ?? false;
   }
 
   /**
@@ -191,32 +185,47 @@ export class Players {
    * grace has run out since the last `forgetExpired`.
    */
   get remembered(): number {
-    return this.departed.size;
+    let count = 0;
+    for (const inCohort of this.departed.values()) count += inCohort.size;
+    return count;
   }
 
-  get(userId: string): Player | undefined {
-    const held = this.byUser.get(userId);
+  get(userId: string, cohortId: string): Player | undefined {
+    const held = this.standing.get(cohortId)?.get(userId);
     return held ? { ...held.player } : undefined;
   }
 
-  has(userId: string): boolean {
-    return this.byUser.has(userId);
+  has(userId: string, cohortId: string): boolean {
+    return this.standing.get(cohortId)?.has(userId) ?? false;
   }
 
-  all(): Player[] {
-    return [...this.byUser.values()].map((held) => ({ ...held.player }));
+  /** Everybody standing in one cohort's campus. */
+  in(cohortId: string): Player[] {
+    return [...(this.standing.get(cohortId)?.values() ?? [])].map((held) => ({
+      ...held.player,
+    }));
   }
 
+  /** Avatars on every cohort's map; one person in two cohorts counts twice. */
   get size(): number {
-    return this.byUser.size;
+    let count = 0;
+    for (const inCohort of this.standing.values()) count += inCohort.size;
+    return count;
   }
 
-  move(userId: string, direction: Direction, now: number): MoveResult {
-    const held = this.byUser.get(userId);
+  move(
+    userId: string,
+    cohortId: string,
+    direction: Direction,
+    now: number,
+  ): MoveResult {
+    const held = this.standing.get(cohortId)?.get(userId);
     if (!held) {
       // Every connection joins before its first frame is read, so this is a
       // bug in the caller rather than something a client can cause.
-      throw new Error(`move for a player who has not joined: ${userId}`);
+      throw new Error(
+        `move for a player who has not joined: ${userId} in ${cohortId}`,
+      );
     }
 
     this.refill(held, now);
@@ -255,4 +264,29 @@ export class Players {
     held.steps = Math.min(STEP_BURST, held.steps + earned);
     held.refilledAt = Math.max(held.refilledAt, now);
   }
+}
+
+function setIn<T>(
+  outer: Map<string, Map<string, T>>,
+  cohortId: string,
+  userId: string,
+  value: T,
+): void {
+  let inner = outer.get(cohortId);
+  if (!inner) {
+    inner = new Map();
+    outer.set(cohortId, inner);
+  }
+  inner.set(userId, value);
+}
+
+function deleteIn<T>(
+  outer: Map<string, Map<string, T>>,
+  cohortId: string,
+  userId: string,
+): void {
+  const inner = outer.get(cohortId);
+  if (!inner) return;
+  inner.delete(userId);
+  if (inner.size === 0) outer.delete(cohortId);
 }
