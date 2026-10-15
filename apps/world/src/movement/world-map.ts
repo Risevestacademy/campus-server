@@ -1,6 +1,7 @@
 import { blocked, type MapLayout } from 'campus-world-map';
 
 import { tileIndex, type Grid } from './grid.js';
+import { emptySpaceIndex, type SpaceIndex } from './spaces.js';
 
 /**
  * The map this process enforces, and which published version of it. Loaded
@@ -11,6 +12,8 @@ export interface WorldMap {
   id: string;
   version: string;
   grid: Grid;
+  /** Which space each tile is in. See spaceAt. */
+  spaces: SpaceIndex;
 }
 
 /**
@@ -23,6 +26,8 @@ export const PLACEHOLDER_MAP: WorldMap = {
   id: 'placeholder',
   version: 'placeholder',
   grid: { width: 40, height: 30, spawn: { x: 20, y: 15 } },
+  // No drawn spaces: every tile is in the default one.
+  spaces: emptySpaceIndex(40, 30),
 };
 
 /**
