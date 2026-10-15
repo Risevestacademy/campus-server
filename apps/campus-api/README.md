@@ -335,6 +335,25 @@ $ pnpm run test:e2e
 $ pnpm run test:cov
 ```
 
+### Tests that need a real PostgreSQL
+
+Database tests run on PGlite, a whole PostgreSQL engine in the test process.
+It serves one connection, so two transactions never overlap, and a test of
+what a row lock prevents would pass on it with or without the lock. Those
+tests (`*.pg.spec.ts`) run against a server instead, and are skipped unless
+`CAMPUS_TEST_DATABASE_URL` names one. CI sets it.
+
+Locally, point it at a database nothing else uses; the migrations are applied
+to it before the tests start:
+
+```bash
+$ createdb campus_test
+$ CAMPUS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/campus_test pnpm run test
+```
+
+The tests make their own rows and clear nothing, so the database fills up
+slowly; drop and recreate it whenever you like.
+
 ## License
 
 MIT

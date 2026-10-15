@@ -140,3 +140,50 @@ describe('0013 against an audit log that already has entries', () => {
     ).rejects.toThrow(/audit_log_space_id_spaces_id_fk/);
   });
 });
+
+/**
+ * The same hazard as 0002, for the rule that a cohort ends on or after the
+ * day it starts. Nothing in the database held to that before, so a deployed
+ * one may hold a cohort that breaks it.
+ */
+describe('the cohort date rule against data the old schema permitted', () => {
+  const FILE = '0016_cohort_dates_in_order.sql';
+  let pg: PGlite;
+
+  beforeEach(async () => {
+    pg = new PGlite();
+    for (const f of files().slice(0, files().indexOf(FILE))) {
+      await apply(pg, f);
+    }
+  });
+
+  const datesOf = async (code: string) =>
+    (
+      await pg.query<{ start: string | null; end: string | null }>(
+        `select start_date::text as start, end_date::text as end from cohorts where code = '${code}'`,
+      )
+    ).rows[0];
+
+  it('opens the end of a cohort saved with its dates backwards, rather than failing to apply', async () => {
+    await pg.query(
+      "insert into cohorts (name, code, start_date, end_date) values ('Backwards','BACK','2026-03-01','2026-02-01')",
+    );
+
+    await apply(pg, FILE);
+
+    expect(await datesOf('BACK')).toEqual({ start: '2026-03-01', end: null });
+  });
+
+  it('leaves a cohort whose dates are in order as it was', async () => {
+    await pg.query(
+      "insert into cohorts (name, code, start_date, end_date) values ('Fine','FINE','2026-02-01','2026-03-01')",
+    );
+
+    await apply(pg, FILE);
+
+    expect(await datesOf('FINE')).toEqual({
+      start: '2026-02-01',
+      end: '2026-03-01',
+    });
+  });
+});

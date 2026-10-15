@@ -302,9 +302,9 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   graceful shutdown — so a redeploy puts people back where they were, and a
   crash loses at most one save interval.
 - Sockets are per-process state too, but presence is in Redis: each account's
-  entry names its live connection and the instance holding it, so two tabs
-  on different instances still leave one place, and the older one is closed
-  with `entered_elsewhere`. More than one instance therefore needs
+  entry for a cohort names its live connection and the instance holding it,
+  so two tabs on the same cohort on different instances still leave one, and
+  the older one is closed with `entered_elsewhere`. More than one instance therefore needs
   `REDIS_URL`. What is still per-process is the live map: players on one
   instance do not see players on another yet, and somebody moving instance
   starts from their last saved position.
