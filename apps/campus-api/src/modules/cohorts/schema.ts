@@ -67,6 +67,14 @@ export const cohorts = pgTable(
   (table) => [
     uniqueIndex('cohorts_code_unique').on(table.code),
     check('cohorts_code_uppercase', sql`${table.code} = upper(${table.code})`),
+    // Either date may be missing; given both, the cohort cannot end before
+    // it starts. The service checks this under a row lock, which is what
+    // gives the caller a clean 400. This is the backstop for any write that
+    // does not go through it.
+    check(
+      'cohorts_dates_in_order',
+      sql`${table.startDate} is null or ${table.endDate} is null or ${table.endDate} >= ${table.startDate}`,
+    ),
   ],
 );
 

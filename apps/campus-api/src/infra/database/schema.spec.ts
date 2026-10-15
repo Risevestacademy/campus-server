@@ -182,6 +182,32 @@ describe('tracks and cohorts', () => {
     );
   });
 
+  it('refuses a cohort that ends before it starts', async () => {
+    await expectViolation(
+      db.insert(cohorts).values({
+        name: 'Backwards',
+        code: 'BACK',
+        startDate: '2026-03-01',
+        endDate: '2026-02-01',
+      }),
+      'cohorts_dates_in_order',
+    );
+  });
+
+  it('accepts a cohort with one date, the same date twice, or neither', async () => {
+    await db.insert(cohorts).values([
+      { name: 'Open', code: 'OPEN', startDate: '2026-03-01' },
+      { name: 'Ends', code: 'ENDS', endDate: '2026-03-01' },
+      {
+        name: 'Day',
+        code: 'DAY',
+        startDate: '2026-03-01',
+        endDate: '2026-03-01',
+      },
+      { name: 'Undated', code: 'UNDATED' },
+    ]);
+  });
+
   it('runs a track at most once per cohort', async () => {
     await expectViolation(
       db
