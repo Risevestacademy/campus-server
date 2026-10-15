@@ -82,6 +82,11 @@ its default and what it does. Two have no default and are required:
 `AUTH_SESSION_SECRET` (the same value as campus-api's) and `DATABASE_URL` (the
 same database campus-api writes; world only reads it).
 
+The local `start` and `start:dev` scripts load `apps/world/.env`. Copy
+`.env.example` to `.env` and set local values before starting World.
+`start:prod` does not load this file; production configuration must be supplied
+by the deployment environment.
+
 `GET /health` answers while the process is up. It does not touch the
 database.
 
