@@ -24,3 +24,13 @@ export class PublishedMapsRejectedException extends DomainException {
     super(message, { problems });
   }
 }
+
+/**
+ * Another sync is running. It is not waited for: a sync reads every
+ * published map with the lock held, and a second one queued behind it would
+ * hold a database connection for nothing. Trying again once it is done
+ * reads what is published then.
+ */
+export class MapSyncBusyException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}

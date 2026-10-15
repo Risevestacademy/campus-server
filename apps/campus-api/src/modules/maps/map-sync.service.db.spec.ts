@@ -478,26 +478,99 @@ describe('syncing again', () => {
 
   /**
    * It was the town hall when it was retired, and another space has been
-   * made the town hall since. It comes back with no kind, for an admin to
-   * decide, and not as a second town hall the database would refuse.
+   * made the town hall since. Bringing it back would mean a second town hall,
+   * which the database refuses, or wiping the kind it was given, which the
+   * sync never does. So the sync is refused, saying which two, and nothing
+   * changes: the stored kind is still there for whichever stays published.
    */
-  it('brings a town hall back with no kind when the campus has another by then', async () => {
+  it('refuses to bring a town hall back while another space is the town hall', async () => {
+    await sync([map('campus', [space('hall', 'town_hall')])]);
+    await sync([map('campus', [space('forum', 'town_hall')])]);
+    const before = await snapshot();
+
+    await expect(
+      sync([
+        map('campus', [
+          space('forum', 'town_hall'),
+          space('hall', 'town_hall'),
+        ]),
+      ]),
+    ).rejects.toMatchObject({
+      constructor: PublishedMapsRejectedException,
+      details: {
+        problems: [
+          'Space "hall" on "campus" is published again and was the campus\'s town hall, but "forum" on "campus" is the town hall now. Unpublish one of them.',
+        ],
+      },
+    });
+
+    await expect(snapshot()).resolves.toEqual(before);
+    expect((await spaceRow('campus', 'hall')).kind).toBe(SpaceKind.TownHall);
+  });
+
+  /** A dry run answers what the sync would, and the sync would refuse. */
+  it('refuses the same way in a dry run', async () => {
     await sync([map('campus', [space('hall', 'town_hall')])]);
     await sync([map('campus', [space('forum', 'town_hall')])]);
 
-    const result = await sync([
-      map('campus', [space('forum', 'town_hall'), space('hall', 'town_hall')]),
+    await expect(
+      sync(
+        [
+          map('campus', [
+            space('forum', 'town_hall'),
+            space('hall', 'town_hall'),
+          ]),
+        ],
+        true,
+      ),
+    ).rejects.toBeInstanceOf(PublishedMapsRejectedException);
+  });
+
+  it('lists every such conflict, the notice board as well as the town hall', async () => {
+    await sync([
+      map('campus', [
+        space('hall', 'town_hall'),
+        space('board', 'notice_board'),
+      ]),
     ]);
+    await sync([
+      map('campus', [
+        space('forum', 'town_hall'),
+        space('wall', 'notice_board'),
+      ]),
+    ]);
+
+    await expect(
+      sync([
+        map('campus', [
+          space('forum', 'town_hall'),
+          space('wall', 'notice_board'),
+          space('hall', 'town_hall'),
+          space('board', 'notice_board'),
+        ]),
+      ]),
+    ).rejects.toMatchObject({
+      details: {
+        problems: [
+          expect.stringContaining('"hall" on "campus"'),
+          expect.stringContaining('"board" on "campus"'),
+        ],
+      },
+    });
+  });
+
+  /** With nobody else holding it, a town hall comes back as one. */
+  it('brings a town hall back as the town hall when the campus has none', async () => {
+    await sync([map('campus', [space('hall', 'town_hall')])]);
+    await sync([map('campus')]);
+
+    const result = await sync([map('campus', [space('hall', 'town_hall')])]);
 
     expect(result.maps[0].spaces).toMatchObject({
       restored: ['hall'],
-      needsKind: ['hall'],
+      needsKind: [],
     });
-    await expect(spacesOf('campus')).resolves.toEqual([
-      `${DEFAULT_SPACE_KEY}[open]`,
-      'forum[town_hall]',
-      'hall[]',
-    ]);
+    expect((await spaceRow('campus', 'hall')).kind).toBe(SpaceKind.TownHall);
   });
 
   it('writes an entry for what changed, and only for the map it changed on', async () => {
