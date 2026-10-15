@@ -303,9 +303,10 @@ describe('POST /v1/maps/sync (e2e)', () => {
       code: 'CONFLICT',
       message: 'The published maps cannot be adopted as they are.',
     });
+    // Each map's own problems, by map, then how the maps fit together.
     expect(res.body.error.details.problems).toEqual([
-      expect.stringMatching(/spawn/),
       expect.stringMatching(/"_default" on "campus"/),
+      expect.stringMatching(/spawn/),
     ]);
     await expect(rows()).resolves.toEqual(before);
   });

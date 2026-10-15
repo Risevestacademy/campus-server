@@ -154,6 +154,46 @@ describe('PublishedMapsReader', () => {
       expect(problems[1]).toMatch(/object 91 is an ellipse/);
     });
 
+    /**
+     * Every broken map is named, not only the first to fail, and in the same
+     * order whichever order Sanity lists them in.
+     */
+    it('names what is wrong with every map, in the order of their keys', async () => {
+      const withUnnamedSpace = (entry: boolean) => {
+        const map = tiledMap({ entry, spaces: [{ key: 'library' }] });
+        (map.layers as { name: string; objects: object[] }[])
+          .find((layer) => layer.name === 'spaces')
+          ?.objects.push({ id: 90, x: 320, y: 320, width: 32, height: 32 });
+        return map;
+      };
+      const tooLong = tiledMap({
+        entry: false,
+        spaces: [{ key: 'k'.repeat(65) }],
+      });
+
+      const answers = await Promise.all(
+        [
+          {
+            zeta: withUnnamedSpace(true),
+            alpha: withUnnamedSpace(false),
+            mid: tooLong,
+          },
+          {
+            mid: tooLong,
+            alpha: withUnnamedSpace(false),
+            zeta: withUnnamedSpace(true),
+          },
+        ].map((maps) => problemsOf(reader(fakeSanity(maps).fetch).read())),
+      );
+
+      expect(answers[0]).toEqual([
+        expect.stringMatching(/^Map "alpha": .*object 90 has no name/),
+        expect.stringMatching(/^Space "k+" on "mid" has a name longer than 64/),
+        expect.stringMatching(/^Map "zeta": .*object 90 has no name/),
+      ]);
+      expect(answers[1]).toEqual(answers[0]);
+    });
+
     it.each([
       ['no map people enter on', { a: tiledMap({ entry: false }) }, /spawn/],
       [

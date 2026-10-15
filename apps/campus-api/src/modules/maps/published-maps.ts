@@ -96,45 +96,65 @@ export class PublishedMapsReader {
       return response;
     };
 
-    let loaded: { key: string; version: string; layout: MapLayout }[];
+    let manifests: Awaited<ReturnType<typeof fetchWorldMapManifests>>;
     try {
-      const manifests = await fetchWorldMapManifests({
+      manifests = await fetchWorldMapManifests({
         projectId,
         dataset: this.config.SANITY_DATASET,
         fetch: reaching,
       });
-      loaded = await Promise.all(
-        manifests.map(async (manifest) => ({
-          key: manifest.mapId,
-          version: manifest.version,
-          layout: readMapLayout(
-            (await loadPublishedMap(manifest, { fetch: reaching })) as TiledMap,
-          ),
-        })),
-      );
     } catch (err) {
-      if (unreachable) {
-        throw new PublishedMapsUnavailableException(
-          'The published maps could not be reached. Try again shortly.',
-          { reason: 'unreachable' },
-        );
-      }
-      if (err instanceof LayoutError || err instanceof ManifestError) {
-        throw new PublishedMapsRejectedException(
-          'The published maps cannot be adopted as they are.',
-          err.message
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean),
-        );
-      }
-      throw err;
+      throw unreadable(err, unreachable);
     }
 
-    const problems = [
-      ...checkLinks(new Map(loaded.map((map) => [map.key, map.layout]))),
-      ...loaded.flatMap((map) => fitProblems(map.key, map.layout)),
-    ];
+    // Every map is read, whichever fail: the answer lists what is wrong with
+    // all of them, not with the first to come back.
+    const settled = await Promise.allSettled(
+      manifests.map(async (manifest) => ({
+        key: manifest.mapId,
+        version: manifest.version,
+        layout: readMapLayout(
+          (await loadPublishedMap(manifest, { fetch: reaching })) as TiledMap,
+        ),
+      })),
+    );
+    if (unreachable) {
+      throw unreadable(undefined, true);
+    }
+
+    const loaded: { key: string; version: string; layout: MapLayout }[] = [];
+    /** By map, so the answer comes in the same order whatever Sanity's is. */
+    const byMap: { map: string; problem: string }[] = [];
+    for (const [i, outcome] of settled.entries()) {
+      if (outcome.status === 'fulfilled') {
+        loaded.push(outcome.value);
+        continue;
+      }
+      const reason: unknown = outcome.reason;
+      if (!(reason instanceof LayoutError || reason instanceof ManifestError)) {
+        throw reason;
+      }
+      const map = manifests[i]?.mapId ?? '?';
+      for (const line of linesOf(reason.message)) {
+        byMap.push({ map, problem: `Map "${map}": ${line}` });
+      }
+    }
+    for (const { key, layout } of loaded) {
+      for (const problem of fitProblems(key, layout)) {
+        byMap.push({ map: key, problem });
+      }
+    }
+
+    const problems = byMap
+      .sort((a, b) => a.map.localeCompare(b.map))
+      .map(({ problem }) => problem);
+    // How the maps fit together is only worth asking once every one of them
+    // has been read: with one missing, every link to it would read as broken.
+    if (loaded.length === manifests.length) {
+      problems.push(
+        ...checkLinks(new Map(loaded.map((map) => [map.key, map.layout]))),
+      );
+    }
     if (problems.length > 0) {
       throw new PublishedMapsRejectedException(
         'The published maps cannot be adopted as they are.',
@@ -183,4 +203,32 @@ function fitProblems(mapKey: string, layout: MapLayout): string[] {
     }
   }
   return problems;
+}
+
+/**
+ * What a failure to read the maps says to the caller: Sanity not answering,
+ * or what it answered not being a set of maps. Anything else is a bug here,
+ * and goes on as it is.
+ */
+function unreadable(err: unknown, unreachable: boolean): unknown {
+  if (unreachable) {
+    return new PublishedMapsUnavailableException(
+      'The published maps could not be reached. Try again shortly.',
+      { reason: 'unreachable' },
+    );
+  }
+  if (err instanceof LayoutError || err instanceof ManifestError) {
+    return new PublishedMapsRejectedException(
+      'The published maps cannot be adopted as they are.',
+      linesOf(err.message),
+    );
+  }
+  return err;
+}
+
+function linesOf(message: string): string[] {
+  return message
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
