@@ -148,13 +148,7 @@ export class PublishedMapsReader {
     const problems = byMap
       .sort((a, b) => a.map.localeCompare(b.map))
       .map(({ problem }) => problem);
-    // How the maps fit together is only worth asking once every one of them
-    // has been read: with one missing, every link to it would read as broken.
-    if (loaded.length === manifests.length) {
-      problems.push(
-        ...checkLinks(new Map(loaded.map((map) => [map.key, map.layout]))),
-      );
-    }
+    problems.push(...linkProblems(loaded, manifests));
     if (problems.length > 0) {
       throw new PublishedMapsRejectedException(
         'The published maps cannot be adopted as they are.',
@@ -232,3 +226,46 @@ function linesOf(message: string): string[] {
     .map((line) => line.trim())
     .filter(Boolean);
 }
+
+/**
+ * How the maps that could be read fit together: one entry map, desk keys,
+ * portals. Asked of whatever was read, so a broken map hides nothing about
+ * the others, but nothing is said that only a broken map could settle: a
+ * portal leading into a map that could not be read is not checked, and
+ * neither is the want of an entry map when the missing one could be it.
+ * By map key, so the answer does not depend on the order Sanity lists them.
+ */
+function linkProblems(
+  loaded: readonly { key: string; layout: MapLayout }[],
+  manifests: readonly { mapId: string }[],
+): string[] {
+  const unread = new Set(
+    manifests
+      .map((manifest) => manifest.mapId)
+      .filter((key) => !loaded.some((map) => map.key === key)),
+  );
+  const layouts = new Map(
+    [...loaded]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map(({ key, layout }) => [
+        key,
+        unread.size === 0
+          ? layout
+          : {
+              ...layout,
+              portals: layout.portals.filter(
+                (portal) => !unread.has(portal.toMap),
+              ),
+            },
+      ]),
+  );
+  const problems = checkLinks(layouts);
+  const entryMayBeUnread =
+    unread.size > 0 && !loaded.some(({ layout }) => layout.spawn !== null);
+  return entryMayBeUnread
+    ? problems.filter((problem) => !problem.startsWith(NO_ENTRY_MAP))
+    : problems;
+}
+
+/** How campus-world-map begins its complaint that no map has a spawn. */
+const NO_ENTRY_MAP = 'No map has a "spawn" layer';

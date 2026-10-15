@@ -109,7 +109,9 @@ is closed to everybody but admins until one is set. The response lists
 those under `needsKind`. The same happens to a new space suggested as a
 second town hall or notice board: the campus has one of each, so the first
 keeps the kind and any other is left for an admin to decide. A space that
-already _had_ the kind is different: see the refusals below. The settings
+already _had_ the kind is different: coming back, it keeps it ahead of any new
+space the map suggests for it, whatever order the map lists them in, and if a
+live space holds it the sync is refused (below). The settings
 each kind starts with are in [`space-defaults.ts`](./space-defaults.ts).
 
 `?dryRun=true` answers with what would change and changes nothing.
@@ -123,7 +125,8 @@ SERVICE_UNAVAILABLE`, with `details.reason` of `unreachable` or
   listed in `details.problems`. That is no map at all, not exactly one entry
   map, a map that fails `campus-world-map`'s own checks, or a key or name
   too long for its column. Every problem is listed: each map's own, by map
-  key, then how the maps fit together. It is also a retired
+  key, then how the maps that could be read fit together (a link into a map
+  that could not be read is left until it can be). It is also a retired
   town hall or notice board published again while another space holds that
   kind: restoring it would mean a second, or taking away the kind it was
   given, so the sync refuses and names both. Unpublish one of them.

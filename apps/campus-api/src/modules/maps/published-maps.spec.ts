@@ -194,6 +194,38 @@ describe('PublishedMapsReader', () => {
       expect(answers[1]).toEqual(answers[0]);
     });
 
+    /**
+     * One map cannot be read, and another has a portal to a map that does
+     * not exist. Both are reported. What only the unreadable map could settle
+     * is not: a portal into it, and the want of an entry map, since the
+     * unreadable one is where people would have entered.
+     */
+    it('checks the links between the maps it could read, even when one could not be', async () => {
+      const unreadable = tiledMap({ entry: true, spaces: [{ key: 'lobby' }] });
+      (unreadable.layers as { name: string; objects: object[] }[])
+        .find((layer) => layer.name === 'spaces')
+        ?.objects.push({ id: 90, x: 320, y: 320, width: 32, height: 32 });
+      const withPortals = tiledMap({ entry: false });
+      (withPortals.layers as Record<string, unknown>[]).push({
+        type: 'objectgroup',
+        name: 'portals',
+        objects: [portal(80, 'atrium', 2, 2), portal(81, 'nowhere', 2, 2)],
+      });
+
+      const problems = await problemsOf(
+        reader(
+          fakeSanity({ library: withPortals, atrium: unreadable }).fetch,
+        ).read(),
+      );
+
+      expect(problems).toEqual([
+        expect.stringMatching(/^Map "atrium": .*object 90 has no name/),
+        expect.stringMatching(
+          /Portal on "library" to "nowhere" .* does not exist/,
+        ),
+      ]);
+    });
+
     it.each([
       ['no map people enter on', { a: tiledMap({ entry: false }) }, /spawn/],
       [
@@ -265,3 +297,19 @@ describe('PublishedMapsReader', () => {
     });
   });
 });
+
+/** A one-tile portal object at row 4, leading to tile (x, y) on `toMap`. */
+function portal(id: number, toMap: string, toX: number, toY: number) {
+  return {
+    id,
+    x: (id % 10) * 64,
+    y: 4 * 32,
+    width: 32,
+    height: 32,
+    properties: [
+      { name: 'toMap', type: 'string', value: toMap },
+      { name: 'toX', type: 'int', value: toX },
+      { name: 'toY', type: 'int', value: toY },
+    ],
+  };
+}
