@@ -776,12 +776,24 @@ export function registerGateway(
       displaced.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
     }
 
-    presence.enter(presenceOf(connection)).catch((err: unknown) => {
-      app.log.warn(
-        { err, userId: connection.userId },
-        'could not record presence, the next renewal will',
-      );
-    });
+    // A newer connection to this cohort on another instance may have reached
+    // Redis first; it holds the place, and this one closes as if displaced.
+    presence.enter(presenceOf(connection)).then(
+      (held) => {
+        if (!held) {
+          displacedElsewhere({
+            userId: connection.userId,
+            connectionId: connection.id,
+          });
+        }
+      },
+      (err: unknown) => {
+        app.log.warn(
+          { err, userId: connection.userId },
+          'could not record presence, the next renewal will',
+        );
+      },
+    );
     app.log.info(
       {
         connectionId: connection.id,

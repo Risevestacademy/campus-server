@@ -135,9 +135,16 @@ const presence = {
   heldElsewhere: new Set<string>(),
   failing: false,
   listeners: [] as ((displaced: Displacement) => void)[],
+  /** Set to have the next entry find a newer connection holding the place. */
+  newerElsewhere: false,
   enter: async (entry: Presence) => {
     if (presence.failing) throw new Error('redis is down');
+    if (presence.newerElsewhere) {
+      presence.newerElsewhere = false;
+      return false;
+    }
     presence.entries.set(presenceKeyOf(entry.userId, entry.cohortId), entry);
+    return true;
   },
   renew: async (entries: readonly Presence[]) => {
     if (presence.failing) throw new Error('redis is down');
@@ -2580,6 +2587,29 @@ describe('movement', () => {
       await quiet();
       expect(second.ws.readyState).toBe(WebSocket.OPEN);
       await leave(second);
+    });
+
+    /**
+     * A newer connection to the same cohort on another instance reached Redis
+     * first. This one does not take its place: it closes as if displaced.
+     */
+    it('closes a socket whose entry finds a newer one holding the place', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      presence.newerElsewhere = true;
+
+      const conn = await arrive(ada);
+
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+      expect(conn.messages).toContainEqual({ type: 'replaced' });
+      await expect(
+        waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
+      ).resolves.toBeDefined();
+      expect(presence.entries.has(presenceKeyOf(ada))).toBe(false);
+      await leave(watcher);
     });
 
     /** The message from the other instance can be missed; the renewal cannot. */

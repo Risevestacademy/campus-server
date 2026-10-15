@@ -60,6 +60,34 @@ describe('MemoryPresenceStore', () => {
     ]);
   });
 
+  /** Two instances' entries can arrive in either order; the newer still wins. */
+  it('keeps the newer connection when the older one enters after it', async () => {
+    const store = new MemoryPresenceStore();
+    const newer = presenceOf('ada', { since: 2 });
+    const older = presenceOf('ada', { since: 1 });
+
+    await expect(store.enter(newer)).resolves.toBe(true);
+    await expect(store.enter(older)).resolves.toBe(false);
+
+    const [entry] = await store.online('cohort-1');
+    expect(entry?.connectionId).toBe(newer.connectionId);
+  });
+
+  it('breaks a tie of the same millisecond by connection id, either way round', async () => {
+    const low = presenceOf('ada', { since: 5, connectionId: 'aaa' });
+    const high = presenceOf('ada', { since: 5, connectionId: 'zzz' });
+
+    for (const order of [
+      [low, high],
+      [high, low],
+    ]) {
+      const store = new MemoryPresenceStore();
+      for (const entry of order) await store.enter(entry);
+      const [entry] = await store.online('cohort-1');
+      expect(entry?.connectionId).toBe('zzz');
+    }
+  });
+
   /** One account may be in several cohorts' campuses at once. */
   it('keeps a place in each cohort, without one displacing another', async () => {
     const store = new MemoryPresenceStore();
@@ -226,6 +254,53 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     ]);
     const [entry] = await a.store.online(cohort);
     expect(entry?.connectionId).toBe(newer.connectionId);
+  });
+
+  /**
+   * The newer connection's entry reaches Redis first, the older one's after
+   * it. Arrival order must not decide: the newer one keeps the place, and
+   * nobody is told to close it.
+   */
+  it('keeps the newer connection when the older one arrives after it, across instances', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    const b = instance();
+    await allSubscribed();
+    const newer = presenceOf(user, { cohortId: cohort, since: 2 });
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+
+    await expect(b.store.enter(newer)).resolves.toBe(true);
+    await expect(a.store.enter(older)).resolves.toBe(false);
+
+    const [entry] = await a.store.online(cohort);
+    expect(entry).toMatchObject({
+      connectionId: newer.connectionId,
+      instanceId: b.store.instanceId,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(b.heard).toEqual([]);
+  });
+
+  it('breaks a tie of the same millisecond by connection id, across instances', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    const b = instance();
+    const low = presenceOf(user, {
+      cohortId: cohort,
+      since: 5,
+      connectionId: `${user}-a`,
+    });
+    const high = presenceOf(user, {
+      cohortId: cohort,
+      since: 5,
+      connectionId: `${user}-z`,
+    });
+
+    await expect(b.store.enter(high)).resolves.toBe(true);
+    await expect(a.store.enter(low)).resolves.toBe(false);
+
+    const [entry] = await a.store.online(cohort);
+    expect(entry?.connectionId).toBe(high.connectionId);
   });
 
   /** When the newer one could not enter, Redis being away at the time. */

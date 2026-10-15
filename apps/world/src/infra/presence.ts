@@ -52,10 +52,16 @@ export interface Displacement {
 export interface PresenceStore {
   readonly instanceId: string;
   /**
-   * Takes the account's place in this connection's cohort, whoever held it.
-   * A holder on another instance is told to close (onDisplaced there).
+   * Takes the account's place in this connection's cohort, unless a newer
+   * connection already holds it. A holder it takes the place of on another
+   * instance is told to close (onDisplaced there).
+   *
+   * Resolves false when the place stays with a newer connection: two
+   * connections opened at nearly the same moment on two instances can reach
+   * Redis in either order, and the newer one wins whichever arrives first.
+   * The caller closes its own connection then.
    */
-  enter(presence: Presence): Promise<void>;
+  enter(presence: Presence): Promise<boolean>;
   /**
    * Keeps these connections present, putting back any entry that lapsed.
    * Returns those whose place a newer connection in the same cohort now
@@ -68,6 +74,22 @@ export interface PresenceStore {
   /** Hears about every displacement, including of connections held elsewhere. */
   onDisplaced(listener: (displaced: Displacement) => void): void;
   close(): Promise<void>;
+}
+
+/**
+ * Which of two connections for one account and cohort is the newer: the one
+ * opened later, and for two opened in the same millisecond, the one whose id
+ * sorts last. Every instance and the Redis script decide it the same way, so
+ * two of them can never each believe they hold the place.
+ */
+export function isNewer(
+  a: Pick<Presence, 'since' | 'connectionId'>,
+  b: Pick<Presence, 'since' | 'connectionId'>,
+): boolean {
+  return (
+    a.since > b.since ||
+    (a.since === b.since && a.connectionId > b.connectionId)
+  );
 }
 
 export function presenceKey(userId: string, cohortId: string): string {
@@ -94,26 +116,28 @@ export class MemoryPresenceStore implements PresenceStore {
   /** By presenceKey: one entry per account and cohort. */
   private readonly entries = new Map<string, Presence>();
 
-  async enter(presence: Presence): Promise<void> {
-    this.entries.set(keyOf(presence), presence);
+  async enter(presence: Presence): Promise<boolean> {
+    return this.claim(presence);
   }
 
   async renew(presences: readonly Presence[]): Promise<Displacement[]> {
-    const displaced: Displacement[] = [];
-    for (const presence of presences) {
-      const { userId, connectionId } = presence;
-      const held = this.entries.get(keyOf(presence));
-      if (
-        held &&
-        held.connectionId !== connectionId &&
-        held.since > presence.since
-      ) {
-        displaced.push({ userId, connectionId });
-      } else {
-        this.entries.set(keyOf(presence), presence);
-      }
+    return presences
+      .filter((presence) => !this.claim(presence))
+      .map(({ userId, connectionId }) => ({ userId, connectionId }));
+  }
+
+  /** Takes the place unless a newer connection holds it; true if it did. */
+  private claim(presence: Presence): boolean {
+    const held = this.entries.get(keyOf(presence));
+    if (
+      held &&
+      held.connectionId !== presence.connectionId &&
+      isNewer(held, presence)
+    ) {
+      return false;
     }
-    return displaced;
+    this.entries.set(keyOf(presence), presence);
+    return true;
   }
 
   async leave(presences: readonly Presence[]): Promise<void> {
@@ -179,8 +203,10 @@ export function createPresenceStore(
 
 /**
  * Writes this connection's entry, unless a newer connection holds the
- * account's place in this cohort and this is only a renewal. Returns what it did, and the
- * connection it took the place of, if any, so that one can be told.
+ * account's place in this cohort, whether this is an entry or a renewal.
+ * Newer is decided as isNewer does: later `since`, and for the same `since`,
+ * the connection id that sorts last. Returns what it did, and the connection
+ * it took the place of, if any, so that one can be told.
  *
  * The cohort index is a sorted set scored by when each entry lapses. It is
  * only an index: a reader confirms each member against the account's entry
@@ -189,11 +215,13 @@ export function createPresenceStore(
 const CLAIM = `
 local held = redis.call('HMGET', KEYS[1], 'connectionId', 'instanceId', 'since')
 local holder = held[1]
-local userId, connectionId, instanceId, cohortId, spaceId, since, ttl, lapses, force =
-  ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8], ARGV[9]
-if holder and holder ~= connectionId and force ~= '1'
-  and (tonumber(held[3]) or 0) > tonumber(since) then
-  return {'newer'}
+local userId, connectionId, instanceId, cohortId, spaceId, since, ttl, lapses =
+  ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8]
+if holder and holder ~= connectionId then
+  local heldSince, mine = tonumber(held[3]) or 0, tonumber(since)
+  if heldSince > mine or (heldSince == mine and holder > connectionId) then
+    return {'newer'}
+  end
 end
 redis.call('DEL', KEYS[1])
 redis.call('HSET', KEYS[1], 'connectionId', connectionId,
@@ -273,13 +301,13 @@ export class RedisPresenceStore implements PresenceStore {
     subscriber.subscribe(DISPLACED_CHANNEL).catch(onError);
   }
 
-  async enter(presence: Presence): Promise<void> {
-    await this.claim(presence, true);
+  async enter(presence: Presence): Promise<boolean> {
+    return (await this.claim(presence)) !== 'newer';
   }
 
   async renew(presences: readonly Presence[]): Promise<Displacement[]> {
     const outcomes = await Promise.all(
-      presences.map((presence) => this.claim(presence, false)),
+      presences.map((presence) => this.claim(presence)),
     );
     return presences
       .filter((_, i) => outcomes[i] === 'newer')
@@ -339,10 +367,7 @@ export class RedisPresenceStore implements PresenceStore {
     }
   }
 
-  private async claim(
-    presence: Presence,
-    force: boolean,
-  ): Promise<ClaimReply[0]> {
+  private async claim(presence: Presence): Promise<ClaimReply[0]> {
     const { userId, connectionId, cohortId, spaceId, since } = presence;
     const reply = await this.scripts.claimPresence(
       presenceKey(userId, cohortId),
@@ -355,7 +380,6 @@ export class RedisPresenceStore implements PresenceStore {
       since,
       this.ttlMs,
       Date.now() + this.ttlMs,
-      force ? '1' : '0',
     );
     // A holder on this instance was displaced here already, by the gateway.
     if (reply[0] === 'took' && reply[2] !== this.instanceId) {
