@@ -551,12 +551,82 @@ describe('syncing again', () => {
       ]),
     ).rejects.toMatchObject({
       details: {
+        // By space key, whatever order the map lists them in.
         problems: [
-          expect.stringContaining('"hall" on "campus"'),
           expect.stringContaining('"board" on "campus"'),
+          expect.stringContaining('"hall" on "campus"'),
         ],
       },
     });
+  });
+
+  /**
+   * A town hall coming back and a new space the map suggests as one, in the
+   * same publish. The one that already was the town hall keeps it, whichever
+   * the map lists first; the new one is left for an admin.
+   */
+  it.each([
+    ['the returning space first', ['hall', 'forum']],
+    ['the new space first', ['forum', 'hall']],
+  ])(
+    'gives the town hall back to the space that had it, with %s',
+    async (_, order) => {
+      await sync([map('campus', [space('hall', 'town_hall')])]);
+      await sync([map('campus')]);
+
+      const result = await sync([
+        map(
+          'campus',
+          order.map((key) => space(key, 'town_hall')),
+        ),
+      ]);
+
+      expect(result.maps[0].spaces).toMatchObject({
+        added: [{ key: 'forum', kind: null }],
+        restored: ['hall'],
+        needsKind: ['forum'],
+      });
+      await expect(spacesOf('campus')).resolves.toEqual([
+        `${DEFAULT_SPACE_KEY}[open]`,
+        'forum[]',
+        'hall[town_hall]',
+      ]);
+    },
+  );
+
+  /** Two returning spaces that were each a town hall: decided by key, not by order. */
+  it('refuses the same way whichever of two returning town halls the map lists first', async () => {
+    await sync([map('campus', [space('alpha', 'town_hall')])]);
+    await sync([map('campus')]);
+    await sync([map('annex'), map('campus')]);
+    await sync([map('annex', [space('beta', 'town_hall')]), map('campus')]);
+    await sync([map('annex'), map('campus')]);
+
+    const answers = [];
+    for (const maps of [
+      [
+        map('annex', [space('beta', 'town_hall')]),
+        map('campus', [space('alpha', 'town_hall')]),
+      ],
+      [
+        map('campus', [space('alpha', 'town_hall')]),
+        map('annex', [space('beta', 'town_hall')]),
+      ],
+    ]) {
+      answers.push(
+        await sync(maps).then(
+          () => 'synced',
+          (err: { details?: { problems?: string[] } }) => err.details?.problems,
+        ),
+      );
+    }
+
+    expect(answers[0]).toEqual([
+      expect.stringMatching(
+        /^Space "alpha" on "campus" .* but "beta" on "annex"/,
+      ),
+    ]);
+    expect(answers[1]).toEqual(answers[0]);
   });
 
   /** With nobody else holding it, a town hall comes back as one. */

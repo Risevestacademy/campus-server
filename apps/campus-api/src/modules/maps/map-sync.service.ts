@@ -198,8 +198,9 @@ class Reconciliation {
     await this.moveEntryFlag();
 
     const singletons = this.singletonsStaying();
+    const restorable = this.reserveRestored(singletons);
     for (const published of this.publishedMaps) {
-      await this.adopt(published, singletons);
+      await this.adopt(published, singletons, restorable);
     }
     // Refused as a whole, as anything unfit to adopt is: the transaction this
     // runs in takes back whatever was written before the conflict was found.
@@ -314,10 +315,56 @@ class Reconciliation {
     return singletons;
   }
 
+  /**
+   * Which retired spaces coming back may keep their kind, decided before any
+   * new space is given one: a space that already was the town hall has a
+   * better claim to it than one the map merely suggests, whichever comes
+   * first on the map. Considered by map key, then space key, so the answer
+   * never depends on the order Sanity lists things in. A space refused here
+   * refuses the sync (see Singletons).
+   */
+  private reserveRestored(singletons: Singletons): Set<string> {
+    const returning: {
+      row: Space;
+      mapKey: string;
+      holder: string;
+    }[] = [];
+    for (const published of this.publishedMaps) {
+      const map = this.known.find((known) => known.key === published.key);
+      if (!map) continue;
+      for (const drawn of published.spaces) {
+        const row = this.knownSpaces.find(
+          (space) =>
+            space.mapId === map.id &&
+            space.key === drawn.key &&
+            space.retiredAt !== null,
+        );
+        if (row) {
+          returning.push({
+            row,
+            mapKey: map.key,
+            holder: label(drawn.key, map.key),
+          });
+        }
+      }
+    }
+    returning.sort(
+      (a, b) =>
+        a.mapKey.localeCompare(b.mapKey) || a.row.key.localeCompare(b.row.key),
+    );
+
+    const restorable = new Set<string>();
+    for (const { row, holder } of returning) {
+      if (singletons.restore(row.kind, holder)) restorable.add(row.id);
+    }
+    return restorable;
+  }
+
   /** Adds or restores one published map, its default space and its spaces. */
   private async adopt(
     published: PublishedMap,
     singletons: Singletons,
+    restorable: ReadonlySet<string>,
   ): Promise<void> {
     const { mapId, result } = await this.adoptMap(published);
     const mine = this.knownSpaces.filter((space) => space.mapId === mapId);
@@ -348,8 +395,8 @@ class Reconciliation {
       if (row.retiredAt !== null) {
         // It comes back as it was. Its kind may be one the campus has one of,
         // given to another space since: then the sync is refused (see
-        // Singletons), not the kind quietly taken away.
-        if (!singletons.restore(row.kind, label(drawn.key, published.key))) {
+        // reserveRestored), not the kind quietly taken away.
+        if (!restorable.has(row.id)) {
           continue;
         }
         await this.tx
