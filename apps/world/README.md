@@ -1,8 +1,8 @@
 # world
 
-The realtime service: one WebSocket per account, carrying who is on the map
-and where they stand. Fastify 5 with `@fastify/websocket`, config validated
-with zod at boot.
+The realtime service: one WebSocket per account in each cohort, carrying who
+is on the map and where they stand. Fastify 5 with `@fastify/websocket`,
+config validated with zod at boot.
 
 It trusts nothing from the client but a direction. The session comes from the
 cookie campus-api signs, the account is re-checked against Postgres, and the
