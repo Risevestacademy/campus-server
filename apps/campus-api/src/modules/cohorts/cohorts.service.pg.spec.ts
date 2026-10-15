@@ -5,6 +5,7 @@ import {
   connectRealPostgres,
   unique,
 } from '../../infra/database/testing/real-postgres.js';
+import { CohortInvalidArgumentException } from './cohorts.exceptions.js';
 import { CohortsService } from './cohorts.service.js';
 import { cohorts } from './schema.js';
 
@@ -15,7 +16,11 @@ const audit = { actorUserId: null };
  * What the row lock in update() is for. The request check looks at each date
  * on its own; whether the pair still makes sense can only be judged against
  * the row. Two edits that each move one date are both fine against the old
- * pair, and unlocked both would be written: an end before the start.
+ * pair. Unlocked, both pass the service's check, and the second is stopped
+ * only by the database's (`cohorts_dates_in_order`), which reaches the
+ * caller as a 500. Locked, the second sees the first's end date and is
+ * refused as the caller's mistake, a 400. So the test asks for exactly one
+ * edit applied and the other refused for its dates, not by the database.
  *
  * See real-postgres.ts for why this cannot run on PGlite.
  */
@@ -58,13 +63,18 @@ describe.skipIf(!REAL_POSTGRES_URL)('CohortsService, two edits at once', () => {
         .from(cohorts)
         .where(eq(cohorts.id, cohort.id));
       const applied = results.filter((r) => r.status === 'fulfilled').length;
+      const refusedCleanly = results.filter(
+        (r) =>
+          r.status === 'rejected' &&
+          r.reason instanceof CohortInvalidArgumentException,
+      ).length;
       const inverted =
         stored.startDate !== null &&
         stored.endDate !== null &&
         stored.endDate < stored.startDate;
-      if (inverted || applied !== 1) {
+      if (inverted || applied !== 1 || refusedCleanly !== 1) {
         wrong.push(
-          `round ${round}: ${applied} applied, stored ${stored.startDate} to ${stored.endDate}`,
+          `round ${round}: ${applied} applied, ${refusedCleanly} refused for its dates, stored ${stored.startDate} to ${stored.endDate}`,
         );
       }
     }
