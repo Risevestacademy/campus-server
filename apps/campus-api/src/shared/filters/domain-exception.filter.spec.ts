@@ -124,6 +124,48 @@ describe('DomainExceptionFilter', () => {
     }
   });
 
+  /**
+   * The one 5xx raised on purpose. Its message tells the caller whether to
+   * wait or to call somebody, so withholding it would leave them with nothing.
+   */
+  it('passes message and details through on a SERVICE_UNAVAILABLE', () => {
+    const logger = { error: vi.fn() };
+    const res = run(
+      new TestException(
+        ExceptionCode.ServiceUnavailable,
+        'The published maps could not be reached. Try again shortly.',
+        { reason: 'unreachable' },
+      ),
+      logger,
+    );
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toEqual({
+      error: {
+        code: ExceptionCode.ServiceUnavailable,
+        message: 'The published maps could not be reached. Try again shortly.',
+        details: { reason: 'unreachable' },
+      },
+    });
+  });
+
+  /** It answers the caller, but somebody still has to go and look at it. */
+  it('logs a SERVICE_UNAVAILABLE, and not as an unhandled exception', () => {
+    const logger = { error: vi.fn() };
+    run(
+      new TestException(ExceptionCode.ServiceUnavailable, 'not there', {
+        reason: 'unreachable',
+      }),
+      logger,
+    );
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [payload, message] = logger.error.mock.calls[0];
+    expect(message).toBe('Dependency unavailable');
+    expect(payload.correlationId).toBe('corr-1');
+    expect(payload.err.details).toEqual({ reason: 'unreachable' });
+  });
+
   it('logs nothing on a 4xx', () => {
     const logger = { error: vi.fn() };
     run(new TestException(ExceptionCode.Conflict, 'already accepted'), logger);

@@ -22,6 +22,18 @@ export enum ExceptionCode {
   InviteRequired = 'INVITE_REQUIRED',
   AccountSuspended = 'ACCOUNT_SUSPENDED',
   RateLimited = 'RATE_LIMITED',
+  /**
+   * The API is up and the request was sound, but something it depends on is
+   * not there to answer: not configured on this deployment, or not reachable
+   * just now. 503, so a caller knows trying again later is reasonable where
+   * a 500 says nothing.
+   *
+   * Unlike every other 5xx, its message and details reach the caller as
+   * written (see DomainExceptionFilter). So whoever raises it writes them
+   * for the caller: what is unavailable and whether to wait, and never an
+   * address, a key or anything else of this service's insides.
+   */
+  ServiceUnavailable = 'SERVICE_UNAVAILABLE',
   InternalError = 'INTERNAL_ERROR',
 }
 
@@ -46,6 +58,8 @@ export function mapExceptionCodeToStatus(code: ExceptionCode): number {
       return 409;
     case ExceptionCode.RateLimited:
       return 429;
+    case ExceptionCode.ServiceUnavailable:
+      return 503;
     case ExceptionCode.InternalError:
     default:
       return 500;

@@ -69,6 +69,7 @@ describe('PostHogExceptionInterceptor', () => {
     [ExceptionCode.SpaceAtCapacity, false],
     [ExceptionCode.RateLimited, false],
     [ExceptionCode.InternalError, true],
+    [ExceptionCode.ServiceUnavailable, true],
   ])(
     'DomainException with code %s is captured: %s',
     async (code, shouldCapture) => {

@@ -100,8 +100,12 @@ change to either reaches both apps:
   sent with, by id or alias; optional, unset sends the email built into the
   API).
   `PORT` is injected by Railway, not set manually.
-  `SANITY_PROJECT_ID` and `SANITY_DATASET` are set on staging but nothing in
-  campus-api reads them yet; they are there for when it does.
+  `SANITY_PROJECT_ID` and `SANITY_DATASET` (`production` unless set; staging
+  reads `staging`) are what the map sync, `POST /v1/maps/sync`, reads the
+  published maps from, with no token. Both are optional: the API starts
+  without them, and the sync answers 503 until the project id is set. They
+  should match world's, or the database will describe a different campus
+  from the one people walk around.
 - Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
   requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
   (this API, matching a registered redirect URI byte for byte) and two

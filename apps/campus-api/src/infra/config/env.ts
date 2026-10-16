@@ -313,6 +313,31 @@ export class Env {
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
 
+  // Maps (Sanity) ------------------------------------------------------
+  // Where the campus maps are published. Read only by the admin's map sync,
+  // which fills `maps` and `spaces` from what is published; no token, the
+  // dataset is public. Unset, the API still runs and the sync answers 503:
+  // nothing else here needs a map.
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined,
+  )
+  @IsString()
+  SANITY_PROJECT_ID?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && value.trim() !== ''
+      ? value.trim()
+      : 'production',
+  )
+  @Matches(/^[a-z0-9_-]+$/, {
+    message:
+      'SANITY_DATASET must contain only lowercase letters, numbers, underscores and hyphens',
+  })
+  SANITY_DATASET: string = 'production';
+
   // Email (Resend) ------------------------------------------------------
   // Off by default, like PostHog: local development and CI never send mail.
   // With the flag off, invites are still created and the admin shares the
