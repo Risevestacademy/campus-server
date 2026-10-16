@@ -38,6 +38,11 @@ export default defineConfig({
       RESEND_INVITE_TEMPLATE_ID: '',
       RESEND_INVITE_ADMIN_TEMPLATE_ID: '',
       RESEND_INVITE_GUEST_TEMPLATE_ID: '',
+      // Named, so the map sync has somewhere to read from: the suite answers
+      // for Sanity itself and never reaches it. Pinned so that a developer's
+      // own .env cannot point a test at a real dataset.
+      SANITY_PROJECT_ID: 'e2e',
+      SANITY_DATASET: 'e2e',
     },
   },
 });
