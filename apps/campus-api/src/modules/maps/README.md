@@ -46,8 +46,9 @@ always open, because it is the way to everywhere else.
 
 **The database stops a map having two. It does not make a map have one.**
 A map row can exist with no default space, and nothing here will object.
-Giving every map its default is the job of whatever writes the map's rows,
-and until one exists the tiles outside the drawn spaces have no room at all.
+Giving every map its default is the job of the [sync](#the-sync), which
+writes it with the map's row, under the key `_default` and the name
+"Corridors and grounds". A space drawn with that key is refused.
 
 The default space keeps one key for as long as its map exists. It is only
 retired with its map, and comes back with it as the same row, so a retired
@@ -85,11 +86,70 @@ its place.
 `space_memberships` works the same way: ending somebody's access sets
 `valid_to`, and the row stays as the record that they had it.
 
+## The sync
+
+`POST /v1/maps/sync`, admins only. The database does not hear of a publish
+by itself: an admin publishes in the Studio, then calls this, and the rows
+are brought level with what is published.
+
+It reads every published map from Sanity (`SANITY_PROJECT_ID`,
+`SANITY_DATASET`, no token) and, in one transaction:
+
+| What it finds                                   | What it does                                                                    |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| A published map with no row                     | Adds the row, named after its key, and its default space                        |
+| A drawn space with no row                       | Adds the row, with the kind its Tiled class suggests and that kind's settings   |
+| A retired map or space that is published again  | Brings the same row back, with the settings it had                              |
+| A row whose map or space is no longer published | Retires it. A retired map takes all its spaces with it                          |
+| The entry flag on a different map               | Moves it                                                                        |
+| A map or space that is already there            | Nothing. A name, a kind or a setting an admin has changed is never written over |
+
+A Tiled class that names no known kind leaves the space with no kind, so it
+is closed to everybody but admins until one is set. The response lists
+those under `needsKind`. The same happens to a new space suggested as a
+second town hall or notice board: the campus has one of each, so the first
+keeps the kind and any other is left for an admin to decide. A space that
+already _had_ the kind is different: coming back, it keeps it ahead of any new
+space the map suggests for it, whatever order the map lists them in, and if a
+live space holds it the sync is refused (below). The settings
+each kind starts with are in [`space-defaults.ts`](./space-defaults.ts).
+
+`?dryRun=true` answers with what would change and changes nothing.
+
+It is all or nothing. Nothing is written when:
+
+- Sanity cannot be reached, or the project is not configured: `503
+SERVICE_UNAVAILABLE`, with `details.reason` of `unreachable` or
+  `not_configured`.
+- What is published cannot be used: `409 CONFLICT`, with every problem
+  listed in `details.problems`. That is no map at all, not exactly one entry
+  map, a map that fails `campus-world-map`'s own checks, or a key or name
+  too long for its column. Every problem is listed: each map's own, by map
+  key, then how the maps that could be read fit together (a link into a map
+  that could not be read is left until it can be). It is also a retired
+  town hall or notice board published again while another space holds that
+  kind: restoring it would mean a second, or taking away the kind it was
+  given, so the sync refuses and names both. Unpublish one of them.
+- Another sync is running: `409 CONFLICT`. Nothing waits for it; try again
+  once it is done.
+
+So a publish that went wrong can never retire the campus.
+
+One sync runs at a time, and it reads Sanity only once it holds the lock, so
+a slow sync cannot write a publish older than one already written. That is
+tested with two syncs on separate connections to a real PostgreSQL, in
+`map-sync.service.pg.spec.ts`. Each map that changed writes a `map_synced`
+audit entry, and each one retired a `map_retired`; a sync that changes
+nothing writes none.
+
 ## Not here yet
 
-- **Nothing fills these tables.** Rows will come from the published maps.
 - **Nothing reads them.** `world` does not consult a space's rules yet, so
   every space is open in practice.
 - **Desks.** No desk is drawn on the map yet.
 - **Which version of a map is live.** Today `world` loads the latest
-  published version. Whether the database should name it is undecided.
+  published version. Whether the database should name it is undecided, so
+  the sync reports the version it read and stores none.
+- **Setting a space up.** No route changes a space's kind or settings yet.
+- **The sync does not reach `world`.** It loads its map at startup, so a new
+  publish is live there after a restart, whether or not this has run.

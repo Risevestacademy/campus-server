@@ -14,6 +14,7 @@ NestJS backend for the campus application.
 - [Environment variables](#environment-variables)
 - [Databases & infra](#databases--infra)
 - [Audit log](#audit-log)
+- [Maps](#maps)
 - [Feedback](#feedback)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
@@ -76,6 +77,8 @@ a clear error.
 | `AUTH_COOKIE_DOMAIN`              | _(unset)_                                              | Optional. Parent domain the access cookie is shared under, so `world` on its own subdomain receives it (`campus.example` covers `world.campus.example`). A bare domain: no scheme, no leading dot. It must cover the hosts of both `APP_PUBLIC_URL` and `GOOGLE_CALLBACK_URL`, or the app refuses to boot. Unset keeps the cookie host-only, which is right for local development. The refresh and state cookies stay host-only either way |
 | `CORS_ORIGINS`                    | _(unset)_                                              | Comma-separated browser origins allowed to call the API. Unset sends no CORS headers, which blocks browser apps                                                                                                                                                                                                                                                                                                                            |
 | `TRUST_PROXY_HOPS`                | `1`                                                    | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none                                                                                                                                                                                                                                                                                                      |
+| `SANITY_PROJECT_ID`               | _(unset)_                                              | The Sanity project the campus maps are published to. Read only by the map sync, with no token. Unset, the API runs and the sync answers 503                                                                                                                                                                                                                                                                                                |
+| `SANITY_DATASET`                  | `production`                                           | The dataset the sync reads (`staging` on staging). Keep it the same as world's                                                                                                                                                                                                                                                                                                                                                             |
 | `FF_LOG_LEVEL`                    | `info`                                                 | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal`                                                                                                                                                                                                                                                                                                                                                                |
 | `FF_LOG_PRETTY`                   | `false`                                                | Enable human-readable pino-pretty output (`true`) or JSON lines (`false`)                                                                                                                                                                                                                                                                                                                                                                  |
 | `DEPLOYMENT_ENVIRONMENT`          | `development`                                          | Label sent with traces (`deployment.environment`)                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -132,6 +135,14 @@ Changes to the admin setup and to people's access are recorded in the
 `audit_log` table, in the same transaction as the change. What is recorded,
 what each field means, the personal-data rules, retention and rollout notes
 are in [src/modules/audit/README.md](src/modules/audit/README.md).
+
+## Maps
+
+The campus maps are drawn and published elsewhere, in Sanity. The database
+holds a row per map and per space, with each space's settings, and an admin
+brings those rows level with what is published by calling
+`POST /v1/maps/sync`. What lives where, and what the sync does and refuses,
+are in [src/modules/maps/README.md](src/modules/maps/README.md).
 
 ## Feedback
 

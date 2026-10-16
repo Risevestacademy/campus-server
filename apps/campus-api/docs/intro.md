@@ -306,6 +306,7 @@ Every error response in the API shares a single envelope:
   | `ACCOUNT_SUSPENDED`       | 403         | The account exists but is closed |
   | `RATE_LIMITED`            | 429         | Too many requests, retry later   |
   | `INTERNAL_ERROR`          | 500         | Unexpected server error          |
+  | `SERVICE_UNAVAILABLE`     | 503         | Something it needs is not there  |
 
 - **`message`** — a human-readable description, safe to show to end users.
 - **`details`** — optional structured context specific to the error.

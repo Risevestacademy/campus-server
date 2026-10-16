@@ -116,6 +116,9 @@ importers:
       '@scalar/nestjs-api-reference':
         specifier: ^1.2.17
         version: 1.2.17
+      campus-world-map:
+        specifier: ^0.2.0
+        version: 0.2.0
       class-transformer:
         specifier: ^0.5.1
         version: 0.5.1
