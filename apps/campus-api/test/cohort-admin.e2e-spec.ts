@@ -251,6 +251,35 @@ describe('cohort and track admin routes (e2e)', () => {
     });
   });
 
+  /**
+   * A page number far past any data reaches the database as an offset too
+   * large for it, which answered 500. It is the caller's mistake, so it is
+   * refused before the query; a page merely past the end is an empty one.
+   */
+  describe('a page number past any real list', () => {
+    it('answers an empty page for a page past the end', async () => {
+      await createTrack().expect(201);
+
+      const res = await as(adminCookie)
+        .get('/v1/tracks?page=10000&perPage=100')
+        .expect(200);
+      expect(res.body.items).toEqual([]);
+    });
+
+    it.each(['1e30', '9007199254740993', '10001'])(
+      "refuses page=%s as the caller's mistake, not a 500",
+      async (page) => {
+        const res = await as(adminCookie)
+          .get(`/v1/tracks?page=${page}`)
+          .expect(400);
+        expect(res.body.error).toMatchObject({
+          code: 'INVALID_ARGUMENT',
+          details: { fields: { page: expect.any(String) } },
+        });
+      },
+    );
+  });
+
   describe('updating tracks', () => {
     it('writes the fields present and uppercases a new code', async () => {
       const track = (await createTrack().expect(201)).body;
