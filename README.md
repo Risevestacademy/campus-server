@@ -83,12 +83,12 @@ pnpm test
 
 `docker-compose.local.yml` provides everything local development needs:
 
-| Service                 | Port(s)                                               |
-| ----------------------- | ----------------------------------------------------- |
-| Postgres 18             | `5432`                                                |
-| Redis 7                 | `6379`                                                |
-| LiveKit                 | `7880` TCP, `7881` TCP, `7882` UDP, `50000-60000` UDP |
-| OpenTelemetry Collector | `4317` (gRPC), `4318` (HTTP)                          |
+| Service                 | Port(s)                            |
+| ----------------------- | ---------------------------------- |
+| Postgres 18             | `5432`                             |
+| Redis 7                 | `6379`                             |
+| LiveKit                 | `7880` TCP, `7881` TCP, `7882` UDP |
+| OpenTelemetry Collector | `4317` (gRPC), `4318` (HTTP)       |
 
 ## Committing
 
