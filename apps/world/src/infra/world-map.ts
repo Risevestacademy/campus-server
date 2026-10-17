@@ -6,6 +6,7 @@ import {
 } from 'campus-world-map';
 import type { FastifyBaseLogger } from 'fastify';
 
+import { spaceIndexFrom } from '../movement/spaces.js';
 import {
   PLACEHOLDER_MAP,
   gridFrom,
@@ -82,10 +83,12 @@ export async function fetchEntryMap(
     // map is whole, and it is the one campus-web loads the same version
     // through.
     const map = await loadPublishedMap(manifest, { fetch: reaching });
+    const layout = readMapLayout(map as TiledMap);
     return {
       id: manifest.mapId,
       version: manifest.version,
-      grid: gridFrom(readMapLayout(map as TiledMap)),
+      grid: gridFrom(layout),
+      spaces: spaceIndexFrom(layout),
     };
   } catch (err) {
     if (unreachable !== undefined) {
@@ -138,6 +141,12 @@ export async function loadWorldMap(
         // A map that loads with far fewer walls than it had is a broken
         // publish that nothing else here would notice.
         wallTiles: map.grid.walls?.reduce((sum, wall) => sum + wall, 0) ?? 0,
+        // Likewise for spaces: fewer drawn, or far fewer tiles in them.
+        spaces: map.spaces.keys.length,
+        spaceTiles: map.spaces.tiles.reduce(
+          (sum, at) => sum + (at === 0 ? 0 : 1),
+          0,
+        ),
       },
       'map loaded',
     );

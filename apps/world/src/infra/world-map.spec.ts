@@ -1,7 +1,10 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_SPACE_KEY } from '@campus/session';
+
 import { walkable } from '../movement/grid.js';
+import { spaceAt } from '../movement/spaces.js';
 import { PLACEHOLDER_MAP } from '../movement/world-map.js';
 import {
   MapUnavailableError,
@@ -40,6 +43,12 @@ const spawn = {
   type: 'objectgroup',
   name: 'spawn',
   objects: [{ id: 2, x: 40, y: 40, point: true }],
+};
+/** One space, the bottom-left 2 × 1 tiles. */
+const spaces = {
+  type: 'objectgroup',
+  name: 'spaces',
+  objects: [{ id: 3, name: 'library', x: 0, y: 64, width: 64, height: 32 }],
 };
 
 /** Answers the manifest query with `manifests`, and each map URL with `map`. */
@@ -84,6 +93,18 @@ describe('fetchEntryMap', () => {
    * drawn on the wall and furniture tiles themselves, which block wherever
    * such a tile is laid.
    */
+  it('knows which space each tile is in, from the spaces the map draws', async () => {
+    const map = await fetchEntryMap(
+      sanity,
+      published([manifest('campus', true)], tiled([collisions, spawn, spaces])),
+    );
+
+    expect(spaceAt(map.spaces, { x: 0, y: 2 })).toBe('library');
+    expect(spaceAt(map.spaces, { x: 1, y: 2 })).toBe('library');
+    expect(spaceAt(map.spaces, { x: 2, y: 2 })).toBe(DEFAULT_SPACE_KEY);
+    expect(spaceAt(map.spaces, { x: 1, y: 1 })).toBe(DEFAULT_SPACE_KEY);
+  });
+
   it('walls off the tiles whose artwork carries a collision shape', async () => {
     const withWallTile = {
       ...tiled([collisions, spawn]),
@@ -356,13 +377,13 @@ describe('loadWorldMap', () => {
   });
 
   /** So a publish that lost its walls shows in the boot log. */
-  it('logs which map loaded, and how many of its tiles are walls', async () => {
+  it('logs which map loaded, and how many of its tiles are walls and spaces', async () => {
     const logger = log();
 
     await loadWorldMap(
       { ...sanity, DEPLOYMENT_ENVIRONMENT: 'staging' },
       logger,
-      published([manifest('campus', true)], tiled([collisions, spawn])),
+      published([manifest('campus', true)], tiled([collisions, spawn, spaces])),
     );
 
     expect(logger.info).toHaveBeenCalledWith(
@@ -372,6 +393,8 @@ describe('loadWorldMap', () => {
         width: 4,
         height: 3,
         wallTiles: 1,
+        spaces: 1,
+        spaceTiles: 2,
       },
       'map loaded',
     );

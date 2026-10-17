@@ -1,3 +1,4 @@
+import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, eq, isNull, ne, sql } from 'drizzle-orm';
 
@@ -21,7 +22,6 @@ import {
 import { PublishedMapsReader, type PublishedMap } from './published-maps.js';
 import { SpaceKind, maps, spaces, type Space } from './schema.js';
 import {
-  DEFAULT_SPACE_KEY,
   DEFAULT_SPACE_NAME,
   SINGLETON_KINDS,
   defaultsFor,

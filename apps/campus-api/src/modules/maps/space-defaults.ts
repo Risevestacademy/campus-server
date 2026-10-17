@@ -6,16 +6,6 @@ import {
   type NewSpace,
 } from './schema.js';
 
-/**
- * The key of a map's default space: the one for every tile inside no drawn
- * space. It is drawn nowhere, so it has no name in Tiled to be known by, and
- * is given this one. It keeps it for good.
- *
- * A drawn space may not use it, and the sync refuses a map where one does.
- * Tiled names do not begin with an underscore unless somebody means them to.
- */
-export const DEFAULT_SPACE_KEY = '_default';
-
 /** What the default space is called until an admin calls it something else. */
 export const DEFAULT_SPACE_NAME = 'Corridors and grounds';
 

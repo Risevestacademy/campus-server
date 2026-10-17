@@ -1,3 +1,4 @@
+import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -23,7 +24,6 @@ import {
   maps,
   spaces,
 } from './schema.js';
-import { DEFAULT_SPACE_KEY } from './space-defaults.js';
 
 /**
  * Against a real engine (PGlite, committed migrations applied). What a sync
