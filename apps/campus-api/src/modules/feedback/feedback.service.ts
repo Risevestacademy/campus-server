@@ -60,8 +60,11 @@ const submitter = alias(users, 'submitter');
 const reported = alias(users, 'reported');
 const resolver = alias(users, 'resolver');
 
-/** The three things an admin is shown of anybody a piece of feedback names. */
-const person = <
+/**
+ * The columns to select for anybody a piece of feedback names: the three
+ * things an admin is shown of them. A selection for a query, not a person.
+ */
+const personColumns = <
   T extends { id: unknown; email: unknown; displayName: unknown },
 >(
   table: T,
@@ -78,8 +81,8 @@ const listColumns = {
   about: feedback.about,
   status: feedback.status,
   createdAt: feedback.createdAt,
-  submittedBy: person(submitter),
-  reportedUser: person(reported),
+  submittedBy: personColumns(submitter),
+  reportedUser: personColumns(reported),
 };
 
 @Injectable()
@@ -94,8 +97,10 @@ export class FeedbackService {
    * where" on every type, as free text, but an account id is an accusation
    * pointed at somebody, and a bug or an idea has no business making one.
    *
-   * A cohort may only be named by somebody in it. It is a hint about where
-   * they were, and one they could not have been in is not a hint.
+   * A cohort may only be named by somebody in it, or by an admin, who may
+   * name any that exists: admins enter any cohort's campus without being in
+   * it. It is a hint about where they were, and one they could not have been
+   * in is not a hint.
    */
   async create(
     author: AuthenticatedUser,
@@ -252,7 +257,7 @@ export class FeedbackService {
         cohortId: feedback.cohortId,
         context: feedback.context,
         userAgent: feedback.userAgent,
-        resolvedBy: person(resolver),
+        resolvedBy: personColumns(resolver),
         resolvedAt: feedback.resolvedAt,
       })
       .from(feedback)
