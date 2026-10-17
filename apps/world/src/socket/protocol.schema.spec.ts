@@ -40,6 +40,8 @@ describe('protocol.schema.json', () => {
         'Avatar',
         'Direction',
         'MoveOutcome',
+        'CloseReason',
+        'CloseCode',
       ].sort(),
     );
   });
