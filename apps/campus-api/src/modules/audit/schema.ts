@@ -8,6 +8,8 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { CORRELATION_ID_MAX_LENGTH } from '../../shared/http/correlation-id.js';
+// Tables, for the two foreign keys, and nothing else from other modules: see
+// "How an entry is written" in this module's README.
 import { spaces } from '../maps/schema.js';
 import { users } from '../users/schema.js';
 
