@@ -47,11 +47,14 @@ describe('close codes and reasons', () => {
   });
 
   /**
-   * The protocol doc's close table is what people read. It is checked
-   * against the list here, so a reason added or renamed in code without the
-   * doc fails this test rather than misleading whoever reads it.
+   * The protocol doc's close table is what people read, so it is held to
+   * the list here word for word: one row per reason, with its code, what it
+   * means and what to do. A reason added, renamed, or given a new meaning or
+   * action in code without the doc fails this test rather than leaving the
+   * doc saying something else. Rows with no reason (1006, 1009) come from the
+   * browser and the socket library, and are the doc's alone.
    */
-  it('matches the close table in docs/world-protocol.md, code for code', () => {
+  it('matches the close table in docs/world-protocol.md, row for row', () => {
     const doc = readFileSync(
       fileURLToPath(
         new URL('../../../../docs/world-protocol.md', import.meta.url),
@@ -59,20 +62,31 @@ describe('close codes and reasons', () => {
       'utf8',
     );
     const table = doc.slice(doc.indexOf('## Errors and closing'));
-    const documented = new Map<string, number>();
+    /** Markdown dressing and padding away, so only the words are compared. */
+    const plain = (text: string) =>
+      text.replaceAll('`', '').replaceAll('**', '').replace(/\s+/g, ' ').trim();
+
+    const documented: Record<string, unknown> = {};
     for (const line of table.split('\n')) {
-      const row = /^\| (\d{4}) \| ([^|]+)\|/.exec(line);
-      if (!row) continue;
-      for (const [, reason] of row[2].matchAll(/`([^`]+)`/g)) {
-        documented.set(reason, Number(row[1]));
-      }
+      const cells = /^\| (\d{4}) \|(.*)\|$/.exec(line);
+      if (!cells) continue;
+      const [reason, meaning, action] = cells[2].split('|').map(plain);
+      if (reason === '—') continue;
+      expect(documented, `${reason} has more than one row`).not.toHaveProperty([
+        reason,
+      ]);
+      documented[reason] = { code: Number(cells[1]), meaning, action };
     }
 
-    expect(Object.fromEntries(documented)).toEqual(
+    expect(documented).toEqual(
       Object.fromEntries(
-        (Object.keys(CLOSES) as CloseReason[]).map((reason) => [
+        Object.entries(CLOSES).map(([reason, close]) => [
           reason,
-          CLOSES[reason].code,
+          {
+            code: close.code,
+            meaning: plain(close.meaning),
+            action: plain(close.action),
+          },
         ]),
       ),
     );
