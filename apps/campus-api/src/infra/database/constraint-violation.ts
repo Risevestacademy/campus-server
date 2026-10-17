@@ -1,11 +1,4 @@
 /**
- * How far down an error's `cause` chain to look. drizzle wraps the driver's
- * error once, and a caller may wrap that again; a few links is plenty, and a
- * bound keeps a cause chain that loops from looping here.
- */
-const MAX_DEPTH = 5;
-
-/**
  * Whether a failed write was Postgres refusing a row with SQLSTATE `code`,
  * and, when `constraint` is given, on the constraint of that name.
  *
@@ -36,15 +29,22 @@ export function isConstraintViolation(
   return false;
 }
 
-/** The error and each `cause` beneath it, up to MAX_DEPTH. */
+/**
+ * The error and every `cause` beneath it, to the end of the chain. Each link
+ * is visited once: a chain that loops back on itself stops where it would
+ * repeat, rather than running forever. No depth limit, since a limit would
+ * leave a driver error past it unread.
+ */
 function causeChain(err: unknown): Record<string, unknown>[] {
   const chain: Record<string, unknown>[] = [];
+  const seen = new Set<object>();
   let current: unknown = err;
   while (
-    chain.length < MAX_DEPTH &&
     typeof current === 'object' &&
-    current !== null
+    current !== null &&
+    !seen.has(current)
   ) {
+    seen.add(current);
     const link = current as Record<string, unknown>;
     chain.push(link);
     current = link['cause'];

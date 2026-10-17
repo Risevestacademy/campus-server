@@ -76,17 +76,32 @@ describe('isConstraintViolation', () => {
     ).toBe(true);
   });
 
-  it('gives up past its depth, and on a chain that loops, rather than looping', () => {
-    expect(
-      isConstraintViolation(
-        nested(6, { code: '23505', constraint: 'tracks_code_unique' }),
-        '23505',
-      ),
-    ).toBe(false);
+  /** However deep it sits: a limit would leave a real violation unread. */
+  it('finds the driver error at the bottom of a long chain', () => {
+    const err = nested(25, { code: '23505', constraint: 'tracks_code_unique' });
 
-    const loop: Record<string, unknown> = { message: 'loop' };
-    loop.cause = loop;
-    expect(isConstraintViolation(loop, '23505')).toBe(false);
+    expect(isUniqueViolation(err, 'tracks_code_unique')).toBe(true);
+  });
+
+  /**
+   * A chain that loops is read once round and then left: whatever it holds
+   * is still found, and nothing past the loop is invented.
+   */
+  it('stops on a chain that loops, finding what is in it', () => {
+    const driverError: Record<string, unknown> = {
+      code: '23503',
+      constraint: 'cohort_tracks_track_id_fk',
+    };
+    const outer = wrap(driverError);
+    driverError.cause = outer;
+    expect(isForeignKeyViolation(outer, 'cohort_tracks_track_id_fk')).toBe(
+      true,
+    );
+    expect(isConstraintViolation(outer, '23505')).toBe(false);
+
+    const self: Record<string, unknown> = { message: 'self' };
+    self.cause = self;
+    expect(isConstraintViolation(self, '23505')).toBe(false);
   });
 
   it('finds nothing in what is not an error', () => {
