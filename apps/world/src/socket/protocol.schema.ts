@@ -11,11 +11,17 @@ import './protocol.js';
  * test beside this file, so a change to protocol.ts that forgets to
  * regenerate fails CI instead of reaching the frontend as a surprise.
  *
- * The root is "any message, either direction": a generator only emits what
- * the root reaches, and this way it reaches everything, each under its own
- * name. Every schema in protocol.ts given an `id` becomes a named type; the
- * test beside this file lists which ones, so one appearing or vanishing is
- * noticed. Draft-07 because that is what the common generators read best.
+ * The root is a catalogue, not a message: an object whose properties name
+ * every type a client needs, the two message unions and the close codes and
+ * reasons. A generator only emits what the root reaches. A root that was the
+ * message union reached the messages but not the close lists, and
+ * json-schema-to-typescript's --unreachableDefinitions does not help, since
+ * it is only read for a root that is an object. This way the default command
+ * emits everything, each under its own name, and the message unions are
+ * exactly what they were. Every schema in protocol.ts given an `id` becomes
+ * a named type; the test beside this file lists which ones, so one appearing
+ * or vanishing is noticed. Draft-07 because that is what the common
+ * generators read best.
  */
 export function protocolJsonSchema(): Record<string, unknown> {
   const { schemas } = z.toJSONSchema(z.globalRegistry, {
@@ -39,13 +45,19 @@ export function protocolJsonSchema(): Record<string, unknown> {
     $schema: 'http://json-schema.org/draft-07/schema#',
     title: 'WorldProtocol',
     description:
-      'Messages on the world socket. Generated from apps/world/src/socket/protocol.ts; ' +
-      'do not edit by hand. How to use them — moving, correcting, closing — is in ' +
+      'Every type on the world socket. Generated from apps/world/src/socket/protocol.ts; ' +
+      'do not edit by hand. This root is a catalogue and is never sent: a frame is a ' +
+      'ClientMessage or a ServerMessage, and a close carries a CloseCode and a ' +
+      'CloseReason. How to use them — moving, correcting, closing — is in ' +
       'docs/world-protocol.md.',
-    anyOf: [
-      { $ref: '#/definitions/ClientMessage' },
-      { $ref: '#/definitions/ServerMessage' },
-    ],
+    type: 'object',
+    properties: {
+      clientMessage: { $ref: '#/definitions/ClientMessage' },
+      serverMessage: { $ref: '#/definitions/ServerMessage' },
+      closeCode: { $ref: '#/definitions/CloseCode' },
+      closeReason: { $ref: '#/definitions/CloseReason' },
+    },
+    additionalProperties: false,
     definitions,
   };
 }

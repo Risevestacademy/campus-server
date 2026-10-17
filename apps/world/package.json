@@ -17,6 +17,7 @@
     "@electric-sql/pglite": "^0.5.8",
     "@types/node": "catalog:",
     "@types/ws": "^8.18.1",
+    "json-schema-to-typescript": "15.0.4",
     "oxlint": "catalog:",
     "pino-pretty": "catalog:",
     "typescript": "catalog:",

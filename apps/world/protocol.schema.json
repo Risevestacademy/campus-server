@@ -1,15 +1,23 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "WorldProtocol",
-  "description": "Messages on the world socket. Generated from apps/world/src/socket/protocol.ts; do not edit by hand. How to use them — moving, correcting, closing — is in docs/world-protocol.md.",
-  "anyOf": [
-    {
+  "description": "Every type on the world socket. Generated from apps/world/src/socket/protocol.ts; do not edit by hand. This root is a catalogue and is never sent: a frame is a ClientMessage or a ServerMessage, and a close carries a CloseCode and a CloseReason. How to use them — moving, correcting, closing — is in docs/world-protocol.md.",
+  "type": "object",
+  "properties": {
+    "clientMessage": {
       "$ref": "#/definitions/ClientMessage"
     },
-    {
+    "serverMessage": {
       "$ref": "#/definitions/ServerMessage"
+    },
+    "closeCode": {
+      "$ref": "#/definitions/CloseCode"
+    },
+    "closeReason": {
+      "$ref": "#/definitions/CloseReason"
     }
-  ],
+  },
+  "additionalProperties": false,
   "definitions": {
     "Direction": {
       "type": "string",
