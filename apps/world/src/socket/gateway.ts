@@ -27,21 +27,22 @@ import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
 import {
   ServerErrorCode,
+  CLOSES,
   decode,
   encode,
   type Avatar,
+  type CloseReason,
   type ServerMessage,
 } from './protocol.js';
 
-/** Close codes. 1008 is "policy violation", which is what a refusal is. */
-const POLICY_VIOLATION = 1008;
-const INTERNAL_ERROR = 1011;
-const GOING_AWAY = 1001;
 /**
- * Its own code, not a policy violation: this is the one close the client must
- * not reconnect after, or two tabs would replace each other indefinitely.
+ * Closes a socket for one of the reasons in CLOSES, with the code that goes
+ * with it. A reason is all a caller names, so the code it is sent with and
+ * what the schema tells clients about it can never disagree.
  */
-const ENTERED_ELSEWHERE = 4000;
+function closeFor(socket: WebSocket, reason: CloseReason): void {
+  socket.close(CLOSES[reason].code, reason);
+}
 
 export interface Gateway {
   connections: Connections;
@@ -225,7 +226,7 @@ export function registerGateway(
     );
     drop(connection);
     send(connection.socket, { type: 'replaced' });
-    connection.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
+    closeFor(connection.socket, 'entered_elsewhere');
   }
   presence.onDisplaced(displacedElsewhere);
 
@@ -410,7 +411,7 @@ export function registerGateway(
           'closing socket, account no longer welcome',
         );
         drop(connection, false);
-        connection.socket.close(POLICY_VIOLATION, reason);
+        closeFor(connection.socket, reason);
       }
     }
   }
@@ -441,7 +442,7 @@ export function registerGateway(
     // Remembered, like a sign-out: the account is still welcome, and signing
     // back in may resume where they stood.
     drop(connection);
-    connection.socket.close(POLICY_VIOLATION, 'session_revoked');
+    closeFor(connection.socket, 'session_revoked');
   }
 
   /**
@@ -495,7 +496,7 @@ export function registerGateway(
     // stood rather than starting over. The same reason an upgrade refused for
     // this leaves the kept position alone.
     drop(connection);
-    connection.socket.close(POLICY_VIOLATION, 'not_a_member');
+    closeFor(connection.socket, 'not_a_member');
   }
 
   /**
@@ -538,7 +539,7 @@ export function registerGateway(
       // Remembered: signing out is not access being taken away, and signing
       // straight back in may resume where they stood.
       drop(connection);
-      connection.socket.close(POLICY_VIOLATION, 'session_ended');
+      closeFor(connection.socket, 'session_ended');
     }
   }
 
@@ -577,7 +578,7 @@ export function registerGateway(
         // comes back, so nothing is counted as present once we have decided
         // it is not. Removal is idempotent, so the close handler is fine.
         drop(connection);
-        connection.socket.close(POLICY_VIOLATION, 'session_expired');
+        closeFor(connection.socket, 'session_expired');
         continue;
       }
 
@@ -652,7 +653,7 @@ export function registerGateway(
       app.log.error({ err }, 'could not decide socket upgrade');
       // Reading has to resume for the closing handshake to complete.
       ws.resume();
-      ws.close(INTERNAL_ERROR, 'internal_error');
+      closeFor(ws, 'internal_error');
       return;
     }
 
@@ -680,7 +681,7 @@ export function registerGateway(
           'closing socket, account no longer welcome',
         );
         drop(connection, false);
-        connection.socket.close(POLICY_VIOLATION, decision.refusal);
+        closeFor(connection.socket, decision.refusal);
       }
       if (
         cohortId !== undefined &&
@@ -773,7 +774,7 @@ export function registerGateway(
         'socket displaced, account entered this cohort elsewhere',
       );
       send(displaced.socket, { type: 'replaced' });
-      displaced.socket.close(ENTERED_ELSEWHERE, 'entered_elsewhere');
+      closeFor(displaced.socket, 'entered_elsewhere');
     }
 
     // A newer connection to this cohort on another instance may have reached
@@ -829,7 +830,7 @@ export function registerGateway(
           'socket sending too fast, closing',
         );
         drop(connection);
-        connection.socket.close(POLICY_VIOLATION, 'rate_limited');
+        closeFor(connection.socket, 'rate_limited');
         return;
       }
       // Frames over WORLD_MAX_MESSAGE_BYTES never arrive: ws enforces
@@ -913,7 +914,7 @@ export function registerGateway(
       code: ServerErrorCode.Unauthorized,
       message: refusal,
     });
-    ws.close(POLICY_VIOLATION, refusal);
+    closeFor(ws, refusal);
   }
 
   function send(ws: WebSocket, message: ServerMessage): void {
@@ -975,7 +976,7 @@ export function registerGateway(
         app.log.warn({ err }, 'could not remove presence on shutdown');
       }
       for (const connection of connections.all()) {
-        connection.socket.close(GOING_AWAY, 'server shutting down');
+        closeFor(connection.socket, 'server shutting down');
       }
     },
   };

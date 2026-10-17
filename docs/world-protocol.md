@@ -16,6 +16,11 @@ curl -s https://ws.dev.campusbyrise.com/schema.json \
   | npx json-schema-to-typescript -o world-protocol.d.ts
 ```
 
+That emits every type a client needs, with no extra options: the messages
+each way (`ClientMessage`, `ServerMessage`) and the close codes and reasons
+(`CloseCode`, `CloseReason`). The schema's root is a catalogue of those four,
+never a frame itself. A test runs this same generator on the schema.
+
 Each environment serves the protocol of the code deployed there, so one that
 is behind another describes the older protocol.
 
@@ -288,23 +293,31 @@ bug, so log it.
 
 When the socket closes:
 
-| Code | Reason                                | Meaning                                                                                    | What to do                                                                         |
-| ---- | ------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| 1008 | `no_token`                            | No session was sent                                                                        | Send them to sign in                                                               |
-| 1008 | `token_not_usable`, `session_expired` | The session sent is not usable: expired, or signed before a change to what a token carries | Try a refresh; if that fails, send them to sign in                                 |
-| 1008 | `session_ended`                       | Signed out, or the sign-in stopped being refreshed                                         | Try a refresh; if that fails, send them to sign in                                 |
-| 1008 | `session_revoked`                     | The account's sessions were ended on purpose                                               | Send them to sign in; a refresh will not work                                      |
-| 1008 | `wrong_scope`                         | Still in onboarding                                                                        | Send them to onboarding                                                            |
-| 1008 | `account_suspended`, `account_gone`   | Not welcome any more                                                                       | Sign them out; do not reconnect                                                    |
-| 1008 | `origin_not_allowed`                  | This page's origin is not on world's list                                                  | Configuration — do not retry                                                       |
-| 1008 | `no_cohort`                           | The upgrade named no `cohortId`                                                            | Client bug; do not retry without one                                               |
-| 1008 | `not_a_member`                        | No live membership in the cohort named; admins excepted                                    | Back to the cohort picker; do not retry                                            |
-| 1008 | `rate_limited`                        | Sustained sending over the message budget                                                  | Client bug; reconnect with backoff                                                 |
-| 4000 | `entered_elsewhere`                   | This account opened this cohort's campus somewhere else                                    | **Do not reconnect** — see [One connection per cohort](#one-connection-per-cohort) |
-| 1001 | `server shutting down`                | A deploy or restart                                                                        | Reconnect                                                                          |
-| 1009 | —                                     | A frame over the size limit (16 KB by default)                                             | Client bug; reconnect                                                              |
-| 1011 | `internal_error`                      | The server could not check the session                                                     | Reconnect with backoff                                                             |
-| 1006 | —                                     | Connection lost, a missed heartbeat, or not reading fast enough                            | Reconnect with backoff                                                             |
+Both lists are in `/schema.json`, as `CloseCode` and `CloseReason`, each value
+described with what to do. Generate them with the rest of the protocol rather
+than copying this table: a reason renamed or added then fails the client's
+typecheck instead of shipping unnoticed. A test keeps this table and the code
+in step.
+
+| Code | Reason                 | Meaning                                                                                     | What to do                                                                                       |
+| ---- | ---------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 1008 | `no_token`             | No session was sent.                                                                        | Send them to sign in.                                                                            |
+| 1008 | `token_not_usable`     | The session sent is not usable: expired, or signed before a change to what a token carries. | Try a refresh; if that fails, send them to sign in.                                              |
+| 1008 | `session_expired`      | The access token an open socket opened with ran out, and it follows no sign-in.             | Try a refresh; if that fails, send them to sign in.                                              |
+| 1008 | `session_ended`        | Signed out, or the sign-in stopped being refreshed.                                         | Try a refresh; if that fails, send them to sign in.                                              |
+| 1008 | `session_revoked`      | The account's sessions were ended on purpose.                                               | Send them to sign in; a refresh will not work.                                                   |
+| 1008 | `wrong_scope`          | Still in onboarding.                                                                        | Send them to onboarding.                                                                         |
+| 1008 | `account_suspended`    | The account is suspended.                                                                   | Sign them out; do not reconnect.                                                                 |
+| 1008 | `account_gone`         | The account no longer exists.                                                               | Sign them out; do not reconnect.                                                                 |
+| 1008 | `origin_not_allowed`   | This page's origin is not on world's list.                                                  | Configuration; do not retry.                                                                     |
+| 1008 | `no_cohort`            | The upgrade named no cohortId.                                                              | Client bug; do not retry without one.                                                            |
+| 1008 | `not_a_member`         | No live membership in the cohort named; admins excepted.                                    | Back to the cohort picker; do not retry.                                                         |
+| 1008 | `rate_limited`         | Sustained sending over the message budget.                                                  | Client bug; reconnect with backoff.                                                              |
+| 4000 | `entered_elsewhere`    | This account opened this cohort's campus somewhere else.                                    | Do not reconnect: show that they are in this campus elsewhere, and reconnect only when they ask. |
+| 1001 | `server shutting down` | A deploy or restart.                                                                        | Reconnect.                                                                                       |
+| 1011 | `internal_error`       | The server could not check the session.                                                     | Reconnect with backoff.                                                                          |
+| 1009 | —                      | A frame over the size limit (16 KB by default)                                              | Client bug; reconnect                                                                            |
+| 1006 | —                      | Connection lost, a missed heartbeat, or not reading fast enough                             | Reconnect with backoff                                                                           |
 
 When the connection is refused at the start, an `error` frame with the same
 reason as its `message` arrives just before the close. A socket closed later

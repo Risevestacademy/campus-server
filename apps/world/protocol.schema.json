@@ -1,15 +1,23 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "WorldProtocol",
-  "description": "Messages on the world socket. Generated from apps/world/src/socket/protocol.ts; do not edit by hand. How to use them — moving, correcting, closing — is in docs/world-protocol.md.",
-  "anyOf": [
-    {
+  "description": "Every type on the world socket. Generated from apps/world/src/socket/protocol.ts; do not edit by hand. This root is a catalogue and is never sent: a frame is a ClientMessage or a ServerMessage, and a close carries a CloseCode and a CloseReason. How to use them — moving, correcting, closing — is in docs/world-protocol.md.",
+  "type": "object",
+  "properties": {
+    "clientMessage": {
       "$ref": "#/definitions/ClientMessage"
     },
-    {
+    "serverMessage": {
       "$ref": "#/definitions/ServerMessage"
+    },
+    "closeCode": {
+      "$ref": "#/definitions/CloseCode"
+    },
+    "closeReason": {
+      "$ref": "#/definitions/CloseReason"
     }
-  ],
+  },
+  "additionalProperties": false,
   "definitions": {
     "Direction": {
       "type": "string",
@@ -482,6 +490,111 @@
         }
       ],
       "description": "Every frame the server may send."
+    },
+    "CloseReason": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "no_token",
+          "description": "Close 1008. No session was sent. Send them to sign in."
+        },
+        {
+          "type": "string",
+          "const": "token_not_usable",
+          "description": "Close 1008. The session sent is not usable: expired, or signed before a change to what a token carries. Try a refresh; if that fails, send them to sign in."
+        },
+        {
+          "type": "string",
+          "const": "session_expired",
+          "description": "Close 1008. The access token an open socket opened with ran out, and it follows no sign-in. Try a refresh; if that fails, send them to sign in."
+        },
+        {
+          "type": "string",
+          "const": "session_ended",
+          "description": "Close 1008. Signed out, or the sign-in stopped being refreshed. Try a refresh; if that fails, send them to sign in."
+        },
+        {
+          "type": "string",
+          "const": "session_revoked",
+          "description": "Close 1008. The account's sessions were ended on purpose. Send them to sign in; a refresh will not work."
+        },
+        {
+          "type": "string",
+          "const": "wrong_scope",
+          "description": "Close 1008. Still in onboarding. Send them to onboarding."
+        },
+        {
+          "type": "string",
+          "const": "account_suspended",
+          "description": "Close 1008. The account is suspended. Sign them out; do not reconnect."
+        },
+        {
+          "type": "string",
+          "const": "account_gone",
+          "description": "Close 1008. The account no longer exists. Sign them out; do not reconnect."
+        },
+        {
+          "type": "string",
+          "const": "origin_not_allowed",
+          "description": "Close 1008. This page's origin is not on world's list. Configuration; do not retry."
+        },
+        {
+          "type": "string",
+          "const": "no_cohort",
+          "description": "Close 1008. The upgrade named no cohortId. Client bug; do not retry without one."
+        },
+        {
+          "type": "string",
+          "const": "not_a_member",
+          "description": "Close 1008. No live membership in the cohort named; admins excepted. Back to the cohort picker; do not retry."
+        },
+        {
+          "type": "string",
+          "const": "rate_limited",
+          "description": "Close 1008. Sustained sending over the message budget. Client bug; reconnect with backoff."
+        },
+        {
+          "type": "string",
+          "const": "entered_elsewhere",
+          "description": "Close 4000. This account opened this cohort's campus somewhere else. Do not reconnect: show that they are in this campus elsewhere, and reconnect only when they ask."
+        },
+        {
+          "type": "string",
+          "const": "server shutting down",
+          "description": "Close 1001. A deploy or restart. Reconnect."
+        },
+        {
+          "type": "string",
+          "const": "internal_error",
+          "description": "Close 1011. The server could not check the session. Reconnect with backoff."
+        }
+      ],
+      "description": "The reason world gives when it closes the socket, read from the close event. Each says which code comes with it and what to do. A 1008 reason this list does not have should be treated as \"stop\": never retry a refusal you do not understand."
+    },
+    "CloseCode": {
+      "anyOf": [
+        {
+          "type": "number",
+          "const": 1001,
+          "description": "A deploy or restart. Reconnect."
+        },
+        {
+          "type": "number",
+          "const": 1008,
+          "description": "A refusal, or access ending on an open socket. What to do depends on the reason: see CloseReason."
+        },
+        {
+          "type": "number",
+          "const": 1011,
+          "description": "The server could not check the session. Reconnect with backoff."
+        },
+        {
+          "type": "number",
+          "const": 4000,
+          "description": "The account opened this cohort elsewhere. Do not reconnect."
+        }
+      ],
+      "description": "The close codes world sends. Two more reach a client without world sending them: 1006, from the browser, when the connection is lost, a heartbeat is missed or the client reads too slowly (reconnect with backoff); and 1009, from the socket library, for a frame over the size limit (client bug; reconnect)."
     }
   }
 }
