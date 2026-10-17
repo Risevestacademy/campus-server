@@ -47,7 +47,9 @@ always open, because it is the way to everywhere else.
 **The database stops a map having two. It does not make a map have one.**
 A map row can exist with no default space, and nothing here will object.
 Giving every map its default is the job of the [sync](#the-sync), which
-writes it with the map's row, under the key `_default` and the name
+writes it with the map's row, under the key `_default` (`DEFAULT_SPACE_KEY`
+from `@campus/session`, the same value world answers for a tile in no drawn
+space) and the name
 "Corridors and grounds". A space drawn with that key is refused.
 
 The default space keeps one key for as long as its map exists. It is only

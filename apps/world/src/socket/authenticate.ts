@@ -8,18 +8,10 @@ import {
 import type { Account, AccountLookup } from '../infra/accounts.js';
 import { allowedOrigins, type Env } from '../infra/env.js';
 import { SESSION_COOKIE } from './endpoint.js';
+import type { Refusal } from './protocol.js';
 
-export type Refusal =
-  | 'origin_not_allowed'
-  | 'no_token'
-  | 'token_not_usable'
-  | 'wrong_scope'
-  | 'account_gone'
-  | 'account_suspended'
-  | 'session_revoked'
-  | 'session_ended'
-  | 'no_cohort'
-  | 'not_a_member';
+// The reasons are defined with every other close reason, in protocol.ts.
+export type { Refusal };
 
 export type UpgradeDecision =
   | { ok: true; claims: SessionClaims; account: Account; cohortId: string }

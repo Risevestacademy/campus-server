@@ -253,6 +253,183 @@ export const ServerMessage = z
 
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
+/**
+ * The close codes world sends. 1008 is "policy violation", which is what a
+ * refusal is; 4000 is world's own, for the one close a client must not
+ * reconnect after.
+ */
+export const CloseCode = {
+  GoingAway: 1001,
+  PolicyViolation: 1008,
+  InternalError: 1011,
+  EnteredElsewhere: 4000,
+} as const;
+export type CloseCode = (typeof CloseCode)[keyof typeof CloseCode];
+
+/**
+ * Every reason world closes a socket with: its code, what it means, and what
+ * a client does about it. The one list: the upgrade's refusals, every close
+ * in the gateway and the generated schema all come from here, so a reason
+ * cannot be renamed or added without the schema, and the clients generated
+ * from it, finding out.
+ */
+export const CLOSES = {
+  no_token: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'No session was sent.',
+    action: 'Send them to sign in.',
+  },
+  token_not_usable: {
+    code: CloseCode.PolicyViolation,
+    meaning:
+      'The session sent is not usable: expired, or signed before a change to what a token carries.',
+    action: 'Try a refresh; if that fails, send them to sign in.',
+  },
+  session_expired: {
+    code: CloseCode.PolicyViolation,
+    meaning:
+      'The access token an open socket opened with ran out, and it follows no sign-in.',
+    action: 'Try a refresh; if that fails, send them to sign in.',
+  },
+  session_ended: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'Signed out, or the sign-in stopped being refreshed.',
+    action: 'Try a refresh; if that fails, send them to sign in.',
+  },
+  session_revoked: {
+    code: CloseCode.PolicyViolation,
+    meaning: "The account's sessions were ended on purpose.",
+    action: 'Send them to sign in; a refresh will not work.',
+  },
+  wrong_scope: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'Still in onboarding.',
+    action: 'Send them to onboarding.',
+  },
+  account_suspended: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'The account is suspended.',
+    action: 'Sign them out; do not reconnect.',
+  },
+  account_gone: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'The account no longer exists.',
+    action: 'Sign them out; do not reconnect.',
+  },
+  origin_not_allowed: {
+    code: CloseCode.PolicyViolation,
+    meaning: "This page's origin is not on world's list.",
+    action: 'Configuration; do not retry.',
+  },
+  no_cohort: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'The upgrade named no cohortId.',
+    action: 'Client bug; do not retry without one.',
+  },
+  not_a_member: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'No live membership in the cohort named; admins excepted.',
+    action: 'Back to the cohort picker; do not retry.',
+  },
+  rate_limited: {
+    code: CloseCode.PolicyViolation,
+    meaning: 'Sustained sending over the message budget.',
+    action: 'Client bug; reconnect with backoff.',
+  },
+  entered_elsewhere: {
+    code: CloseCode.EnteredElsewhere,
+    meaning: "This account opened this cohort's campus somewhere else.",
+    action:
+      'Do not reconnect: show that they are in this campus elsewhere, and reconnect only when they ask.',
+  },
+  'server shutting down': {
+    code: CloseCode.GoingAway,
+    meaning: 'A deploy or restart.',
+    action: 'Reconnect.',
+  },
+  internal_error: {
+    code: CloseCode.InternalError,
+    meaning: 'The server could not check the session.',
+    action: 'Reconnect with backoff.',
+  },
+} as const satisfies Record<
+  string,
+  { code: CloseCode; meaning: string; action: string }
+>;
+export type CloseReason = keyof typeof CLOSES;
+
+/** The reasons an upgrade, or a connection check, is refused with. */
+export const REFUSALS = [
+  'origin_not_allowed',
+  'no_token',
+  'token_not_usable',
+  'wrong_scope',
+  'account_gone',
+  'account_suspended',
+  'session_revoked',
+  'session_ended',
+  'no_cohort',
+  'not_a_member',
+] as const satisfies readonly CloseReason[];
+export type Refusal = (typeof REFUSALS)[number];
+
+const literalsOf = <T extends string | number>(
+  values: readonly { value: T; description: string }[],
+) =>
+  values.map(({ value, description }) =>
+    z.literal(value).describe(description),
+  ) as unknown as [z.ZodLiteral<T>, z.ZodLiteral<T>, ...z.ZodLiteral<T>[]];
+
+export const CloseReasonSchema = z
+  .union(
+    literalsOf(
+      (Object.keys(CLOSES) as CloseReason[]).map((reason) => ({
+        value: reason,
+        description: `Close ${CLOSES[reason].code}. ${CLOSES[reason].meaning} ${CLOSES[reason].action}`,
+      })),
+    ),
+  )
+  .meta({
+    id: 'CloseReason',
+    description:
+      'The reason world gives when it closes the socket, read from the close event. ' +
+      'Each says which code comes with it and what to do. A 1008 reason this list does ' +
+      'not have should be treated as "stop": never retry a refusal you do not understand.',
+  });
+
+const CODE_DESCRIPTIONS: Record<CloseCode, string> = {
+  [CloseCode.GoingAway]: 'A deploy or restart. Reconnect.',
+  [CloseCode.PolicyViolation]:
+    'A refusal, or access ending on an open socket. What to do depends on the reason: see CloseReason.',
+  [CloseCode.InternalError]:
+    'The server could not check the session. Reconnect with backoff.',
+  [CloseCode.EnteredElsewhere]:
+    'The account opened this cohort elsewhere. Do not reconnect.',
+};
+
+export const CloseCodeSchema = z
+  .union(
+    literalsOf(
+      Object.values(CloseCode).map((code) => ({
+        value: code,
+        description: CODE_DESCRIPTIONS[code],
+      })),
+    ),
+  )
+  .meta({
+    id: 'CloseCode',
+    description:
+      'The close codes world sends. Two more reach a client without world sending them: ' +
+      '1006, from the browser, when the connection is lost, a heartbeat is missed or the ' +
+      'client reads too slowly (reconnect with backoff); and 1009, from the socket ' +
+      'library, for a frame over the size limit (client bug; reconnect).',
+  });
+
+/** Every reason world refuses with is a 1008. */
+export type RefusalsArePolicyViolations = Assert<
+  Same<(typeof CLOSES)[Refusal]['code'], typeof CloseCode.PolicyViolation>
+>;
+
 /*
  * movement/ owns Player and MoveOutcome; these schemas describe them on the
  * wire. Checked both ways, so a field added there cannot go out on the wire
