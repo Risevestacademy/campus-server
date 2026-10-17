@@ -1,3 +1,4 @@
+import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   LayoutError,
@@ -15,7 +16,6 @@ import {
   PublishedMapsRejectedException,
   PublishedMapsUnavailableException,
 } from './maps.exceptions.js';
-import { DEFAULT_SPACE_KEY } from './space-defaults.js';
 
 /** Injection token for the fetch the published maps are read with. */
 export const MAPS_FETCH = Symbol('MAPS_FETCH');

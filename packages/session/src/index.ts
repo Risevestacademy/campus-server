@@ -1,8 +1,10 @@
 /**
- * The session token, shared by the two services that both have to understand
- * it: campus-api mints and verifies it, world verifies it on socket upgrade.
- * One copy, because two copies of claim-checking drift the moment the claims
- * change — and the drift shows up as a security hole, not a type error.
+ * What campus-api and world must agree on, defined once. It began with the
+ * session token, which both have to understand: campus-api mints and
+ * verifies it, world verifies it on socket upgrade. One copy, because two
+ * copies of claim-checking drift the moment the claims change — and the drift
+ * shows up as a security hole, not a type error. The same holds for each
+ * rule exported below. A rule only one service needs belongs in that service.
  */
 export * from './session-token.js';
 export * from './session-policy.js';
