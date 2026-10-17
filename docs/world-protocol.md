@@ -288,6 +288,12 @@ bug, so log it.
 
 When the socket closes:
 
+Both lists are in `/schema.json`, as `CloseCode` and `CloseReason`, each value
+described with what to do. Generate them with the rest of the protocol rather
+than copying this table: a reason renamed or added then fails the client's
+typecheck instead of shipping unnoticed. A test keeps this table and the code
+in step.
+
 | Code | Reason                                | Meaning                                                                                    | What to do                                                                         |
 | ---- | ------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
 | 1008 | `no_token`                            | No session was sent                                                                        | Send them to sign in                                                               |
