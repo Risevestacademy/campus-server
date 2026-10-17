@@ -60,7 +60,7 @@ refused.
 | Rule                                                       | Constraint                                              |
 | ---------------------------------------------------------- | ------------------------------------------------------- |
 | A map is known by its key, once                            | `maps_key_unique`                                       |
-| One entry map, not counting retired ones                   | `maps_single_entry`                                     |
+| At most one entry map, not counting retired ones           | `maps_single_entry`                                     |
 | A space is known by its key, once per map                  | `spaces_map_key_unique`                                 |
 | At most one default space per map, retired or not          | `spaces_one_default_per_map`                            |
 | The default space is open to everybody                     | `spaces_default_is_open`                                |
@@ -73,6 +73,12 @@ refused.
 
 They are tested against a real PostgreSQL engine, with the committed
 migrations applied, in `schema.db.spec.ts`.
+
+The database stops a second entry map but does not make there be one: a
+campus with none is a state it allows. The [sync](#the-sync) is what makes it
+exactly one. It refuses a publish without exactly one entry map, and moves
+the flag in the same transaction as everything else, so no sync leaves the
+campus without one.
 
 ## Nothing is deleted
 
