@@ -114,8 +114,10 @@ export const maps = pgTable(
   },
   (table) => [
     uniqueIndex('maps_key_unique').on(table.key),
-    // One campus, one way in. A retired map does not count, so the entry map
-    // can be replaced by another without deleting it.
+    // At most one way into the campus; the sync is what makes it exactly
+    // one, as the database cannot without refusing every write that passes
+    // through having none. A retired map does not count, so the entry map can
+    // be replaced by another without deleting it.
     uniqueIndex('maps_single_entry')
       .on(table.isEntry)
       .where(sql`${table.isEntry} and ${table.retiredAt} is null`),
