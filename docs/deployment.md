@@ -317,17 +317,18 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
 
 Decided: the container in `docker-compose.local.yml` for local development,
 **LiveKit Cloud** for staging and production. Railway's edge proxy does not
-expose the UDP range self-hosted LiveKit needs for real WebRTC media, so
+expose the UDP self-hosted LiveKit needs for real WebRTC media, so
 self-hosting there would give working signalling and broken audio.
 
 That means media configuration differs by environment, and the code must not
 assume otherwise:
 
-|             | Local                              | Staging / production               |
-| ----------- | ---------------------------------- | ---------------------------------- |
-| Server      | `livekit/livekit-server` container | LiveKit Cloud project              |
-| URL         | `ws://localhost:7880`              | the project's `wss://` URL         |
-| Credentials | the dev key pair in `livekit.yaml` | per-environment API key and secret |
+|             | Local                                               | Staging / production               |
+| ----------- | --------------------------------------------------- | ---------------------------------- |
+| Server      | `livekit/livekit-server` container                  | LiveKit Cloud project              |
+| URL         | `ws://localhost:7880`                               | the project's `wss://` URL         |
+| Credentials | the dev key pair in `livekit.yaml`                  | per-environment API key and secret |
+| Media       | UDP `7882`, one port for everybody (`rtc.udp_port`) | LiveKit Cloud's own                |
 
 A Cloud project per environment (`campus-dev`, `campus-staging`,
 `campus-production`), so a staging room can never collide with a production
