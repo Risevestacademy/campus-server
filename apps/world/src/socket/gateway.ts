@@ -1,3 +1,4 @@
+import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -15,6 +16,7 @@ import type {
   PresenceStore,
 } from '../infra/presence.js';
 import { Players, type Player } from '../movement/players.js';
+import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import {
   decideUpgrade,
@@ -193,8 +195,28 @@ export function registerGateway(
       userId: connection.userId,
       connectionId: connection.id,
       cohortId: connection.cohortId,
+      spaceKey: connection.spaceKey,
       since: connection.openedAt,
     };
+  }
+
+  /**
+   * Writes one connection's presence now rather than at the next renewal:
+   * for a move into another space, so who is where is right the moment they
+   * cross. A newer connection holding the place by then is dealt with as the
+   * renewal would deal with it. A write that fails is put right by the next
+   * renewal, which carries the space too.
+   */
+  function presenceNow(connection: Connection): void {
+    presence
+      .renew([presenceOf(connection)])
+      .then((displaced) => displaced.forEach(displacedElsewhere))
+      .catch((err: unknown) => {
+        app.log.warn(
+          { err, userId: connection.userId },
+          'could not record a change of space, the next renewal will',
+        );
+      });
   }
 
   /**
@@ -730,6 +752,8 @@ export function registerGateway(
         displayName: decision.account.displayName,
         spriteKey: decision.account.spriteKey,
       },
+      // Where the avatar stands is known once it has joined, below.
+      spaceKey: DEFAULT_SPACE_KEY,
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
       epoch: decision.claims.epoch,
@@ -750,6 +774,7 @@ export function registerGateway(
       Date.now(),
       saved,
     );
+    connection.spaceKey = spaceAt(map.spaces, player);
     if (arriving) {
       // Told to everyone already in this cohort; the arrival learns of itself
       // from the snapshot.
@@ -864,6 +889,14 @@ export function registerGateway(
             outcome: moved.outcome,
             player: moved.player,
           });
+          if (moved.outcome === 'moved') {
+            // One write per space crossed, none per step within one.
+            const spaceKey = spaceAt(map.spaces, moved.player);
+            if (spaceKey !== connection.spaceKey) {
+              connection.spaceKey = spaceKey;
+              presenceNow(connection);
+            }
+          }
           if (moved.changed) {
             const seat = {
               userId: connection.userId,

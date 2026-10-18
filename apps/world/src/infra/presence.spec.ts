@@ -22,6 +22,7 @@ const presenceOf = (
   userId,
   connectionId: randomUUID(),
   cohortId: 'cohort-1',
+  spaceKey: '_default',
   since: Date.now(),
   ...overrides,
 });
@@ -57,6 +58,21 @@ describe('MemoryPresenceStore', () => {
 
     await expect(store.renew([older])).resolves.toEqual([
       { userId: 'ada', connectionId: older.connectionId },
+    ]);
+  });
+
+  it('keeps the space each entry was last written with', async () => {
+    const store = new MemoryPresenceStore();
+    const ada = presenceOf('ada');
+    await store.enter(ada);
+
+    await store.renew([{ ...ada, spaceKey: 'library' }]);
+
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({
+        connectionId: ada.connectionId,
+        spaceKey: 'library',
+      }),
     ]);
   });
 
@@ -151,7 +167,7 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
   it('records the connection, instance and cohort, and lists them', async () => {
     const { user, cohort } = fresh();
     const { store } = instance();
-    const ada = presenceOf(user, { cohortId: cohort, spaceId: 'library' });
+    const ada = presenceOf(user, { cohortId: cohort, spaceKey: 'library' });
 
     await store.enter(ada);
 

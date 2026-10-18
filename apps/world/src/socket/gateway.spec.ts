@@ -19,7 +19,7 @@ import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
-import { emptySpaceIndex } from '../movement/spaces.js';
+import { spaceIndexFrom } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import {
   DISPLACED_CHANNEL,
@@ -147,7 +147,16 @@ const presence = {
     presence.entries.set(presenceKeyOf(entry.userId, entry.cohortId), entry);
     return true;
   },
+  /**
+   * Writes made the moment somebody crosses into another space, told apart
+   * from the regular renewal by who called: the gateway's presenceNow. So a
+   * test can count crossings without racing the renewal's timer.
+   */
+  crossings: [] as Presence[],
   renew: async (entries: readonly Presence[]) => {
+    if (new Error().stack?.includes('presenceNow')) {
+      presence.crossings.push(...entries);
+    }
     if (presence.failing) throw new Error('redis is down');
     const displaced: Displacement[] = [];
     for (const entry of entries) {
@@ -199,7 +208,8 @@ const env = loadEnv({
 
 /**
  * Small, with spawn in a corner, so an edge is one step away, and one wall
- * two steps below the spawn.
+ * two steps below the spawn. One drawn space, the library, in the top-right
+ * corner (x 3 to 4, y 0 to 1): three steps right of the spawn.
  */
 const WALL = { x: 0, y: 2 };
 const walls = new Uint8Array(5 * 5);
@@ -208,7 +218,23 @@ const map: WorldMap = {
   id: 'campus',
   version: 'v-test',
   grid: { width: 5, height: 5, spawn: { x: 0, y: 0 }, walls },
-  spaces: emptySpaceIndex(5, 5),
+  spaces: spaceIndexFrom({
+    widthTiles: 5,
+    heightTiles: 5,
+    collisions: [],
+    spawn: { x: 0, y: 0 },
+    spaces: [
+      {
+        key: 'library',
+        name: 'Library',
+        kind: null,
+        bounds: { shape: 'rect', x: 3, y: 0, width: 2, height: 2 },
+        properties: {},
+      },
+    ],
+    portals: [],
+    desks: [],
+  }),
 };
 
 let world: World;
@@ -2534,6 +2560,94 @@ describe('movement', () => {
       await expect
         .poll(() => presence.entries.has(presenceKeyOf(ada, 'cohort-frontend')))
         .toBe(false);
+    });
+
+    it('records the space they arrive in', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      await expect
+        .poll(() => presence.entries.get(presenceKeyOf(ada)))
+        .toMatchObject({ spaceKey: '_default' });
+      await leave(conn);
+    });
+
+    /** Somebody back where they stood last time is in that place's space. */
+    it('records the space of a saved position they come back to', async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada), { x: 3, y: 1, facing: 'left' });
+
+      const conn = await arrive(ada);
+
+      await expect
+        .poll(() => presence.entries.get(presenceKeyOf(ada)))
+        .toMatchObject({ spaceKey: 'library' });
+      await leave(conn);
+    });
+
+    /**
+     * Who is in which space has to be right the moment they cross, not at
+     * the next renewal; and a step within a space is not a crossing, so it
+     * costs no write.
+     */
+    it('writes the space as they cross into it and out of it, and not for steps within it', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+      const crossingsOf = () =>
+        presence.crossings
+          .filter((entry) => entry.userId === ada)
+          .map((entry) => entry.spaceKey);
+
+      // Three steps right: the third is into the library.
+      for (const [seq, direction] of ['right', 'right', 'right'].entries()) {
+        move(conn, direction, seq + 1);
+        await waitFor(
+          conn,
+          (m) => m.type === 'moveResult' && m.seq === seq + 1,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      await expect.poll(crossingsOf).toEqual(['library']);
+      expect(presence.entries.get(presenceKeyOf(ada))).toMatchObject({
+        spaceKey: 'library',
+      });
+
+      // Further in, still the library: no write.
+      move(conn, 'right', 4);
+      await waitFor(conn, (m) => m.type === 'moveResult' && m.seq === 4);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      move(conn, 'down', 5);
+      await waitFor(conn, (m) => m.type === 'moveResult' && m.seq === 5);
+      await quiet();
+      expect(crossingsOf()).toEqual(['library']);
+
+      // Back out the way they came.
+      move(conn, 'up', 6);
+      await waitFor(conn, (m) => m.type === 'moveResult' && m.seq === 6);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      for (const [i, seq] of [7, 8].entries()) {
+        move(conn, 'left', seq);
+        await waitFor(conn, (m) => m.type === 'moveResult' && m.seq === seq);
+        await new Promise((resolve) => setTimeout(resolve, 60 + i));
+      }
+      await expect.poll(crossingsOf).toEqual(['library', '_default']);
+
+      await leave(conn);
+    });
+
+    /** A turn on the spot, or a step into a wall, goes nowhere. */
+    it('writes nothing for a move that goes nowhere', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      move(conn, 'up', 1);
+      await waitFor(conn, (m) => m.type === 'moveResult' && m.seq === 1);
+      await quiet();
+
+      expect(
+        presence.crossings.filter((entry) => entry.userId === ada),
+      ).toEqual([]);
+      await leave(conn);
     });
 
     it('keeps the replacing socket present once the one it replaced closes', async () => {
