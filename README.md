@@ -10,7 +10,8 @@ apps/
   campus-api/   NestJS HTTP API (primary service)
   world/        Realtime WebSocket service: presence and movement
 packages/
-  session/      Session tokens, shared by campus-api (signs) and world (verifies)
+  session/      What campus-api and world must agree on: session tokens, roles,
+                sprite keys, the default space's key
   media/        LiveKit room tokens, minted by world
 docs/           Cross-service docs: auth flow, deployment, world protocol
 docker-compose.local.yml   Local dev dependencies (Postgres, Redis, LiveKit, OTel Collector)
@@ -26,6 +27,13 @@ otel-collector.yaml        Local OpenTelemetry Collector config
 | `world`           | Fastify 5          | `3001`       | [apps/world/README.md](apps/world/README.md)           |
 | `@campus/session` | TypeScript library | —            | —                                                      |
 | `@campus/media`   | TypeScript library | —            | —                                                      |
+
+`@campus/session` is the contract between campus-api and world: anything both
+services have to read or write the same way lives there, once, so the two
+cannot drift. It began with the session token, which is where its name comes
+from; it now also holds the system roles, the sprite keys and how a profile
+change is announced, and the default space's key. Nothing in it depends on
+either app. A rule only one service needs belongs in that service.
 
 `@campus/session` ships compiled output, so an app that depends on it needs it
 built first. The root scripts below do that for you; a bare

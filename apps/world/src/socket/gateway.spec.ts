@@ -19,6 +19,7 @@ import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
+import { emptySpaceIndex } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import {
   DISPLACED_CHANNEL,
@@ -207,6 +208,7 @@ const map: WorldMap = {
   id: 'campus',
   version: 'v-test',
   grid: { width: 5, height: 5, spawn: { x: 0, y: 0 }, walls },
+  spaces: emptySpaceIndex(5, 5),
 };
 
 let world: World;
