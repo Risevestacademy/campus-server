@@ -110,7 +110,7 @@ root:
 
 - **Postgres 18** — primary database (port 5432)
 - **Redis 7** — cache / streams (port 6379)
-- **LiveKit** — realtime video/audio (ports 7880-7882, 50000-60000 UDP)
+- **LiveKit** — realtime video/audio (ports 7880-7882; all media over UDP 7882)
 - **OpenTelemetry Collector** — local trace sink (ports 4317 gRPC / 4318 HTTP)
 
 ```bash
