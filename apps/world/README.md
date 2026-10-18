@@ -23,16 +23,16 @@ server decides every position.
   avatar stays where it stood. See
   [the protocol doc](../../docs/world-protocol.md#one-connection-per-cohort).
   This holds across instances too: see presence, below.
-- **Presence in Redis:** who is online, in which cohort (and later which
-  space), per account and cohort: the live connection and the instance
-  holding it. Each
-  entry expires `WORLD_PRESENCE_TTL_SECONDS` after its instance stops renewing
-  it, so a crashed instance's people drop out on their own. When a connection
+- **Presence in Redis:** who is online, in which cohort and in which space
+  (the space's key, or `_default` between drawn spaces, rewritten the moment
+  somebody crosses into another space and with every renewal), per account
+  and cohort: the live connection and the instance holding it. Each entry
+  expires `WORLD_PRESENCE_TTL_SECONDS` after its instance stops renewing it,
+  so a crashed instance's people drop out on their own. When a connection
   takes the place of one in the same cohort on another instance, world
-  publishes that on
-  `world:presence:displaced`, and the other instance closes the old socket
-  with `entered_elsewhere`. Without `REDIS_URL`, presence is kept in memory,
-  which only works for a single instance.
+  publishes that on `world:presence:displaced`, and the other instance
+  closes the old socket with `entered_elsewhere`. Without `REDIS_URL`,
+  presence is kept in memory, which only works for a single instance.
 - **Keeps sockets honest:**
   - a heartbeat drops sockets that stopped answering
   - follows the sign-in behind each socket rather than its fifteen-minute
