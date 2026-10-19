@@ -204,6 +204,67 @@ describe('the cohort date rule against data the old schema permitted', () => {
   });
 });
 
+/**
+ * The call tables are new, but they point at spaces and users that deployed
+ * databases already hold.
+ */
+describe('the call tables over a campus that already has spaces and people', () => {
+  const FILE = '0017_call_sessions.sql';
+  let pg: PGlite;
+  let spaceId: string;
+  let userId: string;
+
+  beforeEach(async () => {
+    pg = new PGlite();
+    for (const f of before(FILE)) {
+      await apply(pg, f);
+    }
+    userId = (
+      await pg.query<{ id: string }>(
+        "insert into users (email) values ('ada@campus.local') returning id",
+      )
+    ).rows[0].id;
+    const mapId = (
+      await pg.query<{ id: string }>(
+        "insert into maps (key, name, is_entry) values ('campus', 'Campus', true) returning id",
+      )
+    ).rows[0].id;
+    spaceId = (
+      await pg.query<{ id: string }>(
+        `insert into spaces (map_id, key, name, audio_mode, access)
+         values ('${mapId}', 'library', 'Library', 'boundary', 'open') returning id`,
+      )
+    ).rows[0].id;
+  });
+
+  it('applies, leaving the spaces and people as they were', async () => {
+    await apply(pg, FILE);
+
+    const counts = await pg.query<{ spaces: number; users: number }>(
+      'select (select count(*)::int from spaces) as spaces, (select count(*)::int from users) as users',
+    );
+    expect(counts.rows).toEqual([{ spaces: 1, users: 1 }]);
+  });
+
+  it('records a call in a space that was there before it', async () => {
+    await apply(pg, FILE);
+
+    const sessionId = (
+      await pg.query<{ id: string }>(
+        `insert into sessions (space_id, provider_room_id) values ('${spaceId}', 'room-1') returning id`,
+      )
+    ).rows[0].id;
+    await pg.query(
+      `insert into session_participants (session_id, user_id) values ('${sessionId}', '${userId}')`,
+    );
+
+    const res = await pg.query<{ video_enabled: boolean }>(
+      'select video_enabled from session_participants',
+    );
+    expect(res.rows).toEqual([{ video_enabled: false }]);
+  });
+});
+
 describe('finding a migration by name', () => {
   it('fails clearly for a migration that is not there', () => {
     expect(() => before('0099_never_written.sql')).toThrow(

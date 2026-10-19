@@ -1,7 +1,7 @@
 %% =====================================================================
 %% Campus by Rise — full ERD
 %% GENERATED — do not hand-edit.
-%% 34 tables, 28 enums.
+%% 34 tables, 27 enums.
 %% -
 %% Mermaid ER cannot express nullability, defaults, column lengths,
 %% partial indexes or CHECK constraints. Those are listed at the
@@ -191,9 +191,8 @@ erDiagram
         uuid space_id FK
         media_provider_enum provider "livekit"
         varchar provider_room_id
-        session_status_enum status "open | closed"
         timestamptz opened_at
-        timestamptz closed_at
+        timestamptz closed_at "null while open"
     }
 
     SESSION_PARTICIPANTS {
@@ -201,9 +200,8 @@ erDiagram
         uuid session_id FK
         uuid user_id FK
         timestamptz joined_at
-        timestamptz left_at
-        int published_seconds
-        boolean video_enabled
+        timestamptz left_at "null while in the call"
+        boolean video_enabled "off unless they turned it on"
     }
 
     %% --------------------------------------- scheduling + attendance
@@ -513,7 +511,7 @@ erDiagram
 %%   access_requests(space_id, user_id)  WHERE status = 'pending'
 %%   desk_claims(desk_id)                WHERE released_at is null
 %%   desk_claims(user_id)                WHERE released_at is null
-%%   sessions(space_id)                  WHERE status = 'open'
+%%   sessions(space_id)                  WHERE closed_at is null
 %%   projects(user_id)                   WHERE is_pinned
 %%   conversations(kind)                 WHERE kind = 'campus'
 %%   conversations(space_id)             WHERE kind = 'space'
