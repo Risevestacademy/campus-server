@@ -1,5 +1,21 @@
 import { Direction, step, walkable, type Grid } from './grid.js';
 
+/**
+ * An account's place in one cohort's campus: who, and in which campus. The
+ * two always travel together, as one value, so a call cannot be handed them
+ * the wrong way round. Anything with both fields is one, a connection
+ * included.
+ */
+export interface Seat {
+  readonly userId: string;
+  readonly cohortId: string;
+}
+
+/** A seat as a single string, for keying a map by it. */
+export function seatKey({ userId, cohortId }: Seat): string {
+  return `${cohortId}\u0000${userId}`;
+}
+
 /** Where somebody stands, and which way they face. What other clients draw. */
 export interface Player {
   userId: string;
@@ -84,8 +100,7 @@ export class Players {
    * existing player if they are already standing in this cohort.
    */
   join(
-    userId: string,
-    cohortId: string,
+    { userId, cohortId }: Seat,
     now: number,
     saved?: Pick<Player, 'x' | 'y' | 'facing'>,
   ): Player {
@@ -95,11 +110,11 @@ export class Players {
     }
 
     const remembered = this.departed.get(cohortId)?.get(userId);
-    deleteIn(this.departed, cohortId, userId);
+    deleteIn(this.departed, { userId, cohortId });
     if (remembered && remembered.until > now) {
       // The step allowance comes back as it was: leaving and rejoining must
       // not be a way to refill it.
-      setIn(this.standing, cohortId, userId, remembered.held);
+      setIn(this.standing, { userId, cohortId }, remembered.held);
       return { ...remembered.held.player };
     }
 
@@ -115,11 +130,15 @@ export class Players {
             y: this.grid.spawn.y,
             facing: Direction.Down,
           };
-    setIn(this.standing, cohortId, userId, {
-      player,
-      steps: STEP_BURST,
-      refilledAt: now,
-    });
+    setIn(
+      this.standing,
+      { userId, cohortId },
+      {
+        player,
+        steps: STEP_BURST,
+        refilledAt: now,
+      },
+    );
     return { ...player };
   }
 
@@ -132,25 +151,24 @@ export class Players {
    * this cohort entirely — for access being taken away, where there is
    * nothing to come back to.
    */
-  leave(
-    userId: string,
-    cohortId: string,
-    now: number,
-    remember: boolean,
-  ): boolean {
+  leave({ userId, cohortId }: Seat, now: number, remember: boolean): boolean {
     const held = this.standing.get(cohortId)?.get(userId);
     if (!remember) {
-      deleteIn(this.departed, cohortId, userId);
+      deleteIn(this.departed, { userId, cohortId });
     }
     if (!held) {
       return false;
     }
-    deleteIn(this.standing, cohortId, userId);
+    deleteIn(this.standing, { userId, cohortId });
     if (remember && this.graceMs > 0) {
-      setIn(this.departed, cohortId, userId, {
-        held,
-        until: now + this.graceMs,
-      });
+      setIn(
+        this.departed,
+        { userId, cohortId },
+        {
+          held,
+          until: now + this.graceMs,
+        },
+      );
     }
     return true;
   }
@@ -164,7 +182,7 @@ export class Players {
     for (const [cohortId, inCohort] of this.departed) {
       for (const [userId, remembered] of inCohort) {
         if (remembered.until <= now) {
-          deleteIn(this.departed, cohortId, userId);
+          deleteIn(this.departed, { userId, cohortId });
         }
       }
     }
@@ -176,7 +194,7 @@ export class Players {
    * next `forgetExpired`; `join` checks the time itself, so that never
    * resumes anybody late.
    */
-  isRemembered(userId: string, cohortId: string): boolean {
+  isRemembered({ userId, cohortId }: Seat): boolean {
     return this.departed.get(cohortId)?.has(userId) ?? false;
   }
 
@@ -190,12 +208,12 @@ export class Players {
     return count;
   }
 
-  get(userId: string, cohortId: string): Player | undefined {
+  get({ userId, cohortId }: Seat): Player | undefined {
     const held = this.standing.get(cohortId)?.get(userId);
     return held ? { ...held.player } : undefined;
   }
 
-  has(userId: string, cohortId: string): boolean {
+  has({ userId, cohortId }: Seat): boolean {
     return this.standing.get(cohortId)?.has(userId) ?? false;
   }
 
@@ -214,8 +232,7 @@ export class Players {
   }
 
   move(
-    userId: string,
-    cohortId: string,
+    { userId, cohortId }: Seat,
     direction: Direction,
     now: number,
   ): MoveResult {
@@ -266,10 +283,10 @@ export class Players {
   }
 }
 
+/** Cohort, then account: each cohort's campus kept together. */
 function setIn<T>(
   outer: Map<string, Map<string, T>>,
-  cohortId: string,
-  userId: string,
+  { userId, cohortId }: Seat,
   value: T,
 ): void {
   let inner = outer.get(cohortId);
@@ -282,8 +299,7 @@ function setIn<T>(
 
 function deleteIn<T>(
   outer: Map<string, Map<string, T>>,
-  cohortId: string,
-  userId: string,
+  { userId, cohortId }: Seat,
 ): void {
   const inner = outer.get(cohortId);
   if (!inner) return;

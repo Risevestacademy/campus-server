@@ -649,7 +649,12 @@ describe('sockets that go wrong', () => {
       await conn.settled;
 
       await expect
-        .poll(() => world.gateway.players.isRemembered(REVOKED, COHORT))
+        .poll(() =>
+          world.gateway.players.isRemembered({
+            userId: REVOKED,
+            cohortId: COHORT,
+          }),
+        )
         .toBe(true);
     }, 15_000);
 
@@ -769,7 +774,12 @@ describe('a socket following its login', () => {
       closeReason: 'session_ended',
     });
     await expect
-      .poll(() => world.gateway.players.isRemembered('user-3', COHORT))
+      .poll(() =>
+        world.gateway.players.isRemembered({
+          userId: 'user-3',
+          cohortId: COHORT,
+        }),
+      )
       .toBe(true);
   }, 15_000);
 
@@ -850,7 +860,9 @@ describe('re-checking the cohort a socket named', () => {
     // A visit that runs out is not access being taken away: the position is
     // kept, for the visit an admin may extend, as an upgrade refused for
     // not_a_member keeps it too.
-    expect(world.gateway.players.isRemembered(GUEST, COHORT)).toBe(true);
+    expect(
+      world.gateway.players.isRemembered({ userId: GUEST, cohortId: COHORT }),
+    ).toBe(true);
   }, 15_000);
 
   /** Campus-api's sign-in gate admits an admin on their role alone; so does this. */
@@ -1495,7 +1507,9 @@ describe('movement', () => {
       type: 'left',
       userId: ada,
     });
-    expect(world.gateway.players.has(ada, COHORT)).toBe(false);
+    expect(world.gateway.players.has({ userId: ada, cohortId: COHORT })).toBe(
+      false,
+    );
 
     await leave(staying);
   });
@@ -1580,7 +1594,9 @@ describe('movement', () => {
         false,
       );
       expect(inBackend.messages.some((m) => m.type === 'moved')).toBe(false);
-      expect(world.gateway.players.get(ada, 'cohort-backend')).toMatchObject({
+      expect(
+        world.gateway.players.get({ userId: ada, cohortId: 'cohort-backend' }),
+      ).toMatchObject({
         x: 0,
         y: 0,
       });
@@ -1798,7 +1814,9 @@ describe('movement', () => {
         ),
       ).toBe(false);
       expect(world.gateway.connections.forUser(ada)).toHaveLength(2);
-      expect(world.gateway.players.get(ada, 'cohort-frontend')).toMatchObject({
+      expect(
+        world.gateway.players.get({ userId: ada, cohortId: 'cohort-frontend' }),
+      ).toMatchObject({
         x: 1,
         y: 0,
       });
@@ -1857,10 +1875,15 @@ describe('movement', () => {
           (m) => m.type === 'left' && m.userId === ada,
         ),
       ).toBe(false);
-      expect(world.gateway.players.has(ada, 'cohort-backend')).toBe(true);
-      expect(world.gateway.players.isRemembered(ada, 'cohort-frontend')).toBe(
-        true,
-      );
+      expect(
+        world.gateway.players.has({ userId: ada, cohortId: 'cohort-backend' }),
+      ).toBe(true);
+      expect(
+        world.gateway.players.isRemembered({
+          userId: ada,
+          cohortId: 'cohort-frontend',
+        }),
+      ).toBe(true);
 
       await leave(inBackend);
       await leave(frontendWatcher);
@@ -1998,7 +2021,12 @@ describe('movement', () => {
       await waitFor(first, (m) => m.type === 'moveResult');
       await leave(first);
       await expect
-        .poll(() => world.gateway.players.isRemembered(ada, 'cohort-frontend'))
+        .poll(() =>
+          world.gateway.players.isRemembered({
+            userId: ada,
+            cohortId: 'cohort-frontend',
+          }),
+        )
         .toBe(true);
 
       const again = await arrive(ada, 'cohort-frontend');
@@ -2022,7 +2050,9 @@ describe('movement', () => {
       await first.settled;
 
       await quiet();
-      expect(world.gateway.players.has(ada, COHORT)).toBe(true);
+      expect(world.gateway.players.has({ userId: ada, cohortId: COHORT })).toBe(
+        true,
+      );
       expect(
         watcher.messages.some((m) => m.type === 'left' && m.userId === ada),
       ).toBe(false);
@@ -2142,7 +2172,9 @@ describe('movement', () => {
       await quiet();
 
       expect(world.gateway.connections.forUser(ada)).toEqual([]);
-      expect(world.gateway.players.has(ada, 'cohort-backend')).toBe(false);
+      expect(
+        world.gateway.players.has({ userId: ada, cohortId: 'cohort-backend' }),
+      ).toBe(false);
       expect(store.positions.size).toBe(0);
     });
 
@@ -2172,7 +2204,9 @@ describe('movement', () => {
       await quiet();
       expect(inFrontend.ws.readyState).toBe(WebSocket.OPEN);
       expect(world.gateway.connections.forUser(ada)).toHaveLength(2);
-      expect(world.gateway.players.get(ada, 'cohort-frontend')).toMatchObject({
+      expect(
+        world.gateway.players.get({ userId: ada, cohortId: 'cohort-frontend' }),
+      ).toMatchObject({
         x: 1,
         y: 0,
       });
@@ -2211,11 +2245,15 @@ describe('movement', () => {
 
       await waitFor(inBackend, (m) => m.type === 'snapshot');
       await waitFor(inFrontend, (m) => m.type === 'snapshot');
-      expect(world.gateway.players.get(ada, 'cohort-backend')).toMatchObject({
+      expect(
+        world.gateway.players.get({ userId: ada, cohortId: 'cohort-backend' }),
+      ).toMatchObject({
         x: 3,
         y: 2,
       });
-      expect(world.gateway.players.get(ada, 'cohort-frontend')).toMatchObject({
+      expect(
+        world.gateway.players.get({ userId: ada, cohortId: 'cohort-frontend' }),
+      ).toMatchObject({
         x: 4,
         y: 1,
       });
@@ -2263,7 +2301,9 @@ describe('movement', () => {
       await leave(first);
       // The client sees its close before the server has handled it.
       await expect
-        .poll(() => world.gateway.players.isRemembered(ada, COHORT))
+        .poll(() =>
+          world.gateway.players.isRemembered({ userId: ada, cohortId: COHORT }),
+        )
         .toBe(true);
       await expect
         .poll(() => store.positions.get(positionKey(ada)))
@@ -2278,7 +2318,9 @@ describe('movement', () => {
         message: 'account_suspended',
       });
       await refused.settled;
-      expect(world.gateway.players.isRemembered(ada, COHORT)).toBe(false);
+      expect(
+        world.gateway.players.isRemembered({ userId: ada, cohortId: COHORT }),
+      ).toBe(false);
       await expect
         .poll(() => store.positions.has(positionKey(ada)))
         .toBe(false);
@@ -2379,7 +2421,9 @@ describe('movement', () => {
     ).resolves.toMatchObject({
       userId: ada,
     });
-    expect(world.gateway.players.has(ada, COHORT)).toBe(false);
+    expect(world.gateway.players.has({ userId: ada, cohortId: COHORT })).toBe(
+      false,
+    );
     expect(world.gateway.connections.forUser(ada)).toEqual([]);
 
     await leave(watcher);
@@ -2399,9 +2443,13 @@ describe('movement', () => {
     ).resolves.toMatchObject({
       userId: ada,
     });
-    expect(world.gateway.players.has(ada, COHORT)).toBe(false);
+    expect(world.gateway.players.has({ userId: ada, cohortId: COHORT })).toBe(
+      false,
+    );
     // Access taken away: nothing kept to come back to.
-    expect(world.gateway.players.isRemembered(ada, COHORT)).toBe(false);
+    expect(
+      world.gateway.players.isRemembered({ userId: ada, cohortId: COHORT }),
+    ).toBe(false);
 
     await leave(watcher);
   }, 15_000);
@@ -2508,7 +2556,9 @@ describe('movement', () => {
       await waitFor(first, (m) => m.type === 'moveResult');
       await leave(first);
       await expect
-        .poll(() => world.gateway.players.isRemembered(ada, COHORT))
+        .poll(() =>
+          world.gateway.players.isRemembered({ userId: ada, cohortId: COHORT }),
+        )
         .toBe(true);
       const loadsBefore = store.loads;
 
@@ -2686,7 +2736,9 @@ describe('movement', () => {
       await expect(
         waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
       ).resolves.toBeDefined();
-      expect(world.gateway.players.has(ada, COHORT)).toBe(false);
+      expect(world.gateway.players.has({ userId: ada, cohortId: COHORT })).toBe(
+        false,
+      );
 
       await leave(watcher);
     });
@@ -2881,7 +2933,9 @@ describe.skipIf(!redisUrl)('across instances', () => {
 
     await expect(onFirst.closed).resolves.toEqual([4000, 'entered_elsewhere']);
     expect(onFirst.messages).toContainEqual({ type: 'replaced' });
-    expect(first.gateway.players.has(userId, cohortId)).toBe(false);
+    expect(
+      first.gateway.players.has({ userId: userId, cohortId: cohortId }),
+    ).toBe(false);
     const welcome = onSecond.messages.find((m) => m.type === 'welcome');
     await expect(second.presence.online(cohortId)).resolves.toEqual([
       expect.objectContaining({
