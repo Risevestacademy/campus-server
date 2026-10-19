@@ -22,6 +22,7 @@ const presenceOf = (
   userId,
   connectionId: randomUUID(),
   cohortId: 'cohort-1',
+  spaceKey: '_default',
   since: Date.now(),
   ...overrides,
 });
@@ -57,6 +58,39 @@ describe('MemoryPresenceStore', () => {
 
     await expect(store.renew([older])).resolves.toEqual([
       { userId: 'ada', connectionId: older.connectionId },
+    ]);
+  });
+
+  it('rewrites the space on a change of space, unless a newer connection holds the place', async () => {
+    const store = new MemoryPresenceStore();
+    const older = presenceOf('ada', { since: 1 });
+    await store.enter(older);
+
+    await expect(
+      store.changeSpace({ ...older, spaceKey: 'library' }),
+    ).resolves.toBe(true);
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({ spaceKey: 'library' }),
+    ]);
+
+    await store.enter(presenceOf('ada', { since: 2 }));
+    await expect(
+      store.changeSpace({ ...older, spaceKey: 'courtyard' }),
+    ).resolves.toBe(false);
+  });
+
+  it('keeps the space each entry was last written with', async () => {
+    const store = new MemoryPresenceStore();
+    const ada = presenceOf('ada');
+    await store.enter(ada);
+
+    await store.renew([{ ...ada, spaceKey: 'library' }]);
+
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({
+        connectionId: ada.connectionId,
+        spaceKey: 'library',
+      }),
     ]);
   });
 
@@ -151,7 +185,7 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
   it('records the connection, instance and cohort, and lists them', async () => {
     const { user, cohort } = fresh();
     const { store } = instance();
-    const ada = presenceOf(user, { cohortId: cohort, spaceId: 'library' });
+    const ada = presenceOf(user, { cohortId: cohort, spaceKey: 'library' });
 
     await store.enter(ada);
 
@@ -168,7 +202,9 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     await expect(store.online(cohort)).resolves.toEqual([]);
-    await expect(redis.exists(presenceKey(user, cohort))).resolves.toBe(0);
+    await expect(
+      redis.exists(presenceKey({ userId: user, cohortId: cohort })),
+    ).resolves.toBe(0);
   });
 
   it('keeps a renewed entry past when it would have expired', async () => {
@@ -189,7 +225,7 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     const { store, redis } = instance();
     const ada = presenceOf(user, { cohortId: cohort });
     await store.enter(ada);
-    await redis.del(presenceKey(user, cohort));
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
 
     await expect(store.renew([ada])).resolves.toEqual([]);
 
@@ -254,6 +290,45 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     ]);
     const [entry] = await a.store.online(cohort);
     expect(entry?.connectionId).toBe(newer.connectionId);
+  });
+
+  it('rewrites the space on a change of space and on a renewal', async () => {
+    const { user, cohort } = fresh();
+    const { store } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+
+    await expect(
+      store.changeSpace({ ...ada, spaceKey: 'library' }),
+    ).resolves.toBe(true);
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ spaceKey: 'library' }),
+    ]);
+
+    await store.renew([{ ...ada, spaceKey: 'courtyard' }]);
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ spaceKey: 'courtyard' }),
+    ]);
+  });
+
+  /**
+   * An entry written by code from before spaces were recorded has none, and
+   * is left out of the list until it is written again with one.
+   */
+  it('leaves out an entry written without a space', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+    await redis.hdel(
+      presenceKey({ userId: user, cohortId: cohort }),
+      'spaceKey',
+    );
+
+    await expect(store.online(cohort)).resolves.toEqual([]);
+
+    await store.renew([ada]);
+    await expect(store.online(cohort)).resolves.toHaveLength(1);
   });
 
   /**

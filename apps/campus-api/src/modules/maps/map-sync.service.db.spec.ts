@@ -853,6 +853,36 @@ describe('a map no longer published', () => {
 });
 
 describe('the entry map', () => {
+  /**
+   * The database holds the campus to at most one entry map; the sync is what
+   * makes it exactly one. After any sync that is let through, there is one
+   * live entry map, the one published as it, whatever there was before.
+   */
+  it('leaves exactly one live entry map after every sync', async () => {
+    const liveEntries = async () =>
+      (await mapRows())
+        .filter((row) => row.isEntry && row.retiredAt === null)
+        .map((row) => row.key);
+
+    for (const published of [
+      [map('campus')],
+      [
+        map('campus', [], { isEntry: false }),
+        map('annex', [], { isEntry: true }),
+      ],
+      [map('plaza', [], { isEntry: true })],
+      [
+        map('campus', [], { isEntry: true }),
+        map('plaza', [], { isEntry: false }),
+      ],
+    ]) {
+      await sync(published);
+      await expect(liveEntries()).resolves.toEqual([
+        published.find((one) => one.isEntry)!.key,
+      ]);
+    }
+  });
+
   /** The database allows one at a time, so the old one lets go first. */
   it('moves from one map to another in a single sync', async () => {
     await sync([map('campus'), map('annex')]);

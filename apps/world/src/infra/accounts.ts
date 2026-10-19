@@ -5,6 +5,7 @@ import {
 } from '@campus/session';
 import postgres from 'postgres';
 
+import type { Seat } from '../seat.js';
 import type { Env } from './env.js';
 
 /**
@@ -25,7 +26,7 @@ export interface AccountLookup {
     refreshedSince: Date,
     now: Date,
   ): Promise<Set<string>>;
-  liveMembership(userId: string, cohortId: string, now: Date): Promise<boolean>;
+  liveMembership(seat: Seat, now: Date): Promise<boolean>;
   /**
    * Calls `listener` with an account id whenever campus-api says that
    * account's sprite or display name changed. Resolves once listening;
@@ -167,7 +168,7 @@ export function createAccountLookup(env: Env): AccountLookup {
       // the driver. The payload is the account id campus-api changed.
       await sql.listen(PROFILE_CHANGED_CHANNEL, (userId) => listener(userId));
     },
-    async liveMembership(userId, cohortId, now): Promise<boolean> {
+    async liveMembership({ userId, cohortId }, now): Promise<boolean> {
       if (!looksLikeId(cohortId)) {
         return false;
       }

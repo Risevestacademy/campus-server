@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 
 import type { Appearance } from '../infra/accounts.js';
+import type { Seat } from '../seat.js';
 
 export interface Connection {
   id: string;
@@ -9,6 +10,11 @@ export interface Connection {
   cohortId: string;
   /** As the account was when this socket opened, updated as it changes. */
   appearance: Appearance;
+  /**
+   * The space this socket's avatar stands in: a drawn space's key, or the
+   * map's default space. Updated as the avatar crosses from one to another.
+   */
+  spaceKey: string;
   socket: WebSocket;
   /**
    * When the access token this socket opened with runs out. Enforced only
@@ -88,7 +94,7 @@ export class Connections {
   }
 
   /** The socket holding the account's place in one cohort. */
-  get(userId: string, cohortId: string): Connection | undefined {
+  holderOf({ userId, cohortId }: Seat): Connection | undefined {
     return this.byUser.get(userId)?.get(cohortId);
   }
 

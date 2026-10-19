@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
 
+import type { Seat } from '../seat.js';
 import type { Env } from './env.js';
 import {
   FAIL_FAST,
@@ -16,8 +17,12 @@ export interface Presence {
   userId: string;
   connectionId: string;
   cohortId: string;
-  /** Unset until spaces exist (W6). */
-  spaceId?: string;
+  /**
+   * The key of the space they are standing in, as the map draws it, or the
+   * map's default space between drawn ones. Rewritten the moment they cross
+   * into another space, and with every renewal.
+   */
+  spaceKey: string;
   /**
    * When the connection opened, in ms. The newest connection in a cohort
    * holds the account's place there.
@@ -68,6 +73,12 @@ export interface PresenceStore {
    * holds: the message telling this instance so may have been missed.
    */
   renew(presences: readonly Presence[]): Promise<Displacement[]>;
+  /**
+   * Rewrites one connection's entry for a move into another space. The same
+   * write as a renewal, kept apart so a crossing has a name of its own.
+   * Resolves false when a newer connection holds the place.
+   */
+  changeSpace(presence: Presence): Promise<boolean>;
   /** Only for connections still holding their account's place. */
   leave(presences: readonly Presence[]): Promise<void>;
   online(cohortId: string): Promise<PresenceEntry[]>;
@@ -92,12 +103,8 @@ export function isNewer(
   );
 }
 
-export function presenceKey(userId: string, cohortId: string): string {
+export function presenceKey({ userId, cohortId }: Seat): string {
   return `world:presence:user:${userId}:cohort:${cohortId}`;
-}
-
-function keyOf({ userId, cohortId }: Presence): string {
-  return presenceKey(userId, cohortId);
 }
 
 export function cohortPresenceKey(cohortId: string): string {
@@ -120,6 +127,10 @@ export class MemoryPresenceStore implements PresenceStore {
     return this.claim(presence);
   }
 
+  async changeSpace(presence: Presence): Promise<boolean> {
+    return this.claim(presence);
+  }
+
   async renew(presences: readonly Presence[]): Promise<Displacement[]> {
     return presences
       .filter((presence) => !this.claim(presence))
@@ -128,7 +139,7 @@ export class MemoryPresenceStore implements PresenceStore {
 
   /** Takes the place unless a newer connection holds it; true if it did. */
   private claim(presence: Presence): boolean {
-    const held = this.entries.get(keyOf(presence));
+    const held = this.entries.get(presenceKey(presence));
     if (
       held &&
       held.connectionId !== presence.connectionId &&
@@ -136,13 +147,13 @@ export class MemoryPresenceStore implements PresenceStore {
     ) {
       return false;
     }
-    this.entries.set(keyOf(presence), presence);
+    this.entries.set(presenceKey(presence), presence);
     return true;
   }
 
   async leave(presences: readonly Presence[]): Promise<void> {
     for (const presence of presences) {
-      const key = keyOf(presence);
+      const key = presenceKey(presence);
       if (this.entries.get(key)?.connectionId === presence.connectionId) {
         this.entries.delete(key);
       }
@@ -215,7 +226,7 @@ export function createPresenceStore(
 const CLAIM = `
 local held = redis.call('HMGET', KEYS[1], 'connectionId', 'instanceId', 'since')
 local holder = held[1]
-local userId, connectionId, instanceId, cohortId, spaceId, since, ttl, lapses =
+local userId, connectionId, instanceId, cohortId, spaceKey, since, ttl, lapses =
   ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8]
 if holder and holder ~= connectionId then
   local heldSince, mine = tonumber(held[3]) or 0, tonumber(since)
@@ -225,10 +236,8 @@ if holder and holder ~= connectionId then
 end
 redis.call('DEL', KEYS[1])
 redis.call('HSET', KEYS[1], 'connectionId', connectionId,
-  'instanceId', instanceId, 'cohortId', cohortId, 'since', since)
-if spaceId ~= '' then
-  redis.call('HSET', KEYS[1], 'spaceId', spaceId)
-end
+  'instanceId', instanceId, 'cohortId', cohortId, 'spaceKey', spaceKey,
+  'since', since)
 redis.call('PEXPIRE', KEYS[1], ttl)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', tonumber(lapses) - tonumber(ttl))
 redis.call('ZADD', KEYS[2], lapses, userId)
@@ -258,7 +267,7 @@ const storedEntry = z.object({
   connectionId: z.string(),
   instanceId: z.string(),
   cohortId: z.string(),
-  spaceId: z.string().optional(),
+  spaceKey: z.string(),
   since: z.coerce.number().int(),
 });
 
@@ -305,6 +314,10 @@ export class RedisPresenceStore implements PresenceStore {
     return (await this.claim(presence)) !== 'newer';
   }
 
+  async changeSpace(presence: Presence): Promise<boolean> {
+    return (await this.claim(presence)) !== 'newer';
+  }
+
   async renew(presences: readonly Presence[]): Promise<Displacement[]> {
     const outcomes = await Promise.all(
       presences.map((presence) => this.claim(presence)),
@@ -318,7 +331,7 @@ export class RedisPresenceStore implements PresenceStore {
     await Promise.all(
       presences.map(({ userId, connectionId, cohortId }) =>
         this.scripts.releasePresence(
-          presenceKey(userId, cohortId),
+          presenceKey({ userId, cohortId }),
           cohortPresenceKey(cohortId),
           userId,
           connectionId,
@@ -338,7 +351,7 @@ export class RedisPresenceStore implements PresenceStore {
     }
     const batch = this.redis.pipeline();
     for (const userId of userIds) {
-      batch.hgetall(presenceKey(userId, cohortId));
+      batch.hgetall(presenceKey({ userId, cohortId }));
     }
     const replies = (await batch.exec()) ?? [];
 
@@ -368,15 +381,15 @@ export class RedisPresenceStore implements PresenceStore {
   }
 
   private async claim(presence: Presence): Promise<ClaimReply[0]> {
-    const { userId, connectionId, cohortId, spaceId, since } = presence;
+    const { userId, connectionId, cohortId, spaceKey, since } = presence;
     const reply = await this.scripts.claimPresence(
-      presenceKey(userId, cohortId),
+      presenceKey(presence),
       cohortPresenceKey(cohortId),
       userId,
       connectionId,
       this.instanceId,
       cohortId,
-      spaceId ?? '',
+      spaceKey,
       since,
       this.ttlMs,
       Date.now() + this.ttlMs,

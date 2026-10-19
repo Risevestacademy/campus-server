@@ -50,9 +50,16 @@ The payload types are this module's own. They are written out in
 `audit-log.ts`, not picked off the cohorts, tracks or invites row types, so
 the modules that write entries depend on this one and it does not depend back
 on them. A role or a status is therefore a `string` here: those vocabularies
-belong to their own modules, and the log records the value it is given. The
-one import that remains is the `users` table in `schema.ts`, which the
-`actor_user_id` foreign key needs.
+belong to their own modules, and the log records the value it is given.
+
+Two imports remain, both tables, both in `schema.ts`, both for a foreign key:
+`users`, for `actor_user_id`, and the maps module's `spaces`, for `space_id`,
+so an entry about a space names one that exists. drizzle declares a foreign
+key on the table that holds it, so the reference has to sit here; declaring
+it anywhere else leaves the migrations and the schema disagreeing. That is
+the whole of the dependency: a table, never a module's services or types.
+`maps/schema.ts` imports nothing from audit, so there is no cycle, and
+`schema.boundary.spec.ts` fails if audit's schema imports anything else.
 
 Writing needs no Nest module and nothing to inject: `writeAuditEntry` is a
 plain function, called by the service that makes the change. `AuditModule`
