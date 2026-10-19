@@ -137,6 +137,15 @@ const schema = z
     WORLD_PRESENCE_TTL_SECONDS: z.coerce.number().int().min(3).default(60),
 
     /**
+     * How long somebody may do nothing before they show as Away to their
+     * cohort, until they do something again. Checked at every heartbeat, so
+     * it shows up to WORLD_HEARTBEAT_SECONDS later. Long enough that reading,
+     * or a call with nobody touching the keys, is not taken for leaving, and
+     * short enough that a real absence shows within a break. 0 turns it off.
+     */
+    WORLD_AWAY_AFTER_SECONDS: z.coerce.number().int().min(0).default(600),
+
+    /**
      * How recently a login must have been refreshed for its socket to stay
      * open. A client refreshes at least once per access token, and the shared
      * session policy caps those at fifteen minutes, so the window must cover
