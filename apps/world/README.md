@@ -142,7 +142,8 @@ Messages are defined once, in `src/socket/protocol.ts`. From them:
 
 `POST /media/connection-check` gives a signed-in member a token for
 LiveKit's pre-join device and network check (`ConnectionCheck` in
-`livekit-client`, or LiveKit's hosted connection test). No request body.
+`livekit-client`, or LiveKit's hosted connection test). No request body;
+one marked `Content-Type: application/json` may still be empty.
 
 - **Who:** the same sign-in as the socket, without the cohort: a
   `full_access` session whose account still exists, is not suspended, and

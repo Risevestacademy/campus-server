@@ -314,6 +314,9 @@ describe('POST /media/connection-check', () => {
       expect(allowed.headers['access-control-allow-headers']).toContain(
         'authorization',
       );
+      expect(allowed.headers['access-control-allow-headers']).toContain(
+        'content-type',
+      );
 
       const other = await app.inject({
         method: 'OPTIONS',
@@ -325,6 +328,39 @@ describe('POST /media/connection-check', () => {
       });
       expect(other.headers['access-control-allow-origin']).toBeUndefined();
       expect(other.headers['access-control-allow-methods']).toBeUndefined();
+    });
+
+    // A fetch wrapper that marks every POST as JSON, whether it sends any.
+    it('takes a JSON content type with no body', async () => {
+      const response = await ask({
+        origin: ORIGIN,
+        cookie: `campus_session=${await sessionToken()}`,
+        'content-type': 'application/json',
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['access-control-allow-origin']).toBe(ORIGIN);
+    });
+
+    it('lets the web app read a refused body, not just a network error', async () => {
+      const app = await start();
+
+      const response = await app.inject({
+        method: 'POST',
+        url: CONNECTION_CHECK_PATH,
+        headers: {
+          origin: ORIGIN,
+          cookie: `campus_session=${await sessionToken()}`,
+          'content-type': 'application/json',
+        },
+        payload: '{"not json',
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.headers).toMatchObject({
+        'access-control-allow-origin': ORIGIN,
+        'access-control-allow-credentials': 'true',
+      });
     });
   });
 });
