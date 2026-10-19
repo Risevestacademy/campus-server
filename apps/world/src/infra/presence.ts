@@ -72,6 +72,12 @@ export interface PresenceStore {
    * holds: the message telling this instance so may have been missed.
    */
   renew(presences: readonly Presence[]): Promise<Displacement[]>;
+  /**
+   * Rewrites one connection's entry for a move into another space. The same
+   * write as a renewal, kept apart so a crossing has a name of its own.
+   * Resolves false when a newer connection holds the place.
+   */
+  changeSpace(presence: Presence): Promise<boolean>;
   /** Only for connections still holding their account's place. */
   leave(presences: readonly Presence[]): Promise<void>;
   online(cohortId: string): Promise<PresenceEntry[]>;
@@ -121,6 +127,10 @@ export class MemoryPresenceStore implements PresenceStore {
   private readonly entries = new Map<string, Presence>();
 
   async enter(presence: Presence): Promise<boolean> {
+    return this.claim(presence);
+  }
+
+  async changeSpace(presence: Presence): Promise<boolean> {
     return this.claim(presence);
   }
 
@@ -304,6 +314,10 @@ export class RedisPresenceStore implements PresenceStore {
   }
 
   async enter(presence: Presence): Promise<boolean> {
+    return (await this.claim(presence)) !== 'newer';
+  }
+
+  async changeSpace(presence: Presence): Promise<boolean> {
     return (await this.claim(presence)) !== 'newer';
   }
 
