@@ -399,7 +399,10 @@ export class CohortMembersService {
    * One row, one transaction: the track the membership is on is replaced and
    * the entry appended together, so neither lands without the other. The row
    * is read under a lock, so two moves racing each see the track the other
-   * left rather than both deciding against the same one.
+   * left rather than both deciding against the same one. The cohort's link to
+   * the target track is locked too: a detach racing the move then waits, and
+   * either finds the student on the track or leaves the move nothing to find,
+   * each a 409 rather than the foreign key failing the update.
    */
   async moveMemberTrack(
     cohortId: string,
@@ -461,7 +464,8 @@ export class CohortMembersService {
             eq(cohortTracks.trackId, trackId),
           ),
         )
-        .limit(1);
+        .limit(1)
+        .for('key share');
       if (!link) {
         throw new CohortConflictException(
           `Track ${track.code} is not run by this cohort`,
@@ -475,15 +479,13 @@ export class CohortMembersService {
         );
       }
 
-      let previousTrackId: string | null = null;
-      if (existing.cohortTrackId !== null) {
-        const [previousLink] = await tx
-          .select({ trackId: cohortTracks.trackId })
-          .from(cohortTracks)
-          .where(eq(cohortTracks.id, existing.cohortTrackId))
-          .limit(1);
-        previousTrackId = previousLink?.trackId ?? null;
-      }
+      // A student always has a track (cohort_members_student_requires_track),
+      // and only a student gets this far.
+      const [previous] = await tx
+        .select({ trackId: cohortTracks.trackId })
+        .from(cohortTracks)
+        .where(eq(cohortTracks.id, existing.cohortTrackId as string))
+        .limit(1);
 
       const [row] = await tx
         .update(cohortMembers)
@@ -494,7 +496,7 @@ export class CohortMembersService {
         ...audit,
         action: AuditAction.MemberTrackChanged,
         subject: { type: AuditSubjectType.CohortMember, id: row.id },
-        details: { cohortId, trackId, previousTrackId },
+        details: { cohortId, trackId, previousTrackId: previous.trackId },
       });
 
       return {

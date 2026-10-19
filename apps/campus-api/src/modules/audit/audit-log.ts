@@ -154,7 +154,7 @@ interface AuditEntryShapes {
     details: {
       cohortId: string;
       trackId: string;
-      previousTrackId: string | null;
+      previousTrackId: string;
     };
   };
   [AuditAction.InviteFlagged]: {
