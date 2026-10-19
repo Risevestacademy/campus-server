@@ -1,3 +1,4 @@
+import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -14,7 +15,9 @@ import type {
   Presence,
   PresenceStore,
 } from '../infra/presence.js';
+import type { Tile } from '../movement/grid.js';
 import { Players, type Player } from '../movement/players.js';
+import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import {
   decideUpgrade,
@@ -193,8 +196,41 @@ export function registerGateway(
       userId: connection.userId,
       connectionId: connection.id,
       cohortId: connection.cohortId,
+      spaceKey: connection.spaceKey,
       since: connection.openedAt,
     };
+  }
+
+  /** A write found a newer connection holding this one's place. */
+  function lostPlace(connection: Connection): void {
+    displacedElsewhere({
+      userId: connection.userId,
+      connectionId: connection.id,
+    });
+  }
+
+  /**
+   * After a move to `tile`: if it is in another space, records the new one
+   * in presence now, not at the next renewal. Skipped once shutdown has
+   * begun, as it would undo shutdown's removal. A failed write is put right
+   * by the next renewal, which carries the space too.
+   */
+  function recordSpaceCrossing(connection: Connection, tile: Tile): void {
+    const spaceKey = spaceAt(map.spaces, tile);
+    if (spaceKey === connection.spaceKey) return;
+    connection.spaceKey = spaceKey;
+    if (stopping) return;
+    presence.changeSpace(presenceOf(connection)).then(
+      (held) => {
+        if (!held) lostPlace(connection);
+      },
+      (err: unknown) => {
+        app.log.warn(
+          { err, userId: connection.userId },
+          'could not record a change of space, the next renewal will',
+        );
+      },
+    );
   }
 
   /**
@@ -730,6 +766,8 @@ export function registerGateway(
         displayName: decision.account.displayName,
         spriteKey: decision.account.spriteKey,
       },
+      // Where the avatar stands is known once it has joined, below.
+      spaceKey: DEFAULT_SPACE_KEY,
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
       epoch: decision.claims.epoch,
@@ -750,6 +788,7 @@ export function registerGateway(
       Date.now(),
       saved,
     );
+    connection.spaceKey = spaceAt(map.spaces, player);
     if (arriving) {
       // Told to everyone already in this cohort; the arrival learns of itself
       // from the snapshot.
@@ -781,12 +820,7 @@ export function registerGateway(
     // Redis first; it holds the place, and this one closes as if displaced.
     presence.enter(presenceOf(connection)).then(
       (held) => {
-        if (!held) {
-          displacedElsewhere({
-            userId: connection.userId,
-            connectionId: connection.id,
-          });
-        }
+        if (!held) lostPlace(connection);
       },
       (err: unknown) => {
         app.log.warn(
@@ -864,6 +898,9 @@ export function registerGateway(
             outcome: moved.outcome,
             player: moved.player,
           });
+          if (moved.outcome === 'moved') {
+            recordSpaceCrossing(connection, moved.player);
+          }
           if (moved.changed) {
             const seat = {
               userId: connection.userId,

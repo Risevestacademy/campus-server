@@ -1,4 +1,8 @@
-import { signSessionToken, SessionScope } from '@campus/session';
+import {
+  DEFAULT_SPACE_KEY,
+  signSessionToken,
+  SessionScope,
+} from '@campus/session';
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import {
@@ -19,7 +23,7 @@ import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
-import { emptySpaceIndex } from '../movement/spaces.js';
+import { spaceIndexFrom } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import {
   DISPLACED_CHANNEL,
@@ -147,6 +151,18 @@ const presence = {
     presence.entries.set(presenceKeyOf(entry.userId, entry.cohortId), entry);
     return true;
   },
+  /** Every change-of-space write, in order: counted apart from renewals. */
+  crossings: [] as Presence[],
+  /** Connections whose next change of space finds a newer one holding it. */
+  newerOnCrossing: new Set<string>(),
+  failCrossings: false,
+  changeSpace: async (entry: Presence) => {
+    presence.crossings.push(entry);
+    if (presence.failCrossings) throw new Error('redis is down');
+    if (presence.newerOnCrossing.has(entry.connectionId)) return false;
+    presence.entries.set(presenceKeyOf(entry.userId, entry.cohortId), entry);
+    return true;
+  },
   renew: async (entries: readonly Presence[]) => {
     if (presence.failing) throw new Error('redis is down');
     const displaced: Displacement[] = [];
@@ -199,7 +215,8 @@ const env = loadEnv({
 
 /**
  * Small, with spawn in a corner, so an edge is one step away, and one wall
- * two steps below the spawn.
+ * two steps below the spawn. One drawn space, the library, in the top-right
+ * corner (x 3 to 4, y 0 to 1): three steps right of the spawn.
  */
 const WALL = { x: 0, y: 2 };
 const walls = new Uint8Array(5 * 5);
@@ -208,7 +225,23 @@ const map: WorldMap = {
   id: 'campus',
   version: 'v-test',
   grid: { width: 5, height: 5, spawn: { x: 0, y: 0 }, walls },
-  spaces: emptySpaceIndex(5, 5),
+  spaces: spaceIndexFrom({
+    widthTiles: 5,
+    heightTiles: 5,
+    collisions: [],
+    spawn: { x: 0, y: 0 },
+    spaces: [
+      {
+        key: 'library',
+        name: 'Library',
+        kind: null,
+        bounds: { shape: 'rect', x: 3, y: 0, width: 2, height: 2 },
+        properties: {},
+      },
+    ],
+    portals: [],
+    desks: [],
+  }),
 };
 
 let world: World;
@@ -2536,6 +2569,141 @@ describe('movement', () => {
         .toBe(false);
     });
 
+    /**
+     * One move, answered, then a full step's time, so the next has its
+     * allowance back. Any shorter and a long walk runs out of steps, sooner
+     * the faster the machine answers.
+     */
+    const step = async (
+      conn: ReturnType<typeof connect>,
+      direction: string,
+      seq: number,
+    ) => {
+      move(conn, direction, seq);
+      const answer = await waitFor(
+        conn,
+        (m) => m.type === 'moveResult' && m.seq === seq,
+      );
+      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
+      return answer;
+    };
+    const crossingsOf = (userId: string) =>
+      presence.crossings
+        .filter((entry) => entry.userId === userId)
+        .map((entry) => entry.spaceKey);
+
+    it('records the space they arrive in', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      await expect
+        .poll(() => presence.entries.get(presenceKeyOf(ada)))
+        .toMatchObject({ spaceKey: DEFAULT_SPACE_KEY });
+      await leave(conn);
+    });
+
+    /** Somebody back where they stood last time is in that place's space. */
+    it('records the space of a saved position they come back to', async () => {
+      const ada = person();
+      store.positions.set(positionKey(ada), { x: 3, y: 1, facing: 'left' });
+
+      const conn = await arrive(ada);
+
+      await expect
+        .poll(() => presence.entries.get(presenceKeyOf(ada)))
+        .toMatchObject({ spaceKey: 'library' });
+      await leave(conn);
+    });
+
+    /** Right the moment they cross; a step within a space costs no write. */
+    it('writes the space as they cross into it and out of it, and not for steps within it', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      // The third step right is into the library.
+      for (const seq of [1, 2, 3]) await step(conn, 'right', seq);
+      expect(crossingsOf(ada)).toEqual(['library']);
+      expect(presence.entries.get(presenceKeyOf(ada))).toMatchObject({
+        spaceKey: 'library',
+      });
+
+      // Further in: still the library, no write.
+      await step(conn, 'right', 4);
+      await step(conn, 'down', 5);
+      expect(crossingsOf(ada)).toEqual(['library']);
+
+      // Back out the way they came.
+      await step(conn, 'up', 6);
+      await step(conn, 'left', 7);
+      await step(conn, 'left', 8);
+      expect(crossingsOf(ada)).toEqual(['library', DEFAULT_SPACE_KEY]);
+
+      await leave(conn);
+    });
+
+    /** Into a wall, or faster than walking allows: they stay put, so no write. */
+    it('writes nothing for a move that goes nowhere', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      await step(conn, 'down', 1);
+      await expect(step(conn, 'down', 2)).resolves.toMatchObject({
+        outcome: 'blocked',
+      });
+
+      // Beside the library's door, then out of steps for a moment: the step
+      // that would cross is refused, and nothing is written for it.
+      await step(conn, 'up', 3);
+      await step(conn, 'right', 4);
+      await step(conn, 'right', 5);
+      for (const seq of [6, 7, 8]) move(conn, 'up', seq);
+      move(conn, 'right', 9);
+      await expect(
+        waitFor(conn, (m) => m.type === 'moveResult' && m.seq === 9),
+      ).resolves.toMatchObject({ outcome: 'too_fast' });
+      await quiet();
+
+      expect(crossingsOf(ada)).toEqual([]);
+      await leave(conn);
+    });
+
+    /** A crossing write can be the first to learn the place moved on. */
+    it('closes a socket whose change of space finds a newer one holding its place', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+      presence.newerOnCrossing.add(await connectionIdOf(conn));
+
+      for (const seq of [1, 2]) await step(conn, 'right', seq);
+      move(conn, 'right', 3);
+
+      await expect(conn.settled).resolves.toMatchObject({
+        closeCode: 4000,
+        closeReason: 'entered_elsewhere',
+      });
+    });
+
+    it('puts a change of space that could not be written right at the next renewal', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+      presence.failCrossings = true;
+      try {
+        for (const seq of [1, 2, 3]) await step(conn, 'right', seq);
+        expect(crossingsOf(ada)).toEqual(['library']);
+        expect(presence.entries.get(presenceKeyOf(ada))).toMatchObject({
+          spaceKey: DEFAULT_SPACE_KEY,
+        });
+
+        await expect
+          .poll(() => presence.entries.get(presenceKeyOf(ada)), {
+            timeout: 3_000,
+          })
+          .toMatchObject({ spaceKey: 'library' });
+      } finally {
+        presence.failCrossings = false;
+      }
+      await leave(conn);
+    });
+
     it('keeps the replacing socket present once the one it replaced closes', async () => {
       const ada = person();
       const first = await arrive(ada);
@@ -2682,6 +2850,77 @@ describe('shutdown', () => {
 
     expect(saved.get('leaving-1')).toEqual({ x: 0, y: 0, facing: 'down' });
     expect(await own.presence.online(COHORT)).toEqual([]);
+    await closed;
+    await own.app.close();
+  });
+
+  /**
+   * Shutdown takes everybody out of presence before it closes their sockets,
+   * and their moves are still read meanwhile. One that crosses into another
+   * space then must not write their entry back, or they show online for a
+   * whole presence lifetime with nothing left to remove them.
+   */
+  it('does not put back a presence entry for a move made while shutting down', async () => {
+    const memory = new MemoryPresenceStore();
+    const removed = deferred<void>();
+    const release = deferred<void>();
+    const holding = {
+      instanceId: memory.instanceId,
+      enter: (entry: Presence) => memory.enter(entry),
+      renew: (entries: readonly Presence[]) => memory.renew(entries),
+      changeSpace: (entry: Presence) => memory.changeSpace(entry),
+      online: (cohortId: string) => memory.online(cohortId),
+      onDisplaced: () => undefined,
+      close: async () => undefined,
+      // Removed at once, as Redis would, but answered only when let go.
+      leave: async (entries: readonly Presence[]) => {
+        await memory.leave(entries);
+        removed.resolve();
+        await release.promise;
+      },
+    };
+    const own = await buildWorld(env, accounts, store, holding, map);
+    await own.app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = own.app.server.address() as AddressInfo;
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`,
+      {
+        headers: {
+          origin: ORIGIN,
+          cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, `leaving-${randomUUID()}`)}`,
+        },
+      },
+    );
+    const messages: Record<string, unknown>[] = [];
+    ws.on('message', (raw) =>
+      messages.push(JSON.parse(raw.toString()) as Record<string, unknown>),
+    );
+    const closed = new Promise((resolve) => ws.on('close', resolve));
+    const answered = (seq: number) =>
+      expect
+        .poll(() =>
+          messages.some((m) => m.type === 'moveResult' && m.seq === seq),
+        )
+        .toBe(true);
+    await expect
+      .poll(() => messages.some((m) => m.type === 'snapshot'))
+      .toBe(true);
+    for (const seq of [1, 2]) {
+      ws.send(JSON.stringify({ type: 'move', direction: 'right', seq }));
+      await answered(seq);
+      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
+    }
+
+    const stopped = own.gateway.stop();
+    await removed.promise;
+    // Into the library, while shutdown's removal is still being answered.
+    ws.send(JSON.stringify({ type: 'move', direction: 'right', seq: 3 }));
+    await answered(3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release.resolve();
+    await stopped;
+
+    await expect(memory.online(COHORT)).resolves.toEqual([]);
     await closed;
     await own.app.close();
   });

@@ -9,6 +9,11 @@ export interface Connection {
   cohortId: string;
   /** As the account was when this socket opened, updated as it changes. */
   appearance: Appearance;
+  /**
+   * The space this socket's avatar stands in: a drawn space's key, or the
+   * map's default space. Updated as the avatar crosses from one to another.
+   */
+  spaceKey: string;
   socket: WebSocket;
   /**
    * When the access token this socket opened with runs out. Enforced only
