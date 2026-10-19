@@ -4,10 +4,6 @@ import { IsUUID } from 'class-validator';
 import { CohortRole } from '../schema.js';
 import { RosterTrackDto } from './cohort-roster.dto.js';
 
-/**
- * The cohort and the member come from the URL, so the body carries only the
- * track to move them to: a catalogue track, the same id detaching names.
- */
 export class MoveMemberTrackDto {
   @ApiProperty({
     example: '33333333-3333-4333-8333-333333333333',

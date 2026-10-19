@@ -915,8 +915,6 @@ describe('moveMemberTrack', () => {
     return row;
   };
 
-  // Only the moves, so the cohort fixture's own setup does not have to be
-  // accounted for.
   const entries = () =>
     pglite
       .select()
@@ -924,7 +922,6 @@ describe('moveMemberTrack', () => {
       .where(eq(auditLog.action, AuditAction.MemberTrackChanged))
       .orderBy(auditLog.createdAt);
 
-  /** A fresh catalogue track, attached to a cohort, so it is one it runs. */
   const attachTrack = async (
     options: { cohort?: string; name?: string; code?: string } = {},
   ) => {

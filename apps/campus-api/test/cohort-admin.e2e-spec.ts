@@ -1633,12 +1633,6 @@ describe('cohort and track admin routes (e2e)', () => {
     });
   });
 
-  /**
-   * A student's track is a place on a cohort's roster, so moving them is a
-   * cohort-admin change like any other. The roster reads the new track from
-   * the next request, and the session the student already holds keeps
-   * working — a move touches the membership's track and nothing else.
-   */
   describe('moving a member track', () => {
     let studentId: string;
     let studentCookie: string;
@@ -1747,7 +1741,6 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(await rosterRow(studentId)).toMatchObject({
         track: { id: dataTrackId, code: 'DS' },
       });
-      // The other student, and the track the moved one left, are untouched.
       expect(await rosterRow(otherId)).toMatchObject({
         track: { id: seTrackId, code: 'SE' },
       });

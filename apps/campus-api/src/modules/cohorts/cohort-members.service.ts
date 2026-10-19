@@ -393,23 +393,13 @@ export class CohortMembersService {
   }
 
   /**
-   * Moves a student to another track the same cohort runs.
+   * Moves a student to another track the same cohort runs. Only a student has
+   * a track to move; staff and guests are refused.
    *
    * One row, one transaction: the track the membership is on is replaced and
    * the entry appended together, so neither lands without the other. The row
    * is read under a lock, so two moves racing each see the track the other
    * left rather than both deciding against the same one.
-   *
-   * Only a student has a track to move: staff and guests are refused with a
-   * 409. The target has to be a track this cohort actually runs — one another
-   * cohort runs is refused, and a track id that names nothing is a 404 — and
-   * the move has to change something, so the track they are already on is a
-   * 409 too. Nothing about the membership but its track is touched: status,
-   * end date and joined date stay as they were.
-   *
-   * Refusals: no such membership is a 404; one that has ended, is not a
-   * student, is already on the target, or names a track this cohort does not
-   * run is a 409; a track id that names no catalogue track is a 404.
    */
   async moveMemberTrack(
     cohortId: string,
@@ -452,9 +442,6 @@ export class CohortMembersService {
         );
       }
 
-      // The catalogue track, then the cohort's own link to it. Checked in
-      // that order so an id that names nothing is its own 404, while a real
-      // track this cohort does not run is the conflict it is.
       const [track] = await tx
         .select()
         .from(tracks)
@@ -488,9 +475,6 @@ export class CohortMembersService {
         );
       }
 
-      // What the entry records the move replaced. The CHECK makes a
-      // student's track non-null, so this is only null for a row the schema
-      // could not have written; read it rather than assume.
       let previousTrackId: string | null = null;
       if (existing.cohortTrackId !== null) {
         const [previousLink] = await tx

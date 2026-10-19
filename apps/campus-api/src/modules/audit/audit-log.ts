@@ -153,9 +153,7 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.CohortMember;
     details: {
       cohortId: string;
-      /** The track the move set, and the one it replaced, as catalogue ids. */
       trackId: string;
-      /** Null only for a student with no track, which the CHECK forbids. */
       previousTrackId: string | null;
     };
   };
