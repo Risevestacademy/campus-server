@@ -109,6 +109,12 @@ export enum AuditAction {
    */
   MembershipEnded = 'membership_ended',
   /**
+   * An admin moved a student to another track the same cohort runs.
+   * `details` has the track before and after, as catalogue ids; the subject
+   * says which membership, so who and where are read from the row.
+   */
+  MemberTrackChanged = 'member_track_changed',
+  /**
    * An admin marked a piece of feedback dealt with, or put it back to open.
    * `details` is empty: what a member wrote is theirs, and often about
    * somebody else, so it stays on the feedback and never comes here.
