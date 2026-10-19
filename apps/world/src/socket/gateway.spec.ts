@@ -2569,7 +2569,11 @@ describe('movement', () => {
         .toBe(false);
     });
 
-    /** One move, answered, then long enough for the walking speed. */
+    /**
+     * One move, answered, then a full step's time, so the next has its
+     * allowance back. Any shorter and a long walk runs out of steps, sooner
+     * the faster the machine answers.
+     */
     const step = async (
       conn: ReturnType<typeof connect>,
       direction: string,
@@ -2580,7 +2584,7 @@ describe('movement', () => {
         conn,
         (m) => m.type === 'moveResult' && m.seq === seq,
       );
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
       return answer;
     };
     const crossingsOf = (userId: string) =>
@@ -2904,7 +2908,7 @@ describe('shutdown', () => {
     for (const seq of [1, 2]) {
       ws.send(JSON.stringify({ type: 'move', direction: 'right', seq }));
       await answered(seq);
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
     }
 
     const stopped = own.gateway.stop();
