@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
 
+import type { Seat } from '../seat.js';
 import type { Env } from './env.js';
 import {
   FAIL_FAST,
@@ -102,12 +103,8 @@ export function isNewer(
   );
 }
 
-export function presenceKey(userId: string, cohortId: string): string {
+export function presenceKey({ userId, cohortId }: Seat): string {
   return `world:presence:user:${userId}:cohort:${cohortId}`;
-}
-
-function keyOf({ userId, cohortId }: Presence): string {
-  return presenceKey(userId, cohortId);
 }
 
 export function cohortPresenceKey(cohortId: string): string {
@@ -142,7 +139,7 @@ export class MemoryPresenceStore implements PresenceStore {
 
   /** Takes the place unless a newer connection holds it; true if it did. */
   private claim(presence: Presence): boolean {
-    const held = this.entries.get(keyOf(presence));
+    const held = this.entries.get(presenceKey(presence));
     if (
       held &&
       held.connectionId !== presence.connectionId &&
@@ -150,13 +147,13 @@ export class MemoryPresenceStore implements PresenceStore {
     ) {
       return false;
     }
-    this.entries.set(keyOf(presence), presence);
+    this.entries.set(presenceKey(presence), presence);
     return true;
   }
 
   async leave(presences: readonly Presence[]): Promise<void> {
     for (const presence of presences) {
-      const key = keyOf(presence);
+      const key = presenceKey(presence);
       if (this.entries.get(key)?.connectionId === presence.connectionId) {
         this.entries.delete(key);
       }
@@ -334,7 +331,7 @@ export class RedisPresenceStore implements PresenceStore {
     await Promise.all(
       presences.map(({ userId, connectionId, cohortId }) =>
         this.scripts.releasePresence(
-          presenceKey(userId, cohortId),
+          presenceKey({ userId, cohortId }),
           cohortPresenceKey(cohortId),
           userId,
           connectionId,
@@ -354,7 +351,7 @@ export class RedisPresenceStore implements PresenceStore {
     }
     const batch = this.redis.pipeline();
     for (const userId of userIds) {
-      batch.hgetall(presenceKey(userId, cohortId));
+      batch.hgetall(presenceKey({ userId, cohortId }));
     }
     const replies = (await batch.exec()) ?? [];
 
@@ -386,7 +383,7 @@ export class RedisPresenceStore implements PresenceStore {
   private async claim(presence: Presence): Promise<ClaimReply[0]> {
     const { userId, connectionId, cohortId, spaceKey, since } = presence;
     const reply = await this.scripts.claimPresence(
-      presenceKey(userId, cohortId),
+      presenceKey(presence),
       cohortPresenceKey(cohortId),
       userId,
       connectionId,

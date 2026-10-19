@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 
 import type { Appearance } from '../infra/accounts.js';
+import type { Seat } from '../seat.js';
 
 export interface Connection {
   id: string;
@@ -93,7 +94,7 @@ export class Connections {
   }
 
   /** The socket holding the account's place in one cohort. */
-  get(userId: string, cohortId: string): Connection | undefined {
+  holderOf({ userId, cohortId }: Seat): Connection | undefined {
     return this.byUser.get(userId)?.get(cohortId);
   }
 
