@@ -15,6 +15,7 @@ import type {
   Presence,
   PresenceStore,
 } from '../infra/presence.js';
+import type { Tile } from '../movement/grid.js';
 import { Players, type Player } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
@@ -200,23 +201,36 @@ export function registerGateway(
     };
   }
 
+  /** A write found a newer connection holding this one's place. */
+  function lostPlace(connection: Connection): void {
+    displacedElsewhere({
+      userId: connection.userId,
+      connectionId: connection.id,
+    });
+  }
+
   /**
-   * Writes one connection's presence now rather than at the next renewal:
-   * for a move into another space, so who is where is right the moment they
-   * cross. A newer connection holding the place by then is dealt with as the
-   * renewal would deal with it. A write that fails is put right by the next
-   * renewal, which carries the space too.
+   * After a move to `tile`: if it is in another space, records the new one
+   * in presence now, not at the next renewal. Skipped once shutdown has
+   * begun, as it would undo shutdown's removal. A failed write is put right
+   * by the next renewal, which carries the space too.
    */
-  function presenceNow(connection: Connection): void {
-    presence
-      .renew([presenceOf(connection)])
-      .then((displaced) => displaced.forEach(displacedElsewhere))
-      .catch((err: unknown) => {
+  function recordSpaceCrossing(connection: Connection, tile: Tile): void {
+    const spaceKey = spaceAt(map.spaces, tile);
+    if (spaceKey === connection.spaceKey) return;
+    connection.spaceKey = spaceKey;
+    if (stopping) return;
+    presence.changeSpace(presenceOf(connection)).then(
+      (held) => {
+        if (!held) lostPlace(connection);
+      },
+      (err: unknown) => {
         app.log.warn(
           { err, userId: connection.userId },
           'could not record a change of space, the next renewal will',
         );
-      });
+      },
+    );
   }
 
   /**
@@ -806,12 +820,7 @@ export function registerGateway(
     // Redis first; it holds the place, and this one closes as if displaced.
     presence.enter(presenceOf(connection)).then(
       (held) => {
-        if (!held) {
-          displacedElsewhere({
-            userId: connection.userId,
-            connectionId: connection.id,
-          });
-        }
+        if (!held) lostPlace(connection);
       },
       (err: unknown) => {
         app.log.warn(
@@ -890,12 +899,7 @@ export function registerGateway(
             player: moved.player,
           });
           if (moved.outcome === 'moved') {
-            // One write per space crossed, none per step within one.
-            const spaceKey = spaceAt(map.spaces, moved.player);
-            if (spaceKey !== connection.spaceKey) {
-              connection.spaceKey = spaceKey;
-              presenceNow(connection);
-            }
+            recordSpaceCrossing(connection, moved.player);
           }
           if (moved.changed) {
             const seat = {
