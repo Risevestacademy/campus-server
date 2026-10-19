@@ -56,6 +56,8 @@ describe('protocol.schema.json', () => {
         'ClientMessage',
         'PingMessage',
         'MoveMessage',
+        'SetStatusMessage',
+        'ActiveMessage',
         'ServerMessage',
         'WelcomeMessage',
         'PongMessage',
@@ -63,6 +65,7 @@ describe('protocol.schema.json', () => {
         'JoinedMessage',
         'AppearanceMessage',
         'LeftMessage',
+        'StatusChangedMessage',
         'ReplacedMessage',
         'MovedMessage',
         'MoveResultMessage',
@@ -73,6 +76,7 @@ describe('protocol.schema.json', () => {
         'MoveOutcome',
         'CloseReason',
         'CloseCode',
+        'Status',
       ].sort(),
     );
   });
