@@ -99,7 +99,10 @@ export async function decideUpgrade(
   // floor by editing a query string.
   if (
     !checked.account.admin &&
-    !(await accounts.liveMembership(caller.claims.userId, cohortId, new Date()))
+    !(await accounts.liveMembership(
+      { userId: caller.claims.userId, cohortId },
+      new Date(),
+    ))
   ) {
     return { ok: false, refusal: 'not_a_member' };
   }

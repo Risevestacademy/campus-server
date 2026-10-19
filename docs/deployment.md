@@ -247,8 +247,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   between visits, and keeps presence in memory — fine for one instance, wrong
   for more. Redis going down never keeps anybody out: a position that cannot
   be read means starting at the spawn, one that cannot be written is lost,
-  and somebody whose presence cannot be written is put back by the next
-  renewal once Redis returns.
+  and somebody whose presence cannot be written, or whose change of space
+  cannot, is put right by the next renewal once Redis returns.
 
 ## world
 
@@ -277,7 +277,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
   the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
   `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
-  `WORLD_PRESENCE_TTL_SECONDS`, the session refresh
+  `WORLD_PRESENCE_TTL_SECONDS`, going Away when idle
+  `WORLD_AWAY_AFTER_SECONDS`, the session refresh
   window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
   and `SANITY_DATASET` (`production` unless set; staging reads `staging`).
 - `SANITY_PROJECT_ID`: the Sanity project the campus maps are published to,
@@ -301,13 +302,14 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   `WORLD_POSITION_SAVE_SECONDS` for anyone who moved, and for everybody on a
   graceful shutdown — so a redeploy puts people back where they were, and a
   crash loses at most one save interval.
-- Sockets are per-process state too, but presence is in Redis: each account's
-  entry for a cohort names its live connection and the instance holding it,
-  so two tabs on the same cohort on different instances still leave one, and
-  the older one is closed with `entered_elsewhere`. More than one instance therefore needs
-  `REDIS_URL`. What is still per-process is the live map: players on one
-  instance do not see players on another yet, and somebody moving instance
-  starts from their last saved position.
+- Sockets are per-process state too, but presence is in Redis: each
+  account's entry for a cohort names its live connection, the instance
+  holding it and the space they stand in, so two tabs on the same cohort on
+  different instances still leave one, and the older one is closed with
+  `entered_elsewhere`. More than one instance therefore needs `REDIS_URL`.
+  What is still per-process is the live map: players on one instance do not
+  see players on another yet, and somebody moving instance starts from their
+  last saved position.
 - Browsers reach world on its own hostname with the access cookie, once
   campus-api's `AUTH_COOKIE_DOMAIN` covers that hostname. World's
   `CORS_ORIGINS` must name the web app's origin.

@@ -60,6 +60,15 @@
       "additionalProperties": false,
       "description": "Somebody on the map, as the server has them. Positions are tiles, never pixels."
     },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "available",
+        "busy",
+        "away"
+      ],
+      "description": "Whether somebody can be approached. available: the default. busy: they would rather not be. away: not at the keyboard — chosen, or set for them by the server once they have done nothing for `awayAfterSeconds`, and cleared when they do something again. Lasts as long as their connection."
+    },
     "Avatar": {
       "type": "object",
       "properties": {
@@ -94,6 +103,9 @@
             "string",
             "null"
           ]
+        },
+        "status": {
+          "$ref": "#/definitions/Status"
         }
       },
       "required": [
@@ -102,10 +114,11 @@
         "y",
         "facing",
         "displayName",
-        "spriteKey"
+        "spriteKey",
+        "status"
       ],
       "additionalProperties": false,
-      "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message."
+      "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message, and to their status as a `statusChanged`."
     },
     "MoveOutcome": {
       "type": "string",
@@ -160,6 +173,38 @@
       "additionalProperties": false,
       "description": "One step. Always answered with a `moveResult`."
     },
+    "SetStatusMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "setStatus"
+        },
+        "status": {
+          "$ref": "#/definitions/Status"
+        }
+      },
+      "required": [
+        "type",
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Choose your status. Answered, if it changes what your cohort sees, by the `statusChanged` everybody in it gets, you included. Counts as activity."
+    },
+    "ActiveMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "active"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "The person did something the server cannot see — a key, a click, a word in a call. Keeps them from going away while idle, and brings them back if they had. A `move` or `setStatus` counts already; a `ping` does not. No answer."
+    },
     "ClientMessage": {
       "oneOf": [
         {
@@ -167,6 +212,12 @@
         },
         {
           "$ref": "#/definitions/MoveMessage"
+        },
+        {
+          "$ref": "#/definitions/SetStatusMessage"
+        },
+        {
+          "$ref": "#/definitions/ActiveMessage"
         }
       ],
       "description": "Every frame a client may send."
@@ -201,6 +252,12 @@
           "maximum": 9007199254740991,
           "description": "How often `moved` arrives while anybody is moving."
         },
+        "awayAfterSeconds": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "description": "How long you may do nothing before the server shows you away. Send `active` well within it while the person is there. 0 when this deployment never does."
+        },
         "displayName": {
           "description": "The name to show beside them. Null when they have set none.",
           "type": [
@@ -223,6 +280,7 @@
         "heartbeatSeconds",
         "stepMs",
         "tickMs",
+        "awayAfterSeconds",
         "displayName",
         "spriteKey"
       ],
@@ -367,6 +425,28 @@
       "additionalProperties": false,
       "description": "Somebody's socket in your cohort closed. Entering another cohort is not leaving this one."
     },
+    "StatusChangedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "statusChanged"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/Status"
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody in your cohort's status changed: chosen, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
+    },
     "ReplacedMessage": {
       "type": "object",
       "properties": {
@@ -475,6 +555,9 @@
         },
         {
           "$ref": "#/definitions/LeftMessage"
+        },
+        {
+          "$ref": "#/definitions/StatusChangedMessage"
         },
         {
           "$ref": "#/definitions/ReplacedMessage"

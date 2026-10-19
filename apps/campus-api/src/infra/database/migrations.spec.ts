@@ -9,6 +9,20 @@ const files = (): string[] =>
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
+/**
+ * The migrations before `file`, found by its name rather than its place in
+ * the folder, so a migration added or renumbered elsewhere cannot point a
+ * test at the wrong one. A name that is not there fails at once, saying so.
+ */
+function before(file: string): string[] {
+  const all = files();
+  const at = all.indexOf(file);
+  if (at === -1) {
+    throw new Error(`no migration named ${file} in ${MIGRATIONS}`);
+  }
+  return all.slice(0, at);
+}
+
 async function apply(pg: PGlite, file: string): Promise<void> {
   for (const stmt of readFileSync(`${MIGRATIONS}/${file}`, 'utf8').split(
     '--> statement-breakpoint',
@@ -30,12 +44,13 @@ async function apply(pg: PGlite, file: string): Promise<void> {
  * and only then run 0002.
  */
 describe('0002 against data the old schema permitted', () => {
+  const FILE = '0002_guest_cohort_role.sql';
   let pg: PGlite;
   let adminId: string;
 
   beforeEach(async () => {
     pg = new PGlite();
-    for (const f of files().slice(0, 2)) {
+    for (const f of before(FILE)) {
       await apply(pg, f);
     }
     const res = await pg.query<{ id: string }>(
@@ -63,7 +78,7 @@ describe('0002 against data the old schema permitted', () => {
   it('closes a pending cohort-less invite rather than failing to apply', async () => {
     await legacyInvite('stranded@campus.local', 'pending');
 
-    await apply(pg, files()[2]);
+    await apply(pg, FILE);
 
     // It could never have been honoured — accepting enrolled the holder into
     // nothing — so it is closed, which also frees the address to be invited
@@ -74,7 +89,7 @@ describe('0002 against data the old schema permitted', () => {
   it('leaves a settled cohort-less invite as the record it is', async () => {
     await legacyInvite('past@campus.local', 'accepted');
 
-    await apply(pg, files()[2]);
+    await apply(pg, FILE);
 
     expect(await statusOf('past@campus.local')).toBe('accepted');
   });
@@ -94,7 +109,7 @@ describe('0002 against data the old schema permitted', () => {
        values ('${c.rows[0].id}','${adminId}','${ct.rows[0].id}','student','active','left over')`,
     );
 
-    await apply(pg, files()[2]);
+    await apply(pg, FILE);
 
     const res = await pg.query<{ dismissal_reason: string | null }>(
       'select dismissal_reason from cohort_members',
@@ -109,11 +124,12 @@ describe('0002 against data the old schema permitted', () => {
  * by trigger, so the constraint has to go on without touching a row.
  */
 describe('0013 against an audit log that already has entries', () => {
+  const FILE = '0013_maps_spaces.sql';
   let pg: PGlite;
 
   beforeEach(async () => {
     pg = new PGlite();
-    for (const f of files().slice(0, 13)) {
+    for (const f of before(FILE)) {
       await apply(pg, f);
     }
     await pg.query(
@@ -122,7 +138,7 @@ describe('0013 against an audit log that already has entries', () => {
   });
 
   it('applies, leaving the entries as they were', async () => {
-    await apply(pg, files()[13]);
+    await apply(pg, FILE);
 
     const res = await pg.query<{ action: string; space_id: string | null }>(
       'select action, space_id from audit_log',
@@ -131,7 +147,7 @@ describe('0013 against an audit log that already has entries', () => {
   });
 
   it('from then on refuses an entry about a space that does not exist', async () => {
-    await apply(pg, files()[13]);
+    await apply(pg, FILE);
 
     await expect(
       pg.query(
@@ -152,7 +168,7 @@ describe('the cohort date rule against data the old schema permitted', () => {
 
   beforeEach(async () => {
     pg = new PGlite();
-    for (const f of files().slice(0, files().indexOf(FILE))) {
+    for (const f of before(FILE)) {
       await apply(pg, f);
     }
   });
@@ -185,5 +201,13 @@ describe('the cohort date rule against data the old schema permitted', () => {
       start: '2026-02-01',
       end: '2026-03-01',
     });
+  });
+});
+
+describe('finding a migration by name', () => {
+  it('fails clearly for a migration that is not there', () => {
+    expect(() => before('0099_never_written.sql')).toThrow(
+      /no migration named 0099_never_written\.sql/,
+    );
   });
 });

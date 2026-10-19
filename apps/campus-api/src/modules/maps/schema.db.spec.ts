@@ -124,6 +124,26 @@ describe('maps', () => {
     );
   });
 
+  /**
+   * At most one, not exactly one: nothing here stops a campus with no live
+   * entry map. That is the sync's to guarantee (it refuses a publish without
+   * exactly one, and moves the flag in one transaction), and the database
+   * cannot without refusing every write that passes through having none.
+   */
+  it('allows no live entry map, leaving that to the sync', async () => {
+    await db
+      .update(maps)
+      .set({ isEntry: false })
+      .where(sql`${maps.key} = 'campus'`);
+
+    await expect(
+      db
+        .select()
+        .from(maps)
+        .where(sql`${maps.isEntry}`),
+    ).resolves.toEqual([]);
+  });
+
   /** Replacing the entry map must not need the old one deleted. */
   it('lets another map be the entry once the old one is retired', async () => {
     await db

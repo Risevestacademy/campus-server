@@ -53,7 +53,9 @@ function fakeRedis() {
 
 describe('positionKey', () => {
   it('names the key by account and cohort', () => {
-    expect(positionKey('ada', 'cohort-1')).toBe('world:position:ada:cohort-1');
+    expect(positionKey({ userId: 'ada', cohortId: 'cohort-1' })).toBe(
+      'world:position:ada:cohort-1',
+    );
   });
 });
 
@@ -66,7 +68,9 @@ describe('RedisPositionStore', () => {
       { userId: 'ada', cohortId: 'cohort-1', x: 3, y: 4, facing: 'left' },
     ]);
 
-    await expect(store.load('ada', 'cohort-1')).resolves.toEqual({
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'cohort-1' }),
+    ).resolves.toEqual({
       x: 3,
       y: 4,
       facing: 'left',
@@ -85,12 +89,16 @@ describe('RedisPositionStore', () => {
       { userId: 'ada', cohortId: 'backend', x: 2, y: 2, facing: 'down' },
     ]);
 
-    await expect(store.load('ada', 'frontend')).resolves.toEqual({
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'frontend' }),
+    ).resolves.toEqual({
       x: 1,
       y: 1,
       facing: 'up',
     });
-    await expect(store.load('ada', 'backend')).resolves.toEqual({
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'backend' }),
+    ).resolves.toEqual({
       x: 2,
       y: 2,
       facing: 'down',
@@ -105,13 +113,17 @@ describe('RedisPositionStore', () => {
       { userId: 'ada', cohortId: 'cohort-1', x: 0, y: 0, facing: 'down' },
     ]);
 
-    expect(ttls.get(positionKey('ada', 'cohort-1'))).toBe(90 * 86_400);
+    expect(ttls.get(positionKey({ userId: 'ada', cohortId: 'cohort-1' }))).toBe(
+      90 * 86_400,
+    );
   });
 
   it('has nothing for somebody never saved', async () => {
     const store = new RedisPositionStore(fakeRedis().redis, MAP_ID, 90);
 
-    await expect(store.load('nobody', 'cohort-1')).resolves.toBeUndefined();
+    await expect(
+      store.load({ userId: 'nobody', cohortId: 'cohort-1' }),
+    ).resolves.toBeUndefined();
   });
 
   /** A position from the placeholder, or a map since replaced, is not one on this map. */
@@ -123,7 +135,9 @@ describe('RedisPositionStore', () => {
 
     const store = new RedisPositionStore(redis, MAP_ID, 90);
 
-    await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'cohort-1' }),
+    ).resolves.toBeUndefined();
   });
 
   /**
@@ -139,7 +153,9 @@ describe('RedisPositionStore', () => {
     );
     const store = new RedisPositionStore(redis, MAP_ID, 90);
 
-    await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'cohort-1' }),
+    ).resolves.toBeUndefined();
   });
 
   it.each([
@@ -156,10 +172,12 @@ describe('RedisPositionStore', () => {
     ],
   ])('treats %s as nothing saved', async (_label, raw) => {
     const { redis, values } = fakeRedis();
-    values.set(positionKey('ada', 'cohort-1'), raw);
+    values.set(positionKey({ userId: 'ada', cohortId: 'cohort-1' }), raw);
     const store = new RedisPositionStore(redis, MAP_ID, 90);
 
-    await expect(store.load('ada', 'cohort-1')).resolves.toBeUndefined();
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'cohort-1' }),
+    ).resolves.toBeUndefined();
   });
 
   it('forgets one cohort, leaving the other', async () => {
@@ -172,10 +190,14 @@ describe('RedisPositionStore', () => {
       { userId: 'ada', cohortId: 'backend', x: 2, y: 2, facing: 'down' },
     ]);
 
-    await store.forget('ada', 'frontend');
+    await store.forget({ userId: 'ada', cohortId: 'frontend' });
 
-    await expect(store.load('ada', 'frontend')).resolves.toBeUndefined();
-    await expect(store.load('ada', 'backend')).resolves.toEqual({
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'frontend' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.load({ userId: 'ada', cohortId: 'backend' }),
+    ).resolves.toEqual({
       x: 2,
       y: 2,
       facing: 'down',
@@ -290,7 +312,11 @@ describe('createPositionStore with Redis unavailable', () => {
     );
 
   it.each([
-    ['load', (store: PositionStore) => store.load('ada', 'cohort-1')],
+    [
+      'load',
+      (store: PositionStore) =>
+        store.load({ userId: 'ada', cohortId: 'cohort-1' }),
+    ],
     [
       'save',
       (store: PositionStore) =>
@@ -298,7 +324,11 @@ describe('createPositionStore with Redis unavailable', () => {
           { userId: 'ada', cohortId: 'cohort-1', x: 1, y: 1, facing: 'up' },
         ]),
     ],
-    ['forget', (store: PositionStore) => store.forget('ada', 'cohort-1')],
+    [
+      'forget',
+      (store: PositionStore) =>
+        store.forget({ userId: 'ada', cohortId: 'cohort-1' }),
+    ],
   ])('refuses a %s at once instead of queueing it', async (_name, operate) => {
     const store = build();
 
@@ -389,7 +419,7 @@ describe('createPositionStore with Redis connected but not answering', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     let outcome = 'pending';
-    store.load('ada', 'cohort-1').then(
+    store.load({ userId: 'ada', cohortId: 'cohort-1' }).then(
       () => (outcome = 'resolved'),
       () => (outcome = 'rejected'),
     );

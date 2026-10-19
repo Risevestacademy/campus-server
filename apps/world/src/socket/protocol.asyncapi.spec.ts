@@ -62,7 +62,12 @@ describe('the AsyncAPI document', () => {
   it('puts every message on the side that sends it', () => {
     const { publish, subscribe } = document.channels['/socket'];
 
-    expect(namesIn(publish)).toEqual(['PingMessage', 'MoveMessage']);
+    expect(namesIn(publish)).toEqual([
+      'PingMessage',
+      'MoveMessage',
+      'SetStatusMessage',
+      'ActiveMessage',
+    ]);
     expect(namesIn(subscribe)).toEqual([
       'WelcomeMessage',
       'PongMessage',
@@ -70,6 +75,7 @@ describe('the AsyncAPI document', () => {
       'JoinedMessage',
       'AppearanceMessage',
       'LeftMessage',
+      'StatusChangedMessage',
       'ReplacedMessage',
       'MovedMessage',
       'MoveResultMessage',
