@@ -1,20 +1,5 @@
+import type { Seat } from '../seat.js';
 import { Direction, step, walkable, type Grid } from './grid.js';
-
-/**
- * An account's place in one cohort's campus: who, and in which campus. The
- * two always travel together, as one value, so a call cannot be handed them
- * the wrong way round. Anything with both fields is one, a connection
- * included.
- */
-export interface Seat {
-  readonly userId: string;
-  readonly cohortId: string;
-}
-
-/** A seat as a single string, for keying a map by it. */
-export function seatKey({ userId, cohortId }: Seat): string {
-  return `${cohortId}\u0000${userId}`;
-}
 
 /** Where somebody stands, and which way they face. What other clients draw. */
 export interface Player {
@@ -100,21 +85,22 @@ export class Players {
    * existing player if they are already standing in this cohort.
    */
   join(
-    { userId, cohortId }: Seat,
+    seat: Seat,
     now: number,
     saved?: Pick<Player, 'x' | 'y' | 'facing'>,
   ): Player {
-    const existing = this.standing.get(cohortId)?.get(userId);
+    const { userId } = seat;
+    const existing = getIn(this.standing, seat);
     if (existing) {
       return { ...existing.player };
     }
 
-    const remembered = this.departed.get(cohortId)?.get(userId);
-    deleteIn(this.departed, { userId, cohortId });
+    const remembered = getIn(this.departed, seat);
+    deleteIn(this.departed, seat);
     if (remembered && remembered.until > now) {
       // The step allowance comes back as it was: leaving and rejoining must
       // not be a way to refill it.
-      setIn(this.standing, { userId, cohortId }, remembered.held);
+      setIn(this.standing, seat, remembered.held);
       return { ...remembered.held.player };
     }
 
@@ -130,15 +116,7 @@ export class Players {
             y: this.grid.spawn.y,
             facing: Direction.Down,
           };
-    setIn(
-      this.standing,
-      { userId, cohortId },
-      {
-        player,
-        steps: STEP_BURST,
-        refilledAt: now,
-      },
-    );
+    setIn(this.standing, seat, { player, steps: STEP_BURST, refilledAt: now });
     return { ...player };
   }
 
@@ -151,24 +129,17 @@ export class Players {
    * this cohort entirely — for access being taken away, where there is
    * nothing to come back to.
    */
-  leave({ userId, cohortId }: Seat, now: number, remember: boolean): boolean {
-    const held = this.standing.get(cohortId)?.get(userId);
+  leave(seat: Seat, now: number, remember: boolean): boolean {
+    const held = getIn(this.standing, seat);
     if (!remember) {
-      deleteIn(this.departed, { userId, cohortId });
+      deleteIn(this.departed, seat);
     }
     if (!held) {
       return false;
     }
-    deleteIn(this.standing, { userId, cohortId });
+    deleteIn(this.standing, seat);
     if (remember && this.graceMs > 0) {
-      setIn(
-        this.departed,
-        { userId, cohortId },
-        {
-          held,
-          until: now + this.graceMs,
-        },
-      );
+      setIn(this.departed, seat, { held, until: now + this.graceMs });
     }
     return true;
   }
@@ -194,8 +165,8 @@ export class Players {
    * next `forgetExpired`; `join` checks the time itself, so that never
    * resumes anybody late.
    */
-  isRemembered({ userId, cohortId }: Seat): boolean {
-    return this.departed.get(cohortId)?.has(userId) ?? false;
+  isRemembered(seat: Seat): boolean {
+    return getIn(this.departed, seat) !== undefined;
   }
 
   /**
@@ -208,13 +179,13 @@ export class Players {
     return count;
   }
 
-  get({ userId, cohortId }: Seat): Player | undefined {
-    const held = this.standing.get(cohortId)?.get(userId);
+  get(seat: Seat): Player | undefined {
+    const held = getIn(this.standing, seat);
     return held ? { ...held.player } : undefined;
   }
 
-  has({ userId, cohortId }: Seat): boolean {
-    return this.standing.get(cohortId)?.has(userId) ?? false;
+  has(seat: Seat): boolean {
+    return getIn(this.standing, seat) !== undefined;
   }
 
   /** Everybody standing in one cohort's campus. */
@@ -231,17 +202,13 @@ export class Players {
     return count;
   }
 
-  move(
-    { userId, cohortId }: Seat,
-    direction: Direction,
-    now: number,
-  ): MoveResult {
-    const held = this.standing.get(cohortId)?.get(userId);
+  move(seat: Seat, direction: Direction, now: number): MoveResult {
+    const held = getIn(this.standing, seat);
     if (!held) {
       // Every connection joins before its first frame is read, so this is a
       // bug in the caller rather than something a client can cause.
       throw new Error(
-        `move for a player who has not joined: ${userId} in ${cohortId}`,
+        `move for a player who has not joined: ${seat.userId} in ${seat.cohortId}`,
       );
     }
 
@@ -283,7 +250,17 @@ export class Players {
   }
 }
 
-/** Cohort, then account: each cohort's campus kept together. */
+/**
+ * The nested maps are cohort, then account, so each cohort's campus is kept
+ * together; these three are the only places that order is written.
+ */
+function getIn<T>(
+  outer: Map<string, Map<string, T>>,
+  { userId, cohortId }: Seat,
+): T | undefined {
+  return outer.get(cohortId)?.get(userId);
+}
+
 function setIn<T>(
   outer: Map<string, Map<string, T>>,
   { userId, cohortId }: Seat,

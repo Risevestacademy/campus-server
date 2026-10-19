@@ -16,18 +16,15 @@ import type {
   PresenceStore,
 } from '../infra/presence.js';
 import type { Tile } from '../movement/grid.js';
-import {
-  Players,
-  seatKey,
-  type Player,
-  type Seat,
-} from '../movement/players.js';
+import { Players, type Player } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
+import { seatKey, type Seat } from '../seat.js';
 import {
   decideUpgrade,
   sessionRefreshedSince,
   type Refusal,
+  type UpgradeDecision,
 } from './authenticate.js';
 import { Connections, type Connection } from './connections.js';
 import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
@@ -101,7 +98,7 @@ export function registerGateway(
       const player = players.get({ userId, cohortId });
       // Left since the step: `left` has already gone out, and an entry now
       // would put back an avatar the client has just taken away.
-      if (!player || !connections.get({ userId, cohortId })) continue;
+      if (!player || !connections.holderOf({ userId, cohortId })) continue;
       const moved = movedIn.get(cohortId);
       if (moved) moved.push(player);
       else movedIn.set(cohortId, [player]);
@@ -157,7 +154,7 @@ export function registerGateway(
       app.log.warn({ err, count: entries.length }, 'could not save positions');
       for (const { userId, cohortId } of entries) {
         // Retried only while the account is still in that cohort.
-        if (connections.get({ userId, cohortId })) {
+        if (connections.holderOf({ userId, cohortId })) {
           unsaved.set(seatKey({ userId, cohortId }), { userId, cohortId });
         }
       }
@@ -165,9 +162,10 @@ export function registerGateway(
   }
 
   /** Forgets one cohort's kept position, for access taken away. */
-  function forgetSaved(userId: string, cohortId: string): void {
-    unsaved.delete(seatKey({ userId, cohortId }));
-    positions.forget(userId, cohortId).catch((err: unknown) => {
+  function forgetSaved(seat: Seat): void {
+    const { userId, cohortId } = seat;
+    unsaved.delete(seatKey(seat));
+    positions.forget(seat).catch((err: unknown) => {
       app.log.warn(
         { err, userId, cohortId },
         'could not forget saved position',
@@ -313,7 +311,7 @@ export function registerGateway(
     connections.remove(connection);
     // Replaced in the same cohort: the avatar stays, and the new socket
     // stands for it. Their places in other cohorts are none of this.
-    if (connections.get(connection)) {
+    if (connections.holderOf(connection)) {
       return;
     }
     const seat = seatKey(connection);
@@ -331,7 +329,7 @@ export function registerGateway(
     // began, everybody has been written already. Access taken away forgets
     // this connection's cohort: there is nothing to come back to.
     if (!remember) {
-      forgetSaved(connection.userId, connection.cohortId);
+      forgetSaved(connection);
     } else if (standing && !stopping) {
       unsaved.delete(seat);
       persist([positionOf(standing, connection.cohortId)]);
@@ -383,7 +381,7 @@ export function registerGateway(
   /** Everybody standing in one cohort's campus, with what to draw for them. */
   function avatarsIn(cohortId: string): Avatar[] {
     return players.in(cohortId).flatMap((player) => {
-      const connection = connections.get({
+      const connection = connections.holderOf({
         userId: player.userId,
         cohortId,
       });
@@ -502,11 +500,7 @@ export function registerGateway(
   ): Promise<void> {
     let live: boolean;
     try {
-      live = await accounts.liveMembership(
-        connection.userId,
-        connection.cohortId,
-        now,
-      );
+      live = await accounts.liveMembership(connection, now);
     } catch (err) {
       // As with the account: a database that is not answering must not throw
       // everybody off the campus. The next sweep tries again.
@@ -704,7 +698,7 @@ export function registerGateway(
     if (!decision.ok && decision.userId) {
       const { userId } = decision;
       if (cohortId !== undefined) {
-        forgetSaved(userId, cohortId);
+        forgetSaved({ userId, cohortId });
       }
       const open = connections.forUser(userId);
       for (const connection of open) {
@@ -740,7 +734,7 @@ export function registerGateway(
       !players.isRemembered(seatOf(decision))
     ) {
       try {
-        saved = await positions.load(decision.claims.userId, decision.cohortId);
+        saved = await positions.load(seatOf(decision));
       } catch (err) {
         app.log.warn(
           { err, userId: decision.claims.userId },
@@ -893,6 +887,8 @@ export function registerGateway(
             recordSpaceCrossing(connection, moved.player);
           }
           if (moved.changed) {
+            // The two fields copied out, not the connection: these maps
+            // outlive the socket, and holding it would keep it in memory.
             const seat: Seat = {
               userId: connection.userId,
               cohortId: connection.cohortId,
@@ -1011,10 +1007,7 @@ export function registerGateway(
 }
 
 /** The seat an accepted upgrade asks for. */
-function seatOf(decision: {
-  claims: { userId: string };
-  cohortId: string;
-}): Seat {
+function seatOf(decision: Extract<UpgradeDecision, { ok: true }>): Seat {
   return { userId: decision.claims.userId, cohortId: decision.cohortId };
 }
 

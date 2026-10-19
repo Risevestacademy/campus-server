@@ -25,6 +25,7 @@ import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
 import { spaceIndexFrom } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
+import type { Seat } from '../seat.js';
 import {
   DISPLACED_CHANNEL,
   MemoryPresenceStore,
@@ -36,8 +37,11 @@ const SECRET = 'a-world-session-secret-of-at-least-32-chars';
 const ORIGIN = 'https://campus.example.com';
 const COHORT = 'cohort-1';
 
+/** A seat in the tests' own cohort unless another is named. */
+type SeatIn = Pick<Seat, 'userId'> & Partial<Seat>;
+
 /** How the fake store keys a position: by account and cohort. */
-const positionKey = (userId: string, cohortId = COHORT) =>
+const positionKey = ({ userId, cohortId = COHORT }: SeatIn) =>
   `${userId}:${cohortId}`;
 
 /** Answers for the database, so these tests need none. */
@@ -70,8 +74,7 @@ const accounts = {
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
   /** As the database's own question: is this membership live at `now`? */
   liveMembership: async (
-    userId: string,
-    cohortId: string,
+    { userId, cohortId }: Seat,
     now: Date,
   ): Promise<boolean> => {
     const key = `${userId}:${cohortId}`;
@@ -106,23 +109,24 @@ const store = {
    * account can take its place while one waits on its saved position.
    */
   heldLoads: new Map<string, Promise<void>>(),
-  load: async (userId: string, cohortId: string) => {
+  load: async (seat: Seat) => {
     store.loads += 1;
-    const held = store.heldLoads.get(cohortId);
+    const held = store.heldLoads.get(seat.cohortId);
     if (held) await held;
     if (store.failLoad) throw new Error('redis is down');
-    return store.positions.get(positionKey(userId, cohortId)) as
+    return store.positions.get(positionKey(seat)) as
       | { x: number; y: number; facing: 'up' | 'down' | 'left' | 'right' }
       | undefined;
   },
   save: async (entries: readonly PositionToSave[]) => {
     if (store.failSave) throw new Error('redis is down');
-    for (const { userId, cohortId, x, y, facing } of entries) {
-      store.positions.set(positionKey(userId, cohortId), { x, y, facing });
+    for (const entry of entries) {
+      const { x, y, facing } = entry;
+      store.positions.set(positionKey(entry), { x, y, facing });
     }
   },
-  forget: async (userId: string, cohortId: string) => {
-    store.positions.delete(positionKey(userId, cohortId));
+  forget: async (seat: Seat) => {
+    store.positions.delete(positionKey(seat));
   },
   ready: async () => true,
   close: async () => undefined,
@@ -130,7 +134,7 @@ const store = {
 
 /** Stands in for presence in Redis, and for the other instances behind it. */
 /** One presence entry per account and cohort, as the real stores keep them. */
-const presenceKeyOf = (userId: string, cohortId = COHORT) =>
+const presenceKeyOf = ({ userId, cohortId = COHORT }: SeatIn) =>
   `${userId}:${cohortId}`;
 
 const presence = {
@@ -148,7 +152,7 @@ const presence = {
       presence.newerElsewhere = false;
       return false;
     }
-    presence.entries.set(presenceKeyOf(entry.userId, entry.cohortId), entry);
+    presence.entries.set(presenceKeyOf(entry), entry);
     return true;
   },
   /** Every change-of-space write, in order: counted apart from renewals. */
@@ -160,7 +164,7 @@ const presence = {
     presence.crossings.push(entry);
     if (presence.failCrossings) throw new Error('redis is down');
     if (presence.newerOnCrossing.has(entry.connectionId)) return false;
-    presence.entries.set(presenceKeyOf(entry.userId, entry.cohortId), entry);
+    presence.entries.set(presenceKeyOf(entry), entry);
     return true;
   },
   renew: async (entries: readonly Presence[]) => {
@@ -170,18 +174,15 @@ const presence = {
       if (presence.heldElsewhere.has(entry.connectionId)) {
         displaced.push(entry);
       } else {
-        presence.entries.set(
-          presenceKeyOf(entry.userId, entry.cohortId),
-          entry,
-        );
+        presence.entries.set(presenceKeyOf(entry), entry);
       }
     }
     return displaced;
   },
   leave: async (entries: readonly Presence[]) => {
-    for (const { userId, cohortId, connectionId } of entries) {
-      const key = presenceKeyOf(userId, cohortId);
-      if (presence.entries.get(key)?.connectionId === connectionId) {
+    for (const entry of entries) {
+      const key = presenceKeyOf(entry);
+      if (presence.entries.get(key)?.connectionId === entry.connectionId) {
         presence.entries.delete(key);
       }
     }
@@ -1788,11 +1789,14 @@ describe('movement', () => {
       move(inFrontend, 'right', 1);
       await waitFor(inFrontend, (m) => m.type === 'moveResult');
       // Backend already knows where they stood last time.
-      store.positions.set(positionKey(ada, 'cohort-backend'), {
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
+      store.positions.set(
+        positionKey({ userId: ada, cohortId: 'cohort-backend' }),
+        {
+          x: 3,
+          y: 2,
+          facing: 'left',
+        },
+      );
 
       const inBackend = await arrive(ada, 'cohort-backend');
 
@@ -1857,10 +1861,18 @@ describe('movement', () => {
       await leave(inBackend);
 
       await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-frontend')))
+        .poll(() =>
+          store.positions.get(
+            positionKey({ userId: ada, cohortId: 'cohort-frontend' }),
+          ),
+        )
         .toEqual({ x: 1, y: 0, facing: 'right' });
       await expect
-        .poll(() => store.positions.get(positionKey(ada, 'cohort-backend')))
+        .poll(() =>
+          store.positions.get(
+            positionKey({ userId: ada, cohortId: 'cohort-backend' }),
+          ),
+        )
         .toEqual({ x: 0, y: 1, facing: 'down' });
     });
 
@@ -2120,11 +2132,14 @@ describe('movement', () => {
 
     it('replaces without an extra save when the second connection is the same cohort', async () => {
       const ada = person();
-      store.positions.set(positionKey(ada, 'cohort-backend'), {
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
+      store.positions.set(
+        positionKey({ userId: ada, cohortId: 'cohort-backend' }),
+        {
+          x: 3,
+          y: 2,
+          facing: 'left',
+        },
+      );
       const backend = hold('cohort-backend');
 
       const first = connect(
@@ -2150,7 +2165,11 @@ describe('movement', () => {
       expect(world.gateway.connections.forUser(ada)).toHaveLength(1);
       // Same-cohort replacement leaves the avatar untouched and writes
       // nothing: the store still holds only Backend's own saved position.
-      expect(store.positions.get(positionKey(ada, 'cohort-backend'))).toEqual({
+      expect(
+        store.positions.get(
+          positionKey({ userId: ada, cohortId: 'cohort-backend' }),
+        ),
+      ).toEqual({
         x: 3,
         y: 2,
         facing: 'left',
@@ -2224,16 +2243,22 @@ describe('movement', () => {
 
     it('places both when two cohorts wait at once, each at its own saved position', async () => {
       const ada = person();
-      store.positions.set(positionKey(ada, 'cohort-backend'), {
-        x: 3,
-        y: 2,
-        facing: 'left',
-      });
-      store.positions.set(positionKey(ada, 'cohort-frontend'), {
-        x: 4,
-        y: 1,
-        facing: 'right',
-      });
+      store.positions.set(
+        positionKey({ userId: ada, cohortId: 'cohort-backend' }),
+        {
+          x: 3,
+          y: 2,
+          facing: 'left',
+        },
+      );
+      store.positions.set(
+        positionKey({ userId: ada, cohortId: 'cohort-frontend' }),
+        {
+          x: 4,
+          y: 1,
+          facing: 'right',
+        },
+      );
       const frontend = hold('cohort-frontend');
       const backend = hold('cohort-backend');
 
@@ -2313,7 +2338,7 @@ describe('movement', () => {
         )
         .toBe(true);
       await expect
-        .poll(() => store.positions.get(positionKey(ada)))
+        .poll(() => store.positions.get(positionKey({ userId: ada })))
         .toEqual({ x: 1, y: 0, facing: 'right' });
 
       accounts.suspended.add(ada);
@@ -2329,7 +2354,7 @@ describe('movement', () => {
         world.gateway.players.isRemembered({ userId: ada, cohortId: COHORT }),
       ).toBe(false);
       await expect
-        .poll(() => store.positions.has(positionKey(ada)))
+        .poll(() => store.positions.has(positionKey({ userId: ada })))
         .toBe(false);
 
       // Suspension lifted: welcome back, but at the spawn.
@@ -2347,16 +2372,22 @@ describe('movement', () => {
 
     it('forgets only the cohort the refusal named, leaving others', async () => {
       const ada = person();
-      store.positions.set(positionKey(ada, 'cohort-frontend'), {
-        x: 1,
-        y: 1,
-        facing: 'up',
-      });
-      store.positions.set(positionKey(ada, 'cohort-backend'), {
-        x: 2,
-        y: 2,
-        facing: 'down',
-      });
+      store.positions.set(
+        positionKey({ userId: ada, cohortId: 'cohort-frontend' }),
+        {
+          x: 1,
+          y: 1,
+          facing: 'up',
+        },
+      );
+      store.positions.set(
+        positionKey({ userId: ada, cohortId: 'cohort-backend' }),
+        {
+          x: 2,
+          y: 2,
+          facing: 'down',
+        },
+      );
 
       accounts.suspended.add(ada);
       const refused = connect(
@@ -2369,12 +2400,18 @@ describe('movement', () => {
       await refused.settled;
 
       await expect
-        .poll(() => store.positions.has(positionKey(ada, 'cohort-frontend')))
+        .poll(() =>
+          store.positions.has(
+            positionKey({ userId: ada, cohortId: 'cohort-frontend' }),
+          ),
+        )
         .toBe(false);
       // The cohort not involved in the attempt is left alone.
-      expect(store.positions.has(positionKey(ada, 'cohort-backend'))).toBe(
-        true,
-      );
+      expect(
+        store.positions.has(
+          positionKey({ userId: ada, cohortId: 'cohort-backend' }),
+        ),
+      ).toBe(true);
     });
 
     /** Gone from everybody's screen at once, and back in the same place. */
@@ -2468,7 +2505,11 @@ describe('movement', () => {
   describe('between visits', () => {
     it('starts somebody where they stood last time', async () => {
       const ada = person();
-      store.positions.set(positionKey(ada), { x: 2, y: 3, facing: 'left' });
+      store.positions.set(positionKey({ userId: ada }), {
+        x: 2,
+        y: 3,
+        facing: 'left',
+      });
 
       const conn = await arrive(ada);
 
@@ -2484,7 +2525,11 @@ describe('movement', () => {
 
     it('starts at the spawn when the saved tile is no longer on the map', async () => {
       const ada = person();
-      store.positions.set(positionKey(ada), { x: 9, y: 9, facing: 'up' });
+      store.positions.set(positionKey({ userId: ada }), {
+        x: 9,
+        y: 9,
+        facing: 'up',
+      });
 
       const conn = await arrive(ada);
 
@@ -2500,7 +2545,10 @@ describe('movement', () => {
 
     it('starts at the spawn when the saved tile is now a wall', async () => {
       const ada = person();
-      store.positions.set(positionKey(ada), { ...WALL, facing: 'up' });
+      store.positions.set(positionKey({ userId: ada }), {
+        ...WALL,
+        facing: 'up',
+      });
 
       const conn = await arrive(ada);
 
@@ -2539,7 +2587,7 @@ describe('movement', () => {
       await leave(conn);
 
       await expect
-        .poll(() => store.positions.get(positionKey(ada)))
+        .poll(() => store.positions.get(positionKey({ userId: ada })))
         .toEqual({ x: 1, y: 0, facing: 'right' });
     });
 
@@ -2550,7 +2598,9 @@ describe('movement', () => {
       await waitFor(conn, (m) => m.type === 'moveResult');
 
       await expect
-        .poll(() => store.positions.get(positionKey(ada)), { timeout: 3_000 })
+        .poll(() => store.positions.get(positionKey({ userId: ada })), {
+          timeout: 3_000,
+        })
         .toEqual({ x: 0, y: 1, facing: 'down' });
       await leave(conn);
     });
@@ -2588,14 +2638,18 @@ describe('movement', () => {
       move(conn, 'right', 1);
       await waitFor(conn, (m) => m.type === 'moveResult');
       await expect
-        .poll(() => store.positions.has(positionKey(ada)), { timeout: 3_000 })
+        .poll(() => store.positions.has(positionKey({ userId: ada })), {
+          timeout: 3_000,
+        })
         .toBe(true);
 
       accounts.suspended.add(ada);
 
       await expect(conn.settled).resolves.toMatchObject({ closeCode: 1008 });
       await expect
-        .poll(() => store.positions.has(positionKey(ada)), { timeout: 3_000 })
+        .poll(() => store.positions.has(positionKey({ userId: ada })), {
+          timeout: 3_000,
+        })
         .toBe(false);
     }, 15_000);
   });
@@ -2610,12 +2664,20 @@ describe('movement', () => {
       const connectionId = await connectionIdOf(conn);
 
       await expect
-        .poll(() => presence.entries.get(presenceKeyOf(ada, 'cohort-frontend')))
+        .poll(() =>
+          presence.entries.get(
+            presenceKeyOf({ userId: ada, cohortId: 'cohort-frontend' }),
+          ),
+        )
         .toMatchObject({ connectionId, cohortId: 'cohort-frontend' });
 
       await leave(conn);
       await expect
-        .poll(() => presence.entries.has(presenceKeyOf(ada, 'cohort-frontend')))
+        .poll(() =>
+          presence.entries.has(
+            presenceKeyOf({ userId: ada, cohortId: 'cohort-frontend' }),
+          ),
+        )
         .toBe(false);
     });
 
@@ -2643,7 +2705,7 @@ describe('movement', () => {
       const conn = await arrive(ada);
 
       await expect
-        .poll(() => presence.entries.get(presenceKeyOf(ada)))
+        .poll(() => presence.entries.get(presenceKeyOf({ userId: ada })))
         .toMatchObject({ spaceKey: DEFAULT_SPACE_KEY });
       await leave(conn);
     });
@@ -2651,12 +2713,16 @@ describe('movement', () => {
     /** Somebody back where they stood last time is in that place's space. */
     it('records the space of a saved position they come back to', async () => {
       const ada = person();
-      store.positions.set(positionKey(ada), { x: 3, y: 1, facing: 'left' });
+      store.positions.set(positionKey({ userId: ada }), {
+        x: 3,
+        y: 1,
+        facing: 'left',
+      });
 
       const conn = await arrive(ada);
 
       await expect
-        .poll(() => presence.entries.get(presenceKeyOf(ada)))
+        .poll(() => presence.entries.get(presenceKeyOf({ userId: ada })))
         .toMatchObject({ spaceKey: 'library' });
       await leave(conn);
     });
@@ -2669,7 +2735,9 @@ describe('movement', () => {
       // The third step right is into the library.
       for (const seq of [1, 2, 3]) await step(conn, 'right', seq);
       expect(crossingsOf(ada)).toEqual(['library']);
-      expect(presence.entries.get(presenceKeyOf(ada))).toMatchObject({
+      expect(
+        presence.entries.get(presenceKeyOf({ userId: ada })),
+      ).toMatchObject({
         spaceKey: 'library',
       });
 
@@ -2735,12 +2803,14 @@ describe('movement', () => {
       try {
         for (const seq of [1, 2, 3]) await step(conn, 'right', seq);
         expect(crossingsOf(ada)).toEqual(['library']);
-        expect(presence.entries.get(presenceKeyOf(ada))).toMatchObject({
+        expect(
+          presence.entries.get(presenceKeyOf({ userId: ada })),
+        ).toMatchObject({
           spaceKey: DEFAULT_SPACE_KEY,
         });
 
         await expect
-          .poll(() => presence.entries.get(presenceKeyOf(ada)), {
+          .poll(() => presence.entries.get(presenceKeyOf({ userId: ada })), {
             timeout: 3_000,
           })
           .toMatchObject({ spaceKey: 'library' });
@@ -2758,9 +2828,9 @@ describe('movement', () => {
       await first.settled;
 
       await quiet();
-      expect(presence.entries.get(presenceKeyOf(ada))?.connectionId).toBe(
-        connectionId,
-      );
+      expect(
+        presence.entries.get(presenceKeyOf({ userId: ada }))?.connectionId,
+      ).toBe(connectionId);
 
       await leave(second);
     });
@@ -2826,7 +2896,7 @@ describe('movement', () => {
       await expect(
         waitFor(watcher, (m) => m.type === 'left' && m.userId === ada),
       ).resolves.toBeDefined();
-      expect(presence.entries.has(presenceKeyOf(ada))).toBe(false);
+      expect(presence.entries.has(presenceKeyOf({ userId: ada }))).toBe(false);
       await leave(watcher);
     });
 
@@ -2849,11 +2919,11 @@ describe('movement', () => {
 
       const conn = await arrive(ada);
       await quiet();
-      expect(presence.entries.has(presenceKeyOf(ada))).toBe(false);
+      expect(presence.entries.has(presenceKeyOf({ userId: ada }))).toBe(false);
 
       presence.failing = false;
       await expect
-        .poll(() => presence.entries.has(presenceKeyOf(ada)), {
+        .poll(() => presence.entries.has(presenceKeyOf({ userId: ada })), {
           timeout: 3_000,
         })
         .toBe(true);
@@ -3054,9 +3124,7 @@ describe.skipIf(!redisUrl)('across instances', () => {
 
     await expect(onFirst.closed).resolves.toEqual([4000, 'entered_elsewhere']);
     expect(onFirst.messages).toContainEqual({ type: 'replaced' });
-    expect(
-      first.gateway.players.has({ userId: userId, cohortId: cohortId }),
-    ).toBe(false);
+    expect(first.gateway.players.has({ userId, cohortId })).toBe(false);
     const welcome = onSecond.messages.find((m) => m.type === 'welcome');
     await expect(second.presence.online(cohortId)).resolves.toEqual([
       expect.objectContaining({
