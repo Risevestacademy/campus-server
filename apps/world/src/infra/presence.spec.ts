@@ -202,7 +202,9 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     await expect(store.online(cohort)).resolves.toEqual([]);
-    await expect(redis.exists(presenceKey(user, cohort))).resolves.toBe(0);
+    await expect(
+      redis.exists(presenceKey({ userId: user, cohortId: cohort })),
+    ).resolves.toBe(0);
   });
 
   it('keeps a renewed entry past when it would have expired', async () => {
@@ -223,7 +225,7 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     const { store, redis } = instance();
     const ada = presenceOf(user, { cohortId: cohort });
     await store.enter(ada);
-    await redis.del(presenceKey(user, cohort));
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
 
     await expect(store.renew([ada])).resolves.toEqual([]);
 
@@ -318,7 +320,10 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     const { store, redis } = instance();
     const ada = presenceOf(user, { cohortId: cohort });
     await store.enter(ada);
-    await redis.hdel(presenceKey(user, cohort), 'spaceKey');
+    await redis.hdel(
+      presenceKey({ userId: user, cohortId: cohort }),
+      'spaceKey',
+    );
 
     await expect(store.online(cohort)).resolves.toEqual([]);
 

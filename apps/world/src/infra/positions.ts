@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
 
 import { Direction } from '../movement/grid.js';
+import type { Seat } from '../seat.js';
 import type { Env } from './env.js';
 import {
   FAIL_FAST,
@@ -21,10 +22,7 @@ export interface SavedPosition {
  * value rather than living on Player, which is sent to clients and must not
  * carry a cohort they have no use for.
  */
-export interface PositionToSave extends SavedPosition {
-  userId: string;
-  cohortId: string;
-}
+export interface PositionToSave extends SavedPosition, Seat {}
 
 /**
  * Where each player last stood, kept between visits. In Redis rather
@@ -39,14 +37,14 @@ export interface PositionToSave extends SavedPosition {
  */
 export interface PositionStore {
   /** Undefined when nothing is kept, or what is kept is for another map. */
-  load(userId: string, cohortId: string): Promise<SavedPosition | undefined>;
+  load(seat: Seat): Promise<SavedPosition | undefined>;
   save(positions: readonly PositionToSave[]): Promise<void>;
   /**
    * For access taken away: there is nothing to come back to. Only the named
    * cohort, because a position is kept per cohort and there is no single
    * entry to remove.
    */
-  forget(userId: string, cohortId: string): Promise<void>;
+  forget(seat: Seat): Promise<void>;
   /**
    * Resolves true once the store can answer, or false after `timeoutMs`.
    * Waited on before accepting sockets: after a redeploy everybody
@@ -64,7 +62,7 @@ const stored = z.object({
   facing: z.enum(Direction),
 });
 
-export function positionKey(userId: string, cohortId: string): string {
+export function positionKey({ userId, cohortId }: Seat): string {
   return `world:position:${userId}:${cohortId}`;
 }
 
@@ -132,11 +130,8 @@ export class RedisPositionStore implements PositionStore {
     this.ttlSeconds = ttlDays * 86_400;
   }
 
-  async load(
-    userId: string,
-    cohortId: string,
-  ): Promise<SavedPosition | undefined> {
-    const raw = await this.redis.get(positionKey(userId, cohortId));
+  async load(seat: Seat): Promise<SavedPosition | undefined> {
+    const raw = await this.redis.get(positionKey(seat));
     if (raw === null) {
       return undefined;
     }
@@ -165,7 +160,7 @@ export class RedisPositionStore implements PositionStore {
     const batch = this.redis.multi();
     for (const position of positions) {
       batch.set(
-        positionKey(position.userId, position.cohortId),
+        positionKey(position),
         JSON.stringify({
           mapId: this.mapId,
           x: position.x,
@@ -183,8 +178,8 @@ export class RedisPositionStore implements PositionStore {
     }
   }
 
-  async forget(userId: string, cohortId: string): Promise<void> {
-    await this.redis.del(positionKey(userId, cohortId));
+  async forget(seat: Seat): Promise<void> {
+    await this.redis.del(positionKey(seat));
   }
 
   ready(timeoutMs: number): Promise<boolean> {
