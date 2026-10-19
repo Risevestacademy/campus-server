@@ -38,6 +38,7 @@ import {
   ApiGraduateMember,
   ApiListCohorts,
   ApiListRoster,
+  ApiMoveMemberTrack,
   ApiRemoveMember,
   ApiUpdateCohort,
   ApiWithdrawMember,
@@ -64,6 +65,10 @@ import {
 } from './dto/end-membership.dto.js';
 import type { EndMembershipResponseDto } from './dto/end-membership.dto.js';
 import { ExtendGuestVisitDto, MemberParamDto } from './dto/extend-visit.dto.js';
+import {
+  MoveMemberTrackDto,
+  MoveMemberTrackResponseDto,
+} from './dto/move-track.dto.js';
 import { UpdateCohortDto } from './dto/update-cohort.dto.js';
 
 @ApiTags('cohorts')
@@ -155,6 +160,22 @@ export class CohortsController {
       params.cohortId,
       params.userId,
       new Date(dto.accessExpiresAt),
+      { actorUserId: admin.id, correlationId },
+    );
+  }
+
+  @Patch(':cohortId/members/:userId/track')
+  @ApiMoveMemberTrack()
+  moveMemberTrack(
+    @Param() params: MemberParamDto,
+    @Body() dto: MoveMemberTrackDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<MoveMemberTrackResponseDto> {
+    return this.members.moveMemberTrack(
+      params.cohortId,
+      params.userId,
+      dto.trackId,
       { actorUserId: admin.id, correlationId },
     );
   }
