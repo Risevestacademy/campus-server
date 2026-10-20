@@ -55,6 +55,8 @@ describe('space memberships (e2e)', () => {
   let spaceId: string;
   let retiredSpaceId: string;
   let cohortTrackId: string;
+  let cohortId: string;
+  let trackId: string;
 
   const cookieFor = async (user: { id: string; email: string }) => {
     const { token } = await signSessionToken(
@@ -193,6 +195,8 @@ describe('space memberships (e2e)', () => {
       .values({ cohortId: cohort.id, trackId: track.id })
       .returning();
     cohortTrackId = run.id;
+    cohortId = cohort.id;
+    trackId = track.id;
   });
 
   it('refuses without a session, and refuses a member on every route', async () => {
@@ -295,6 +299,50 @@ describe('space memberships (e2e)', () => {
     await expect(db.select().from(spaceMemberships)).resolves.toHaveLength(1);
   });
 
+  it('refuses a malformed id or end date as a field error, before any query', async () => {
+    const fieldOf = async (res: request.Test) =>
+      Object.keys((await res.expect(400)).body.error.details.fields);
+
+    await expect(fieldOf(grant({ userId: 'nope' }))).resolves.toEqual([
+      'userId',
+    ]);
+    await expect(fieldOf(grant({ cohortTrackId: 'nope' }))).resolves.toEqual([
+      'cohortTrackId',
+    ]);
+    // Forms a Date cannot read, and a timestamp with no zone to read it in.
+    for (const validTo of [
+      'garbage',
+      '2099-W48-1',
+      '2099-335',
+      '2099-02-30',
+      '2099-12-01T00:00:00',
+    ]) {
+      await expect(
+        fieldOf(grant({ userId: member.id, validTo })),
+      ).resolves.toEqual(['validTo']);
+    }
+    await expect(fieldOf(end('nope'))).resolves.toEqual(['membershipId']);
+    await expect(
+      fieldOf(end('55555555-5555-4555-8555-555555555555', adminCookie, 'nope')),
+    ).resolves.toEqual(['id']);
+    await expect(fieldOf(list(adminCookie, 'nope'))).resolves.toEqual(['id']);
+
+    await expect(db.select().from(spaceMemberships)).resolves.toHaveLength(0);
+  });
+
+  it('takes an end date as a bare day, or as a timestamp with its zone', async () => {
+    const day = await grant({ userId: member.id, validTo: '2099-12-01' });
+    expect(day.status).toBe(201);
+    expect(day.body.validTo).toBe('2099-12-01T00:00:00.000Z');
+    await end(day.body.id).expect(204);
+
+    const zoned = await grant({
+      userId: member.id,
+      validTo: '2099-12-01T09:00:00+01:00',
+    }).expect(201);
+    expect(zoned.body.validTo).toBe('2099-12-01T08:00:00.000Z');
+  });
+
   it('lists the space’s grants with who holds them now', async () => {
     await grant({ userId: member.id }).expect(201);
     await grant({ cohortTrackId }).expect(201);
@@ -334,6 +382,70 @@ describe('space memberships (e2e)', () => {
     await end('55555555-5555-4555-8555-555555555555').expect(404);
   });
 
+  describe('and the track detached from its cohort', () => {
+    const detach = () =>
+      request(app.getHttpServer())
+        .delete(`/v1/cohorts/${cohortId}/tracks/${trackId}`)
+        .set('Cookie', adminCookie);
+
+    it('is refused while the track holds a grant that has not ended, naming the space', async () => {
+      await grant({ cohortTrackId }).expect(201);
+
+      const res = await detach().expect(409);
+
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message: expect.stringMatching(/access to a space/),
+        details: { cohortId, trackId, spaceIds: [spaceId] },
+      });
+      await expect(
+        db
+          .select()
+          .from(cohortTracks)
+          .where(eq(cohortTracks.id, cohortTrackId)),
+      ).resolves.toHaveLength(1);
+    });
+
+    it('is refused for a grant with an end date still ahead', async () => {
+      await grant({ cohortTrackId, validTo: '2099-01-01' }).expect(201);
+
+      await detach().expect(409);
+    });
+
+    it('clears the ended grants, names them in its entry, and lets the cohort go', async () => {
+      const first = await grant({ cohortTrackId }).expect(201);
+      await end(first.body.id).expect(204);
+      const second = await grant({ cohortTrackId }).expect(201);
+      await end(second.body.id).expect(204);
+      // A person's grant on the same space is no business of the track's.
+      const person = await grant({ userId: member.id }).expect(201);
+
+      await detach().expect(204);
+
+      const left = await db.select().from(spaceMemberships);
+      expect(left.map((row) => row.id)).toEqual([person.body.id]);
+      const [entry] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.CohortTrackDetached));
+      expect(entry.details).toEqual({
+        cohortId,
+        trackId,
+        clearedSpaceMembershipIds: expect.arrayContaining([
+          first.body.id,
+          second.body.id,
+        ]),
+      });
+      // The grants' own entries stay: they are the record now.
+      await expect(entriesFor(first.body.id)).resolves.toHaveLength(2);
+
+      await request(app.getHttpServer())
+        .delete(`/v1/cohorts/${cohortId}`)
+        .set('Cookie', adminCookie)
+        .expect(204);
+    });
+  });
+
   it('is in the OpenAPI document, with the refusals documented on each route', () => {
     // Mirrors main.ts: the document every client is generated from.
     const document = SwaggerModule.createDocument(
@@ -347,12 +459,17 @@ describe('space memberships (e2e)', () => {
 
     const many = paths['/v1/spaces/{id}/memberships'];
     expect(many.post.responses).toHaveProperty('201');
+    expect(many.post.responses).toHaveProperty('400');
     expect(many.post.responses).toHaveProperty('403');
     expect(many.get.responses).toHaveProperty('200');
+    expect(many.get.responses).toHaveProperty('400');
     expect(many.get.responses).toHaveProperty('403');
+    // The body is a class, so it is both validated and described.
+    expect(JSON.stringify(many.post)).toContain('GrantSpaceMembershipDto');
 
     const one = paths['/v1/spaces/{id}/memberships/{membershipId}'];
     expect(one.delete.responses).toHaveProperty('204');
+    expect(one.delete.responses).toHaveProperty('400');
     expect(one.delete.responses).toHaveProperty('403');
 
     // Admin-only, said by the security every operation carries.

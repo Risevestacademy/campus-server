@@ -2,7 +2,11 @@ import { isLiveGrant, type SpaceGrantFacts } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, eq } from 'drizzle-orm';
 
-import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import {
+  DRIZZLE,
+  type Db,
+  type Tx,
+} from '../../infra/database/database.constants.js';
 import type { AuditContext } from '../audit/audit-log.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
@@ -49,6 +53,63 @@ function windowOf(row: {
 }
 
 /**
+ * Whether a grant is over: its span closed at or before `at`. Not the same
+ * question as `isLiveGrant` — a grant that has not started yet is not live,
+ * and not ended either.
+ */
+function hasEnded<T extends { validTo: Date | null }>(
+  row: T,
+  at: Date,
+): row is T & { validTo: Date } {
+  return row.validTo !== null && row.validTo.getTime() <= at.getTime();
+}
+
+/** What became of a track's grants when it was taken off its cohort. */
+export type TrackGrantRelease =
+  | { released: true; clearedIds: string[] }
+  | { released: false; standingSpaceIds: string[] };
+
+/**
+ * The grants side of detaching a track from its cohort
+ * (CohortsService.detachTrack), run in the detach's own transaction after it
+ * has locked the cohort's link to the track.
+ *
+ * A grant that has not ended keeps the track where it is: taking the track
+ * off would take that access away without anyone ending it, so nothing is
+ * deleted and the spaces it opens are named. Otherwise the ended grants go —
+ * kept for good they would hold the link, and so the cohort, forever — and
+ * the audit log, which has each one's granting and ending, is their record.
+ */
+export async function releaseTrackGrants(
+  tx: Tx,
+  cohortTrackId: string,
+  now: Date,
+): Promise<TrackGrantRelease> {
+  const held = await tx
+    .select({
+      id: spaceMemberships.id,
+      spaceId: spaceMemberships.spaceId,
+      validTo: spaceMemberships.validTo,
+    })
+    .from(spaceMemberships)
+    .where(eq(spaceMemberships.cohortTrackId, cohortTrackId));
+
+  const standing = held.filter((row) => !hasEnded(row, now));
+  if (standing.length > 0) {
+    return {
+      released: false,
+      standingSpaceIds: [...new Set(standing.map((row) => row.spaceId))],
+    };
+  }
+
+  const cleared = await tx
+    .delete(spaceMemberships)
+    .where(eq(spaceMemberships.cohortTrackId, cohortTrackId))
+    .returning({ id: spaceMemberships.id });
+  return { released: true, clearedIds: cleared.map((row) => row.id) };
+}
+
+/**
  * Granting and ending access to a space, and reading who has it: the admin
  * side of the `invite` and `request` settings, whose entry rule this
  * answers from — `mayEnter` in @campus/space-access counts a grant between
@@ -71,6 +132,9 @@ export class SpaceMembershipsService {
    * is a question about now, and a partial unique index may only name
    * immutable conditions, so `now()` is refused in one — which is why the
    * lock, not an index, is what makes the check true under concurrency.
+   * `no key update` rather than `update`: two grants still take turns, but
+   * a row elsewhere that only references the space — an audit entry naming
+   * it — is not held up behind the grant.
    */
   async grant(
     spaceId: string,
@@ -99,7 +163,7 @@ export class SpaceMembershipsService {
         .select()
         .from(spaces)
         .where(eq(spaces.id, spaceId))
-        .for('update');
+        .for('no key update');
       if (!space) {
         throw new SpaceNotFoundException(`No space with id ${spaceId}`);
       }
@@ -136,6 +200,11 @@ export class SpaceMembershipsService {
         // A cohort track row exists only under a cohort that runs it, so the
         // join is the refusal for "no cohort runs that track": there is no
         // id to find. The columns come along for the answer's sake.
+        //
+        // Held with `key share` to the end, as a member's move holds it: a
+        // detach of the track locks the row before it looks for grants, so
+        // if this went first the detach waits and then sees the grant, and
+        // if the detach went first this finds no row and answers 404.
         const [track] = await tx
           .select({
             id: cohortTracks.id,
@@ -148,7 +217,8 @@ export class SpaceMembershipsService {
           .innerJoin(cohorts, eq(cohortTracks.cohortId, cohorts.id))
           .innerJoin(tracks, eq(cohortTracks.trackId, tracks.id))
           .where(eq(cohortTracks.id, cohortTrackId as string))
-          .limit(1);
+          .limit(1)
+          .for('key share', { of: cohortTracks });
         if (!track) {
           throw new SpaceMembershipSubjectNotFoundException(
             `No cohort runs a track with id ${cohortTrackId}`,
@@ -225,8 +295,10 @@ export class SpaceMembershipsService {
 
   /**
    * Bring a grant to an end: `valid_to` is set to now and the row stays as
-   * the record that it existed. The grant's own row is locked, so two ends
-   * of it take turns — the second is told it is already over rather than
+   * the record that it existed — until, for a grant to a track, the track
+   * is detached from its cohort (releaseTrackGrants), and the audit log is
+   * the record from then on. The grant's own row is locked, so two ends of
+   * it take turns — the second is told it is already over rather than
    * moving the record a second time.
    */
   async end(
@@ -251,7 +323,7 @@ export class SpaceMembershipsService {
           `No grant ${membershipId} on space ${spaceId}`,
         );
       }
-      if (row.validTo !== null && row.validTo.getTime() <= now.getTime()) {
+      if (hasEnded(row, now)) {
         throw new SpaceMembershipAlreadyEndedException(
           `That grant already ended at ${row.validTo.toISOString()}`,
           { validTo: row.validTo },
@@ -292,8 +364,9 @@ export class SpaceMembershipsService {
 
   /**
    * Every grant on the space, ended ones included: the ended rows are the
-   * record of who had access and when, and `live` says which count right
-   * now. Ordered by when they began, earliest first.
+   * record of who had access and when — short of a track's ended grants,
+   * which go when the track is detached from its cohort — and `live` says
+   * which count right now. Ordered by when they began, earliest first.
    */
   async list(
     spaceId: string,

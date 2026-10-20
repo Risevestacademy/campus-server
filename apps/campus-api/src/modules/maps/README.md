@@ -92,7 +92,9 @@ retired town hall, notice board or entry map does not stop another taking
 its place.
 
 `space_memberships` works the same way: ending somebody's access sets
-`valid_to`, and the row stays as the record that they had it.
+`valid_to`, and the row stays as the record that they had it. The one
+exception is a track taken off its cohort: the ended grants to that track go
+with it (see [Granting access](#granting-access)).
 
 ## The sync
 
@@ -159,8 +161,9 @@ from, and the only thing that writes them.
 A grant is to **one person or one cohort track, never both and never
 neither** — `cohort_track_id` names a `cohort_tracks` row, so it is a track
 some cohort actually runs, not a bare track. It starts the moment it is
-given and may carry an end date (`validTo`, in the future); without one it
-has no end until an admin ends it. Ending sets `valid_to` and keeps the row,
+given and may carry an end date (`validTo`, in the future: a bare date,
+read as midnight UTC, or a timestamp with its zone); without one it has no
+end until an admin ends it. Ending sets `valid_to` and keeps the row,
 as [above](#nothing-is-deleted). Each change writes an audit entry naming
 the admin, in the same transaction as the row, and is the first thing to
 fill `audit_log.space_id`.
@@ -176,7 +179,21 @@ two transactions, so it is tested on a server with more than one connection
 
 Refused, each with the status that says which: no such space or no such
 subject (404), a retired space or a subject that already holds a live grant
-(409), both subjects or neither, or an end date that has passed (400).
+(409), both subjects or neither, an id that is not a UUID, or an end date
+that has passed or is not a date or zoned timestamp (400).
+
+**A track detached from its cohort.** A track grant points at the
+`cohort_tracks` row, so detaching the track
+(`DELETE /v1/cohorts/{id}/tracks/{trackId}`) has to decide what happens to
+its grants. A grant that has not ended refuses the detach (409, naming the
+spaces) — end it first, so access is never taken away without anyone ending
+it. Ended grants go with the track: kept for good, they would block the
+detach, and so the cohort's deletion, forever. Their record is the audit
+log — each grant's `space_membership_granted` and `space_membership_ended`
+entries — and the `cohort_track_detached` entry names the grants it cleared.
+The detach locks the link before it looks for grants, and a grant to a
+track holds the link with `key share`, so the two never cross: tested in
+`space-memberships.pg.spec.ts`.
 
 ## Not here yet
 

@@ -21,13 +21,11 @@ import {
   ApiGrantSpaceMembership,
   ApiListSpaceMemberships,
 } from './docs/space-memberships.docs.js';
-import type {
-  GrantSpaceMembershipDto,
-  SpaceMembershipResponseDto,
-} from './dto/space-membership.dto.js';
+import type { SpaceMembershipResponseDto } from './dto/space-membership.dto.js';
 import {
-  MembershipIdParamDto,
+  GrantSpaceMembershipDto,
   SpaceIdParamDto,
+  SpaceMembershipParamDto,
 } from './dto/space-membership.dto.js';
 import { SpaceMembershipsService } from './space-memberships.service.js';
 
@@ -64,7 +62,7 @@ export class SpaceMembershipsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiEndSpaceMembership()
   end(
-    @Param() params: MembershipIdParamDto & SpaceIdParamDto,
+    @Param() params: SpaceMembershipParamDto,
     @CurrentUser() admin: AuthenticatedUser,
     @CorrelationId() correlationId: string | undefined,
   ): Promise<void> {

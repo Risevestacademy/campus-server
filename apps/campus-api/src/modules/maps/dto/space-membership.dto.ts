@@ -1,5 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsISO8601, IsOptional, IsUUID } from 'class-validator';
+import { IsISO8601, IsOptional, IsUUID, Matches } from 'class-validator';
+
+/**
+ * A day, read as midnight UTC, or an instant that says which zone it is in.
+ * A timestamp with no zone would be read in whatever zone the server runs
+ * in, so it is refused rather than guessed at — and so are the ISO 8601
+ * forms a `Date` cannot read, a week (`2027-W48-1`) or an ordinal day
+ * (`2027-335`), which would otherwise pass as valid and fail at the write.
+ */
+const DATE_OR_ZONED_INSTANT =
+  /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
 /**
  * Which of a grant's two subjects it names. Exactly one is set on every row
@@ -18,7 +28,12 @@ export class SpaceIdParamDto {
   id: string;
 }
 
-export class MembershipIdParamDto {
+/** The `:id` and `:membershipId` of the route that ends one grant. */
+export class SpaceMembershipParamDto {
+  @ApiProperty({ example: '55555555-5555-4555-8555-555555555555' })
+  @IsUUID()
+  id: string;
+
   @ApiProperty({ example: '66666666-6666-4666-8666-666666666666' })
   @IsUUID()
   membershipId: string;
@@ -60,11 +75,15 @@ export class GrantSpaceMembershipDto {
     format: 'date-time',
     example: '2026-12-01T00:00:00.000Z',
     description:
-      'When access ends: an ISO 8601 instant, which has to be in the ' +
-      'future. Left out, access has no end until an admin ends it.',
+      'When access ends, which has to be in the future. A bare date ' +
+      '(`2026-12-01`) is midnight UTC; a timestamp must carry its zone. ' +
+      'Left out, access has no end until an admin ends it.',
   })
   @IsOptional()
-  @IsISO8601()
+  @IsISO8601({ strict: true })
+  @Matches(DATE_OR_ZONED_INSTANT, {
+    message: 'validTo must be a date or a timestamp with a zone',
+  })
   validTo?: string;
 }
 

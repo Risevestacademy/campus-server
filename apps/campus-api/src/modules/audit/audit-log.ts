@@ -232,7 +232,15 @@ interface AuditEntryShapes {
   };
   [AuditAction.CohortTrackDetached]: {
     subject: AuditSubjectType.CohortTrack;
-    details: { cohortId: string; trackId: string };
+    details: {
+      cohortId: string;
+      trackId: string;
+      /**
+       * The ended space grants to the track that went with it — empty when
+       * it held none. Their granting and ending have entries of their own.
+       */
+      clearedSpaceMembershipIds: string[];
+    };
   };
   [AuditAction.TrackCreated]: {
     subject: AuditSubjectType.Track;

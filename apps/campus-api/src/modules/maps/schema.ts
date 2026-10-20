@@ -242,7 +242,9 @@ export const spaces = pgTable(
  * answered from.
  *
  * It holds a span, not a switch: ending access sets valid_to, and the row
- * stays as the record that they once had it.
+ * stays as the record that they once had it — until, for a grant to a
+ * track, the track is detached from its cohort, which clears ended grants
+ * and leaves the audit log as their record.
  */
 export const spaceMemberships = pgTable(
   'space_memberships',
