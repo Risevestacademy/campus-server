@@ -24,6 +24,7 @@ const presenceOf = (
   cohortId: 'cohort-1',
   spaceKey: '_default',
   since: Date.now(),
+  status: 'available',
   ...overrides,
 });
 
@@ -137,6 +138,37 @@ describe('MemoryPresenceStore', () => {
     await store.leave([frontend]);
     await expect(store.online('cohort-1')).resolves.toEqual([]);
     await expect(store.online('cohort-2')).resolves.toHaveLength(1);
+  });
+
+  it('sets the status only for the connection holding the place', async () => {
+    const store = new MemoryPresenceStore();
+    const older = presenceOf('ada', { since: 1 });
+    const newer = presenceOf('ada', { since: 2 });
+    await store.enter(older);
+    await store.enter(newer);
+
+    await store.setStatus({ ...older, status: 'away' });
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
+
+    await store.setStatus({ ...newer, status: 'busy' });
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({ status: 'busy' }),
+    ]);
+  });
+
+  it('sets the status in one cohort only', async () => {
+    const store = new MemoryPresenceStore();
+    const frontend = presenceOf('ada', { cohortId: 'cohort-1' });
+    await store.enter(frontend);
+    await store.enter(presenceOf('ada', { cohortId: 'cohort-2' }));
+
+    await store.setStatus({ ...frontend, status: 'busy' });
+
+    await expect(store.online('cohort-2')).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
   });
 });
 
@@ -394,6 +426,65 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
       .toContainEqual({ userId: user, connectionId: older.connectionId });
   });
 
+  it('sets the status only for the connection holding the place', async () => {
+    const { user, cohort } = fresh();
+    const { store } = instance();
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+    const newer = presenceOf(user, { cohortId: cohort, since: 2 });
+    await store.enter(older);
+    await store.enter(newer);
+
+    await store.setStatus({ ...older, status: 'away' });
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
+
+    await store.setStatus({ ...newer, status: 'busy' });
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'busy' }),
+    ]);
+  });
+
+  it('does not bring back a lapsed entry to set its status', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
+
+    await store.setStatus({ ...ada, status: 'busy' });
+
+    await expect(
+      redis.exists(presenceKey({ userId: user, cohortId: cohort })),
+    ).resolves.toBe(0);
+  });
+
+  it('carries the status on a renewal that puts a lapsed entry back', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
+
+    await store.renew([{ ...ada, status: 'busy' }]);
+
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'busy' }),
+    ]);
+  });
+
+  /** Written by an instance deployed before statuses, during a rollout. */
+  it('reads an entry with no status as available', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    await store.enter(presenceOf(user, { cohortId: cohort, status: 'busy' }));
+    await redis.hdel(presenceKey({ userId: user, cohortId: cohort }), 'status');
+
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
+  });
+
   /** One account may be in several cohorts' campuses at once. */
   it('lists somebody in every cohort they are in, each held separately', async () => {
     const { user, cohort } = fresh();
@@ -470,6 +561,7 @@ describe('createPresenceStore', () => {
       ['enter', (s: PresenceStore) => s.enter(presenceOf('ada'))],
       ['renew', (s: PresenceStore) => s.renew([presenceOf('ada')])],
       ['leave', (s: PresenceStore) => s.leave([presenceOf('ada')])],
+      ['setStatus', (s: PresenceStore) => s.setStatus(presenceOf('ada'))],
       ['online', (s: PresenceStore) => s.online('cohort-1')],
     ])('refuses %s at once instead of queueing it', async (_name, operate) => {
       store = createPresenceStore(
