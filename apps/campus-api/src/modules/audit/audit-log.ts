@@ -54,6 +54,19 @@ export interface TrackSnapshot {
   description: string | null;
 }
 
+/** What an admin can change on a mentorship group. */
+export interface MentorshipGroupSnapshot {
+  name: string;
+  description: string | null;
+  spaceId: string | null;
+}
+
+/** A mentorship group as a whole: the editable fields plus its people. */
+export interface MentorshipGroupRecordSnapshot extends MentorshipGroupSnapshot {
+  cohortId: string;
+  mentorMemberId: string;
+}
+
 /** A membership as it stood before a revive overwrote it. */
 export interface MembershipSnapshot {
   role: string;
@@ -257,6 +270,33 @@ interface AuditEntryShapes {
   [AuditAction.TrackDeleted]: {
     subject: AuditSubjectType.Track;
     details: TrackSnapshot;
+  };
+  [AuditAction.MentorshipGroupCreated]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: MentorshipGroupRecordSnapshot;
+  };
+  [AuditAction.MentorshipGroupUpdated]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: {
+      cohortId: string;
+      changes: FieldChanges<MentorshipGroupSnapshot>;
+    };
+  };
+  [AuditAction.MentorshipGroupMentorChanged]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: { cohortId: string; from: string; to: string };
+  };
+  [AuditAction.MentorshipGroupStudentAdded]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: { cohortId: string; cohortMemberId: string };
+  };
+  [AuditAction.MentorshipGroupStudentRemoved]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: { cohortId: string; cohortMemberId: string };
+  };
+  [AuditAction.MentorshipGroupDeleted]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: MentorshipGroupRecordSnapshot;
   };
 }
 

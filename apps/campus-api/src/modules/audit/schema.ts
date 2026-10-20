@@ -135,6 +135,26 @@ export enum AuditAction {
    * the subject says which grant, `space_id` which space.
    */
   SpaceMembershipEnded = 'space_membership_ended',
+  /**
+   * An admin created a mentorship group. `details` has the cohort, the name,
+   * the mentor membership and the room it was given.
+   */
+  MentorshipGroupCreated = 'mentorship_group_created',
+  /**
+   * An admin edited a group's name, description or room. `details.changes`
+   * maps each field that moved to its `from` and `to`.
+   */
+  MentorshipGroupUpdated = 'mentorship_group_updated',
+  /** An admin replaced the mentor. `details` has the membership before and after. */
+  MentorshipGroupMentorChanged = 'mentorship_group_mentor_changed',
+  /** An admin put a student in a group. */
+  MentorshipGroupStudentAdded = 'mentorship_group_student_added',
+  /** An admin took a student out of a group. */
+  MentorshipGroupStudentRemoved = 'mentorship_group_student_removed',
+  /**
+   * An admin deleted a group. The row is gone, so `details` keeps what it was.
+   */
+  MentorshipGroupDeleted = 'mentorship_group_deleted',
 }
 
 export enum AuditSubjectType {
@@ -148,6 +168,7 @@ export enum AuditSubjectType {
   Feedback = 'feedback',
   /** One row of `space_memberships`: a grant of access to a space. */
   SpaceMembership = 'space_membership',
+  MentorshipGroup = 'mentorship_group',
 }
 
 /**

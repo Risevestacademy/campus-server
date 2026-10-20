@@ -13,6 +13,16 @@ import {
   cohorts,
 } from '../../modules/cohorts/schema.js';
 import { InviteStatus, invites } from '../../modules/invites/schema.js';
+import {
+  AudioMode,
+  SpaceAccess,
+  maps,
+  spaces,
+} from '../../modules/maps/schema.js';
+import {
+  mentorshipGroupStudents,
+  mentorshipGroups,
+} from '../../modules/mentorship-groups/schema.js';
 import { tracks } from '../../modules/tracks/schema.js';
 import { SystemRole, users } from '../../modules/users/schema.js';
 
@@ -67,7 +77,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await db.execute(
-    sql`truncate invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate mentorship_group_students, mentorship_groups, space_memberships, spaces, maps, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
   );
 
   const [admin] = await db
@@ -504,5 +514,279 @@ describe('cohort members', () => {
       dismissalReason: 'Moved abroad.',
       leftAt: new Date(),
     });
+  });
+});
+
+describe('mentorship groups', () => {
+  let setup: {
+    mentorMemberId: string;
+    otherMentorMemberId: string;
+    studentMemberId: string;
+    otherStudentMemberId: string;
+    secondMentorMemberId: string;
+    spaceId: string;
+  };
+
+  beforeEach(async () => {
+    const [mentorUser] = await db
+      .insert(users)
+      .values({ email: 'mentor@campus.local' })
+      .returning();
+    const [studentUser] = await db
+      .insert(users)
+      .values({ email: 'student@campus.local' })
+      .returning();
+    const [otherMentorUser] = await db
+      .insert(users)
+      .values({ email: 'other-mentor@campus.local' })
+      .returning();
+    const [otherStudentUser] = await db
+      .insert(users)
+      .values({ email: 'other-student@campus.local' })
+      .returning();
+    const [secondMentorUser] = await db
+      .insert(users)
+      .values({ email: 'second-mentor@campus.local' })
+      .returning();
+
+    const [mentor] = await db
+      .insert(cohortMembers)
+      .values({
+        cohortId: fixtures.cohortId,
+        userId: mentorUser.id,
+        role: CohortRole.Mentor,
+      })
+      .returning();
+    const [secondMentor] = await db
+      .insert(cohortMembers)
+      .values({
+        cohortId: fixtures.cohortId,
+        userId: secondMentorUser.id,
+        role: CohortRole.Mentor,
+      })
+      .returning();
+    const [student] = await db
+      .insert(cohortMembers)
+      .values({
+        cohortId: fixtures.cohortId,
+        userId: studentUser.id,
+        cohortTrackId: fixtures.cohortTrackId,
+        role: CohortRole.Student,
+        status: StudentStatus.Active,
+      })
+      .returning();
+    const [otherMentor] = await db
+      .insert(cohortMembers)
+      .values({
+        cohortId: fixtures.otherCohortId,
+        userId: otherMentorUser.id,
+        role: CohortRole.Mentor,
+      })
+      .returning();
+    const [otherStudent] = await db
+      .insert(cohortMembers)
+      .values({
+        cohortId: fixtures.otherCohortId,
+        userId: otherStudentUser.id,
+        cohortTrackId: fixtures.otherCohortTrackId,
+        role: CohortRole.Student,
+        status: StudentStatus.Active,
+      })
+      .returning();
+
+    const [map] = await db
+      .insert(maps)
+      .values({ key: 'main', name: 'Main' })
+      .returning();
+    const [space] = await db
+      .insert(spaces)
+      .values({
+        mapId: map.id,
+        key: 'pod-a',
+        name: 'Pod A',
+        audioMode: AudioMode.Proximity,
+        access: SpaceAccess.Normal,
+      })
+      .returning();
+
+    setup = {
+      mentorMemberId: mentor.id,
+      secondMentorMemberId: secondMentor.id,
+      studentMemberId: student.id,
+      otherMentorMemberId: otherMentor.id,
+      otherStudentMemberId: otherStudent.id,
+      spaceId: space.id,
+    };
+  });
+
+  const group = (
+    overrides: Partial<typeof mentorshipGroups.$inferInsert> = {},
+  ) =>
+    db.insert(mentorshipGroups).values({
+      cohortId: fixtures.cohortId,
+      mentorMemberId: setup.mentorMemberId,
+      name: 'Pod A',
+      ...overrides,
+    });
+
+  it('accepts a mentor of this cohort and a space', async () => {
+    await group({ spaceId: setup.spaceId });
+  });
+
+  it('requires the mentor to be a member of the same cohort', async () => {
+    await expectViolation(
+      group({ mentorMemberId: setup.otherMentorMemberId }),
+      'mentorship_groups_mentor_in_cohort',
+    );
+  });
+
+  it('requires the mentor to hold the mentor role', async () => {
+    await expectViolation(
+      group({ mentorMemberId: setup.studentMemberId }),
+      'mentorship_groups_mentor_in_cohort',
+    );
+  });
+
+  it('keeps a name unique per cohort, ignoring case', async () => {
+    await group();
+    await expectViolation(
+      group({ name: 'pod a', mentorMemberId: setup.secondMentorMemberId }),
+      'mentorship_groups_cohort_name_unique',
+    );
+    // The same name in another cohort is a different pod.
+    await group({
+      cohortId: fixtures.otherCohortId,
+      mentorMemberId: setup.otherMentorMemberId,
+    });
+  });
+
+  it('keeps a mentor to one group per cohort', async () => {
+    await group();
+    await expectViolation(
+      group({ name: 'Pod B' }),
+      'mentorship_groups_one_per_mentor',
+    );
+    // Another cohort is a different pod.
+    await group({
+      cohortId: fixtures.otherCohortId,
+      mentorMemberId: setup.otherMentorMemberId,
+    });
+  });
+
+  it('keeps a space to one group', async () => {
+    await group({ spaceId: setup.spaceId });
+    await expectViolation(
+      group({
+        name: 'Pod B',
+        mentorMemberId: setup.secondMentorMemberId,
+        spaceId: setup.spaceId,
+      }),
+      'mentorship_groups_space_unique',
+    );
+  });
+
+  it('accepts a student of this cohort', async () => {
+    const [row] = await group().returning();
+    await db.insert(mentorshipGroupStudents).values({
+      mentorshipGroupId: row.id,
+      cohortId: fixtures.cohortId,
+      cohortMemberId: setup.studentMemberId,
+    });
+  });
+
+  it('requires the student to be a member of the group cohort', async () => {
+    const [row] = await group().returning();
+    await expectViolation(
+      db.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: row.id,
+        cohortId: fixtures.cohortId,
+        cohortMemberId: setup.otherStudentMemberId,
+      }),
+      'mentorship_group_students_student_in_cohort',
+    );
+  });
+
+  it('requires the student to hold the student role', async () => {
+    const [row] = await group().returning();
+    await expectViolation(
+      db.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: row.id,
+        cohortId: fixtures.cohortId,
+        cohortMemberId: setup.mentorMemberId,
+      }),
+      'mentorship_group_students_student_in_cohort',
+    );
+  });
+
+  it('refuses the same student twice in one group', async () => {
+    const [row] = await group().returning();
+    const link = () =>
+      db.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: row.id,
+        cohortId: fixtures.cohortId,
+        cohortMemberId: setup.studentMemberId,
+      });
+    await link();
+    await expectViolation(link(), 'mentorship_group_students_unique');
+  });
+
+  it('keeps a student to one group per cohort', async () => {
+    const [first] = await group().returning();
+    const [second] = await group({
+      name: 'Pod B',
+      mentorMemberId: setup.secondMentorMemberId,
+    }).returning();
+
+    await db.insert(mentorshipGroupStudents).values({
+      mentorshipGroupId: first.id,
+      cohortId: fixtures.cohortId,
+      cohortMemberId: setup.studentMemberId,
+    });
+    await expectViolation(
+      db.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: second.id,
+        cohortId: fixtures.cohortId,
+        cohortMemberId: setup.studentMemberId,
+      }),
+      'mentorship_group_students_one_per_cohort',
+    );
+  });
+
+  it('accepts an invite that names a group in its cohort', async () => {
+    const [row] = await group().returning();
+    await invite({
+      cohortId: fixtures.cohortId,
+      cohortTrackId: fixtures.cohortTrackId,
+      cohortRole: CohortRole.Student,
+      mentorshipGroupId: row.id,
+    });
+  });
+
+  it('requires an invite group to be in the invite cohort', async () => {
+    const [row] = await group({
+      cohortId: fixtures.otherCohortId,
+      mentorMemberId: setup.otherMentorMemberId,
+    }).returning();
+    await expectViolation(
+      invite({
+        cohortId: fixtures.cohortId,
+        cohortTrackId: fixtures.cohortTrackId,
+        cohortRole: CohortRole.Student,
+        mentorshipGroupId: row.id,
+      }),
+      'invites_mentorship_group_cohort_fk',
+    );
+  });
+
+  it('refuses a group on an invite that is not for a student', async () => {
+    const [row] = await group().returning();
+    await expectViolation(
+      invite({
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Professor,
+        mentorshipGroupId: row.id,
+      }),
+      'invites_mentorship_group_student',
+    );
   });
 });

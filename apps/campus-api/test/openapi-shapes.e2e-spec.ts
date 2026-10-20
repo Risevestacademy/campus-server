@@ -117,6 +117,7 @@ describe('OpenAPI shapes (e2e)', () => {
     ['/v1/tracks', 'TrackResponseDto'],
     ['/v1/cohorts', 'CohortResponseDto'],
     ['/v1/cohorts/{id}/members', 'RosterMemberDto'],
+    ['/v1/cohorts/{cohortId}/mentorship-groups', 'MentorshipGroupResponseDto'],
     ['/v1/users', 'UserListItemDto'],
     ['/v1/audit-log', 'AuditLogEntryDto'],
     ['/v1/feedback', 'FeedbackListItemDto'],

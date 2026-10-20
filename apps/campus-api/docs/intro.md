@@ -253,14 +253,15 @@ in plain preferences.
 The API is organized by resource, and each resource appears as its own section
 in the docs:
 
-| Resource  | Description                                            |
-| --------- | ------------------------------------------------------ |
-| `auth`    | Google sign-in (`GET /v1/auth/google`)                 |
-| `health`  | Service health and performance data (`GET /v1/health`) |
-| `cohorts` | Cohort management                                      |
-| `users`   | The admin's list of accounts, with filters             |
-| `profile` | A member's own profile, and other members' cards       |
-| `spaces`  | Physical spaces and occupancy                          |
+| Resource            | Description                                            |
+| ------------------- | ------------------------------------------------------ |
+| `auth`              | Google sign-in (`GET /v1/auth/google`)                 |
+| `health`            | Service health and performance data (`GET /v1/health`) |
+| `cohorts`           | Cohort management                                      |
+| `mentorship-groups` | Pods inside a cohort: mentor and students              |
+| `users`             | The admin's list of accounts, with filters             |
+| `profile`           | A member's own profile, and other members' cards       |
+| `spaces`            | Physical spaces and occupancy                          |
 
 Each operation documents its path, expected request body/query parameters, and
 every possible response (including each error status) inline.

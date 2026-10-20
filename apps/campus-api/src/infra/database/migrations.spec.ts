@@ -470,3 +470,59 @@ describe('finding a migration by name', () => {
     );
   });
 });
+
+/**
+ * 0020 turns invites.mentorship_group_id into a real foreign key. Before the
+ * table existed the column held whatever an admin sent, so deployed rows may
+ * name groups that were never written. The migration clears them rather than
+ * failing to apply, and only then adds the constraint.
+ */
+describe('0020 against invites that already name a group', () => {
+  const FILE = '0020_mentorship_groups.sql';
+  let pg: PGlite;
+  let cohortId: string;
+  let trackId: string;
+  let adminId: string;
+
+  beforeEach(async () => {
+    pg = new PGlite();
+    for (const f of before(FILE)) {
+      await apply(pg, f);
+    }
+    const user = await pg.query<{ id: string }>(
+      "insert into users (email, system_role) values ('admin@campus.local','admin') returning id",
+    );
+    adminId = user.rows[0].id;
+    const track = await pg.query<{ id: string }>(
+      "insert into tracks (name, code) values ('SE','SE') returning id",
+    );
+    trackId = track.rows[0].id;
+    const cohort = await pg.query<{ id: string }>(
+      "insert into cohorts (name, code) values ('C1','C1') returning id",
+    );
+    cohortId = cohort.rows[0].id;
+    await pg.query(
+      `insert into cohort_tracks (cohort_id, track_id) values ('${cohortId}','${trackId}')`,
+    );
+    await pg.query(
+      `insert into invites (email, token_hash, invited_by, expires_at, cohort_id, cohort_track_id, mentorship_group_id, cohort_role, system_role, status)
+       values ('legacy@campus.local','legacy-hash','${adminId}', now() + interval '1 day', '${cohortId}', (select id from cohort_tracks limit 1), '00000000-0000-4000-8000-000000000001', 'student', 'user', 'pending')`,
+    );
+  });
+
+  it('clears the legacy group id, then refuses a group that does not exist', async () => {
+    await apply(pg, FILE);
+
+    const res = await pg.query<{ mentorship_group_id: string | null }>(
+      "select mentorship_group_id from invites where email = 'legacy@campus.local'",
+    );
+    expect(res.rows[0].mentorship_group_id).toBeNull();
+
+    await expect(
+      pg.query(
+        `insert into invites (email, token_hash, invited_by, expires_at, cohort_id, cohort_track_id, mentorship_group_id, cohort_role, system_role, status)
+         values ('new@campus.local','new-hash','${adminId}', now() + interval '1 day', '${cohortId}', (select id from cohort_tracks limit 1), '00000000-0000-4000-8000-000000000002', 'student', 'user', 'pending')`,
+      ),
+    ).rejects.toThrow(/invites_mentorship_group_id_mentorship_groups_id_fk/);
+  });
+});
