@@ -152,8 +152,10 @@ nothing writes none.
 
 ## Not here yet
 
-- **Nothing reads them.** `world` does not consult a space's rules yet, so
-  every space is open in practice.
+- **Nothing reads them yet.** Who may enter one is answered by
+  [`@campus/space-access`](../../../../../packages/space-access/README.md)'s
+  `mayEnter` — one pure function, for campus-api and world alike — but no
+  caller invokes it yet, so in practice every space is open.
 - **Desks.** No desk is drawn on the map yet.
 - **Which version of a map is live.** Today `world` loads the latest
   published version. Whether the database should name it is undecided, so
