@@ -29,6 +29,7 @@ import { oneAtATime } from './gateway.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
+import { STEP_BURST } from '../movement/players.js';
 import { spaceIndexFrom } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
@@ -1563,14 +1564,18 @@ describe('movement', () => {
   it('refuses steps faster than walking pace', async () => {
     const walker = await arrive(person());
 
-    for (let seq = 0; seq < 6; seq++) move(walker, 'down', seq);
-    await waitFor(walker, (m) => m.type === 'moveResult' && m.seq === 5);
+    // One more than the burst allows, all at once.
+    for (let seq = 0; seq <= STEP_BURST; seq++) move(walker, 'down', seq);
+    await waitFor(
+      walker,
+      (m) => m.type === 'moveResult' && m.seq === STEP_BURST,
+    );
 
     const results = walker.messages.filter((m) => m.type === 'moveResult');
     expect(results.map((m) => m.outcome)).toContain('too_fast');
-    // Wherever they ended up, it was not six tiles away.
+    // Wherever they ended up, it was not every step away.
     const last = results.at(-1) as { player: { y: number } };
-    expect(last.player.y).toBeLessThan(6);
+    expect(last.player.y).toBeLessThan(STEP_BURST + 1);
 
     await leave(walker);
   });
@@ -2939,10 +2944,12 @@ describe('movement', () => {
       await step(conn, 'up', 3);
       await step(conn, 'right', 4);
       await step(conn, 'right', 5);
-      for (const seq of [6, 7, 8]) move(conn, 'up', seq);
-      move(conn, 'right', 9);
+      // A whole burst against the top edge spends every step there is.
+      for (let i = 0; i < STEP_BURST; i += 1) move(conn, 'up', 6 + i);
+      const crossing = 6 + STEP_BURST;
+      move(conn, 'right', crossing);
       await expect(
-        waitFor(conn, (m) => m.type === 'moveResult' && m.seq === 9),
+        waitFor(conn, (m) => m.type === 'moveResult' && m.seq === crossing),
       ).resolves.toMatchObject({ outcome: 'too_fast' });
       await quiet();
 

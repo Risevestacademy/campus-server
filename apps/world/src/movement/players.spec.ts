@@ -155,7 +155,11 @@ describe('Players', () => {
   });
 
   it('allows a short burst of steps sent together', () => {
-    const world = players();
+    // Wide enough that the whole burst is floor, whatever its size.
+    const world = new Players(
+      { width: STEP_BURST + 1, height: 1, spawn: { x: 0, y: 0 } },
+      STEP_MS,
+    );
     world.join(at(), 0);
 
     const outcomes = Array.from(
