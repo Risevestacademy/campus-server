@@ -23,6 +23,7 @@ import {
   EndMembershipResponseDto,
   MembershipEndAction,
 } from '../dto/end-membership.dto.js';
+import { MoveMemberTrackResponseDto } from '../dto/move-track.dto.js';
 const cohortNotFound = {
   summary: 'No such cohort',
   value: {
@@ -279,7 +280,10 @@ export function ApiDetachTrack(): MethodDecorator {
         'Refused with a 409 while anything in the cohort is still on the ' +
         'track — a student placed on it, or an invite that names it, ' +
         'whether pending or already settled. Nothing is moved or removed ' +
-        'for you.\n\n' +
+        'for you. Refused the same way while the track holds a grant of ' +
+        'access to a space that has not ended: end it first. Grants to the ' +
+        'track that have ended are cleared with it; the audit log keeps ' +
+        'their record, and the detach entry names them.\n\n' +
         'A cohort has to have its tracks detached before it can be deleted.',
     }),
     ApiNoContentResponse({ description: 'The track was detached.' }),
@@ -316,7 +320,9 @@ export function ApiDetachTrack(): MethodDecorator {
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,
-      description: 'Students or invites in the cohort are still on the track.',
+      description:
+        'Students or invites in the cohort are still on the track, or it ' +
+        'holds a grant of access to a space that has not ended.',
       content: {
         'application/json': {
           examples: {
@@ -330,6 +336,21 @@ export function ApiDetachTrack(): MethodDecorator {
                   details: {
                     cohortId: '11111111-1111-4111-8111-111111111111',
                     trackId: '33333333-3333-4333-8333-333333333333',
+                  },
+                },
+              },
+            },
+            grantStanding: {
+              summary: 'Track holds access to a space',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'Track cannot be detached while it holds access to a space; end those grants first',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    trackId: '33333333-3333-4333-8333-333333333333',
+                    spaceIds: ['55555555-5555-4555-8555-555555555555'],
                   },
                 },
               },
@@ -436,6 +457,123 @@ export function ApiExtendGuestVisit(): MethodDecorator {
                     cohortId: '11111111-1111-4111-8111-111111111111',
                     userId: '44444444-4444-4444-8444-444444444444',
                     role: 'student',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+}
+
+export function ApiMoveMemberTrack(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Move a student to another track (admin only)',
+      description:
+        'Changes which track a student in this cohort sits on, to another ' +
+        'track the same cohort runs. The cohort and the member come from the ' +
+        'URL, so the body carries only the target `trackId`; any other field ' +
+        'is ignored.\n\n' +
+        'Students only: staff and guests are refused with a 409. The roster ' +
+        'shows the new track from the next read — nothing else about the ' +
+        'membership changes, and the student needs no sign-in again.\n\n' +
+        'Refusals: a 404 when nobody in the cohort holds this membership, or ' +
+        'when the track id names no track at all; a 409 when the membership ' +
+        'has already ended, when it is not a student, when the student is ' +
+        'already on the target track, or when the cohort does not run the ' +
+        'track (a track another cohort runs is refused, not moved).',
+    }),
+    ApiOkResponse({ type: MoveMemberTrackResponseDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'cohortId or userId is not a UUID, or trackId is missing.',
+    }),
+    ApiAdminOnly(),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'Nobody in that cohort holds this membership, or no track has this id.',
+      content: {
+        'application/json': {
+          examples: {
+            memberNotFound: {
+              summary: 'No such membership',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message:
+                    'No membership for 44444444-4444-4444-8444-444444444444 in cohort 11111111-1111-4111-8111-111111111111',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                  },
+                },
+              },
+            },
+            trackNotFound: {
+              summary: 'No such track',
+              value: {
+                error: {
+                  code: 'NOT_FOUND',
+                  message:
+                    'Track 33333333-3333-4333-8333-333333333333 not found',
+                  details: {
+                    trackId: '33333333-3333-4333-8333-333333333333',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The membership has ended or is not a student, the student is ' +
+        'already on the track, or the cohort does not run it.',
+      content: {
+        'application/json': {
+          examples: {
+            alreadyEnded: {
+              summary: 'Already ended',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'That membership has already ended',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                  },
+                },
+              },
+            },
+            notAStudent: {
+              summary: 'Staff or guest',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'Only a student has a track to move',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    userId: '44444444-4444-4444-8444-444444444444',
+                    role: 'professor',
+                  },
+                },
+              },
+            },
+            notRun: {
+              summary: 'The cohort does not run this track',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message: 'Track DS is not run by this cohort',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    trackId: '33333333-3333-4333-8333-333333333333',
                   },
                 },
               },

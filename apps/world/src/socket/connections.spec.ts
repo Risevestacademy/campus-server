@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WebSocket } from 'ws';
 
+import { Availability, Status } from '../status/availability.js';
 import { Connections, type Connection } from './connections.js';
 
 let opened = 0;
@@ -15,6 +16,7 @@ function connection(userId: string, cohortId: string): Connection {
     cohortId,
     appearance: { displayName: null, spriteKey: null },
     spaceKey: '_default',
+    availability: new Availability(Status.Available, 0),
     socket: {} as WebSocket,
     expiresAt: new Date(0),
     openedAt: opened,

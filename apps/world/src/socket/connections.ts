@@ -2,6 +2,7 @@ import type { WebSocket } from 'ws';
 
 import type { Appearance } from '../infra/accounts.js';
 import type { Seat } from '../seat.js';
+import type { Availability } from '../status/availability.js';
 
 export interface Connection {
   id: string;
@@ -15,6 +16,8 @@ export interface Connection {
    * map's default space. Updated as the avatar crosses from one to another.
    */
   spaceKey: string;
+  /** Lives and dies with this socket, unlike appearance. */
+  availability: Availability;
   socket: WebSocket;
   /**
    * When the access token this socket opened with runs out. Enforced only

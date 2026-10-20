@@ -176,6 +176,7 @@ describe('cohort and track admin routes (e2e)', () => {
       ['delete', `/v1/cohorts/${MISSING}`],
       ['post', `/v1/cohorts/${MISSING}/tracks`],
       ['patch', `/v1/cohorts/${MISSING}/members/${MISSING}`],
+      ['patch', `/v1/cohorts/${MISSING}/members/${MISSING}/track`],
     ] as const)('refuses %s %s without a session', async (method, path) => {
       await request(app.getHttpServer())[method](path).expect(401);
     });
@@ -190,6 +191,7 @@ describe('cohort and track admin routes (e2e)', () => {
       ['patch', `/v1/cohorts/${MISSING}`],
       ['delete', `/v1/cohorts/${MISSING}`],
       ['patch', `/v1/cohorts/${MISSING}/members/${MISSING}`],
+      ['patch', `/v1/cohorts/${MISSING}/members/${MISSING}/track`],
     ] as const)('refuses %s %s to a non-admin', async (method, path) => {
       const res =
         method === 'get'
@@ -955,7 +957,11 @@ describe('cohort and track admin routes (e2e)', () => {
           actorUserId: adminId,
           subjectType: AuditSubjectType.CohortTrack,
           subjectId: link.id,
-          details: { cohortId: cohort.id, trackId: track.id },
+          details: {
+            cohortId: cohort.id,
+            trackId: track.id,
+            clearedSpaceMembershipIds: [],
+          },
         }),
       ]);
     });
@@ -1628,6 +1634,239 @@ describe('cohort and track admin routes (e2e)', () => {
       await end('remove', member.id).expect(200);
 
       await as(memberCookie).get('/v1/auth/me').expect(200);
+    });
+  });
+
+  describe('moving a member track', () => {
+    let studentId: string;
+    let studentCookie: string;
+    let otherId: string;
+    let cohortId: string;
+    let seTrackId: string;
+    let seLinkId: string;
+    let dataTrackId: string;
+    let dataLinkId: string;
+
+    const attach = async (cohort: string, trackId: string) =>
+      (
+        await as(adminCookie)
+          .post(`/v1/cohorts/${cohort}/tracks`, { trackId })
+          .expect(201)
+      ).body;
+
+    const move = (userId: string, body: object, cookie = adminCookie) =>
+      as(cookie).patch(`/v1/cohorts/${cohortId}/members/${userId}/track`, body);
+
+    const membershipOf = async (id: string) => {
+      const [row] = await db
+        .select()
+        .from(schema.cohortMembers)
+        .where(
+          and(
+            eq(schema.cohortMembers.cohortId, cohortId),
+            eq(schema.cohortMembers.userId, id),
+          ),
+        );
+      return row;
+    };
+
+    const moveEntries = () =>
+      db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.MemberTrackChanged));
+
+    const rosterRow = async (id: string) => {
+      const roster = (
+        await as(adminCookie).get(`/v1/cohorts/${cohortId}/members`).expect(200)
+      ).body;
+      return roster.items.find(
+        (item: { user: { id: string } }) => item.user.id === id,
+      );
+    };
+
+    beforeEach(async () => {
+      const se = (
+        await createTrack({ name: 'Software Engineering', code: 'se' }).expect(
+          201,
+        )
+      ).body;
+      const data = (
+        await createTrack({ name: 'Data Science', code: 'ds' }).expect(201)
+      ).body;
+      const cohort = (await createCohort().expect(201)).body;
+      cohortId = cohort.id;
+      seTrackId = se.id;
+      dataTrackId = data.id;
+      seLinkId = (await attach(cohortId, se.id)).id;
+      dataLinkId = (await attach(cohortId, data.id)).id;
+
+      const [student] = await db
+        .insert(users)
+        .values({ email: 'student@campus.local', systemRole: SystemRole.User })
+        .returning();
+      const [other] = await db
+        .insert(users)
+        .values({ email: 'other@campus.local', systemRole: SystemRole.User })
+        .returning();
+      studentId = student.id;
+      otherId = other.id;
+      studentCookie = await cookieFor(student);
+      await db.insert(schema.cohortMembers).values([
+        {
+          cohortId,
+          userId: studentId,
+          cohortTrackId: seLinkId,
+          role: CohortRole.Student,
+          status: StudentStatus.Active,
+        },
+        {
+          cohortId,
+          userId: otherId,
+          cohortTrackId: seLinkId,
+          role: CohortRole.Student,
+          status: StudentStatus.Active,
+        },
+      ]);
+    });
+
+    it('moves a student, shows the new track on the roster, and records it', async () => {
+      const res = await move(studentId, { trackId: dataTrackId }).expect(200);
+
+      expect(res.body).toEqual({
+        id: expect.any(String),
+        cohortId,
+        userId: studentId,
+        role: CohortRole.Student,
+        track: { id: dataTrackId, name: 'Data Science', code: 'DS' },
+      });
+      expect((await membershipOf(studentId)).cohortTrackId).toBe(dataLinkId);
+
+      expect(await rosterRow(studentId)).toMatchObject({
+        track: { id: dataTrackId, code: 'DS' },
+      });
+      expect(await rosterRow(otherId)).toMatchObject({
+        track: { id: seTrackId, code: 'SE' },
+      });
+
+      expect(await moveEntries()).toEqual([
+        expect.objectContaining({
+          actorUserId: adminId,
+          subjectType: AuditSubjectType.CohortMember,
+          subjectId: res.body.id,
+          details: {
+            cohortId,
+            trackId: dataTrackId,
+            previousTrackId: seTrackId,
+          },
+        }),
+      ]);
+    });
+
+    it('refuses a track this cohort does not run, and records nothing', async () => {
+      const loose = (
+        await createTrack({ name: 'Product Design', code: 'pd' }).expect(201)
+      ).body;
+
+      const res = await move(studentId, { trackId: loose.id }).expect(409);
+
+      expect(res.body.error).toMatchObject({ code: 'CONFLICT' });
+      expect((await membershipOf(studentId)).cohortTrackId).toBe(seLinkId);
+      expect(await moveEntries()).toHaveLength(0);
+      expect(await rosterRow(studentId)).toMatchObject({
+        track: { id: seTrackId, code: 'SE' },
+      });
+    });
+
+    it('refuses a track that another cohort runs', async () => {
+      const other = (
+        await createCohort({ name: 'Cohort 2', code: 'c2' }).expect(201)
+      ).body;
+      const shared = (
+        await createTrack({ name: 'Product Design', code: 'pd' }).expect(201)
+      ).body;
+      await attach(other.id, shared.id);
+
+      const res = await move(studentId, { trackId: shared.id }).expect(409);
+
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        details: { cohortId, trackId: shared.id },
+      });
+      expect((await membershipOf(studentId)).cohortTrackId).toBe(seLinkId);
+      expect(await moveEntries()).toHaveLength(0);
+    });
+
+    it('answers 400 for a malformed id and 404 for an absent member', async () => {
+      await request(app.getHttpServer())
+        .patch(`/v1/cohorts/not-a-uuid/members/${studentId}/track`)
+        .set('Cookie', adminCookie)
+        .set('Origin', ORIGIN)
+        .send({ trackId: dataTrackId })
+        .expect(400);
+      await request(app.getHttpServer())
+        .patch(`/v1/cohorts/${cohortId}/members/not-a-uuid/track`)
+        .set('Cookie', adminCookie)
+        .set('Origin', ORIGIN)
+        .send({ trackId: dataTrackId })
+        .expect(400);
+      await move(MISSING, { trackId: dataTrackId }).expect(404);
+    });
+
+    it('answers 400 when the track id is missing or empty', async () => {
+      await move(studentId, {}).expect(400);
+      await move(studentId, { trackId: '' }).expect(400);
+    });
+
+    it('ignores anything but the track id in the body', async () => {
+      const before = await membershipOf(studentId);
+
+      await move(studentId, {
+        trackId: dataTrackId,
+        status: 'dismissed',
+        cohortId: MISSING,
+        userId: MISSING,
+        endDate: '2027-01-01',
+      }).expect(200);
+
+      expect(await membershipOf(studentId)).toMatchObject({
+        cohortId,
+        userId: studentId,
+        role: before.role,
+        status: before.status,
+        leftAt: before.leftAt,
+        cohortTrackId: dataLinkId,
+      });
+    });
+
+    it("leaves the student's existing session working after the move", async () => {
+      await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Cookie', studentCookie)
+        .expect(200);
+
+      await move(studentId, { trackId: dataTrackId }).expect(200);
+
+      await request(app.getHttpServer())
+        .get('/v1/auth/me')
+        .set('Cookie', studentCookie)
+        .expect(200);
+    });
+
+    it('refuses a membership that has already ended', async () => {
+      await db
+        .update(schema.cohortMembers)
+        .set({ leftAt: new Date(Date.now() - 60_000) })
+        .where(
+          and(
+            eq(schema.cohortMembers.cohortId, cohortId),
+            eq(schema.cohortMembers.userId, studentId),
+          ),
+        );
+
+      const res = await move(studentId, { trackId: dataTrackId }).expect(409);
+      expect(res.body.error.code).toBe('CONFLICT');
+      expect(await moveEntries()).toHaveLength(0);
     });
   });
 
