@@ -280,7 +280,10 @@ export function ApiDetachTrack(): MethodDecorator {
         'Refused with a 409 while anything in the cohort is still on the ' +
         'track — a student placed on it, or an invite that names it, ' +
         'whether pending or already settled. Nothing is moved or removed ' +
-        'for you.\n\n' +
+        'for you. Refused the same way while the track holds a grant of ' +
+        'access to a space that has not ended: end it first. Grants to the ' +
+        'track that have ended are cleared with it; the audit log keeps ' +
+        'their record, and the detach entry names them.\n\n' +
         'A cohort has to have its tracks detached before it can be deleted.',
     }),
     ApiNoContentResponse({ description: 'The track was detached.' }),
@@ -317,7 +320,9 @@ export function ApiDetachTrack(): MethodDecorator {
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,
-      description: 'Students or invites in the cohort are still on the track.',
+      description:
+        'Students or invites in the cohort are still on the track, or it ' +
+        'holds a grant of access to a space that has not ended.',
       content: {
         'application/json': {
           examples: {
@@ -331,6 +336,21 @@ export function ApiDetachTrack(): MethodDecorator {
                   details: {
                     cohortId: '11111111-1111-4111-8111-111111111111',
                     trackId: '33333333-3333-4333-8333-333333333333',
+                  },
+                },
+              },
+            },
+            grantStanding: {
+              summary: 'Track holds access to a space',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'Track cannot be detached while it holds access to a space; end those grants first',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    trackId: '33333333-3333-4333-8333-333333333333',
+                    spaceIds: ['55555555-5555-4555-8555-555555555555'],
                   },
                 },
               },

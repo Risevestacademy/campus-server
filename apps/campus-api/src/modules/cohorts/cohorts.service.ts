@@ -14,6 +14,7 @@ import {
   writeAuditEntry,
 } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { releaseTrackGrants } from '../maps/space-memberships.service.js';
 import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
@@ -202,11 +203,17 @@ export class CohortsService {
    * are restrictive on purpose — detaching must not quietly leave a student
    * with no track, or an invite pointing at nothing — so those have to be
    * moved or removed first.
+   *
+   * Refused too while the track holds a grant of access to a space that has
+   * not ended; grants that have ended go with the track. That rule belongs
+   * to the grants, so it is releaseTrackGrants', in the maps module. The
+   * entry written here names the grants it cleared.
    */
   async detachTrack(
     cohortId: string,
     trackId: string,
     audit: AuditContext,
+    now: Date = new Date(),
   ): Promise<void> {
     // Read first, so a missing cohort and a track that is simply not
     // attached get different answers.
@@ -216,26 +223,45 @@ export class CohortsService {
       // One transaction, so a track is never detached without its entry, and
       // a detach the FKs refuse leaves no entry behind.
       await this.db.transaction(async (tx) => {
-        const [row] = await tx
-          .delete(cohortTracks)
+        // Locked before the grants are read, so a grant to this track made
+        // at the same moment is either seen here or finds no track: it holds
+        // the row with `key share`, which this waits behind.
+        const [link] = await tx
+          .select()
+          .from(cohortTracks)
           .where(
             and(
               eq(cohortTracks.cohortId, cohortId),
               eq(cohortTracks.trackId, trackId),
             ),
           )
-          .returning();
-        if (!row) {
+          .for('update');
+        if (!link) {
           throw new TrackNotFoundException(
             `Track ${trackId} is not attached to this cohort`,
             { cohortId, trackId },
           );
         }
+
+        const grants = await releaseTrackGrants(tx, link.id, now);
+        if (!grants.released) {
+          throw new CohortConflictException(
+            'Track cannot be detached while it holds access to a space; end those grants first',
+            { cohortId, trackId, spaceIds: grants.standingSpaceIds },
+          );
+        }
+
+        await tx.delete(cohortTracks).where(eq(cohortTracks.id, link.id));
+
         await writeAuditEntry(tx, {
           ...audit,
           action: AuditAction.CohortTrackDetached,
-          subject: { type: AuditSubjectType.CohortTrack, id: row.id },
-          details: { cohortId, trackId },
+          subject: { type: AuditSubjectType.CohortTrack, id: link.id },
+          details: {
+            cohortId,
+            trackId,
+            clearedSpaceMembershipIds: grants.clearedIds,
+          },
         });
       });
     } catch (err) {

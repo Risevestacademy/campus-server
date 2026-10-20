@@ -123,6 +123,18 @@ export enum AuditAction {
    */
   FeedbackResolved = 'feedback_resolved',
   FeedbackReopened = 'feedback_reopened',
+  /**
+   * An admin gave a person, or everybody on a cohort's track, standing
+   * access to a space. The subject is the grant's own row; `details` keeps
+   * who it was to and the span it runs for, and `space_id` names the space.
+   */
+  SpaceMembershipGranted = 'space_membership_granted',
+  /**
+   * An admin brought a grant to a space to an end. The row stays as the
+   * record that it existed, so `details` keeps only when access stopped;
+   * the subject says which grant, `space_id` which space.
+   */
+  SpaceMembershipEnded = 'space_membership_ended',
 }
 
 export enum AuditSubjectType {
@@ -134,6 +146,8 @@ export enum AuditSubjectType {
   Track = 'track',
   Map = 'map',
   Feedback = 'feedback',
+  /** One row of `space_memberships`: a grant of access to a space. */
+  SpaceMembership = 'space_membership',
 }
 
 /**
@@ -151,8 +165,9 @@ export const auditLog = pgTable(
     subjectType: varchar('subject_type', { length: 64 }),
     subjectId: uuid('subject_id'),
     /**
-     * Reserved for entries about a space; nothing writes it yet. A space is
-     * retired, never deleted, so an entry keeps pointing at one that exists.
+     * The space an entry is about, when it is about one: a grant of access
+     * to it, its settings changed. A space is retired, never deleted, so an
+     * entry keeps pointing at one that exists.
      */
     spaceId: uuid('space_id').references(() => spaces.id),
     details: jsonb('details'),

@@ -34,3 +34,65 @@ export class PublishedMapsRejectedException extends DomainException {
 export class MapSyncBusyException extends DomainException {
   readonly code = ExceptionCode.Conflict;
 }
+
+/** No space with that id. */
+export class SpaceNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
+
+/**
+ * The space is retired: off its map, and no new access is given for it.
+ * Ending access still works — taking a grant away from a retired space is
+ * how the record is kept straight — but nothing new is handed out.
+ */
+export class SpaceRetiredException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
+/**
+ * The grant's subject does not exist to be granted to: no account with that
+ * id, or no cohort running a track with that id.
+ */
+export class SpaceMembershipSubjectNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
+
+/**
+ * The subject already holds a grant on this space whose span covers now, so
+ * a second would overlap it and leave nobody sure which one ending access
+ * would end. End that one first, or wait until it runs out.
+ */
+export class SpaceMembershipAlreadyLiveException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
+/** No grant with that id on this space. */
+export class SpaceMembershipNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
+
+/**
+ * The grant has already been ended: its span closed at or before now, and
+ * the row stays as the record. Ending it twice would move the record.
+ */
+export class SpaceMembershipAlreadyEndedException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
+/**
+ * The grant's span has not begun: ending closes it at now, and a close
+ * after its open is the one thing the window rule will not take. No route
+ * makes such a grant — one starts when it is given — so this is for rows
+ * written another way, and for an end asked for before the start.
+ */
+export class SpaceMembershipNotStartedException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
+/**
+ * The request's own terms: more than one subject, none, or an end date that
+ * has already passed — which the window rule would refuse anyway.
+ */
+export class SpaceMembershipInvalidArgumentException extends DomainException {
+  readonly code = ExceptionCode.InvalidArgument;
+}

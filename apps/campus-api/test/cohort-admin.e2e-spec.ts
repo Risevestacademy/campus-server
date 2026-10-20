@@ -957,7 +957,11 @@ describe('cohort and track admin routes (e2e)', () => {
           actorUserId: adminId,
           subjectType: AuditSubjectType.CohortTrack,
           subjectId: link.id,
-          details: { cohortId: cohort.id, trackId: track.id },
+          details: {
+            cohortId: cohort.id,
+            trackId: track.id,
+            clearedSpaceMembershipIds: [],
+          },
         }),
       ]);
     });
