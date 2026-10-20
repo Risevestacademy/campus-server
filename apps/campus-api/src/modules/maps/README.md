@@ -150,6 +150,34 @@ tested with two syncs on separate connections to a real PostgreSQL, in
 audit entry, and each one retired a `map_retired`; a sync that changes
 nothing writes none.
 
+## Granting access
+
+`POST`, `GET` and `DELETE /v1/spaces/{id}/memberships`, admins only. This is
+the admin side of the `invite` and `request` settings: the rows they read
+from, and the only thing that writes them.
+
+A grant is to **one person or one cohort track, never both and never
+neither** — `cohort_track_id` names a `cohort_tracks` row, so it is a track
+some cohort actually runs, not a bare track. It starts the moment it is
+given and may carry an end date (`validTo`, in the future); without one it
+has no end until an admin ends it. Ending sets `valid_to` and keeps the row,
+as [above](#nothing-is-deleted). Each change writes an audit entry naming
+the admin, in the same transaction as the row, and is the first thing to
+fill `audit_log.space_id`.
+
+Every grant to a subject on a space must not overlap another. The database
+cannot hold that rule itself: "still live" is a question about now, and a
+partial unique index may only name immutable conditions, so `now()` is
+refused in one. The service holds it instead — the space's row is locked
+before anything is judged, so two grants for one space take turns and the
+second sees the first. That cannot be shown on PGlite, which never overlaps
+two transactions, so it is tested on a server with more than one connection
+(`space-memberships.pg.spec.ts`).
+
+Refused, each with the status that says which: no such space or no such
+subject (404), a retired space or a subject that already holds a live grant
+(409), both subjects or neither, or an end date that has passed (400).
+
 ## Not here yet
 
 - **Nothing reads them yet.** Who may enter one is answered by

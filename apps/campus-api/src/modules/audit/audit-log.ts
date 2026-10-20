@@ -5,6 +5,13 @@ import { auditLog, type AuditAction, type AuditSubjectType } from './schema.js';
 export interface AuditContext {
   actorUserId: string | null;
   correlationId?: string;
+  /**
+   * The space the entry is about, for actions whose subject sits in or on a
+   * space. Filled here rather than in each action's details, because it is a
+   * column of its own with its own foreign key: the log can be read by space
+   * without digging it out of the JSON.
+   */
+  spaceId?: string;
 }
 
 /**
@@ -181,6 +188,24 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.Feedback;
     details: Record<string, never>;
   };
+  [AuditAction.SpaceMembershipGranted]: {
+    subject: AuditSubjectType.SpaceMembership;
+    details: {
+      /** Who the grant is to: one of these, never both and never neither. */
+      userId: string | null;
+      cohortTrackId: string | null;
+      /** The span it runs for, as given — `validTo` null means no end. */
+      validFrom: Date;
+      validTo: Date | null;
+    };
+  };
+  [AuditAction.SpaceMembershipEnded]: {
+    subject: AuditSubjectType.SpaceMembership;
+    details: {
+      /** When the admin brought it to an end; the row keeps saying so. */
+      endedAt: Date;
+    };
+  };
   [AuditAction.CohortCreated]: {
     subject: AuditSubjectType.Cohort;
     details: CohortSnapshot;
@@ -265,6 +290,7 @@ export async function writeAuditEntry(
     action: entry.action,
     subjectType: entry.subject.type,
     subjectId: entry.subject.id,
+    spaceId: entry.spaceId ?? null,
     details: entry.details,
     // Stored as given, never trimmed: the request's id is settled as it
     // arrives (resolveCorrelationId) and already fits the column, so the
