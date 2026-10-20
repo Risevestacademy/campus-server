@@ -27,14 +27,6 @@ export interface MoveResult {
   changed: boolean;
 }
 
-/**
- * Steps a player may take back to back before the walking speed applies.
- * Frames bunch up on the way here — a phone on patchy signal delivers three
- * held-back steps at once — and refusing the second of those would snap a
- * player who did nothing wrong back across the map. A few steps of slack
- * absorbs that without letting anybody outrun the speed for more than a
- * moment.
- */
 export const STEP_BURST = 6;
 
 interface Held {
