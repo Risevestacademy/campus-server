@@ -40,28 +40,50 @@ export function registerConnectionCheck(
     return true;
   }
 
-  // A bearer token makes the request non-simple, so the browser asks first.
-  app.options(CONNECTION_CHECK_PATH, async (request, reply) => {
-    if (allowOrigin(request, reply)) {
-      void reply
-        .header('access-control-allow-methods', 'POST')
-        .header(
-          'access-control-allow-headers',
-          `authorization, ${CORRELATION_ID_HEADER}`,
-        )
-        .header('access-control-max-age', '600');
-    }
-    return reply.status(204).send();
+  // Its own scope, so the JSON parser below is this route's alone.
+  void app.register(async (scope) => {
+    // The body is never read, but a client may still mark an empty one as JSON.
+    const parseJson = scope.getDefaultJsonParser('error', 'error');
+    scope.addContentTypeParser<string>(
+      'application/json',
+      { parseAs: 'string' },
+      (request, body, done) => {
+        if (body === '') {
+          done(null, undefined);
+          return;
+        }
+        parseJson(request, body, done);
+      },
+    );
+
+    // A bearer token makes the request non-simple, so the browser asks first.
+    scope.options(CONNECTION_CHECK_PATH, async (request, reply) => {
+      if (allowOrigin(request, reply)) {
+        void reply
+          .header('access-control-allow-methods', 'POST')
+          .header(
+            'access-control-allow-headers',
+            `authorization, content-type, ${CORRELATION_ID_HEADER}`,
+          )
+          .header('access-control-max-age', '600');
+      }
+      return reply.status(204).send();
+    });
+
+    scope.post(CONNECTION_CHECK_PATH, { onRequest: grantOrigin }, handle);
   });
 
-  app.post(CONNECTION_CHECK_PATH, async (request, reply) => {
+  // Before the body is parsed, so a 400 from the parser is readable too.
+  async function grantOrigin(request: FastifyRequest, reply: FastifyReply) {
     if (allowOrigin(request, reply)) {
       void reply.header(
         'access-control-expose-headers',
         `${CORRELATION_ID_HEADER}, retry-after`,
       );
     }
+  }
 
+  async function handle(request: FastifyRequest, reply: FastifyReply) {
     const caller = await readCaller(env, request.headers as CallerHeaders);
     if (!caller.ok) {
       return refuse(request, reply, caller.refusal);
@@ -107,7 +129,7 @@ export function registerConnectionCheck(
       token: minted.token,
       expiresAt: minted.expiresAt.toISOString(),
     });
-  });
+  }
 }
 
 /**
