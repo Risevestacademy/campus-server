@@ -208,6 +208,7 @@ describe('with the position store failing', () => {
         facing: 'down',
         displayName: null,
         spriteKey: null,
+        status: 'available',
       },
     ]);
 

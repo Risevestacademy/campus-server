@@ -149,6 +149,14 @@ interface AuditEntryShapes {
       reason: string | null;
     };
   };
+  [AuditAction.MemberTrackChanged]: {
+    subject: AuditSubjectType.CohortMember;
+    details: {
+      cohortId: string;
+      trackId: string;
+      previousTrackId: string;
+    };
+  };
   [AuditAction.InviteFlagged]: {
     subject: AuditSubjectType.Invite;
     details: { cohortId: string | null; invitedBy: string };
