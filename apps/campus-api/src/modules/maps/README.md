@@ -130,7 +130,10 @@ each kind starts with are in [`space-defaults.ts`](./space-defaults.ts),
 with the list a designated kind starts with: students, professors and
 mentors for a classroom or live-coding room (everybody in the cohort but its
 guests), and nobody for a mentor pod until an admin adds somebody. The list
-is written once, when the sync adds the space, never again.
+is written once, when the sync adds the space, never again. So a space the
+sync added with no kind, and an admin later makes a classroom, starts with an
+empty list: admins only until an admin puts people on it. Whatever sets a
+space's kind should write that kind's starting list too.
 
 `?dryRun=true` answers with what would change and changes nothing.
 

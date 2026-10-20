@@ -1,4 +1,6 @@
 import type { DbExecutor } from '../../infra/database/database.constants.js';
+import type { CohortRole } from '../cohorts/schema.js';
+import type { SystemRole } from '../users/schema.js';
 import { auditLog, type AuditAction, type AuditSubjectType } from './schema.js';
 
 /** Who did it and which request — the parts every entry from one call shares. */
@@ -116,9 +118,9 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.Invite;
     details: {
       cohortId: string | null;
-      cohortRole: string | null;
+      cohortRole: CohortRole | null;
       cohortTrackId: string | null;
-      systemRole: string;
+      systemRole: SystemRole;
       expiresAt: Date;
       guestAccessExpiresAt: Date | null;
     };
@@ -202,8 +204,8 @@ interface AuditEntryShapes {
       /** Who the grant is to: exactly one of these four is set. */
       userId: string | null;
       cohortTrackId: string | null;
-      cohortRole: string | null;
-      systemRole: string | null;
+      cohortRole: CohortRole | null;
+      systemRole: SystemRole | null;
       /** The span it runs for, as given — `validTo` null means no end. */
       validFrom: Date;
       validTo: Date | null;

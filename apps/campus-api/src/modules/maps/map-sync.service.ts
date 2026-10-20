@@ -34,7 +34,7 @@ import {
   startingListFor,
   suggestedKind,
 } from './space-defaults.js';
-import { tellWorld } from './space-memberships.service.js';
+import { tellWorld } from './tell-world.js';
 
 type MapRow = typeof maps.$inferSelect;
 

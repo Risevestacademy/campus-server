@@ -1,7 +1,7 @@
 %% =====================================================================
 %% Campus by Rise — full ERD
 %% GENERATED — do not hand-edit.
-%% 34 tables, 27 enums.
+%% 34 tables, 25 enums.
 %% -
 %% Mermaid ER cannot express nullability, defaults, column lengths,
 %% partial indexes or CHECK constraints. Those are listed at the
@@ -131,11 +131,9 @@ erDiagram
         varchar name
         space_kind_enum kind "Set by an admin. Null until then: not set up, admins only."
         boolean is_map_default "The one space every map has for tiles inside no drawn spa…"
-        audio_mode_enum audio_mode "the five independent behaviour dimensions"
-        space_access_enum access "open | cohort | invite | request"
-        outsider_visibility_enum outsider_visibility "hidden | avatars_visible | full"
+        audio_mode_enum audio_mode "proximity | boundary"
+        space_access_enum access "normal | designated"
         int capacity "null = uncapped"
-        publish_policy_enum publish_policy "all | staff | grant_only"
         numeric audible_radius "In tiles. Gain falls 1.0 -> 0 across this radius, applied…"
         numeric subscribe_radius "Slightly larger than audible_radius, and THE COST LEVER:…"
         numeric hysteresis_factor
@@ -149,6 +147,8 @@ erDiagram
         uuid space_id FK
         uuid cohort_track_id FK
         uuid user_id FK
+        cohort_role_enum cohort_role "everybody holding this cohort role"
+        system_role_enum system_role "everybody holding this system role"
         uuid granted_by FK
         timestamptz valid_from
         timestamptz valid_to
@@ -540,10 +540,9 @@ erDiagram
 %%   conversation_participants(conversation_id, user_id)
 %% -
 %% CHECK
-%%   spaces: audio_mode <> 'broadcast' OR publish_policy <> 'all'
-%%   spaces: NOT is_map_default OR access = 'open'
+%%   spaces: NOT is_map_default OR access = 'normal'
 %%   spaces: capacity IS NULL OR capacity > 0
-%%   space_memberships: (cohort_track_id IS NULL) <> (user_id IS NULL)
+%%   space_memberships: num_nonnulls(user_id, cohort_track_id, cohort_role, system_role) = 1
 %%   space_memberships: valid_to IS NULL OR valid_to > valid_from
 %%   sessions: closed_at IS NULL OR closed_at >= opened_at
 %%   session_participants: left_at IS NULL OR left_at >= joined_at
