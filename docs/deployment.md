@@ -266,8 +266,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   first. `users.session_epoch` was the first such column: world's account
   lookup fails on every socket without it. `space_memberships.cohort_role`
   and `system_role` (migration `0018`) are the latest: without them world
-  cannot read the spaces, and every drawn space is left open to everybody,
-  designated or not, until it can.
+  cannot read the spaces, and every drawn space is admins only, normal or
+  designated, until it can (saved places are kept).
 - Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
   no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
   from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:

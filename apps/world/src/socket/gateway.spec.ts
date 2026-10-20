@@ -3551,6 +3551,57 @@ describe('movement', () => {
       }
     });
 
+    it('keeps a saved place when the spaces could not be read', async () => {
+      const ada = person();
+      store.positions.set(positionKey({ userId: ada }), {
+        x: 3,
+        y: 1,
+        facing: 'left',
+      });
+      const own = await buildWorld(
+        env,
+        {
+          ...accounts,
+          spacesOn: async () => {
+            throw new Error('postgres is down');
+          },
+        },
+        store,
+        new MemoryPresenceStore(),
+        map,
+      );
+      await own.app.listen({ port: 0, host: '127.0.0.1' });
+      const { port } = own.app.server.address() as AddressInfo;
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`,
+        {
+          headers: {
+            origin: ORIGIN,
+            cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`,
+          },
+        },
+      );
+      const conn = { messages: [] as Record<string, unknown>[] };
+      ws.on('message', (raw) =>
+        conn.messages.push(
+          JSON.parse(raw.toString()) as Record<string, unknown>,
+        ),
+      );
+      try {
+        const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+
+        // Inside the library, unread and so admins only: still where they
+        // stood, not at the spawn with their place saved over.
+        expect(positionsIn(snapshot)).toContainEqual(
+          expect.objectContaining({ userId: ada, x: 3, y: 1 }),
+        );
+      } finally {
+        ws.close();
+        await own.gateway.stop();
+        await own.app.close();
+      }
+    });
+
     it('reads a role that changed at the next heartbeat', async () => {
       const ada = person();
       designateLibrary(listEntry({ toCohortRole: 'professor' }));

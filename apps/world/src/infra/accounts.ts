@@ -57,7 +57,9 @@ export interface AccountLookup {
   spacesOn(mapKey: string, now: Date): Promise<Map<string, SpaceFacts>>;
   /**
    * Calls `listener` whenever campus-api says something a space's door reads
-   * has changed. Resolves once listening; rejects if it could not start.
+   * has changed, and whenever listening (re)starts, since a change made while
+   * it was not listening reached nobody. Resolves once listening; rejects if
+   * it could not start.
    */
   onSpacesChanged(listener: () => void): Promise<void>;
   /**
@@ -387,7 +389,14 @@ export function createAccountLookup(env: Env): AccountLookup {
       );
     },
     async onSpacesChanged(listener): Promise<void> {
-      await sql.listen(SPACES_CHANGED_CHANNEL, () => listener());
+      // Called on every notification, and again each time the driver
+      // subscribes: a change made while it was reconnecting sent its word to
+      // nobody, so reading again on the way back in is what catches it.
+      await sql.listen(
+        SPACES_CHANGED_CHANNEL,
+        () => listener(),
+        () => listener(),
+      );
     },
     async close(): Promise<void> {
       await sql.end();

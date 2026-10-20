@@ -1004,12 +1004,13 @@ export function registerGateway(
     // — has already placed the avatar, and this one takes it over.
     // A saved place inside a space they may no longer enter is not where
     // they come back to: they start at the spawn, as on a first visit. Only
-    // when their row was read: a read that failed says nothing about where
-    // they may stand, and the place would be lost for good once the spawn
-    // was saved over it.
+    // when their row and the spaces were both read: a read that failed says
+    // nothing about where they may stand, and the place would be lost for
+    // good once the spawn was saved over it.
     if (
       saved &&
       membershipKnown &&
+      doorsRead &&
       !mayStepInto(connection, spaceAt(map.spaces, saved), new Date())
     ) {
       app.log.info(
