@@ -188,6 +188,7 @@ erDiagram
 
     SESSIONS {
         uuid id PK
+        uuid cohort_id FK
         uuid space_id FK
         media_provider_enum provider "livekit"
         varchar provider_room_id
@@ -451,6 +452,7 @@ erDiagram
     DESKS ||--o{ DESK_CLAIMS : "claimed_by"
     USERS ||--o{ DESK_CLAIMS : "claims"
 
+    COHORTS ||--o{ SESSIONS : "holds"
     SPACES ||--o{ SESSIONS : "hosts"
     SESSIONS ||--o{ SESSION_PARTICIPANTS : "records"
     USERS ||--o{ SESSION_PARTICIPANTS : "participates"
@@ -511,7 +513,8 @@ erDiagram
 %%   access_requests(space_id, user_id)  WHERE status = 'pending'
 %%   desk_claims(desk_id)                WHERE released_at is null
 %%   desk_claims(user_id)                WHERE released_at is null
-%%   sessions(space_id)                  WHERE closed_at is null
+%%   sessions(cohort_id, space_id)       WHERE closed_at is null
+%%   session_participants(session_id, user_id) WHERE left_at is null
 %%   projects(user_id)                   WHERE is_pinned
 %%   conversations(kind)                 WHERE kind = 'campus'
 %%   conversations(space_id)             WHERE kind = 'space'
@@ -542,6 +545,8 @@ erDiagram
 %%   spaces: capacity IS NULL OR capacity > 0
 %%   space_memberships: (cohort_track_id IS NULL) <> (user_id IS NULL)
 %%   space_memberships: valid_to IS NULL OR valid_to > valid_from
+%%   sessions: closed_at IS NULL OR closed_at >= opened_at
+%%   session_participants: left_at IS NULL OR left_at >= joined_at
 %%   feedback: reported_user_id IS NULL OR type = 'report'
 %%   feedback: (status = 'resolved') = (resolved_at IS NOT NULL) = (resolved_by IS NOT NULL)
 %%   feedback: title and details hold something other than white space

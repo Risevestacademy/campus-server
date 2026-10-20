@@ -1,5 +1,5 @@
 {
-  "id": "fdcce5f1-37ce-4240-b5f3-6f1df35c587d",
+  "id": "63507c81-eb02-40f9-9b67-0e2ec2f6e11f",
   "prevId": "cf019a7c-0600-40bf-b4a4-fd8596f1be69",
   "version": "7",
   "dialect": "postgresql",
@@ -238,6 +238,28 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "session_participants_one_open_per_person": {
+          "name": "session_participants_one_open_per_person",
+          "columns": [
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"session_participants\".\"left_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -271,7 +293,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "session_participants_left_after_joined": {
+          "name": "session_participants_left_after_joined",
+          "value": "\"session_participants\".\"left_at\" is null or \"session_participants\".\"left_at\" >= \"session_participants\".\"joined_at\""
+        }
+      },
       "isRLSEnabled": false
     },
     "public.sessions": {
@@ -284,6 +311,12 @@
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
+        },
+        "cohort_id": {
+          "name": "cohort_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
         },
         "space_id": {
           "name": "space_id",
@@ -319,6 +352,21 @@
         }
       },
       "indexes": {
+        "sessions_cohort_idx": {
+          "name": "sessions_cohort_idx",
+          "columns": [
+            {
+              "expression": "cohort_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "sessions_space_idx": {
           "name": "sessions_space_idx",
           "columns": [
@@ -334,9 +382,15 @@
           "method": "btree",
           "with": {}
         },
-        "sessions_one_open_per_space": {
-          "name": "sessions_one_open_per_space",
+        "sessions_one_open_per_cohort_space": {
+          "name": "sessions_one_open_per_cohort_space",
           "columns": [
+            {
+              "expression": "cohort_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
             {
               "expression": "space_id",
               "isExpression": false,
@@ -352,6 +406,19 @@
         }
       },
       "foreignKeys": {
+        "sessions_cohort_id_cohorts_id_fk": {
+          "name": "sessions_cohort_id_cohorts_id_fk",
+          "tableFrom": "sessions",
+          "tableTo": "cohorts",
+          "columnsFrom": [
+            "cohort_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "sessions_space_id_spaces_id_fk": {
           "name": "sessions_space_id_spaces_id_fk",
           "tableFrom": "sessions",
@@ -369,7 +436,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "sessions_closed_after_opened": {
+          "name": "sessions_closed_after_opened",
+          "value": "\"sessions\".\"closed_at\" is null or \"sessions\".\"closed_at\" >= \"sessions\".\"opened_at\""
+        }
+      },
       "isRLSEnabled": false
     },
     "public.cohort_members": {

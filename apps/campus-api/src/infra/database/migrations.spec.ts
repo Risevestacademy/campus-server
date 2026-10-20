@@ -211,6 +211,7 @@ describe('the cohort date rule against data the old schema permitted', () => {
 describe('the call tables over a campus that already has spaces and people', () => {
   const FILE = '0017_call_sessions.sql';
   let pg: PGlite;
+  let cohortId: string;
   let spaceId: string;
   let userId: string;
 
@@ -222,6 +223,11 @@ describe('the call tables over a campus that already has spaces and people', () 
     userId = (
       await pg.query<{ id: string }>(
         "insert into users (email) values ('ada@campus.local') returning id",
+      )
+    ).rows[0].id;
+    cohortId = (
+      await pg.query<{ id: string }>(
+        "insert into cohorts (name, code) values ('C1', 'C1') returning id",
       )
     ).rows[0].id;
     const mapId = (
@@ -237,21 +243,26 @@ describe('the call tables over a campus that already has spaces and people', () 
     ).rows[0].id;
   });
 
-  it('applies, leaving the spaces and people as they were', async () => {
+  it('applies, leaving the cohorts, spaces and people as they were', async () => {
     await apply(pg, FILE);
 
-    const counts = await pg.query<{ spaces: number; users: number }>(
-      'select (select count(*)::int from spaces) as spaces, (select count(*)::int from users) as users',
+    const counts = await pg.query<{
+      cohorts: number;
+      spaces: number;
+      users: number;
+    }>(
+      'select (select count(*)::int from cohorts) as cohorts, (select count(*)::int from spaces) as spaces, (select count(*)::int from users) as users',
     );
-    expect(counts.rows).toEqual([{ spaces: 1, users: 1 }]);
+    expect(counts.rows).toEqual([{ cohorts: 1, spaces: 1, users: 1 }]);
   });
 
-  it('records a call in a space that was there before it', async () => {
+  it('records a call in a cohort and a space that were there before it', async () => {
     await apply(pg, FILE);
 
     const sessionId = (
       await pg.query<{ id: string }>(
-        `insert into sessions (space_id, provider_room_id) values ('${spaceId}', 'room-1') returning id`,
+        `insert into sessions (cohort_id, space_id, provider_room_id)
+         values ('${cohortId}', '${spaceId}', 'room-1') returning id`,
       )
     ).rows[0].id;
     await pg.query(
