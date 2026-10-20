@@ -5,7 +5,7 @@ import {
 } from '@campus/session';
 import postgres from 'postgres';
 
-import type { Seat } from '../seat.js';
+import { seatKey, type Seat } from '../seat.js';
 import type { Env } from './env.js';
 
 /**
@@ -27,6 +27,12 @@ export interface AccountLookup {
     now: Date,
   ): Promise<Set<string>>;
   liveMembership(seat: Seat, now: Date): Promise<boolean>;
+  /**
+   * Which of these seats still hold a live membership: one query for every
+   * open socket, however many there are, as `liveSessions` does for logins.
+   * Answered as `seatKey` of the live ones.
+   */
+  liveMemberships(seats: readonly Seat[], now: Date): Promise<Set<string>>;
   /**
    * Calls `listener` with an account id whenever campus-api says that
    * account's sprite or display name changed. Resolves once listening;
@@ -88,16 +94,35 @@ export const LIVE_SESSIONS_QUERY = `select distinct family_id from refresh_token
     and created_at >= $2`;
 
 /**
- * Must stay the same question campus-api's `isLiveMembership` asks, or the two
- * disagree about who belongs. $1 user, $2 cohort, $3 now.
+ * The one question about a membership. Must stay the same as campus-api's
+ * `isLiveMembership`, or the two disagree about who belongs. Written once so
+ * the two statements below — a pair at a time, or many pairs at once —
+ * cannot drift apart: only the asking differs, never the answer.
+ */
+const MEMBERSHIP_IS_LIVE = `left_at is null
+    and (role <> 'student' or status is not distinct from 'active')
+    and (access_expires_at is null or access_expires_at > $3)`;
+
+/**
+ * Asked of one seat, as at the upgrade. $1 user, $2 cohort, $3 now.
  */
 export const LIVE_MEMBERSHIP_QUERY = `select 1 from cohort_members
   where user_id = $1
     and cohort_id = $2
-    and left_at is null
-    and (role <> 'student' or status is not distinct from 'active')
-    and (access_expires_at is null or access_expires_at > $3)
+    and ${MEMBERSHIP_IS_LIVE}
   limit 1`;
+
+/**
+ * The same question for many seats at once, as the heartbeat's sweep asks
+ * it: one query however many sockets are open. $1 user ids and $2 cohort
+ * ids, paired by position; $3 now.
+ */
+export const LIVE_MEMBERSHIPS_QUERY = `select user_id, cohort_id from cohort_members
+  where (user_id, cohort_id) in (
+    select seat.user_id, seat.cohort_id
+    from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
+  )
+    and ${MEMBERSHIP_IS_LIVE}`;
 
 /**
  * Ids come from campus-api, so they are UUIDs. Anything else is dropped before
@@ -178,6 +203,38 @@ export function createAccountLookup(env: Env): AccountLookup {
         now,
       ]);
       return rows.length > 0;
+    },
+    async liveMemberships(seats, now): Promise<Set<string>> {
+      // Every pair rides in one query, so an id the database cannot cast
+      // would fail it for every socket at once. Dropped here, user and cohort
+      // alike, where holding nothing is what a non-id could only have meant
+      // anyway.
+      const named = [
+        ...new Map(
+          seats
+            .filter(
+              ({ userId, cohortId }) =>
+                looksLikeId(userId) && looksLikeId(cohortId),
+            )
+            .map((seat) => [seatKey(seat), seat]),
+        ).values(),
+      ];
+      if (named.length === 0) {
+        return new Set();
+      }
+      const rows = await sql.unsafe<{ user_id: string; cohort_id: string }[]>(
+        LIVE_MEMBERSHIPS_QUERY,
+        [
+          named.map((seat) => seat.userId),
+          named.map((seat) => seat.cohortId),
+          now,
+        ],
+      );
+      return new Set(
+        rows.map((row) =>
+          seatKey({ userId: row.user_id, cohortId: row.cohort_id }),
+        ),
+      );
     },
     async close(): Promise<void> {
       await sql.end();

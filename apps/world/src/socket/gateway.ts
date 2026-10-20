@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import type { AccountLookup, Appearance } from '../infra/accounts.js';
+import type { Account, AccountLookup, Appearance } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import type {
   PositionStore,
@@ -428,8 +428,10 @@ export function registerGateway(
    * Checked once per heartbeat rather than per frame: a ban, or the end of a
    * guest's visit, should take effect in seconds, and asking the database on
    * every message would put a query in the path of every movement. One query
-   * per account, however many cohorts it has sockets in, plus one for the
-   * cohort membership behind every socket that is not an admin's.
+   * per account, however many cohorts it has sockets in, plus one question
+   * for the cohort membership behind every socket that is not an admin's —
+   * one query for all of them together, as the session check beside it asks
+   * for every login at once.
    */
   async function dropUnwelcome(): Promise<void> {
     const now = new Date();
@@ -440,16 +442,51 @@ export function registerGateway(
       else byAccount.set(connection.userId, [connection]);
     }
 
-    for (const [userId, open] of byAccount) {
-      let account;
+    // Every account is read before any membership is judged, because who is
+    // excepted from the membership question — an admin — is on the account's
+    // row. An account the database would not answer for is skipped alone,
+    // and its sockets left to the next sweep.
+    const known = new Map<string, Account | null>();
+    const unasked = new Set<string>();
+    for (const userId of byAccount.keys()) {
       try {
-        account = await accounts.find(userId);
+        known.set(userId, await accounts.find(userId));
       } catch (err) {
         // A database that is not answering must not throw everybody off the
         // campus; the next sweep tries again.
         app.log.error({ err, userId }, 'could not re-check account');
-        continue;
+        unasked.add(userId);
       }
+    }
+
+    // The cohort every non-admin socket named, asked again — the upgrade
+    // asks once, and nothing behind the socket keeps that answer true: a
+    // guest's visit has an end date, and neither the access token the socket
+    // opened with nor the login it follows runs out with it. So a membership
+    // that ends while the socket is open has to reach that socket, within
+    // one heartbeat — and asked once for every socket together, however
+    // many are open, as the sessions beside it are.
+    let members: Set<string> | undefined;
+    const toAsk: Seat[] = [];
+    for (const [userId, open] of byAccount) {
+      const account = known.get(userId);
+      if (!account || account.suspended || account.admin) continue;
+      toAsk.push(...open);
+    }
+    if (toAsk.length > 0) {
+      try {
+        members = await accounts.liveMemberships(toAsk, now);
+      } catch (err) {
+        // As with accounts: a database that is not answering must not throw
+        // everybody off the campus. Membership stands as the last answer
+        // left it, and the next sweep asks again.
+        app.log.error({ err }, 'could not re-check membership');
+      }
+    }
+
+    for (const [userId, open] of byAccount) {
+      if (unasked.has(userId)) continue;
+      const account = known.get(userId) ?? null;
       if (account && !account.suspended) {
         for (const connection of open) {
           dropIfRevoked(connection, account.sessionEpoch);
@@ -459,9 +496,11 @@ export function registerGateway(
           showAppearance(connection, account);
           // The cohort is asked again for everybody but an admin, who is
           // admitted on their role alone — from the row, as at the upgrade,
-          // so a demotion lands on the socket already open too.
-          if (!account.admin) {
-            await dropIfNotMember(connection, now);
+          // so a demotion lands on the socket already open too. The answer
+          // came from the one query above; when the database gave none,
+          // membership stands and the next sweep tries again.
+          if (!account.admin && members !== undefined) {
+            dropIfNotMember(connection, members.has(seatKey(connection)));
           }
         }
         continue;
@@ -516,35 +555,17 @@ export function registerGateway(
   }
 
   /**
-   * The cohort this socket named, asked again. The upgrade asks once, and
-   * nothing behind the socket keeps that answer true: a guest's visit has an
-   * end date, and neither the access token the socket opened with nor the
-   * login it follows runs out with it. So a membership that ends while the
-   * socket is open has to reach that socket, within one heartbeat.
-   *
-   * Admins are excepted by the caller, as they are at the upgrade.
+   * Applies the sweep's membership answer to one socket: a seat among the
+   * live ones stays. Admins are excepted by the caller, as they are at the
+   * upgrade.
    *
    * And only one that still holds the account's place in its cohort, for the
-   * same reason as dropIfRevoked: the read crosses awaits, and in that time a
-   * newer socket may have displaced this one — which has then been told
-   * `replaced` and closed already.
+   * same reason as dropIfRevoked: the answer was asked for every socket at
+   * once and crossed an await, and in that time a newer socket may have
+   * displaced this one — which has then been told `replaced` and closed
+   * already, with nothing left to drop.
    */
-  async function dropIfNotMember(
-    connection: Connection,
-    now: Date,
-  ): Promise<void> {
-    let live: boolean;
-    try {
-      live = await accounts.liveMembership(connection, now);
-    } catch (err) {
-      // As with the account: a database that is not answering must not throw
-      // everybody off the campus. The next sweep tries again.
-      app.log.error(
-        { err, userId: connection.userId, cohortId: connection.cohortId },
-        'could not re-check membership',
-      );
-      return;
-    }
+  function dropIfNotMember(connection: Connection, live: boolean): void {
     if (live || !connections.has(connection)) {
       return;
     }
