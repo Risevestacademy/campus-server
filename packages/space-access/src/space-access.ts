@@ -18,6 +18,16 @@ import { hasAdminPowers } from '@campus/session';
  */
 
 /**
+ * The Postgres channel campus-api notifies, in the same transaction as the
+ * write, whenever something a space's entry rule reads changes: a list entry
+ * given or ended, a space added or set up. world listens and reloads, so a
+ * change reaches the door without waiting for a heartbeat. The payload says
+ * nothing: world reloads every space on its map, which is cheap, rather than
+ * trusting a message to say which.
+ */
+export const SPACES_CHANGED_CHANNEL = 'spaces_changed';
+
+/**
  * `space_access`, the two kinds of space. A `normal` space admits anybody in
  * the campus unless the people inside have locked it; a `designated` one
  * admits whoever its list names. The same values campus-api writes into the

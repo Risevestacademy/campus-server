@@ -1,4 +1,5 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -979,6 +980,41 @@ describe('the entry map', () => {
       { key: 'campus', isEntry: false, retiredAt: expect.any(Date) },
       { key: 'plaza', isEntry: true, retiredAt: null },
     ]);
+  });
+});
+
+describe('telling world the spaces changed', () => {
+  const listening = async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(SPACES_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    return { heard, stop };
+  };
+
+  it('tells world when a sync changes something, and not when it changes nothing', async () => {
+    const { heard, stop } = await listening();
+    try {
+      await sync([map('campus', [space('library', 'open')])]);
+      await vi.waitFor(() => expect(heard).toHaveLength(1));
+
+      await sync([map('campus', [space('library', 'open')])]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(heard).toHaveLength(1);
+    } finally {
+      await stop();
+    }
+  });
+
+  it('says nothing on a dry run, which changes nothing', async () => {
+    const { heard, stop } = await listening();
+    try {
+      await sync([map('campus', [space('library', 'open')])], true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(heard).toEqual([]);
+    } finally {
+      await stop();
+    }
   });
 });
 

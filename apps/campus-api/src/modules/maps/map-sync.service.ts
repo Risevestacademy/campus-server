@@ -34,6 +34,7 @@ import {
   startingListFor,
   suggestedKind,
 } from './space-defaults.js';
+import { tellWorld } from './space-memberships.service.js';
 
 type MapRow = typeof maps.$inferSelect;
 
@@ -107,6 +108,11 @@ export class MapSyncService {
           throw new DryRun({ ...result, dryRun: true });
         }
         await this.record(tx, admin, options.correlationId, result.maps);
+        // A space added, restored or retired changes who may stand where, so
+        // world reloads its spaces once this commits.
+        if (result.changed) {
+          await tellWorld(tx);
+        }
         return result;
       });
     } catch (err) {

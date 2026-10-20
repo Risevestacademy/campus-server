@@ -1,6 +1,10 @@
-import { isLiveGrant, type SpaceGrantFacts } from '@campus/space-access';
+import {
+  SPACES_CHANGED_CHANNEL,
+  isLiveGrant,
+  type SpaceGrantFacts,
+} from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 
 import {
   DRIZZLE,
@@ -111,6 +115,16 @@ export async function releaseTrackGrants(
     .where(eq(spaceMemberships.cohortTrackId, cohortTrackId))
     .returning({ id: spaceMemberships.id });
   return { released: true, clearedIds: cleared.map((row) => row.id) };
+}
+
+/**
+ * Something a space's door reads changed — a list, or the spaces themselves —
+ * so world reads its spaces again. Postgres holds the notification until the
+ * commit, so world never reads before the change is in, and never hears of
+ * one that rolled back. Every writer of spaces or lists calls this.
+ */
+export async function tellWorld(tx: Tx): Promise<void> {
+  await tx.execute(sql`select pg_notify(${SPACES_CHANGED_CHANNEL}, '')`);
 }
 
 /** How a refusal names the subject that already holds a live grant. */
@@ -297,6 +311,7 @@ export class SpaceMembershipsService {
         })
         .returning();
 
+      await tellWorld(tx);
       await writeAuditEntry(tx, {
         ...audit,
         spaceId,
@@ -383,6 +398,7 @@ export class SpaceMembershipsService {
         .set({ validTo: closedAt })
         .where(eq(spaceMemberships.id, row.id));
 
+      await tellWorld(tx);
       await writeAuditEntry(tx, {
         ...audit,
         spaceId,

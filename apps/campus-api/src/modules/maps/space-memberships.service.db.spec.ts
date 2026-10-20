@@ -1,3 +1,4 @@
+import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -676,6 +677,50 @@ describe('listing a space’s grants', () => {
     await expect(
       service.list('99999999-9999-4999-8999-999999999999', GRANT_AT),
     ).rejects.toBeInstanceOf(SpaceNotFoundException);
+  });
+});
+
+/**
+ * world decides who may step into a space from the lists, so a change to one
+ * has to reach it: campus-api notifies, in the same transaction, and world
+ * reloads. A refusal changes nothing, so it says nothing.
+ */
+describe('telling world a list changed', () => {
+  const listening = async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(SPACES_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    return { heard, stop };
+  };
+
+  it('tells world when a grant is given and when it is ended', async () => {
+    const { heard, stop } = await listening();
+    try {
+      const given = await service.grant(
+        spaceId,
+        { userId: memberId },
+        actor,
+        GRANT_AT,
+      );
+      await service.end(spaceId, given.id, actor, END_AT);
+      await vi.waitFor(() => expect(heard).toHaveLength(2));
+    } finally {
+      await stop();
+    }
+  });
+
+  it('says nothing when a grant is refused', async () => {
+    const { heard, stop } = await listening();
+    try {
+      await expect(
+        service.grant(retiredSpaceId, { userId: memberId }, actor, GRANT_AT),
+      ).rejects.toBeInstanceOf(SpaceRetiredException);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(heard).toEqual([]);
+    } finally {
+      await stop();
+    }
   });
 });
 
