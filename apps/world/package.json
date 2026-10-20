@@ -27,6 +27,7 @@
   "dependencies": {
     "@campus/media": "workspace:*",
     "@campus/session": "workspace:*",
+    "@campus/space-access": "workspace:*",
     "@fastify/websocket": "^11.3.1",
     "campus-world-map": "^0.2.0",
     "fastify": "^5.12.3",

@@ -70,6 +70,7 @@ export default defineRailway((ctx) => {
         '/apps/world/**',
         '/packages/media/**',
         '/packages/session/**',
+        '/packages/space-access/**',
         '/package.json',
         '/pnpm-lock.yaml',
         '/pnpm-workspace.yaml',

@@ -120,8 +120,18 @@ A tile is a wall when a collision shape covers its middle: `blocked(layout,
 tile)` from the same package gives the answer the server uses, so predict with
 it. The map's edge blocks too. `width` and `height` are in tiles.
 
-One map for now, the one people enter the campus on. Spaces and portals are
-read from it by the client but mean nothing to the server yet.
+One map for now, the one people enter the campus on. Portals are read from
+it by the client but mean nothing to the server yet.
+
+**Spaces have doors.** Most spaces admit anybody in the campus. A
+_designated_ space admits only the people its list names (an admin keeps
+the list in campus-api); a step into one you are not on is answered
+`refused`, like a wall you cannot see. The corridors and grounds (every tile
+in no drawn space) are always open. Only the step _into_ a space is asked
+about: somebody already inside stays until they step out, whatever changes
+meanwhile. You cannot predict a refusal, so draw the step and let the
+`moveResult` correct it. If your saved place is in a space you may no longer
+enter, you arrive at the spawn.
 
 In local development only, a server with no published map to load (none
 configured, none published, or Sanity out of reach) runs on a placeholder
@@ -145,11 +155,12 @@ The client says which way, never where to. The server decides every position.
 3. **Every admitted move is answered with a `moveResult`**, in the order sent,
    carrying your `seq` and where the server has you:
 
-   | `outcome`  | Meaning                                                 | What to draw                  |
-   | ---------- | ------------------------------------------------------- | ----------------------------- |
-   | `moved`    | One tile, as you predicted                              | Nothing changes               |
-   | `blocked`  | Not walkable; you turn to face it without moving        | Snap back, facing the new way |
-   | `too_fast` | Over walking speed; nothing happened, not even the turn | Snap back                     |
+   | `outcome`  | Meaning                                                  | What to draw                  |
+   | ---------- | -------------------------------------------------------- | ----------------------------- |
+   | `moved`    | One tile, as you predicted                               | Nothing changes               |
+   | `blocked`  | Not walkable; you turn to face it without moving         | Snap back, facing the new way |
+   | `refused`  | Floor, in a space you may not enter; you turn to face it | Snap back, facing the new way |
+   | `too_fast` | Over walking speed; nothing happened, not even the turn  | Snap back                     |
 
 4. **Correct against the server, then replay what it has not answered yet.**
    By the time a `moveResult` arrives you may have predicted further steps.

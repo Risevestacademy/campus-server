@@ -20,7 +20,10 @@ const accounts = {
   liveSessions: async () => new Set<string>(),
   liveMembership: async () => true,
   liveMemberships: async () => new Set<string>(),
+  memberships: async () => new Map(),
+  spacesOn: async () => new Map(),
   onProfileChanged: async () => undefined,
+  onSpacesChanged: async () => undefined,
   close: async () => undefined,
 };
 
@@ -169,6 +172,7 @@ describe('with the position store failing', () => {
           id,
           suspended: false,
           admin: false,
+          systemRole: 'user',
           sessionEpoch: 0,
           displayName: null,
           spriteKey: null,

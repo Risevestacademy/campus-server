@@ -3,11 +3,16 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { seatKey } from '../seat.js';
+import { mayEnter } from '@campus/space-access';
+
 import {
   ACCOUNT_QUERY,
   LIVE_MEMBERSHIP_QUERY,
   LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
+  MEMBERSHIP_ROWS_QUERY,
+  SPACES_QUERY,
+  SPACE_LISTS_QUERY,
   looksLikeId,
 } from './accounts.js';
 
@@ -469,5 +474,214 @@ describe("world's cohort gate, against campus-api's schema", () => {
     expect(looksLikeId('cohort-1')).toBe(false);
     expect(looksLikeId('')).toBe(false);
     expect(looksLikeId("'; drop table cohort_members; --")).toBe(false);
+  });
+});
+
+/**
+ * What the door reads: the spaces on the map, the entries on their lists, and
+ * each seat's membership row. All three tables are campus-api's, so the
+ * statements run against its migrations here, and the rows they return are
+ * put to the rule itself, so a column read wrong shows as a wrong answer.
+ */
+describe("world's space doors, against campus-api's schema", () => {
+  const NOW = new Date('2026-10-20T12:00:00.000Z');
+  const HOUR = 3_600_000;
+
+  const COHORT = 'eeeeeee1-0000-4000-8000-000000000001';
+  const TRACK = 'eeeeeee2-0000-4000-8000-000000000001';
+  const COHORT_TRACK = 'eeeeeee3-0000-4000-8000-000000000001';
+  const STUDENT = 'eeeeeee4-0000-4000-8000-000000000001';
+  const GUEST = 'eeeeeee4-0000-4000-8000-000000000002';
+  const NAMED = 'eeeeeee4-0000-4000-8000-000000000003';
+
+  let spaceIds: Record<string, string>;
+
+  beforeAll(async () => {
+    for (const id of [STUDENT, GUEST, NAMED]) {
+      await db.query(
+        `insert into users (id, email, status) values ($1, $2, 'active')`,
+        [id, `${id}@campus.local`],
+      );
+    }
+    await db.query(
+      `insert into cohorts (id, name, code) values ($1, 'Cohort 9', 'C9')`,
+      [COHORT],
+    );
+    await db.query(
+      `insert into tracks (id, name, code) values ($1, 'Design', 'DESIGN9')`,
+      [TRACK],
+    );
+    await db.query(
+      `insert into cohort_tracks (id, cohort_id, track_id) values ($1, $2, $3)`,
+      [COHORT_TRACK, COHORT, TRACK],
+    );
+    await db.query(
+      `insert into cohort_members (user_id, cohort_id, cohort_track_id, role, status, access_expires_at)
+       values ($1, $4, $5, 'student', 'active', null),
+              ($2, $4, null, 'guest', null, $6),
+              ($3, $4, $5, 'student', 'active', null)`,
+      [
+        STUDENT,
+        GUEST,
+        NAMED,
+        COHORT,
+        COHORT_TRACK,
+        new Date(NOW.getTime() + HOUR),
+      ],
+    );
+
+    const map = await db.query<{ id: string }>(
+      `insert into maps (key, name) values ('doors', 'Doors') returning id`,
+    );
+    const other = await db.query<{ id: string }>(
+      `insert into maps (key, name) values ('elsewhere', 'Elsewhere') returning id`,
+    );
+    spaceIds = {};
+    for (const [key, mapId, kind, access, retired] of [
+      ['lounge', map.rows[0].id, 'meeting_room', 'normal', null],
+      ['classroom', map.rows[0].id, 'classroom', 'designated', null],
+      ['pod', map.rows[0].id, 'mentor_pod', 'designated', null],
+      ['old', map.rows[0].id, 'meeting_room', 'normal', NOW],
+      ['annex', other.rows[0].id, 'meeting_room', 'normal', null],
+    ] as const) {
+      const row = await db.query<{ id: string }>(
+        `insert into spaces (map_id, key, name, kind, audio_mode, access, retired_at)
+         values ($1, $2, $2, $3, 'boundary', $4, $5) returning id`,
+        [mapId, key, kind, access, retired],
+      );
+      spaceIds[key] = row.rows[0].id;
+    }
+    await db.query(
+      `insert into space_memberships (space_id, cohort_role, valid_from) values ($1, 'student', $2)`,
+      [spaceIds.classroom, new Date(NOW.getTime() - HOUR)],
+    );
+    // One person named on the pod, and one whose entry has already ended.
+    await db.query(
+      `insert into space_memberships (space_id, user_id, valid_from, valid_to)
+       values ($1, $2, $4, null), ($1, $3, $4, $5)`,
+      [
+        spaceIds.pod,
+        NAMED,
+        STUDENT,
+        new Date(NOW.getTime() - 2 * HOUR),
+        new Date(NOW.getTime() - HOUR),
+      ],
+    );
+  });
+
+  async function spaces() {
+    const rows = (
+      await db.query<{
+        id: string;
+        key: string;
+        kind: string | null;
+        access: string;
+        retired_at: Date | null;
+      }>(SPACES_QUERY, ['doors'])
+    ).rows;
+    const entries = (
+      await db.query<{
+        space_id: string;
+        user_id: string | null;
+        cohort_track_id: string | null;
+        cohort_role: string | null;
+        system_role: string | null;
+        valid_from: Date;
+        valid_to: Date | null;
+      }>(SPACE_LISTS_QUERY, [rows.map((row) => row.id), NOW])
+    ).rows;
+    return new Map(
+      rows.map((row) => [
+        row.key,
+        {
+          kind: row.kind,
+          access: row.access,
+          retiredAt: row.retired_at,
+          locked: false,
+          grants: entries
+            .filter((entry) => entry.space_id === row.id)
+            .map((entry) => ({
+              toUserId: entry.user_id,
+              toTrackId: entry.cohort_track_id,
+              toCohortRole: entry.cohort_role,
+              toSystemRole: entry.system_role,
+              validFrom: entry.valid_from,
+              validTo: entry.valid_to,
+            })),
+        },
+      ]),
+    );
+  }
+
+  async function person(userId: string) {
+    const row = (
+      await db.query<{
+        cohort_id: string;
+        role: string;
+        left_at: Date | null;
+        status: string | null;
+        access_expires_at: Date | null;
+        cohort_track_id: string | null;
+      }>(MEMBERSHIP_ROWS_QUERY, [[userId], [COHORT]])
+    ).rows[0];
+    return {
+      userId,
+      systemRole: 'user',
+      cohortId: COHORT,
+      membership: {
+        cohortId: row.cohort_id,
+        role: row.role,
+        leftAt: row.left_at,
+        status: row.status,
+        accessExpiresAt: row.access_expires_at,
+        trackId: row.cohort_track_id,
+      },
+    };
+  }
+
+  it("reads every space on the map, retired ones too, and none on another map's", async () => {
+    expect([...(await spaces()).keys()].sort()).toEqual([
+      'classroom',
+      'lounge',
+      'old',
+      'pod',
+    ]);
+  });
+
+  it('leaves out an entry that has ended', async () => {
+    const pod = (await spaces()).get('pod');
+
+    expect(pod?.grants.map((grant) => grant.toUserId)).toEqual([NAMED]);
+  });
+
+  it('reads a membership row as it stands: role, track and visit', async () => {
+    expect((await person(GUEST)).membership).toMatchObject({
+      role: 'guest',
+      trackId: null,
+      accessExpiresAt: new Date(NOW.getTime() + HOUR),
+    });
+    expect((await person(STUDENT)).membership).toMatchObject({
+      role: 'student',
+      status: 'active',
+      trackId: COHORT_TRACK,
+    });
+  });
+
+  it('gives the rule what it needs to answer at each door', async () => {
+    const book = await spaces();
+    const at = (who: Awaited<ReturnType<typeof person>>, key: string) =>
+      mayEnter(who, book.get(key)!, NOW);
+    const student = await person(STUDENT);
+    const guest = await person(GUEST);
+    const named = await person(NAMED);
+
+    expect(at(student, 'lounge')).toBe(true);
+    expect(at(guest, 'lounge')).toBe(true);
+    expect(at(student, 'classroom')).toBe(true);
+    expect(at(guest, 'classroom')).toBe(false);
+    expect(at(named, 'pod')).toBe(true);
+    // Their entry ended an hour ago.
+    expect(at(student, 'pod')).toBe(false);
+    expect(at(student, 'old')).toBe(false);
   });
 });

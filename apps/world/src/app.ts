@@ -88,6 +88,12 @@ export async function buildWorld(
     .catch((err: unknown) =>
       app.log.error({ err }, 'could not listen for profile changes'),
     );
+  // The same for the spaces: the heartbeat reads them again too.
+  accounts
+    .onSpacesChanged(() => void gateway.spacesChanged())
+    .catch((err: unknown) =>
+      app.log.error({ err }, 'could not listen for space changes'),
+    );
   registerConnectionCheck(app, env, accounts);
 
   app.get('/health', async () => ({

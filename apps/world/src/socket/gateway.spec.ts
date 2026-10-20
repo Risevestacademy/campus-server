@@ -3,6 +3,12 @@ import {
   signSessionToken,
   SessionScope,
 } from '@campus/session';
+import {
+  SPACE_ACCESS,
+  type CohortMembershipFacts,
+  type SpaceFacts,
+  type SpaceGrantFacts,
+} from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import {
@@ -74,6 +80,7 @@ const accounts = {
           id: userId,
           suspended: accounts.suspended.has(userId),
           admin: accounts.admins.has(userId),
+          systemRole: accounts.admins.has(userId) ? 'admin' : 'user',
           sessionEpoch: accounts.epochs.get(userId) ?? 0,
           displayName: accounts.looks.get(userId)?.displayName ?? null,
           spriteKey: accounts.looks.get(userId)?.spriteKey ?? null,
@@ -91,6 +98,40 @@ const accounts = {
       if (await isLiveMembership(seat, now)) live.add(seatKey(seat));
     }
     return live;
+  },
+  /** Cohort roles other than student: `userId:cohortId` to the role. */
+  roles: new Map<string, string>(),
+  failMemberships: false,
+  /** Each seat's membership row, as the doors read it. */
+  memberships: async (seats: readonly Seat[]) => {
+    if (accounts.failMemberships) throw new Error('postgres is down');
+    return new Map<string, CohortMembershipFacts>(
+      seats.map((seat) => {
+        const key = `${seat.userId}:${seat.cohortId}`;
+        return [
+          seatKey(seat),
+          {
+            cohortId: seat.cohortId,
+            role: accounts.roles.get(key) ?? 'student',
+            leftAt: accounts.notMembers.has(key) ? new Date(0) : null,
+            status: 'active',
+            accessExpiresAt: accounts.visitEnds.get(key) ?? null,
+            trackId: null,
+          },
+        ];
+      }),
+    );
+  },
+  /** The spaces on the map as campus-api has them. See openLibrary. */
+  spaces: new Map<string, SpaceFacts>(),
+  failSpaces: false,
+  spacesOn: async () => {
+    if (accounts.failSpaces) throw new Error('postgres is down');
+    return new Map(accounts.spaces);
+  },
+  spaceListeners: [] as (() => void)[],
+  onSpacesChanged: async (listener: () => void) => {
+    accounts.spaceListeners.push(listener);
   },
   /** Who campus-api tells, through Postgres, when a profile changes. */
   profileListeners: [] as ((userId: string) => void)[],
@@ -263,6 +304,47 @@ const map: WorldMap = {
   }),
 };
 
+/**
+ * The library as a normal meeting room, which anybody walks into: how every
+ * test finds it unless it says otherwise.
+ */
+function openLibrary(): void {
+  accounts.spaces.clear();
+  accounts.spaces.set('library', {
+    kind: 'meeting_room',
+    access: SPACE_ACCESS.Normal,
+    retiredAt: null,
+    locked: false,
+    grants: [],
+  });
+}
+
+/** The library designated, with these entries on its list. */
+function designateLibrary(...grants: SpaceGrantFacts[]): void {
+  accounts.spaces.set('library', {
+    kind: 'classroom',
+    access: SPACE_ACCESS.Designated,
+    retiredAt: null,
+    locked: false,
+    grants,
+  });
+}
+
+openLibrary();
+
+/** An entry naming one subject, counting since well before any test. */
+function listEntry(subject: Partial<SpaceGrantFacts>): SpaceGrantFacts {
+  return {
+    toUserId: null,
+    toTrackId: null,
+    toCohortRole: null,
+    toSystemRole: null,
+    validFrom: new Date(0),
+    validTo: null,
+    ...subject,
+  };
+}
+
 let world: World;
 let url: string;
 
@@ -338,7 +420,7 @@ function positionsIn(snapshot: Record<string, unknown>) {
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   // A test that moves the clock must not leave it moved: every deadline
   // after it would be read against the wrong time.
   vi.useRealTimers();
@@ -350,6 +432,12 @@ beforeEach(() => {
   accounts.visitEnds.clear();
   accounts.admins.clear();
   accounts.looks.clear();
+  accounts.roles.clear();
+  accounts.failSpaces = false;
+  accounts.failMemberships = false;
+  openLibrary();
+  // A test that changed the doors must not leave them changed for the next.
+  await world.gateway.spacesChanged();
   store.positions.clear();
   store.failLoad = false;
   store.failSave = false;
@@ -3175,6 +3263,307 @@ describe('movement', () => {
       await expect(
         waitFor(conn, (m) => m.type === 'error'),
       ).resolves.toMatchObject({ code: 'BAD_MESSAGE' });
+      await leave(conn);
+    });
+  });
+
+  /**
+   * Who may step into a space. The library is the one drawn space: three
+   * steps right of the spawn. A refusal is answered like a wall, and only a
+   * step into another space is asked about.
+   */
+  describe('the doors', () => {
+    const step = async (
+      conn: ReturnType<typeof connect>,
+      direction: string,
+      seq: number,
+    ) => {
+      move(conn, direction, seq);
+      const answer = await waitFor(
+        conn,
+        (m) => m.type === 'moveResult' && m.seq === seq,
+      );
+      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
+      return answer;
+    };
+
+    /** Three steps right: the last is the one into the library. */
+    const walkToLibrary = async (conn: ReturnType<typeof connect>) => {
+      await step(conn, 'right', 1);
+      await step(conn, 'right', 2);
+      return step(conn, 'right', 3);
+    };
+
+    it('lets anybody into a normal space', async () => {
+      const conn = await arrive(person());
+
+      await expect(walkToLibrary(conn)).resolves.toMatchObject({
+        outcome: 'moved',
+        player: { x: 3, y: 0 },
+      });
+      await leave(conn);
+    });
+
+    it('refuses a step into a designated space they are not on the list of, turning them to face it', async () => {
+      designateLibrary();
+      await world.gateway.spacesChanged();
+      const conn = await arrive(person());
+
+      await expect(walkToLibrary(conn)).resolves.toMatchObject({
+        outcome: 'refused',
+        player: { x: 2, y: 0, facing: 'right' },
+      });
+      await leave(conn);
+    });
+
+    it('lets in somebody the list names, by person or by role', async () => {
+      const ada = person();
+      const grace = person();
+      designateLibrary(
+        listEntry({ toUserId: ada }),
+        listEntry({ toCohortRole: 'mentor' }),
+      );
+      accounts.roles.set(`${grace}:${COHORT}`, 'mentor');
+      await world.gateway.spacesChanged();
+
+      const first = await arrive(ada);
+      const second = await arrive(grace);
+      const third = await arrive(person());
+
+      await expect(walkToLibrary(first)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(second)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(third)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(first), leave(second), leave(third)]);
+    });
+
+    it('lets an admin in, whatever the list says', async () => {
+      const ada = person();
+      accounts.admins.add(ada);
+      designateLibrary();
+      await world.gateway.spacesChanged();
+      const conn = await arrive(ada);
+
+      await expect(walkToLibrary(conn)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await leave(conn);
+    });
+
+    it('opens to somebody the moment campus-api says they are on the list, without a reconnect', async () => {
+      const ada = person();
+      designateLibrary();
+      await world.gateway.spacesChanged();
+      const conn = await arrive(ada);
+      await expect(walkToLibrary(conn)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+
+      designateLibrary(listEntry({ toUserId: ada }));
+      for (const listener of accounts.spaceListeners) listener();
+      await world.gateway.spacesChanged();
+
+      await expect(step(conn, 'right', 4)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await leave(conn);
+    });
+
+    it('leaves somebody already inside where they are, and refuses them once they step out and back', async () => {
+      const conn = await arrive(person());
+      await walkToLibrary(conn);
+
+      designateLibrary();
+      await world.gateway.spacesChanged();
+
+      // Within the library: no door to pass.
+      await expect(step(conn, 'down', 4)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(step(conn, 'up', 5)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      // Out, then back: a door, and they are not on the list.
+      await expect(step(conn, 'left', 6)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(step(conn, 'right', 7)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await leave(conn);
+    });
+
+    it('starts somebody at the spawn whose saved place is in a space they may no longer enter', async () => {
+      const ada = person();
+      store.positions.set(positionKey({ userId: ada }), {
+        x: 3,
+        y: 1,
+        facing: 'left',
+      });
+      designateLibrary();
+      await world.gateway.spacesChanged();
+
+      const conn = await arrive(ada);
+      const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+
+      expect(positionsIn(snapshot)).toContainEqual(
+        expect.objectContaining({ userId: ada, x: 0, y: 0 }),
+      );
+      await leave(conn);
+    });
+
+    it('opens a drawn space the database has no row for to anybody', async () => {
+      accounts.spaces.delete('library');
+      await world.gateway.spacesChanged();
+      const conn = await arrive(person());
+
+      await expect(walkToLibrary(conn)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await leave(conn);
+    });
+
+    it('keeps a space with a row but no kind to admins: not set up yet', async () => {
+      const admin = person();
+      accounts.admins.add(admin);
+      accounts.spaces.set('library', {
+        kind: null,
+        access: SPACE_ACCESS.Designated,
+        retiredAt: null,
+        locked: false,
+        grants: [],
+      });
+      await world.gateway.spacesChanged();
+
+      const member = await arrive(person());
+      const staff = await arrive(admin);
+
+      await expect(walkToLibrary(member)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await expect(walkToLibrary(staff)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await Promise.all([leave(member), leave(staff)]);
+    });
+
+    it('keeps the doors as they were when the spaces cannot be read', async () => {
+      designateLibrary();
+      await world.gateway.spacesChanged();
+      accounts.failSpaces = true;
+      openLibrary();
+      await world.gateway.spacesChanged();
+
+      const conn = await arrive(person());
+
+      await expect(walkToLibrary(conn)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await leave(conn);
+    });
+
+    it('keeps a saved place when their membership could not be read', async () => {
+      const ada = person();
+      store.positions.set(positionKey({ userId: ada }), {
+        x: 3,
+        y: 1,
+        facing: 'left',
+      });
+      accounts.failMemberships = true;
+
+      const conn = await arrive(ada);
+      const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+
+      expect(positionsIn(snapshot)).toContainEqual(
+        expect.objectContaining({ userId: ada, x: 3, y: 1 }),
+      );
+      await leave(conn);
+    });
+
+    it('keeps every drawn space to admins until the spaces have been read once', async () => {
+      const own = await buildWorld(
+        env,
+        {
+          ...accounts,
+          spacesOn: async () => {
+            throw new Error('postgres is down');
+          },
+        },
+        store,
+        new MemoryPresenceStore(),
+        map,
+      );
+      await own.app.listen({ port: 0, host: '127.0.0.1' });
+      const { port } = own.app.server.address() as AddressInfo;
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`,
+        {
+          headers: {
+            origin: ORIGIN,
+            cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, person())}`,
+          },
+        },
+      );
+      const conn = { messages: [] as Record<string, unknown>[] };
+      ws.on('message', (raw) =>
+        conn.messages.push(
+          JSON.parse(raw.toString()) as Record<string, unknown>,
+        ),
+      );
+      try {
+        await waitFor(conn, (m) => m.type === 'snapshot');
+        const answers: Record<string, unknown>[] = [];
+        for (const seq of [1, 2, 3]) {
+          ws.send(JSON.stringify({ type: 'move', direction: 'right', seq }));
+          answers.push(
+            await waitFor(
+              conn,
+              (m) => m.type === 'moveResult' && m.seq === seq,
+            ),
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, env.WORLD_STEP_MS),
+          );
+        }
+
+        // The corridor is open; the library, unread, is not.
+        expect(answers.map((answer) => answer.outcome)).toEqual([
+          'moved',
+          'moved',
+          'refused',
+        ]);
+      } finally {
+        ws.close();
+        await own.gateway.stop();
+        await own.app.close();
+      }
+    });
+
+    it('reads a role that changed at the next heartbeat', async () => {
+      const ada = person();
+      designateLibrary(listEntry({ toCohortRole: 'professor' }));
+      await world.gateway.spacesChanged();
+      const conn = await arrive(ada);
+      await expect(walkToLibrary(conn)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+
+      accounts.roles.set(`${ada}:${COHORT}`, 'professor');
+      await expect
+        .poll(
+          () => world.gateway.connections.forUser(ada)[0]?.membership?.role,
+          { timeout: 5_000 },
+        )
+        .toBe('professor');
+
+      await expect(step(conn, 'right', 4)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
       await leave(conn);
     });
   });

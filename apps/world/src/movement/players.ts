@@ -1,5 +1,5 @@
 import type { Seat } from '../seat.js';
-import { Direction, step, walkable, type Grid } from './grid.js';
+import { Direction, step, walkable, type Grid, type Tile } from './grid.js';
 
 /** Where somebody stands, and which way they face. What other clients draw. */
 export interface Player {
@@ -13,9 +13,11 @@ export interface Player {
  * - `moved`: one tile in the direction asked.
  * - `blocked`: the tile is not walkable. They still turn to face it, as they
  *   would walking into a wall, so `changed` may be true.
+ * - `refused`: the tile is floor, in a space they may not enter. They turn
+ *   to face it, as at a wall.
  * - `too_fast`: over the walking speed. Nothing happens, not even the turn.
  */
-export type MoveOutcome = 'moved' | 'blocked' | 'too_fast';
+export type MoveOutcome = 'moved' | 'blocked' | 'refused' | 'too_fast';
 
 export interface MoveResult {
   outcome: MoveOutcome;
@@ -33,7 +35,7 @@ export interface MoveResult {
  * absorbs that without letting anybody outrun the speed for more than a
  * moment.
  */
-export const STEP_BURST = 3;
+export const STEP_BURST = 6;
 
 interface Held {
   player: Player;
@@ -202,7 +204,17 @@ export class Players {
     return count;
   }
 
-  move(seat: Seat, direction: Direction, now: number): MoveResult {
+  /**
+   * One step. `admits` is asked about a walkable tile before it is taken,
+   * and a no is a `refused`: who may stand where is the caller's to know,
+   * this only keeps people on the floor and to the walking speed.
+   */
+  move(
+    seat: Seat,
+    direction: Direction,
+    now: number,
+    admits: (target: Tile) => boolean = () => true,
+  ): MoveResult {
     const held = getIn(this.standing, seat);
     if (!held) {
       // Every connection joins before its first frame is read, so this is a
@@ -231,6 +243,13 @@ export class Players {
     if (!walkable(this.grid, target)) {
       return {
         outcome: 'blocked',
+        player: { ...held.player },
+        changed: turned,
+      };
+    }
+    if (!admits(target)) {
+      return {
+        outcome: 'refused',
         player: { ...held.player },
         changed: turned,
       };

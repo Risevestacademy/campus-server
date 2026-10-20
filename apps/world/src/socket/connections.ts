@@ -1,3 +1,4 @@
+import type { CohortMembershipFacts } from '@campus/space-access';
 import type { WebSocket } from 'ws';
 
 import type { Appearance } from '../infra/accounts.js';
@@ -18,6 +19,20 @@ export interface Connection {
   spaceKey: string;
   /** Lives and dies with this socket, unlike appearance. */
   availability: Availability;
+  /**
+   * `users.system_role` as the account row last said: read at the upgrade,
+   * then again every heartbeat. What a space's door reads for an admin, and
+   * for a list entry naming a system role.
+   */
+  systemRole: string;
+  /**
+   * Their `cohort_members` row in this socket's cohort, as it stood at the
+   * upgrade and then at each heartbeat; null if none was read. The door
+   * decides from it, at the moment of each step, whether it is live and what
+   * role and track it gives them. Never read for an admin, whom the door
+   * admits on their role.
+   */
+  membership: CohortMembershipFacts | null;
   socket: WebSocket;
   /**
    * When the access token this socket opened with runs out. Enforced only
