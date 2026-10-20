@@ -206,9 +206,9 @@ export function createAccountLookup(env: Env): AccountLookup {
     },
     async liveMemberships(seats, now): Promise<Set<string>> {
       // Every pair rides in one query, so an id the database cannot cast
-      // would spoil it for every socket rather than, as in the question one
-      // at a time, be quietly not-a-member. Dropped here, where holding
-      // nothing is what a non-id could only have meant anyway.
+      // would fail it for every socket at once. Dropped here, user and cohort
+      // alike, where holding nothing is what a non-id could only have meant
+      // anyway.
       const named = [
         ...new Map(
           seats

@@ -957,6 +957,12 @@ describe('re-checking the cohort a socket named', () => {
       await new Promise((resolve) => setTimeout(resolve, 2_500));
     } finally {
       accounts.liveMemberships = working;
+      // Closed before anything is asserted: a failure left them open, and
+      // four open sockets stall every test after this one.
+      for (const conn of open) {
+        conn.ws.close();
+        await conn.settled;
+      }
     }
 
     // Every sweep that ran asked once, and the one question carried every
@@ -970,11 +976,6 @@ describe('re-checking the cohort a socket named', () => {
           seatKey({ userId: 'guest-3', cohortId: COHORT }),
         ].sort(),
       );
-    }
-
-    for (const conn of open) {
-      conn.ws.close();
-      await conn.settled;
     }
   }, 15_000);
 });
