@@ -36,13 +36,17 @@ const accounts = {
           suspended: suspended.has(id),
           sessionEpoch: 0,
           admin: false,
+          systemRole: 'user',
           displayName: null,
           spriteKey: null,
         },
   liveSessions: async () => new Set<string>(),
   liveMembership: async () => false,
   liveMemberships: async () => new Set<string>(),
+  memberships: async () => new Map(),
+  spacesOn: async () => new Map(),
   onProfileChanged: async () => undefined,
+  onSpacesChanged: async () => undefined,
   close: async () => undefined,
 };
 

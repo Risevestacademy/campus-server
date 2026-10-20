@@ -1,4 +1,10 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
+import {
+  SPACE_ACCESS,
+  mayEnter,
+  type CohortMembershipFacts,
+  type SpaceFacts,
+} from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -42,6 +48,36 @@ import {
 } from './protocol.js';
 
 /**
+ * What a drawn space the database has no row for is taken as: a normal
+ * space, open to anybody in the campus. The map was published and the sync
+ * has not run since, and a room nobody has set up is not a reason to keep
+ * people out of it. The boot log names the space. A row with no kind is a
+ * different thing: an admin's space not yet set up, which admits admins only.
+ */
+const NOT_YET_SYNCED: SpaceFacts = {
+  kind: 'open',
+  access: SPACE_ACCESS.Normal,
+  retiredAt: null,
+  locked: false,
+  grants: [],
+};
+
+/**
+ * What every drawn space is taken as before the spaces have been read even
+ * once, as when the database is out of reach at boot: admins only. Not
+ * knowing whether a room is designated is not the same as knowing it has no
+ * row, and the safe guess about a list nobody has read is that you are not
+ * on it. The corridors stay open; the next read that succeeds opens the rest.
+ */
+const NOT_YET_READ: SpaceFacts = {
+  kind: null,
+  access: SPACE_ACCESS.Designated,
+  retiredAt: null,
+  locked: false,
+  grants: [],
+};
+
+/**
  * Closes a socket for one of the reasons in CLOSES, with the code that goes
  * with it. A reason is all a caller names, so the code it is sent with and
  * what the schema tells clients about it can never disagree.
@@ -58,6 +94,11 @@ export interface Gateway {
    * again, and tell their cohort if what to draw is different.
    */
   appearanceChanged(userId: string): Promise<void>;
+  /**
+   * campus-api says something a space's door reads has changed: read every
+   * space on the map again. Resolves once the doors answer from it.
+   */
+  spacesChanged(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -75,6 +116,85 @@ export function registerGateway(
     env.WORLD_STEP_MS,
     env.WORLD_RECONNECT_GRACE_SECONDS * 1000,
   );
+
+  /**
+   * Every space on this map as the database last said, by key: what each
+   * door decides from. Read whole, at boot, whenever campus-api says a space
+   * or a list changed, and every heartbeat in case that word went missing.
+   * A read that fails keeps what the doors had.
+   */
+  let doors: ReadonlyMap<string, SpaceFacts> = new Map();
+  /** Whether a read has ever succeeded, so a missing key means no row. */
+  let doorsRead = false;
+  let doorsLoading: Promise<void> | undefined;
+  let readDoorsAgain = false;
+
+  /**
+   * One read at a time. Asked again while one is running, the running one
+   * reads once more when it is done, so a change that lands mid-read is
+   * never left behind; everybody asking waits for the same read.
+   */
+  function reloadDoors(): Promise<void> {
+    if (doorsLoading) {
+      readDoorsAgain = true;
+      return doorsLoading;
+    }
+    doorsLoading = (async () => {
+      do {
+        readDoorsAgain = false;
+        try {
+          doors = await accounts.spacesOn(map.id, new Date());
+          doorsRead = true;
+        } catch (err) {
+          app.log.error(
+            { err },
+            'could not read the spaces; doors keep what they had',
+          );
+        }
+      } while (readDoorsAgain);
+    })().finally(() => {
+      doorsLoading = undefined;
+    });
+    return doorsLoading;
+  }
+
+  const doorsReady = reloadDoors().then(() => {
+    if (!doorsRead) {
+      return; // Already logged, and the heartbeat reads again.
+    }
+    const unknown = map.spaces.keys.filter((key) => !doors.has(key));
+    if (unknown.length > 0) {
+      app.log.warn(
+        { spaces: unknown },
+        'drawn spaces with no row in the database: open to everybody until the maps are synced',
+      );
+    }
+  });
+
+  /**
+   * Whether this socket's person may step into a space, at `now`. The map's
+   * default space is the way to everywhere else and the database keeps it
+   * normal, so it is never asked about.
+   */
+  function mayStepInto(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): boolean {
+    if (spaceKey === DEFAULT_SPACE_KEY) {
+      return true;
+    }
+    return mayEnter(
+      {
+        userId: connection.userId,
+        systemRole: connection.systemRole,
+        cohortId: connection.cohortId,
+        membership: connection.membership,
+      },
+      doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ),
+      now,
+    );
+  }
 
   /**
    * Who moved since the last tick, by account and cohort. Holds names, not
@@ -473,6 +593,7 @@ export function registerGateway(
       if (!account || account.suspended || account.admin) continue;
       toAsk.push(...open);
     }
+    let rows: Map<string, CohortMembershipFacts> | undefined;
     if (toAsk.length > 0) {
       try {
         members = await accounts.liveMemberships(toAsk, now);
@@ -481,6 +602,13 @@ export function registerGateway(
         // everybody off the campus. Membership stands as the last answer
         // left it, and the next sweep asks again.
         app.log.error({ err }, 'could not re-check membership');
+      }
+      // What the doors read: a track moved or a role changed reaches them
+      // here, a heartbeat late at worst. Kept as they were when unread.
+      try {
+        rows = await accounts.memberships(toAsk);
+      } catch (err) {
+        app.log.error({ err }, 'could not re-read memberships for the doors');
       }
     }
 
@@ -494,6 +622,10 @@ export function registerGateway(
           // process missed, while it was reconnecting to the database, is
           // caught here, a heartbeat late at worst.
           showAppearance(connection, account);
+          connection.systemRole = account.systemRole;
+          if (!account.admin && rows !== undefined) {
+            connection.membership = rows.get(seatKey(connection)) ?? null;
+          }
           // The cohort is asked again for everybody but an admin, who is
           // admitted on their role alone — from the row, as at the upgrade,
           // so a demotion lands on the socket already open too. The answer
@@ -646,6 +778,7 @@ export function registerGateway(
   const heartbeat = setInterval(() => {
     sweepUnwelcome();
     sweepSessions();
+    void reloadDoors();
     const now = Date.now();
     players.forgetExpired(now);
     for (const connection of connections.all()) {
@@ -802,6 +935,29 @@ export function registerGateway(
       }
     }
 
+    // Their membership row, for the doors, and the doors themselves on the
+    // first arrival after boot. An admin's row is never read: the door
+    // admits them on their role. A row that cannot be read leaves them in
+    // the corridors until the heartbeat reads it.
+    let membership: CohortMembershipFacts | null = null;
+    // Whether the doors know who this is. An admin needs no row; anybody
+    // else's has to have been read for a refusal to mean anything.
+    let membershipKnown = decision.ok && decision.account.admin;
+    if (decision.ok && !decision.account.admin) {
+      const seat = seatOf(decision);
+      try {
+        membership =
+          (await accounts.memberships([seat])).get(seatKey(seat)) ?? null;
+        membershipKnown = true;
+      } catch (err) {
+        app.log.warn(
+          { err, userId: seat.userId },
+          'could not read membership for the doors, reading it again at the heartbeat',
+        );
+      }
+    }
+    await doorsReady;
+
     if (closed || ws.readyState !== ws.OPEN) {
       return;
     }
@@ -827,6 +983,8 @@ export function registerGateway(
       },
       // Where the avatar stands is known once it has joined, below.
       spaceKey: DEFAULT_SPACE_KEY,
+      systemRole: decision.account.systemRole,
+      membership,
       availability: new Availability(
         replacing?.availability.chosen ?? Status.Available,
         Date.now(),
@@ -844,6 +1002,23 @@ export function registerGateway(
     // can never arrive for a player who is not standing anywhere yet. Another
     // socket for the same account and cohort — loaded while this one waited
     // — has already placed the avatar, and this one takes it over.
+    // A saved place inside a space they may no longer enter is not where
+    // they come back to: they start at the spawn, as on a first visit. Only
+    // when their row and the spaces were both read: a read that failed says
+    // nothing about where they may stand, and the place would be lost for
+    // good once the spawn was saved over it.
+    if (
+      saved &&
+      membershipKnown &&
+      doorsRead &&
+      !mayStepInto(connection, spaceAt(map.spaces, saved), new Date())
+    ) {
+      app.log.info(
+        { userId: connection.userId, cohortId: connection.cohortId },
+        'saved position is in a space they may not enter, starting at the spawn',
+      );
+      saved = undefined;
+    }
     const arriving = !players.has(connection);
     const player = players.join(connection, Date.now(), saved);
     connection.spaceKey = spaceAt(map.spaces, player);
@@ -968,7 +1143,16 @@ export function registerGateway(
         case 'move': {
           noteActivity(connection);
           const { direction, seq } = result.message;
-          const moved = players.move(connection, direction, Date.now());
+          const now = Date.now();
+          // Asked only on a step into another space: somebody already inside
+          // stays until they leave, whatever has changed since they came in.
+          const moved = players.move(connection, direction, now, (target) => {
+            const into = spaceAt(map.spaces, target);
+            return (
+              into === connection.spaceKey ||
+              mayStepInto(connection, into, new Date(now))
+            );
+          });
           send(ws, {
             type: 'moveResult',
             seq,
@@ -1067,6 +1251,7 @@ export function registerGateway(
         }
       }
     },
+    spacesChanged: reloadDoors,
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       clearInterval(tick);

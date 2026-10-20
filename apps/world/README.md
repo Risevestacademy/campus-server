@@ -54,6 +54,13 @@ server decides every position.
     middle (the smaller, where two overlap, then the key that sorts first),
     or the map's default space, `_default`, for the corridors and grounds.
     Worked out once at load (`movement/spaces.ts`)
+  - every step into another space asks `mayEnter` from
+    `@campus/space-access`: a normal space admits anybody in the campus, a
+    designated one only the people its list names, admins anything. A no is
+    a `refused` move. The spaces and their lists are read from campus-api's
+    tables at boot, again whenever campus-api notifies `spaces_changed`, and
+    every heartbeat; each person's role and track at connect and every
+    heartbeat. Somebody already inside stays until they step out
   - the server enforces walking speed
   - one avatar per account in each cohort, walked by whichever socket holds
     its place there
@@ -69,7 +76,8 @@ server decides every position.
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
 
-Not yet: more than one map, spaces, portals, live positions shared across
+Not yet: more than one map, locking a space or asking to enter one, portals,
+live positions shared across
 instances (a player who moves to another instance starts from their last
 saved position), or audio and video rooms.
 

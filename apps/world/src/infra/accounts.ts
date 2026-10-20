@@ -3,6 +3,12 @@ import {
   hasAdminPowers,
   spriteKeyOrNone,
 } from '@campus/session';
+import {
+  SPACES_CHANGED_CHANNEL,
+  type CohortMembershipFacts,
+  type SpaceFacts,
+  type SpaceGrantFacts,
+} from '@campus/space-access';
 import postgres from 'postgres';
 
 import { seatKey, type Seat } from '../seat.js';
@@ -33,6 +39,29 @@ export interface AccountLookup {
    * Answered as `seatKey` of the live ones.
    */
   liveMemberships(seats: readonly Seat[], now: Date): Promise<Set<string>>;
+  /**
+   * Each seat's `cohort_members` row as it stands, ended or not: what a
+   * space's door reads their role and track from, and decides for itself
+   * whether it is live. One query for every seat, answered by `seatKey`; a
+   * seat with no row is left out.
+   */
+  memberships(
+    seats: readonly Seat[],
+  ): Promise<Map<string, CohortMembershipFacts>>;
+  /**
+   * Every space on a map, by key, with the entries on its list that have
+   * not ended by `now`: what the door needs to decide who may step in. Two
+   * queries however many spaces there are. `locked` is always false here:
+   * world holds locks, not the database.
+   */
+  spacesOn(mapKey: string, now: Date): Promise<Map<string, SpaceFacts>>;
+  /**
+   * Calls `listener` whenever campus-api says something a space's door reads
+   * has changed, and whenever listening (re)starts, since a change made while
+   * it was not listening reached nobody. Resolves once listening; rejects if
+   * it could not start.
+   */
+  onSpacesChanged(listener: () => void): Promise<void>;
   /**
    * Calls `listener` with an account id whenever campus-api says that
    * account's sprite or display name changed. Resolves once listening;
@@ -66,6 +95,8 @@ export interface Account extends Appearance {
   sessionEpoch: number;
   /** Admins bypass cohort gating, as they do at campus-api's sign-in gate. */
   admin: boolean;
+  /** `users.system_role` as text, which a space's list may name. */
+  systemRole: string;
 }
 
 /**
@@ -125,6 +156,33 @@ export const LIVE_MEMBERSHIPS_QUERY = `select user_id, cohort_id from cohort_mem
     and ${MEMBERSHIP_IS_LIVE}`;
 
 /**
+ * A seat's membership row as it stands, many seats at once. No liveness here:
+ * the door decides that with `isLiveMembership`, at the moment of the step.
+ * $1 user ids and $2 cohort ids, paired by position.
+ */
+export const MEMBERSHIP_ROWS_QUERY = `select user_id, cohort_id, role, left_at, status, access_expires_at, cohort_track_id
+  from cohort_members
+  where (user_id, cohort_id) in (
+    select seat.user_id, seat.cohort_id
+    from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
+  )`;
+
+/** Every space on one map, retired ones included. $1 the map's key. */
+export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.kind, spaces.access, spaces.retired_at
+  from spaces
+  join maps on maps.id = spaces.map_id
+  where maps.key = $1`;
+
+/**
+ * The entries on those spaces' lists that have not ended. One ended stays
+ * ended, so leaving it out loses nothing. $1 space ids, $2 now.
+ */
+export const SPACE_LISTS_QUERY = `select space_id, user_id, cohort_track_id, cohort_role, system_role, valid_from, valid_to
+  from space_memberships
+  where space_id = any($1::uuid[])
+    and (valid_to is null or valid_to > $2)`;
+
+/**
  * Ids come from campus-api, so they are UUIDs. Anything else is dropped before
  * it reaches a query, where it would fail the cast rather than return nothing.
  */
@@ -172,6 +230,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             suspended: row.status === 'suspended',
             sessionEpoch: row.session_epoch,
             admin: hasAdminPowers(row.system_role),
+            systemRole: row.system_role,
             displayName: row.display_name,
             spriteKey: spriteKeyOrNone(row.sprite_key),
           }
@@ -234,6 +293,109 @@ export function createAccountLookup(env: Env): AccountLookup {
         rows.map((row) =>
           seatKey({ userId: row.user_id, cohortId: row.cohort_id }),
         ),
+      );
+    },
+    async memberships(seats): Promise<Map<string, CohortMembershipFacts>> {
+      // As in liveMemberships: a pair the database cannot cast would fail
+      // the query for every socket, so it is dropped here.
+      const named = [
+        ...new Map(
+          seats
+            .filter(
+              ({ userId, cohortId }) =>
+                looksLikeId(userId) && looksLikeId(cohortId),
+            )
+            .map((seat) => [seatKey(seat), seat]),
+        ).values(),
+      ];
+      if (named.length === 0) {
+        return new Map();
+      }
+      const rows = await sql.unsafe<
+        {
+          user_id: string;
+          cohort_id: string;
+          role: string;
+          left_at: Date | null;
+          status: string | null;
+          access_expires_at: Date | null;
+          cohort_track_id: string | null;
+        }[]
+      >(MEMBERSHIP_ROWS_QUERY, [
+        named.map((seat) => seat.userId),
+        named.map((seat) => seat.cohortId),
+      ]);
+      return new Map(
+        rows.map((row) => [
+          seatKey({ userId: row.user_id, cohortId: row.cohort_id }),
+          {
+            cohortId: row.cohort_id,
+            role: row.role,
+            leftAt: row.left_at,
+            status: row.status,
+            accessExpiresAt: row.access_expires_at,
+            trackId: row.cohort_track_id,
+          },
+        ]),
+      );
+    },
+    async spacesOn(mapKey, now): Promise<Map<string, SpaceFacts>> {
+      const spaces = await sql.unsafe<
+        {
+          id: string;
+          key: string;
+          kind: string | null;
+          access: string;
+          retired_at: Date | null;
+        }[]
+      >(SPACES_QUERY, [mapKey]);
+      const lists = new Map<string, SpaceGrantFacts[]>(
+        spaces.map((space) => [space.id, []]),
+      );
+      if (spaces.length > 0) {
+        const entries = await sql.unsafe<
+          {
+            space_id: string;
+            user_id: string | null;
+            cohort_track_id: string | null;
+            cohort_role: string | null;
+            system_role: string | null;
+            valid_from: Date;
+            valid_to: Date | null;
+          }[]
+        >(SPACE_LISTS_QUERY, [spaces.map((space) => space.id), now]);
+        for (const entry of entries) {
+          lists.get(entry.space_id)?.push({
+            toUserId: entry.user_id,
+            toTrackId: entry.cohort_track_id,
+            toCohortRole: entry.cohort_role,
+            toSystemRole: entry.system_role,
+            validFrom: entry.valid_from,
+            validTo: entry.valid_to,
+          });
+        }
+      }
+      return new Map(
+        spaces.map((space) => [
+          space.key,
+          {
+            kind: space.kind,
+            access: space.access,
+            retiredAt: space.retired_at,
+            locked: false,
+            grants: lists.get(space.id) ?? [],
+          },
+        ]),
+      );
+    },
+    async onSpacesChanged(listener): Promise<void> {
+      // Called on every notification, and again each time the driver
+      // subscribes: a change made while it was reconnecting sent its word to
+      // nobody, so reading again on the way back in is what catches it.
+      await sql.listen(
+        SPACES_CHANGED_CHANNEL,
+        () => listener(),
+        () => listener(),
       );
     },
     async close(): Promise<void> {

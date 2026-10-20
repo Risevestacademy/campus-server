@@ -13,6 +13,9 @@ export default defineConfig({
       '@campus/session': fileURLToPath(
         new URL('../../packages/session/src/index.ts', import.meta.url),
       ),
+      '@campus/space-access': fileURLToPath(
+        new URL('../../packages/space-access/src/index.ts', import.meta.url),
+      ),
     },
   },
   test: {

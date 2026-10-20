@@ -10,9 +10,9 @@ import {
 import type { AuditContext } from '../audit/audit-log.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
-import { cohorts, cohortTracks } from '../cohorts/schema.js';
+import { CohortRole, cohorts, cohortTracks } from '../cohorts/schema.js';
 import { tracks } from '../tracks/schema.js';
-import { users } from '../users/schema.js';
+import { SystemRole, users } from '../users/schema.js';
 import type {
   GrantSpaceMembershipDto,
   SpaceMembershipResponseDto,
@@ -30,6 +30,7 @@ import {
   SpaceRetiredException,
 } from './maps.exceptions.js';
 import { spaceMemberships, spaces } from './schema.js';
+import { tellWorld } from './tell-world.js';
 
 /**
  * A membership row as the shared rule reads it: the span, and who it is to.
@@ -41,12 +42,16 @@ import { spaceMemberships, spaces } from './schema.js';
 function windowOf(row: {
   userId: string | null;
   cohortTrackId: string | null;
+  cohortRole: string | null;
+  systemRole: string | null;
   validFrom: Date;
   validTo: Date | null;
 }): SpaceGrantFacts {
   return {
     toUserId: row.userId,
     toTrackId: row.cohortTrackId,
+    toCohortRole: row.cohortRole,
+    toSystemRole: row.systemRole,
     validFrom: row.validFrom,
     validTo: row.validTo,
   };
@@ -109,11 +114,20 @@ export async function releaseTrackGrants(
   return { released: true, clearedIds: cleared.map((row) => row.id) };
 }
 
+/** How a refusal names the subject that already holds a live grant. */
+const HOLDER: Record<SpaceMembershipSubjectType, string> = {
+  [SpaceMembershipSubjectType.User]: 'That person',
+  [SpaceMembershipSubjectType.CohortTrack]: 'That track',
+  [SpaceMembershipSubjectType.CohortRole]: 'That cohort role',
+  [SpaceMembershipSubjectType.SystemRole]: 'That system role',
+};
+
 /**
- * Granting and ending access to a space, and reading who has it: the admin
- * side of the `invite` and `request` settings, whose entry rule this
- * answers from — `mayEnter` in @campus/space-access counts a grant between
- * its start and its end, and this is what puts those spans in place.
+ * Granting and ending access to a space, and reading who has it: the
+ * entries on a designated space's list, which `mayEnter` in
+ * @campus/space-access counts between their start and their end. An entry
+ * on a normal space is taken but does nothing there; it counts if an admin
+ * later makes the space designated.
  *
  * Every write is one transaction of row plus audit entry, so the log never
  * claims something that did not happen nor misses something that did.
@@ -144,10 +158,15 @@ export class SpaceMembershipsService {
   ): Promise<SpaceMembershipResponseDto> {
     const userId = dto.userId ?? null;
     const cohortTrackId = dto.cohortTrackId ?? null;
-    if ((userId === null) === (cohortTrackId === null)) {
+    const cohortRole = dto.cohortRole ?? null;
+    const systemRole = dto.systemRole ?? null;
+    const named = [userId, cohortTrackId, cohortRole, systemRole].filter(
+      (subject) => subject !== null,
+    );
+    if (named.length !== 1) {
       throw new SpaceMembershipInvalidArgumentException(
-        'A grant is to exactly one of a person or a cohort track',
-        { userId, cohortTrackId },
+        'A grant is to exactly one of a person, a cohort track, a cohort role or a system role',
+        { userId, cohortTrackId, cohortRole, systemRole },
       );
     }
     const validTo = dto.validTo === undefined ? null : new Date(dto.validTo);
@@ -175,6 +194,13 @@ export class SpaceMembershipsService {
       }
 
       const subject = await (async (): Promise<SpaceMembershipSubjectDto> => {
+        // A role needs nothing looked up: the enum is the whole of it.
+        if (cohortRole !== null) {
+          return { type: SpaceMembershipSubjectType.CohortRole, cohortRole };
+        }
+        if (systemRole !== null) {
+          return { type: SpaceMembershipSubjectType.SystemRole, systemRole };
+        }
         if (userId !== null) {
           const [user] = await tx
             .select({
@@ -243,15 +269,17 @@ export class SpaceMembershipsService {
             eq(spaceMemberships.spaceId, spaceId),
             userId !== null
               ? eq(spaceMemberships.userId, userId)
-              : eq(spaceMemberships.cohortTrackId, cohortTrackId as string),
+              : cohortTrackId !== null
+                ? eq(spaceMemberships.cohortTrackId, cohortTrackId)
+                : cohortRole !== null
+                  ? eq(spaceMemberships.cohortRole, cohortRole)
+                  : eq(spaceMemberships.systemRole, systemRole as SystemRole),
           ),
         );
       const live = held.find((row) => isLiveGrant(windowOf(row), now));
       if (live) {
         throw new SpaceMembershipAlreadyLiveException(
-          userId !== null
-            ? `That person already holds a live grant on this space`
-            : `That track already holds a live grant on this space`,
+          `${HOLDER[subject.type]} already holds a live grant on this space`,
           { membershipId: live.id, validTo: live.validTo },
         );
       }
@@ -262,12 +290,15 @@ export class SpaceMembershipsService {
           spaceId,
           userId,
           cohortTrackId,
+          cohortRole,
+          systemRole,
           grantedBy: audit.actorUserId,
           validFrom: now,
           validTo,
         })
         .returning();
 
+      await tellWorld(tx);
       await writeAuditEntry(tx, {
         ...audit,
         spaceId,
@@ -276,6 +307,8 @@ export class SpaceMembershipsService {
         details: {
           userId: row.userId,
           cohortTrackId: row.cohortTrackId,
+          cohortRole: row.cohortRole,
+          systemRole: row.systemRole,
           validFrom: row.validFrom,
           validTo: row.validTo,
         },
@@ -352,6 +385,7 @@ export class SpaceMembershipsService {
         .set({ validTo: closedAt })
         .where(eq(spaceMemberships.id, row.id));
 
+      await tellWorld(tx);
       await writeAuditEntry(tx, {
         ...audit,
         spaceId,
@@ -387,6 +421,8 @@ export class SpaceMembershipsService {
         spaceId: spaceMemberships.spaceId,
         userId: spaceMemberships.userId,
         cohortTrackId: spaceMemberships.cohortTrackId,
+        cohortRole: spaceMemberships.cohortRole,
+        systemRole: spaceMemberships.systemRole,
         grantedBy: spaceMemberships.grantedBy,
         validFrom: spaceMemberships.validFrom,
         validTo: spaceMemberships.validTo,
@@ -398,9 +434,9 @@ export class SpaceMembershipsService {
         cohortName: cohorts.name,
       })
       .from(spaceMemberships)
-      // Left joins because one side of the XOR is always null: a person's
-      // grant fills the user columns and a track's the rest, and either way
-      // every row comes back in one query.
+      // Left joins because only one subject is ever set: a person's entry
+      // fills the user columns, a track's the track and cohort ones, and a
+      // role's none of them; every row comes back in one query either way.
       .leftJoin(users, eq(spaceMemberships.userId, users.id))
       .leftJoin(
         cohortTracks,
@@ -414,26 +450,54 @@ export class SpaceMembershipsService {
     return rows.map((row) => ({
       id: row.id,
       spaceId: row.spaceId,
-      subject:
-        row.userId !== null
-          ? {
-              type: SpaceMembershipSubjectType.User,
-              userId: row.userId,
-              email: row.email,
-              displayName: row.displayName,
-            }
-          : {
-              type: SpaceMembershipSubjectType.CohortTrack,
-              cohortTrackId: row.cohortTrackId as string,
-              trackName: row.trackName,
-              trackCode: row.trackCode,
-              cohortId: row.cohortId as string,
-              cohortName: row.cohortName,
-            },
+      subject: subjectOf(row),
       grantedBy: row.grantedBy,
       validFrom: row.validFrom,
       validTo: row.validTo,
       live: isLiveGrant(windowOf(row), now),
     }));
   }
+}
+
+/** Which subject a listed row names, with what there is to say about it. */
+function subjectOf(row: {
+  userId: string | null;
+  cohortTrackId: string | null;
+  cohortRole: CohortRole | null;
+  systemRole: SystemRole | null;
+  email: string | null;
+  displayName: string | null;
+  trackName: string | null;
+  trackCode: string | null;
+  cohortId: string | null;
+  cohortName: string | null;
+}): SpaceMembershipSubjectDto {
+  if (row.userId !== null) {
+    return {
+      type: SpaceMembershipSubjectType.User,
+      userId: row.userId,
+      email: row.email,
+      displayName: row.displayName,
+    };
+  }
+  if (row.cohortTrackId !== null) {
+    return {
+      type: SpaceMembershipSubjectType.CohortTrack,
+      cohortTrackId: row.cohortTrackId,
+      trackName: row.trackName,
+      trackCode: row.trackCode,
+      cohortId: row.cohortId as string,
+      cohortName: row.cohortName,
+    };
+  }
+  if (row.cohortRole !== null) {
+    return {
+      type: SpaceMembershipSubjectType.CohortRole,
+      cohortRole: row.cohortRole,
+    };
+  }
+  return {
+    type: SpaceMembershipSubjectType.SystemRole,
+    systemRole: row.systemRole as SystemRole,
+  };
 }

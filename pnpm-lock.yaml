@@ -213,6 +213,9 @@ importers:
       '@campus/session':
         specifier: workspace:*
         version: link:../../packages/session
+      '@campus/space-access':
+        specifier: workspace:*
+        version: link:../../packages/space-access
       '@fastify/websocket':
         specifier: ^11.3.1
         version: 11.3.1

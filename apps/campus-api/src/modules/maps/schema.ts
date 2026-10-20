@@ -13,8 +13,8 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-import { cohortTracks } from '../cohorts/schema.js';
-import { users } from '../users/schema.js';
+import { cohortRoleEnum, cohortTracks } from '../cohorts/schema.js';
+import { systemRoleEnum, users } from '../users/schema.js';
 
 /*
  * What the database knows of the campus map: that a map and its spaces
@@ -47,45 +47,28 @@ export enum SpaceKind {
 }
 
 /**
- * How people in a space hear one another: by distance, everybody in the
- * space alike, or a few speaking to everybody.
+ * How people in a space hear one another: by distance, or everybody in the
+ * space alike. Sound never crosses a space's edge either way. There is no
+ * broadcast space: an admin speaks to the whole campus instead.
  */
 export enum AudioMode {
   Proximity = 'proximity',
   Boundary = 'boundary',
-  Broadcast = 'broadcast',
 }
 
-/** Who may walk in. `invite` and `request` are resolved by space_memberships. */
+/**
+ * Who may walk in. A `normal` space admits anybody in the campus, unless the
+ * people inside have locked it; a `designated` one admits whoever its list in
+ * space_memberships names.
+ */
 export enum SpaceAccess {
-  Open = 'open',
-  Cohort = 'cohort',
-  Invite = 'invite',
-  Request = 'request',
-}
-
-/** What somebody standing outside a space is shown of the people inside. */
-export enum OutsiderVisibility {
-  Hidden = 'hidden',
-  AvatarsVisible = 'avatars_visible',
-  Full = 'full',
-}
-
-/** Who may speak or share in a space. */
-export enum PublishPolicy {
-  All = 'all',
-  Staff = 'staff',
-  GrantOnly = 'grant_only',
+  Normal = 'normal',
+  Designated = 'designated',
 }
 
 export const spaceKindEnum = pgEnum('space_kind', SpaceKind);
 export const audioModeEnum = pgEnum('audio_mode', AudioMode);
 export const spaceAccessEnum = pgEnum('space_access', SpaceAccess);
-export const outsiderVisibilityEnum = pgEnum(
-  'outsider_visibility',
-  OutsiderVisibility,
-);
-export const publishPolicyEnum = pgEnum('publish_policy', PublishPolicy);
 
 export const maps = pgTable(
   'maps',
@@ -154,14 +137,8 @@ export const spaces = pgTable(
 
     audioMode: audioModeEnum('audio_mode').notNull(),
     access: spaceAccessEnum('access').notNull(),
-    outsiderVisibility: outsiderVisibilityEnum('outsider_visibility')
-      .notNull()
-      .default(OutsiderVisibility.AvatarsVisible),
     /** Null for no limit. */
     capacity: integer('capacity'),
-    publishPolicy: publishPolicyEnum('publish_policy')
-      .notNull()
-      .default(PublishPolicy.All),
 
     /**
      * In tiles. How far a voice carries: the client fades it to nothing
@@ -220,14 +197,8 @@ export const spaces = pgTable(
     // grounds. Gating it would shut people out of the way to everywhere
     // else.
     check(
-      'spaces_default_is_open',
-      sql`not ${table.isMapDefault} or ${table.access} = ${sql.raw(`'${SpaceAccess.Open}'`)}`,
-    ),
-    // A broadcast is a few people speaking to a room. With everybody allowed
-    // to publish it is not one.
-    check(
-      'spaces_broadcast_restricts_publish',
-      sql`${table.audioMode} <> ${sql.raw(`'${AudioMode.Broadcast}'`)} or ${table.publishPolicy} <> ${sql.raw(`'${PublishPolicy.All}'`)}`,
+      'spaces_default_is_normal',
+      sql`not ${table.isMapDefault} or ${table.access} = ${sql.raw(`'${SpaceAccess.Normal}'`)}`,
     ),
     check(
       'spaces_capacity_positive',
@@ -237,9 +208,13 @@ export const spaces = pgTable(
 );
 
 /**
- * Somebody's standing permission to enter a space: a person, or everybody on
- * a cohort's track. What the `invite` and `request` kinds of access are
- * answered from.
+ * One entry on a designated space's list: a person, everybody on a cohort's
+ * track, everybody holding a cohort role, or everybody holding a system role.
+ * Any one live entry that names somebody lets them in.
+ *
+ * A space belongs to no cohort, so an entry naming a role reaches that role
+ * in every cohort's copy of the campus; one naming a track reaches only the
+ * cohort that runs it.
  *
  * It holds a span, not a switch: ending access sets valid_to, and the row
  * stays as the record that they once had it — until, for a grant to a
@@ -255,6 +230,10 @@ export const spaceMemberships = pgTable(
       .references(() => spaces.id),
     cohortTrackId: uuid('cohort_track_id').references(() => cohortTracks.id),
     userId: uuid('user_id').references(() => users.id),
+    /** Everybody holding this role in the cohort being walked. */
+    cohortRole: cohortRoleEnum('cohort_role'),
+    /** Everybody holding this system role, whichever cohort they walk. */
+    systemRole: systemRoleEnum('system_role'),
     /** Null when no person granted it: the seed, a sync. */
     grantedBy: uuid('granted_by').references(() => users.id),
     validFrom: timestamp('valid_from', { withTimezone: true })
@@ -270,12 +249,11 @@ export const spaceMemberships = pgTable(
     index('space_memberships_space_idx').on(table.spaceId),
     index('space_memberships_user_idx').on(table.userId),
     index('space_memberships_cohort_track_idx').on(table.cohortTrackId),
-    // A grant is to one person or to one track, never both and never
-    // neither: with both it is unclear whose access ends when one of them
-    // does, and with neither it admits nobody.
+    // An entry names exactly one subject: with two it is unclear whose
+    // access ends when one of them does, and with none it admits nobody.
     check(
       'space_memberships_one_subject',
-      sql`(${table.cohortTrackId} is null) <> (${table.userId} is null)`,
+      sql`num_nonnulls(${table.userId}, ${table.cohortTrackId}, ${table.cohortRole}, ${table.systemRole}) = 1`,
     ),
     check(
       'space_memberships_valid_window',

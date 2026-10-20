@@ -65,6 +65,46 @@ describe('Players', () => {
     expect(result.player).toMatchObject({ x: 0, y: 0 });
   });
 
+  /**
+   * Who may stand where is the caller's to say: a floor tile it turns down is
+   * refused like a wall, turn and all, and the step's time is spent.
+   */
+  it('refuses a floor tile the caller will not admit, turning them toward it', () => {
+    const world = players();
+    world.join(at(), 0);
+    const asked: { x: number; y: number }[] = [];
+
+    expect(
+      world.move(at(), 'right', 0, (target) => {
+        asked.push(target);
+        return false;
+      }),
+    ).toMatchObject({
+      outcome: 'refused',
+      player: { x: 0, y: 0, facing: 'right' },
+      changed: true,
+    });
+    expect(asked).toEqual([{ x: 1, y: 0 }]);
+    expect(world.move(at(), 'right', 1_000, () => true)).toMatchObject({
+      outcome: 'moved',
+      player: { x: 1, y: 0 },
+    });
+  });
+
+  it('never asks about a wall: a wall is blocked before anybody is', () => {
+    const world = players();
+    world.join(at(), 0);
+    let asked = false;
+
+    expect(
+      world.move(at(), 'left', 0, () => {
+        asked = true;
+        return false;
+      }),
+    ).toMatchObject({ outcome: 'blocked' });
+    expect(asked).toBe(false);
+  });
+
   /** Walking into a wall still turns you to face it, and others should see that. */
   it('turns toward a blocked tile, and reports the turn as a change', () => {
     const world = players();
@@ -115,7 +155,11 @@ describe('Players', () => {
   });
 
   it('allows a short burst of steps sent together', () => {
-    const world = players();
+    // Wide enough that the whole burst is floor, whatever its size.
+    const world = new Players(
+      { width: STEP_BURST + 1, height: 1, spawn: { x: 0, y: 0 } },
+      STEP_MS,
+    );
     world.join(at(), 0);
 
     const outcomes = Array.from(

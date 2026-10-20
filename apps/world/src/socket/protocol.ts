@@ -76,13 +76,17 @@ export const Avatar = z
       'as a `statusChanged`.',
   });
 
-export const MoveOutcome = z.enum(['moved', 'blocked', 'too_fast']).meta({
-  id: 'MoveOutcome',
-  description:
-    'moved: one tile in the direction asked. blocked: the tile is not walkable; ' +
-    'they turn to face it without moving. too_fast: over walking speed; nothing ' +
-    'happens, not even the turn.',
-});
+export const MoveOutcome = z
+  .enum(['moved', 'blocked', 'refused', 'too_fast'])
+  .meta({
+    id: 'MoveOutcome',
+    description:
+      'moved: one tile in the direction asked. blocked: the tile is not ' +
+      'walkable; they turn to face it without moving. refused: the tile is ' +
+      'floor, but in a space they may not enter (designated, and not on its ' +
+      'list); they turn to face it without moving. too_fast: over walking ' +
+      'speed; nothing happens, not even the turn.',
+  });
 
 /**
  * No TOO_LARGE: ws enforces maxPayload itself and closes the socket with

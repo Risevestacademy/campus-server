@@ -1,4 +1,5 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -18,10 +19,10 @@ import type {
 } from './published-maps.js';
 import {
   AudioMode,
-  PublishPolicy,
   SpaceAccess,
   SpaceKind,
   maps,
+  spaceMemberships,
   spaces,
 } from './schema.js';
 
@@ -87,6 +88,20 @@ const spacesOf = async (mapKey: string) =>
       .where(eq(maps.key, mapKey))
       .orderBy(asc(spaces.key))
   ).map((row) => `${row.key}[${row.kind ?? ''}]${row.retired ? '†' : ''}`);
+
+/** The cohort roles on a space's list, in text order. */
+const listOf = async (mapKey: string, key: string) => {
+  const { id } = await spaceRow(mapKey, key);
+  const rows = await db
+    .select({
+      cohortRole: spaceMemberships.cohortRole,
+      grantedBy: spaceMemberships.grantedBy,
+    })
+    .from(spaceMemberships)
+    .where(eq(spaceMemberships.spaceId, id));
+  expect(rows.every((row) => row.grantedBy === null)).toBe(true);
+  return rows.map((row) => row.cohortRole).sort();
+};
 
 const spaceRow = async (mapKey: string, key: string) => {
   const [row] = await db
@@ -184,30 +199,57 @@ describe('a first sync', () => {
         space('library', 'open'),
         space('room_1', 'meeting_room'),
         space('se', 'classroom'),
+        space('pod', 'mentor_pod'),
         space('hall', 'town_hall'),
       ]),
     ]);
 
     await expect(spaceRow('campus', 'library')).resolves.toMatchObject({
       audioMode: AudioMode.Proximity,
-      access: SpaceAccess.Open,
-      publishPolicy: PublishPolicy.All,
+      access: SpaceAccess.Normal,
     });
     await expect(spaceRow('campus', 'room_1')).resolves.toMatchObject({
       audioMode: AudioMode.Boundary,
-      access: SpaceAccess.Open,
+      access: SpaceAccess.Normal,
     });
     await expect(spaceRow('campus', 'se')).resolves.toMatchObject({
       audioMode: AudioMode.Boundary,
-      access: SpaceAccess.Cohort,
+      access: SpaceAccess.Designated,
     });
-    // A broadcast where everybody may speak is not one, and the database
-    // refuses it: the town hall has to start with staff speaking.
     await expect(spaceRow('campus', 'hall')).resolves.toMatchObject({
-      audioMode: AudioMode.Broadcast,
-      access: SpaceAccess.Open,
-      publishPolicy: PublishPolicy.Staff,
+      audioMode: AudioMode.Boundary,
+      access: SpaceAccess.Normal,
     });
+  });
+
+  it('starts a designated space with the list its kind starts with', async () => {
+    await sync([
+      map('campus', [
+        space('se', 'classroom'),
+        space('pod', 'mentor_pod'),
+        space('room_1', 'meeting_room'),
+      ]),
+    ]);
+
+    // The people the cohort setting let in: everybody but its guests.
+    await expect(listOf('campus', 'se')).resolves.toEqual([
+      'mentor',
+      'professor',
+      'student',
+    ]);
+    // Admins only, until an admin adds somebody.
+    await expect(listOf('campus', 'pod')).resolves.toEqual([]);
+    await expect(listOf('campus', 'room_1')).resolves.toEqual([]);
+  });
+
+  it('writes a list only for a space it adds, never again on a later sync', async () => {
+    await sync([map('campus', [space('se', 'classroom')])]);
+    const { id } = await spaceRow('campus', 'se');
+    await db.delete(spaceMemberships).where(eq(spaceMemberships.spaceId, id));
+
+    await sync([map('campus', [space('se', 'classroom')])]);
+
+    await expect(listOf('campus', 'se')).resolves.toEqual([]);
   });
 
   it('gives every kind there is settings the database will take', async () => {
@@ -274,7 +316,7 @@ describe('the kind a map suggests', () => {
       // Closed as far as anything reading `access` alone can tell.
       await expect(spaceRow('campus', 'nook')).resolves.toMatchObject({
         kind: null,
-        access: SpaceAccess.Invite,
+        access: SpaceAccess.Designated,
       });
     },
   );
@@ -388,7 +430,7 @@ describe('syncing again', () => {
       .set({
         name: 'Reading Room',
         kind: SpaceKind.Classroom,
-        access: SpaceAccess.Invite,
+        access: SpaceAccess.Designated,
         audioMode: AudioMode.Boundary,
         capacity: 12,
       })
@@ -405,7 +447,7 @@ describe('syncing again', () => {
     await expect(spaceRow('campus', 'library')).resolves.toMatchObject({
       name: 'Reading Room',
       kind: SpaceKind.Classroom,
-      access: SpaceAccess.Invite,
+      access: SpaceAccess.Designated,
       audioMode: AudioMode.Boundary,
       capacity: 12,
     });
@@ -456,7 +498,7 @@ describe('syncing again', () => {
     const { id } = await spaceRow('campus', 'room_1');
     await db
       .update(spaces)
-      .set({ name: 'Board Room', access: SpaceAccess.Invite, capacity: 8 })
+      .set({ name: 'Board Room', access: SpaceAccess.Designated, capacity: 8 })
       .where(eq(spaces.id, id));
     await sync([map('campus', [space('library', 'open')])]);
 
@@ -471,7 +513,7 @@ describe('syncing again', () => {
       retiredAt: null,
       name: 'Board Room',
       kind: SpaceKind.MeetingRoom,
-      access: SpaceAccess.Invite,
+      access: SpaceAccess.Designated,
       capacity: 8,
     });
   });
@@ -686,7 +728,7 @@ describe('the default space', () => {
       await expect(spaceRow(key, DEFAULT_SPACE_KEY)).resolves.toMatchObject({
         isMapDefault: true,
         kind: SpaceKind.Open,
-        access: SpaceAccess.Open,
+        access: SpaceAccess.Normal,
         audioMode: AudioMode.Proximity,
         retiredAt: null,
       });
@@ -938,6 +980,41 @@ describe('the entry map', () => {
       { key: 'campus', isEntry: false, retiredAt: expect.any(Date) },
       { key: 'plaza', isEntry: true, retiredAt: null },
     ]);
+  });
+});
+
+describe('telling world the spaces changed', () => {
+  const listening = async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(SPACES_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    return { heard, stop };
+  };
+
+  it('tells world when a sync changes something, and not when it changes nothing', async () => {
+    const { heard, stop } = await listening();
+    try {
+      await sync([map('campus', [space('library', 'open')])]);
+      await vi.waitFor(() => expect(heard).toHaveLength(1));
+
+      await sync([map('campus', [space('library', 'open')])]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(heard).toHaveLength(1);
+    } finally {
+      await stop();
+    }
+  });
+
+  it('says nothing on a dry run, which changes nothing', async () => {
+    const { heard, stop } = await listening();
+    try {
+      await sync([map('campus', [space('library', 'open')])], true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(heard).toEqual([]);
+    } finally {
+      await stop();
+    }
   });
 });
 

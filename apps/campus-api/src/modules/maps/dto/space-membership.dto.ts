@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsISO8601, IsOptional, IsUUID, Matches } from 'class-validator';
+import {
+  IsEnum,
+  IsISO8601,
+  IsOptional,
+  IsUUID,
+  Matches,
+} from 'class-validator';
+
+import { CohortRole } from '../../cohorts/schema.js';
+import { SystemRole } from '../../users/schema.js';
 
 /**
  * A day, read as midnight UTC, or an instant that says which zone it is in.
@@ -12,7 +21,7 @@ const DATE_OR_ZONED_INSTANT =
   /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
 /**
- * Which of a grant's two subjects it names. Exactly one is set on every row
+ * Which of an entry's four subjects it names. Exactly one is set on every row
  * and every request — the database insists on it for rows
  * (`space_memberships_one_subject`) and the service on requests, so both
  * kinds of caller are held to the same rule.
@@ -20,6 +29,8 @@ const DATE_OR_ZONED_INSTANT =
 export enum SpaceMembershipSubjectType {
   User = 'user',
   CohortTrack = 'cohort_track',
+  CohortRole = 'cohort_role',
+  SystemRole = 'system_role',
 }
 
 export class SpaceIdParamDto {
@@ -40,20 +51,21 @@ export class SpaceMembershipParamDto {
 }
 
 /**
- * A grant of access to a space: to one person, or to everybody on one of
- * the cohort's tracks, and optionally until a date. Which of the two it is
- * to is a rule across the whole request rather than any one field, so it is
- * checked by the service, not here: a request with both or neither is a 400
- * either way, and this way there is one answer to it rather than two.
+ * An entry on a designated space's list: one person, everybody on one of a
+ * cohort's tracks, everybody holding a cohort role, or everybody holding a
+ * system role, optionally until a date. That it names exactly one is a rule
+ * across the whole request rather than any one field, so it is checked by
+ * the service, not here: a request naming two or none is a 400 either way,
+ * and this way there is one answer to it rather than two.
  */
 export class GrantSpaceMembershipDto {
   @ApiPropertyOptional({
     format: 'uuid',
     example: '22222222-2222-4222-8222-222222222222',
     description:
-      'Give access to this one person. Exactly one of `userId` and ' +
-      '`cohortTrackId` is required: a grant is to a person or to a track, ' +
-      'never both and never neither.',
+      'Give access to this one person. Exactly one of `userId`, ' +
+      '`cohortTrackId`, `cohortRole` and `systemRole` is required: an ' +
+      'entry names one subject, never two and never none.',
   })
   @IsOptional()
   @IsUUID()
@@ -64,12 +76,35 @@ export class GrantSpaceMembershipDto {
     example: '33333333-3333-4333-8333-333333333333',
     description:
       'Give access to everybody on this cohort track — a track a cohort ' +
-      'runs, as named by `cohort_tracks.id`. Exactly one of `userId` and ' +
-      '`cohortTrackId` is required.',
+      'runs, as named by `cohort_tracks.id`. Exactly one subject is ' +
+      'required.',
   })
   @IsOptional()
   @IsUUID()
   cohortTrackId?: string;
+
+  @ApiPropertyOptional({
+    enum: CohortRole,
+    enumName: 'CohortRole',
+    description:
+      'Give access to everybody holding this role, in whichever cohort ' +
+      'they walk the campus as. Exactly one subject is required.',
+  })
+  @IsOptional()
+  @IsEnum(CohortRole)
+  cohortRole?: CohortRole;
+
+  @ApiPropertyOptional({
+    enum: SystemRole,
+    enumName: 'SystemRole',
+    description:
+      'Give access to everybody holding this system role. Admins enter ' +
+      'every space anyway, so this matters for any other role. Exactly ' +
+      'one subject is required.',
+  })
+  @IsOptional()
+  @IsEnum(SystemRole)
+  systemRole?: SystemRole;
 
   @ApiPropertyOptional({
     format: 'date-time',
@@ -158,6 +193,20 @@ export class SpaceMembershipSubjectDto {
       'The cohort whose track runs it, when the grant is to a track.',
   })
   cohortName?: string | null;
+
+  @ApiPropertyOptional({
+    enum: CohortRole,
+    enumName: 'CohortRole',
+    description: 'Present when the entry names a cohort role.',
+  })
+  cohortRole?: CohortRole;
+
+  @ApiPropertyOptional({
+    enum: SystemRole,
+    enumName: 'SystemRole',
+    description: 'Present when the entry names a system role.',
+  })
+  systemRole?: SystemRole;
 }
 
 export class SpaceMembershipResponseDto {
