@@ -36,7 +36,7 @@ input.
 
 That gives `ClientMessage`, `ServerMessage`, one type per message
 (`MoveMessage`, `MovedMessage`, `MoveResultMessage`, …), and `Player`,
-`Avatar`, `Direction` and `MoveOutcome`. This document covers what the schema cannot:
+`Avatar`, `Direction`, `MoveOutcome` and `Status`. This document covers what the schema cannot:
 the order things happen in, and what the client is expected to do about them.
 
 ## Connecting
@@ -86,9 +86,11 @@ sequenceDiagram
 
 - **`welcome`** carries your `userId`, your own `spriteKey` and
   `displayName`, and the timings to play by: `stepMs` (walking speed),
-  `tickMs` (how often others' moves arrive) and `heartbeatSeconds`.
+  `tickMs` (how often others' moves arrive), `heartbeatSeconds`, and
+  `awayAfterSeconds` (how long before an idle person shows as away; see
+  [Status](#status)).
 - **`snapshot`** carries which map this is and every player in your cohort
-  on it, you included, each with their sprite and name. Draw from it;
+  on it, you included, each with their sprite, name and status. Draw from it;
   everything after is a change to it.
 
 You can send as soon as the socket opens. Frames sent while the server is
@@ -173,14 +175,15 @@ The client says which way, never where to. The server decides every position.
 **Everybody else means everybody in your cohort.** Each cohort is its own
 campus: the cohort named when the socket opened decides whose avatars you are
 told about, and nobody in another cohort appears in your `snapshot`, `joined`,
-`left` or `moved`, or you in theirs.
+`left`, `moved` or `statusChanged`, or you in theirs.
 
-| Message      | When                                      | What to do                                 |
-| ------------ | ----------------------------------------- | ------------------------------------------ |
-| `joined`     | Somebody arrived                          | Add their avatar, with its sprite and name |
-| `appearance` | Somebody changed their sprite or name     | Redraw them with it                        |
-| `left`       | Somebody's socket in this cohort closed   | Remove their avatar                        |
-| `moved`      | Once per tick, if anybody moved or turned | Move each listed player                    |
+| Message         | When                                      | What to do                                         |
+| --------------- | ----------------------------------------- | -------------------------------------------------- |
+| `joined`        | Somebody arrived                          | Add their avatar, with its sprite, name and status |
+| `appearance`    | Somebody changed their sprite or name     | Redraw them with it                                |
+| `statusChanged` | Somebody's status changed, yours included | Show their new status                              |
+| `left`          | Somebody's socket in this cohort closed   | Remove their avatar                                |
+| `moved`         | Once per tick, if anybody moved or turned | Move each listed player                            |
 
 About `moved`:
 
@@ -195,7 +198,7 @@ About `moved`:
 ### Drawing each person
 
 Somebody first appears as an `Avatar` — in the `snapshot`, or in `joined` —
-which is a `Player` plus two fields saying what to draw:
+which is a `Player` plus three fields saying what to draw:
 
 - **`spriteKey`**: which character. One of the keys campus-api accepts on
   `PATCH /v1/users/me` (listed in its API docs), or `null` when the person has
@@ -203,10 +206,13 @@ which is a `Player` plus two fields saying what to draw:
   `null`, and for any key you have no sprite for yet.
 - **`displayName`**: the name to show beside them, or `null` when they have
   set none.
+- **`status`**: `available`, `busy` or `away`, as it is now. Unlike the other
+  two it changes while they are here; see [Status](#status).
 
-Keep both by `userId`. `moved` and `moveResult` carry a plain `Player` —
+Keep all three by `userId`. `moved` and `moveResult` carry a plain `Player` —
 position and facing only — so take what to draw from the `Avatar` and keep it
-until that person's `left`, or until an `appearance` replaces it.
+until that person's `left`, or until an `appearance` or a `statusChanged`
+replaces part of it.
 
 **A change shows straight away.** When somebody saves a new sprite or display
 name, everybody in their cohort, themselves included, gets:
@@ -224,6 +230,44 @@ Redraw that person with it. Nothing is sent when what to draw did not change.
 campus-api tells world as it saves; should that notice be lost, world still
 picks the change up within one heartbeat.
 
+## Status
+
+Everybody is **available**, **busy** or **away**, and everybody in their
+cohort sees which: `Avatar.status` says what it is when they appear, and a
+`statusChanged` follows every change after.
+
+- **Choosing.** Send `{ "type": "setStatus", "status": "busy" }`. When that
+  changes what the cohort sees, everybody in it gets
+  `{ "type": "statusChanged", "userId": "…", "status": "busy" }` — you too,
+  which is your confirmation. Choosing what you already show sends nothing
+  back, so draw your own choice at once rather than waiting for an answer.
+- **Away while idle.** Somebody who does nothing for
+  `welcome.awayAfterSeconds` (600, ten minutes, by default) is shown as away,
+  and is sent the `statusChanged` saying so like everybody else. The first
+  thing they do afterwards brings back the status they had chosen, with
+  another `statusChanged`. The server notices at its heartbeat, so going away
+  can land up to `heartbeatSeconds` late; coming back is immediate. An away
+  they chose themselves is theirs: activity does not clear it, only choosing
+  another status does. `awayAfterSeconds` is `0` on a deployment that never
+  does this.
+- **What counts as doing something:** a `move`, a `setStatus`, and `active`.
+  The server sees nothing else — not somebody reading the map, typing
+  elsewhere in the app, or talking on a call — so send `{ "type": "active" }`
+  when the person presses a key, clicks or moves the pointer. Throttle it to
+  a small fraction of `awayAfterSeconds`: once a minute suits the default,
+  often enough never to be taken for idle, rarely enough to cost nothing. It
+  has no answer. A `ping` does not count: it is the client's, not the
+  person's.
+- **It lasts as long as the connection.** Nothing is saved. A socket that
+  closes takes the status with it, and the next one starts available — a
+  reconnect within the grace included. Another tab in the same cohort is the
+  exception: the avatar never left, so the new tab keeps the status chosen in
+  the old one. If the old tab had gone idle, the new one brings them back, and
+  the rest of the cohort gets a `statusChanged`; the new tab reads it from its
+  `snapshot`.
+- **One status per cohort,** as there is one avatar per cohort. Somebody in
+  two cohorts' campuses at once chooses, and goes idle, in each separately.
+
 ## One connection per cohort
 
 **An account has one connection in each cohort's campus.** Somebody who
@@ -235,8 +279,8 @@ that cohort.
   replaced, and nobody in the first cohort sees them leave. The new cohort
   sees `joined`, at where they last stood there, or at the spawn.
 - **Entering the same cohort again**, from another tab or device, takes the
-  first connection's place. The avatar stays exactly where it stood, and
-  nobody is told anybody left or arrived. World sends the displaced connection
+  first connection's place. The avatar stays exactly where it stood, with the
+  status chosen there, and nobody is told anybody left or arrived. World sends the displaced connection
   `{ "type": "replaced" }` and closes it with **4000 `entered_elsewhere`**.
 
 Other pages are unaffected. The cohort picker, a profile screen and an invite
@@ -251,8 +295,9 @@ screen hold no socket, so they keep working in as many tabs as you like.
 ## Limits
 
 - **Messages:** about `WORLD_MAX_MESSAGES_PER_SECOND` (20 by default) per
-  socket, with a second's worth allowed at once. Walking at full speed while
-  pinging uses about half. The first frame past the budget closes the socket
+  socket, with a second's worth allowed at once, whatever the frames are —
+  `setStatus` and `active` included. Walking at full speed while pinging uses
+  about half. The first frame past the budget closes the socket
   with `rate_limited` before parsing. Reconnect and rebuild state from the
   fresh snapshot.
 - **Frame size:** 16 KB by default. Larger closes the socket with 1009.

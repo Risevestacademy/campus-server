@@ -1,7 +1,7 @@
 %% =====================================================================
 %% Campus by Rise — full ERD
 %% GENERATED — do not hand-edit.
-%% 34 tables, 28 enums.
+%% 34 tables, 27 enums.
 %% -
 %% Mermaid ER cannot express nullability, defaults, column lengths,
 %% partial indexes or CHECK constraints. Those are listed at the
@@ -188,12 +188,12 @@ erDiagram
 
     SESSIONS {
         uuid id PK
+        uuid cohort_id FK
         uuid space_id FK
         media_provider_enum provider "livekit"
         varchar provider_room_id
-        session_status_enum status "open | closed"
         timestamptz opened_at
-        timestamptz closed_at
+        timestamptz closed_at "null while open"
     }
 
     SESSION_PARTICIPANTS {
@@ -201,9 +201,8 @@ erDiagram
         uuid session_id FK
         uuid user_id FK
         timestamptz joined_at
-        timestamptz left_at
-        int published_seconds
-        boolean video_enabled
+        timestamptz left_at "null while in the call"
+        boolean video_enabled "off unless they turned it on"
     }
 
     %% --------------------------------------- scheduling + attendance
@@ -453,6 +452,7 @@ erDiagram
     DESKS ||--o{ DESK_CLAIMS : "claimed_by"
     USERS ||--o{ DESK_CLAIMS : "claims"
 
+    COHORTS ||--o{ SESSIONS : "holds"
     SPACES ||--o{ SESSIONS : "hosts"
     SESSIONS ||--o{ SESSION_PARTICIPANTS : "records"
     USERS ||--o{ SESSION_PARTICIPANTS : "participates"
@@ -513,7 +513,8 @@ erDiagram
 %%   access_requests(space_id, user_id)  WHERE status = 'pending'
 %%   desk_claims(desk_id)                WHERE released_at is null
 %%   desk_claims(user_id)                WHERE released_at is null
-%%   sessions(space_id)                  WHERE status = 'open'
+%%   sessions(cohort_id, space_id)       WHERE closed_at is null
+%%   session_participants(session_id, user_id) WHERE left_at is null
 %%   projects(user_id)                   WHERE is_pinned
 %%   conversations(kind)                 WHERE kind = 'campus'
 %%   conversations(space_id)             WHERE kind = 'space'
@@ -544,6 +545,8 @@ erDiagram
 %%   spaces: capacity IS NULL OR capacity > 0
 %%   space_memberships: (cohort_track_id IS NULL) <> (user_id IS NULL)
 %%   space_memberships: valid_to IS NULL OR valid_to > valid_from
+%%   sessions: closed_at IS NULL OR closed_at >= opened_at
+%%   session_participants: left_at IS NULL OR left_at >= joined_at
 %%   feedback: reported_user_id IS NULL OR type = 'report'
 %%   feedback: (status = 'resolved') = (resolved_at IS NOT NULL) = (resolved_by IS NOT NULL)
 %%   feedback: title and details hold something other than white space

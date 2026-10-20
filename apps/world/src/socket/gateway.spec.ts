@@ -187,6 +187,14 @@ const presence = {
       }
     }
   },
+  setStatus: async (entry: Presence) => {
+    if (presence.failing) throw new Error('redis is down');
+    const key = presenceKeyOf(entry);
+    const held = presence.entries.get(key);
+    if (held?.connectionId === entry.connectionId) {
+      presence.entries.set(key, { ...held, status: entry.status });
+    }
+  },
   online: async () => [],
   onDisplaced: (listener: (displaced: Displacement) => void) => {
     presence.listeners.push(listener);
@@ -265,9 +273,15 @@ async function token(
  * Opens a socket and collects what the server says, until it closes or
  * settles. Pass '' as the cohort to leave the parameter off entirely.
  */
-function connect(headers: Record<string, string>, cohortId = COHORT) {
+function connect(
+  headers: Record<string, string>,
+  cohortId = COHORT,
+  socketUrl = url,
+) {
   const target =
-    cohortId === '' ? url : `${url}?cohortId=${encodeURIComponent(cohortId)}`;
+    cohortId === ''
+      ? socketUrl
+      : `${socketUrl}?cohortId=${encodeURIComponent(cohortId)}`;
   const ws = new WebSocket(target, { headers });
   const messages: Record<string, unknown>[] = [];
 
@@ -309,7 +323,8 @@ async function waitFor(
 /** Where everybody in a snapshot stands, leaving out what to draw for them. */
 function positionsIn(snapshot: Record<string, unknown>) {
   return (snapshot.players as Record<string, unknown>[]).map(
-    ({ displayName: _name, spriteKey: _sprite, ...player }) => player,
+    ({ displayName: _name, spriteKey: _sprite, status: _status, ...player }) =>
+      player,
   );
 }
 
@@ -379,6 +394,7 @@ describe('socket upgrade', () => {
       heartbeatSeconds: 1,
       stepMs: 100,
       tickMs: 200,
+      awayAfterSeconds: 600,
     });
     ws.close();
   });
@@ -1150,6 +1166,7 @@ describe('movement', () => {
         facing: 'down',
         displayName: null,
         spriteKey: null,
+        status: 'available',
       },
     });
     // Learns about themselves from the snapshot, not from a joined.
@@ -2934,6 +2951,340 @@ describe('movement', () => {
       await leave(conn);
     });
   });
+
+  describe('status', () => {
+    const setStatus = (conn: { ws: WebSocket }, status: string) =>
+      conn.ws.send(JSON.stringify({ type: 'setStatus', status }));
+    const statusesIn = (conn: { messages: Record<string, unknown>[] }) =>
+      conn.messages.filter((m) => m.type === 'statusChanged');
+
+    it('starts everybody available', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+
+      const snapshot = await waitFor(conn, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toEqual([
+        expect.objectContaining({ userId: ada, status: 'available' }),
+      ]);
+      await expect
+        .poll(
+          () => presence.entries.get(presenceKeyOf({ userId: ada }))?.status,
+        )
+        .toBe('available');
+
+      await leave(conn);
+    });
+
+    it('tells a status chosen to everybody in the cohort, them included, and nobody in another', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const sameCohort = await arrive(person(), 'cohort-frontend');
+      const otherCohort = await arrive(person(), 'cohort-backend');
+
+      setStatus(inFrontend, 'busy');
+
+      const changed = { type: 'statusChanged', userId: ada, status: 'busy' };
+      await expect(
+        waitFor(sameCohort, (m) => m.type === 'statusChanged'),
+      ).resolves.toEqual(changed);
+      await expect(
+        waitFor(inFrontend, (m) => m.type === 'statusChanged'),
+      ).resolves.toEqual(changed);
+      await expect
+        .poll(
+          () =>
+            presence.entries.get(
+              presenceKeyOf({ userId: ada, cohortId: 'cohort-frontend' }),
+            )?.status,
+        )
+        .toBe('busy');
+      await quiet();
+      expect(statusesIn(otherCohort)).toEqual([]);
+
+      await leave(inFrontend);
+      await leave(sameCohort);
+      await leave(otherCohort);
+    });
+
+    it('keeps a status to the cohort it was chosen in, for somebody in two', async () => {
+      const ada = person();
+      const inFrontend = await arrive(ada, 'cohort-frontend');
+      const inBackend = await arrive(ada, 'cohort-backend');
+      const backendWatcher = await arrive(person(), 'cohort-backend');
+
+      setStatus(inFrontend, 'busy');
+
+      await waitFor(inFrontend, (m) => m.type === 'statusChanged');
+      await quiet();
+      expect(statusesIn(inBackend)).toEqual([]);
+      expect(statusesIn(backendWatcher)).toEqual([]);
+      expect(
+        presence.entries.get(
+          presenceKeyOf({ userId: ada, cohortId: 'cohort-backend' }),
+        )?.status,
+      ).toBe('available');
+
+      await leave(inFrontend);
+      await leave(inBackend);
+      await leave(backendWatcher);
+    });
+
+    it('sends nothing for choosing the status already shown', async () => {
+      const conn = await arrive(person());
+      const watcher = await arrive(person());
+
+      setStatus(conn, 'available');
+
+      await quiet();
+      expect(statusesIn(watcher)).toEqual([]);
+      expect(statusesIn(conn)).toEqual([]);
+      await leave(conn);
+      await leave(watcher);
+    });
+
+    it('shows a later arrival the status as it is now', async () => {
+      const ada = person();
+      const conn = await arrive(ada);
+      setStatus(conn, 'away');
+      await waitFor(conn, (m) => m.type === 'statusChanged');
+
+      const later = await arrive(person());
+
+      const snapshot = await waitFor(later, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual(
+        expect.objectContaining({ userId: ada, status: 'away' }),
+      );
+      await leave(conn);
+      await leave(later);
+    });
+
+    it('forgets the status once they disconnect', async () => {
+      const ada = person();
+      const first = await arrive(ada);
+      setStatus(first, 'busy');
+      await expect
+        .poll(
+          () => presence.entries.get(presenceKeyOf({ userId: ada }))?.status,
+        )
+        .toBe('busy');
+
+      await leave(first);
+      await expect
+        .poll(() => presence.entries.has(presenceKeyOf({ userId: ada })))
+        .toBe(false);
+      const again = await arrive(ada);
+
+      const snapshot = await waitFor(again, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toEqual([
+        expect.objectContaining({ userId: ada, status: 'available' }),
+      ]);
+      await leave(again);
+    });
+
+    it('keeps the status chosen in a tab another replaces in the same cohort', async () => {
+      const ada = person();
+      const watcher = await arrive(person());
+      const first = await arrive(ada);
+      setStatus(first, 'busy');
+      await waitFor(watcher, (m) => m.type === 'statusChanged');
+
+      const second = await arrive(ada);
+      await first.settled;
+
+      const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual(
+        expect.objectContaining({ userId: ada, status: 'busy' }),
+      );
+      await quiet();
+      expect(statusesIn(watcher)).toHaveLength(1);
+      await expect
+        .poll(
+          () => presence.entries.get(presenceKeyOf({ userId: ada }))?.status,
+        )
+        .toBe('busy');
+
+      await leave(second);
+      await leave(watcher);
+    });
+
+    it('rejects a status that is not one of the three', async () => {
+      const conn = await arrive(person());
+
+      setStatus(conn, 'invisible');
+
+      await expect(
+        waitFor(conn, (m) => m.type === 'error'),
+      ).resolves.toMatchObject({ code: 'BAD_MESSAGE' });
+      await leave(conn);
+    });
+  });
+});
+
+/**
+ * In a world of its own, idle after a second: in the shared one, everybody in
+ * every other test would go away under it.
+ */
+describe('going away while idle', () => {
+  const AWAY = { timeout: 5_000 };
+  let idle: World;
+  let idleUrl: string;
+  let nextUser = 0;
+
+  beforeAll(async () => {
+    idle = await buildWorld(
+      { ...env, WORLD_AWAY_AFTER_SECONDS: 1 },
+      accounts,
+      store,
+      new MemoryPresenceStore(),
+      map,
+    );
+    await idle.app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = idle.app.server.address() as AddressInfo;
+    idleUrl = `ws://127.0.0.1:${port}/socket`;
+  });
+
+  afterAll(async () => {
+    await idle.gateway.stop();
+    await idle.app.close();
+  });
+
+  async function arrive(cohortId = COHORT) {
+    const userId = `idler-${++nextUser}`;
+    const conn = connect(
+      {
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
+      },
+      cohortId,
+      idleUrl,
+    );
+    await waitFor(conn, (m) => m.type === 'snapshot');
+    return { ...conn, userId };
+  }
+
+  async function leave(...conns: ReturnType<typeof connect>[]) {
+    for (const conn of conns) {
+      conn.ws.close();
+      await conn.settled;
+    }
+  }
+
+  /** The statuses one person was shown as, in the order they arrived. */
+  const statusesOf = (
+    conn: { messages: Record<string, unknown>[] },
+    userId: string,
+  ) =>
+    conn.messages
+      .filter((m) => m.type === 'statusChanged' && m.userId === userId)
+      .map((m) => m.status);
+
+  it('tells each arrival how long they may be idle', async () => {
+    const conn = await arrive();
+
+    expect(conn.messages[0]).toMatchObject({
+      type: 'welcome',
+      awayAfterSeconds: 1,
+    });
+    await leave(conn);
+  });
+
+  it('shows somebody idle as away to their cohort, them included, and back once they move', async () => {
+    const ada = await arrive('cohort-frontend');
+    const watcher = await arrive('cohort-frontend');
+    const elsewhere = await arrive('cohort-backend');
+
+    await expect
+      .poll(() => statusesOf(watcher, ada.userId), AWAY)
+      .toEqual(['away']);
+    expect(statusesOf(ada, ada.userId)).toEqual(['away']);
+    await expect
+      .poll(async () =>
+        (await idle.presence.online('cohort-frontend')).find(
+          (entry) => entry.userId === ada.userId,
+        ),
+      )
+      .toMatchObject({ status: 'away' });
+
+    ada.ws.send(JSON.stringify({ type: 'move', direction: 'right', seq: 1 }));
+
+    await expect
+      .poll(() => statusesOf(watcher, ada.userId), AWAY)
+      .toEqual(['away', 'available']);
+    await expect
+      .poll(async () =>
+        (await idle.presence.online('cohort-frontend')).find(
+          (entry) => entry.userId === ada.userId,
+        ),
+      )
+      .toMatchObject({ status: 'available' });
+    expect(statusesOf(elsewhere, ada.userId)).toEqual([]);
+
+    await leave(ada, watcher, elsewhere);
+  });
+
+  it('brings them back to the status they chose on `active`', async () => {
+    const ada = await arrive();
+    const watcher = await arrive();
+    ada.ws.send(JSON.stringify({ type: 'setStatus', status: 'busy' }));
+
+    await expect
+      .poll(() => statusesOf(watcher, ada.userId), AWAY)
+      .toEqual(['busy', 'away']);
+
+    ada.ws.send(JSON.stringify({ type: 'active' }));
+
+    await expect
+      .poll(() => statusesOf(watcher, ada.userId), AWAY)
+      .toEqual(['busy', 'away', 'busy']);
+    await leave(ada, watcher);
+  });
+
+  it('does not count a ping as activity', async () => {
+    const ada = await arrive();
+    const watcher = await arrive();
+    const pinging = setInterval(
+      () => ada.ws.send(JSON.stringify({ type: 'ping' })),
+      100,
+    );
+
+    try {
+      await expect
+        .poll(() => statusesOf(watcher, ada.userId), AWAY)
+        .toEqual(['away']);
+    } finally {
+      clearInterval(pinging);
+    }
+    await leave(ada, watcher);
+  });
+
+  it('brings back an idle tab replaced by a new one in the same cohort', async () => {
+    const ada = await arrive();
+    const watcher = await arrive();
+    ada.ws.send(JSON.stringify({ type: 'setStatus', status: 'busy' }));
+    await expect
+      .poll(() => statusesOf(watcher, ada.userId), AWAY)
+      .toEqual(['busy', 'away']);
+
+    const second = connect(
+      {
+        origin: ORIGIN,
+        cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, ada.userId)}`,
+      },
+      COHORT,
+      idleUrl,
+    );
+    const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
+
+    expect(second.messages[0]).toMatchObject({ type: 'welcome' });
+    expect(snapshot.players).toContainEqual(
+      expect.objectContaining({ userId: ada.userId, status: 'busy' }),
+    );
+    await expect
+      .poll(() => statusesOf(watcher, ada.userId))
+      .toEqual(['busy', 'away', 'busy']);
+    await ada.settled;
+    await leave(second, watcher);
+  });
 });
 
 /** A redeploy must not send everybody back to the spawn. */
@@ -2991,6 +3342,7 @@ describe('shutdown', () => {
       enter: (entry: Presence) => memory.enter(entry),
       renew: (entries: readonly Presence[]) => memory.renew(entries),
       changeSpace: (entry: Presence) => memory.changeSpace(entry),
+      setStatus: (entry: Presence) => memory.setStatus(entry),
       online: (cohortId: string) => memory.online(cohortId),
       onDisplaced: () => undefined,
       close: async () => undefined,
