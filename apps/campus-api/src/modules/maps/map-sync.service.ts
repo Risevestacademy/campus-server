@@ -20,11 +20,18 @@ import {
   PublishedMapsRejectedException,
 } from './maps.exceptions.js';
 import { PublishedMapsReader, type PublishedMap } from './published-maps.js';
-import { SpaceKind, maps, spaces, type Space } from './schema.js';
+import {
+  SpaceKind,
+  maps,
+  spaceMemberships,
+  spaces,
+  type Space,
+} from './schema.js';
 import {
   DEFAULT_SPACE_NAME,
   SINGLETON_KINDS,
   defaultsFor,
+  startingListFor,
   suggestedKind,
 } from './space-defaults.js';
 
@@ -378,15 +385,30 @@ class Reconciliation {
           suggestedKind(drawn.tiledClass),
           label(drawn.key, published.key),
         );
-        await this.tx.insert(spaces).values({
-          mapId,
-          key: drawn.key,
-          name: drawn.name,
-          kind,
-          ...defaultsFor(kind),
-          createdAt: this.now,
-          updatedAt: this.now,
-        });
+        const [added] = await this.tx
+          .insert(spaces)
+          .values({
+            mapId,
+            key: drawn.key,
+            name: drawn.name,
+            kind,
+            ...defaultsFor(kind),
+            createdAt: this.now,
+            updatedAt: this.now,
+          })
+          .returning({ id: spaces.id });
+        // A designated kind starts with the roles its list names, written
+        // with no granter: the sync, not an admin, put them there.
+        const roles = startingListFor(kind);
+        if (roles.length > 0) {
+          await this.tx.insert(spaceMemberships).values(
+            roles.map((cohortRole) => ({
+              spaceId: added.id,
+              cohortRole,
+              validFrom: this.now,
+            })),
+          );
+        }
         result.spaces.added.push({ key: drawn.key, name: drawn.name, kind });
         if (kind === null) result.spaces.needsKind.push(drawn.key);
         continue;

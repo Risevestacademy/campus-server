@@ -164,7 +164,7 @@ describe('space memberships (e2e)', () => {
         mapId: map.id,
         key: 'mentor-pod',
         name: 'Mentor Pod',
-        access: SpaceAccess.Invite,
+        access: SpaceAccess.Designated,
         audioMode: AudioMode.Proximity,
       })
       .returning();
@@ -174,7 +174,7 @@ describe('space memberships (e2e)', () => {
         mapId: map.id,
         key: 'old-pod',
         name: 'Old Pod',
-        access: SpaceAccess.Invite,
+        access: SpaceAccess.Designated,
         audioMode: AudioMode.Proximity,
         retiredAt: new Date('2026-01-01T00:00:00.000Z'),
       })
@@ -309,6 +309,12 @@ describe('space memberships (e2e)', () => {
     await expect(fieldOf(grant({ cohortTrackId: 'nope' }))).resolves.toEqual([
       'cohortTrackId',
     ]);
+    await expect(fieldOf(grant({ cohortRole: 'dean' }))).resolves.toEqual([
+      'cohortRole',
+    ]);
+    await expect(fieldOf(grant({ systemRole: 'root' }))).resolves.toEqual([
+      'systemRole',
+    ]);
     // Forms a Date cannot read, and a timestamp with no zone to read it in.
     for (const validTo of [
       'garbage',
@@ -341,6 +347,20 @@ describe('space memberships (e2e)', () => {
       validTo: '2099-12-01T09:00:00+01:00',
     }).expect(201);
     expect(zoned.body.validTo).toBe('2099-12-01T08:00:00.000Z');
+  });
+
+  it('grants everybody holding a cohort role, and refuses a role beside a person', async () => {
+    const res = await grant({ cohortRole: 'mentor' }).expect(201);
+    expect(res.body.subject).toEqual({
+      type: 'cohort_role',
+      cohortRole: 'mentor',
+    });
+
+    const both = await grant({
+      userId: member.id,
+      cohortRole: 'student',
+    }).expect(400);
+    expect(both.body.error.code).toBe('INVALID_ARGUMENT');
   });
 
   it('lists the space’s grants with who holds them now', async () => {

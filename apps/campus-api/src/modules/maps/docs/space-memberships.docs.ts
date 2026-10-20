@@ -20,10 +20,12 @@ export function ApiGrantSpaceMembership(): MethodDecorator {
     ApiOperation({
       summary: 'Grant access to a space (admin only)',
       description:
-        'Gives one person, or everybody on one cohort track, standing ' +
-        'access to the space: a row in `space_memberships`, which is what ' +
-        'the `invite` and `request` settings answer entry from.\n\n' +
-        'A grant is to one subject, never both and never neither. It may ' +
+        'Puts an entry on the space’s list: one person, everybody on one ' +
+        'cohort track, everybody holding a cohort role, or everybody ' +
+        'holding a system role. A `designated` space admits whoever its ' +
+        'list names; a `normal` one admits anybody in the campus, so an ' +
+        'entry there has nothing to do.\n\n' +
+        'A grant names exactly one subject. It may ' +
         'carry an end date (`validTo`, in the future: a date, read as ' +
         'midnight UTC, or a timestamp with its zone); left out, ' +
         'it has no end until an admin ends it. A grant starts the moment it ' +
@@ -43,8 +45,9 @@ export function ApiGrantSpaceMembership(): MethodDecorator {
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
       description:
-        'Both `userId` and `cohortTrackId` were sent, or neither; an id is ' +
-        'not a UUID; or `validTo` is not a date or zoned timestamp in the ' +
+        'More than one of `userId`, `cohortTrackId`, `cohortRole` and ' +
+        '`systemRole` was sent, or none; an id is not a UUID; a role is not ' +
+        'one there is; or `validTo` is not a date or zoned timestamp in the ' +
         'future.',
     }),
     ApiNotFoundResponse({

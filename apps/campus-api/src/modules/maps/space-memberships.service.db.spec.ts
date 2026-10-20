@@ -7,7 +7,7 @@ import { beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
-import { cohortTracks, cohorts } from '../cohorts/schema.js';
+import { CohortRole, cohortTracks, cohorts } from '../cohorts/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { SpaceMembershipSubjectType } from './dto/space-membership.dto.js';
@@ -95,7 +95,7 @@ beforeEach(async () => {
       name: 'Mentor Pod',
       kind: SpaceKind.MentorPod,
       audioMode: AudioMode.Proximity,
-      access: SpaceAccess.Invite,
+      access: SpaceAccess.Designated,
     })
     .returning();
   const [retired] = await db
@@ -105,7 +105,7 @@ beforeEach(async () => {
       key: 'old-pod',
       name: 'Old Pod',
       audioMode: AudioMode.Proximity,
-      access: SpaceAccess.Invite,
+      access: SpaceAccess.Designated,
       retiredAt: new Date('2026-01-01T00:00:00.000Z'),
     })
     .returning();
@@ -289,6 +289,89 @@ describe('granting access to a space', () => {
         GRANT_AT,
       ),
     ).rejects.toBeInstanceOf(SpaceNotFoundException);
+  });
+
+  it('grants everybody holding a cohort role, and audits which role', async () => {
+    const answer = await service.grant(
+      spaceId,
+      { cohortRole: CohortRole.Professor },
+      actor,
+      GRANT_AT,
+    );
+
+    expect(answer.subject).toEqual({
+      type: SpaceMembershipSubjectType.CohortRole,
+      cohortRole: CohortRole.Professor,
+    });
+    const [row] = await rows();
+    expect(row).toMatchObject({
+      cohortRole: CohortRole.Professor,
+      userId: null,
+      cohortTrackId: null,
+      systemRole: null,
+    });
+    const [entry] = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.subjectId, answer.id));
+    expect(entry.details).toMatchObject({
+      cohortRole: CohortRole.Professor,
+      systemRole: null,
+    });
+  });
+
+  it('grants everybody holding a system role', async () => {
+    const answer = await service.grant(
+      spaceId,
+      { systemRole: SystemRole.User },
+      actor,
+      GRANT_AT,
+    );
+
+    expect(answer.subject).toEqual({
+      type: SpaceMembershipSubjectType.SystemRole,
+      systemRole: SystemRole.User,
+    });
+  });
+
+  it('refuses a second live grant to the same role, but not to another', async () => {
+    await service.grant(
+      spaceId,
+      { cohortRole: CohortRole.Mentor },
+      actor,
+      GRANT_AT,
+    );
+
+    await expect(
+      service.grant(spaceId, { cohortRole: CohortRole.Mentor }, actor, LATER),
+    ).rejects.toThrow('That cohort role already holds a live grant');
+    await expect(
+      service.grant(spaceId, { cohortRole: CohortRole.Student }, actor, LATER),
+    ).resolves.toBeDefined();
+    await expect(
+      service.grant(spaceId, { systemRole: SystemRole.User }, actor, LATER),
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses a role named beside another subject', async () => {
+    await expect(
+      service.grant(
+        spaceId,
+        { userId: memberId, cohortRole: CohortRole.Student },
+        actor,
+        GRANT_AT,
+      ),
+    ).rejects.toBeInstanceOf(SpaceMembershipInvalidArgumentException);
+    await expect(
+      service.grant(
+        spaceId,
+        { cohortRole: CohortRole.Student, systemRole: SystemRole.User },
+        actor,
+        GRANT_AT,
+      ),
+    ).rejects.toBeInstanceOf(SpaceMembershipInvalidArgumentException);
+
+    expect(await rows()).toHaveLength(0);
   });
 
   it('refuses both subjects, and refuses neither', async () => {
@@ -547,6 +630,12 @@ describe('listing a space’s grants', () => {
       actor,
       END_AT,
     );
+    const professors = await service.grant(
+      spaceId,
+      { cohortRole: CohortRole.Professor },
+      actor,
+      LATER,
+    );
 
     const listed = await service.list(spaceId, LATER);
 
@@ -554,8 +643,18 @@ describe('listing a space’s grants', () => {
       spent.id,
       live.id,
       onTrack.id,
+      professors.id,
     ]);
-    expect(listed.map((entry) => entry.live)).toEqual([false, true, true]);
+    expect(listed.map((entry) => entry.live)).toEqual([
+      false,
+      true,
+      true,
+      true,
+    ]);
+    expect(listed[3].subject).toEqual({
+      type: SpaceMembershipSubjectType.CohortRole,
+      cohortRole: CohortRole.Professor,
+    });
     expect(listed[0].subject).toMatchObject({
       type: SpaceMembershipSubjectType.User,
       userId: otherId,

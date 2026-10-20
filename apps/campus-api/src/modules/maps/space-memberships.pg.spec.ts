@@ -79,7 +79,7 @@ describe.skipIf(!REAL_POSTGRES_URL)(
           key: 'pod',
           name: 'Pod',
           audioMode: AudioMode.Proximity,
-          access: SpaceAccess.Invite,
+          access: SpaceAccess.Designated,
         })
         .returning();
       spaceId = room.id;
@@ -191,7 +191,7 @@ describe.skipIf(!REAL_POSTGRES_URL)(
           key: 'studio',
           name: 'Studio',
           audioMode: AudioMode.Proximity,
-          access: SpaceAccess.Invite,
+          access: SpaceAccess.Designated,
         })
         .returning();
       spaceId = room.id;

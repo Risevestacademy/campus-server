@@ -5,13 +5,11 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
 import { auditLog } from '../audit/schema.js';
-import { cohortTracks, cohorts } from '../cohorts/schema.js';
+import { CohortRole, cohortTracks, cohorts } from '../cohorts/schema.js';
 import { tracks } from '../tracks/schema.js';
-import { users } from '../users/schema.js';
+import { SystemRole, users } from '../users/schema.js';
 import {
   AudioMode,
-  OutsiderVisibility,
-  PublishPolicy,
   SpaceAccess,
   SpaceKind,
   maps,
@@ -101,7 +99,7 @@ function space(overrides: Partial<typeof spaces.$inferInsert> = {}) {
       name: 'Library',
       kind: SpaceKind.Open,
       audioMode: AudioMode.Proximity,
-      access: SpaceAccess.Open,
+      access: SpaceAccess.Normal,
       ...overrides,
     })
     .returning();
@@ -163,8 +161,6 @@ describe('spaces', () => {
 
     expect(row).toMatchObject({
       isMapDefault: false,
-      outsiderVisibility: OutsiderVisibility.AvatarsVisible,
-      publishPolicy: PublishPolicy.All,
       capacity: null,
       hysteresisFactor: '1.20',
       retiredAt: null,
@@ -242,22 +238,9 @@ describe('spaces', () => {
   /** It is the way to everywhere else; gating it shuts people out of that. */
   it('refuses a default space that is not open to everybody', async () => {
     await expectViolation(
-      space({ isMapDefault: true, access: SpaceAccess.Cohort }),
-      'spaces_default_is_open',
+      space({ isMapDefault: true, access: SpaceAccess.Designated }),
+      'spaces_default_is_normal',
     );
-  });
-
-  it('refuses a broadcast everybody may speak in', async () => {
-    await expectViolation(
-      space({ audioMode: AudioMode.Broadcast }),
-      'spaces_broadcast_restricts_publish',
-    );
-    await expect(
-      space({
-        audioMode: AudioMode.Broadcast,
-        publishPolicy: PublishPolicy.Staff,
-      }),
-    ).resolves.toBeDefined();
   });
 
   it('refuses a capacity nobody fits in', async () => {
@@ -346,24 +329,44 @@ describe('space_memberships', () => {
   let spaceId: string;
 
   beforeEach(async () => {
-    [{ id: spaceId }] = await space({ access: SpaceAccess.Invite });
+    [{ id: spaceId }] = await space({ access: SpaceAccess.Designated });
   });
 
   const grant = (
     overrides: Partial<typeof spaceMemberships.$inferInsert> = {},
   ) => db.insert(spaceMemberships).values({ spaceId, ...overrides });
 
-  it('grants a space to one person, or to one track', async () => {
+  it('lists a person, a track, a cohort role or a system role', async () => {
     await expect(grant({ userId })).resolves.toBeDefined();
     await expect(grant({ cohortTrackId })).resolves.toBeDefined();
+    await expect(
+      grant({ cohortRole: CohortRole.Professor }),
+    ).resolves.toBeDefined();
+    await expect(
+      grant({ systemRole: SystemRole.Admin }),
+    ).resolves.toBeDefined();
   });
 
-  /** With both, whose access ends when one of them does? With neither, nobody's. */
-  it('refuses a grant to both, and a grant to neither', async () => {
+  /** With two, whose access ends when one of them does? With none, nobody's. */
+  it.each([
+    ['a person and a track', { userId: 'user', cohortTrackId: 'track' }],
+    ['a person and a role', { userId: 'user', cohortRole: CohortRole.Mentor }],
+    [
+      'a cohort role and a system role',
+      { cohortRole: CohortRole.Mentor, systemRole: SystemRole.Admin },
+    ],
+  ])('refuses an entry naming %s', async (_, subjects) => {
     await expectViolation(
-      grant({ userId, cohortTrackId }),
+      grant({
+        ...subjects,
+        ...('userId' in subjects ? { userId } : {}),
+        ...('cohortTrackId' in subjects ? { cohortTrackId } : {}),
+      }),
       'space_memberships_one_subject',
     );
+  });
+
+  it('refuses an entry naming nobody', async () => {
     await expectViolation(grant(), 'space_memberships_one_subject');
   });
 

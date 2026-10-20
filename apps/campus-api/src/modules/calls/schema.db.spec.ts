@@ -83,7 +83,7 @@ function space(key: string) {
       key,
       name: key,
       audioMode: AudioMode.Boundary,
-      access: SpaceAccess.Open,
+      access: SpaceAccess.Normal,
     })
     .returning();
 }

@@ -1,10 +1,5 @@
-import {
-  AudioMode,
-  PublishPolicy,
-  SpaceAccess,
-  SpaceKind,
-  type NewSpace,
-} from './schema.js';
+import { CohortRole } from '../cohorts/schema.js';
+import { AudioMode, SpaceAccess, SpaceKind, type NewSpace } from './schema.js';
 
 /** What the default space is called until an admin calls it something else. */
 export const DEFAULT_SPACE_NAME = 'Corridors and grounds';
@@ -20,7 +15,7 @@ export const SINGLETON_KINDS: ReadonlySet<SpaceKind> = new Set([
   SpaceKind.NoticeBoard,
 ]);
 
-type Behaviour = Pick<NewSpace, 'audioMode' | 'access' | 'publishPolicy'>;
+type Behaviour = Pick<NewSpace, 'audioMode' | 'access'>;
 
 /**
  * How a space of each kind behaves when it is first met. A starting point
@@ -30,81 +25,93 @@ type Behaviour = Pick<NewSpace, 'audioMode' | 'access' | 'publishPolicy'>;
  * The thinking, kind by kind:
  * - `open`, `desk`, `notice_board`: you hear who is near you, and anybody on
  *   the campus may be there.
- * - `meeting_room`, `help_desk`: everybody in the room hears everybody, and
- *   anybody may walk in.
- * - `classroom`: the same audio, but for the cohort and not its guests.
- * - `mentor_pod`: the same audio, for the people it has been granted to.
- * - `live_coding`: staff speak to the room; for the cohort.
- * - `town_hall`: staff speak to the room; anybody may come.
- * - `stage`: only whoever has been given the floor speaks.
+ * - `meeting_room`, `help_desk`, `town_hall`, `stage`: everybody in the room
+ *   hears everybody, and anybody may walk in.
+ * - `classroom`, `live_coding`: the same audio, for the cohort's students,
+ *   professors and mentors (STARTING_LISTS) and not its guests.
+ * - `mentor_pod`: the same audio, for whoever an admin puts on its list.
  */
 const BY_KIND: Record<SpaceKind, Behaviour> = {
   [SpaceKind.Open]: {
     audioMode: AudioMode.Proximity,
-    access: SpaceAccess.Open,
-    publishPolicy: PublishPolicy.All,
+    access: SpaceAccess.Normal,
   },
   [SpaceKind.Desk]: {
     audioMode: AudioMode.Proximity,
-    access: SpaceAccess.Open,
-    publishPolicy: PublishPolicy.All,
+    access: SpaceAccess.Normal,
   },
   [SpaceKind.NoticeBoard]: {
     audioMode: AudioMode.Proximity,
-    access: SpaceAccess.Open,
-    publishPolicy: PublishPolicy.All,
+    access: SpaceAccess.Normal,
   },
   [SpaceKind.MeetingRoom]: {
     audioMode: AudioMode.Boundary,
-    access: SpaceAccess.Open,
-    publishPolicy: PublishPolicy.All,
+    access: SpaceAccess.Normal,
   },
   [SpaceKind.HelpDesk]: {
     audioMode: AudioMode.Boundary,
-    access: SpaceAccess.Open,
-    publishPolicy: PublishPolicy.All,
+    access: SpaceAccess.Normal,
+  },
+  [SpaceKind.TownHall]: {
+    audioMode: AudioMode.Boundary,
+    access: SpaceAccess.Normal,
+  },
+  [SpaceKind.Stage]: {
+    audioMode: AudioMode.Boundary,
+    access: SpaceAccess.Normal,
   },
   [SpaceKind.Classroom]: {
     audioMode: AudioMode.Boundary,
-    access: SpaceAccess.Cohort,
-    publishPolicy: PublishPolicy.All,
+    access: SpaceAccess.Designated,
+  },
+  [SpaceKind.LiveCoding]: {
+    audioMode: AudioMode.Boundary,
+    access: SpaceAccess.Designated,
   },
   [SpaceKind.MentorPod]: {
     audioMode: AudioMode.Boundary,
-    access: SpaceAccess.Invite,
-    publishPolicy: PublishPolicy.All,
-  },
-  [SpaceKind.LiveCoding]: {
-    audioMode: AudioMode.Broadcast,
-    access: SpaceAccess.Cohort,
-    publishPolicy: PublishPolicy.Staff,
-  },
-  [SpaceKind.TownHall]: {
-    audioMode: AudioMode.Broadcast,
-    access: SpaceAccess.Open,
-    publishPolicy: PublishPolicy.Staff,
-  },
-  [SpaceKind.Stage]: {
-    audioMode: AudioMode.Broadcast,
-    access: SpaceAccess.Open,
-    publishPolicy: PublishPolicy.GrantOnly,
+    access: SpaceAccess.Designated,
   },
 };
 
 /**
+ * The cohort roles a designated space of each kind starts with on its list.
+ * The people the old `cohort` setting let in, which is everybody in the
+ * cohort but its guests. A kind not here starts with an empty list: admins
+ * only, until an admin adds somebody.
+ */
+const STARTING_LISTS: Partial<Record<SpaceKind, readonly CohortRole[]>> = {
+  [SpaceKind.Classroom]: [
+    CohortRole.Student,
+    CohortRole.Professor,
+    CohortRole.Mentor,
+  ],
+  [SpaceKind.LiveCoding]: [
+    CohortRole.Student,
+    CohortRole.Professor,
+    CohortRole.Mentor,
+  ],
+};
+
+/**
  * A space with no kind is not set up, and admits nobody but admins whatever
- * it says here. It is given the most closed settings anyway, so that nothing
- * reading `access` on its own takes it for open.
+ * it says here. It is given the most closed settings anyway, designated with
+ * an empty list, so that nothing reading `access` on its own takes it for
+ * open.
  */
 const NOT_SET_UP: Behaviour = {
   audioMode: AudioMode.Proximity,
-  access: SpaceAccess.Invite,
-  publishPolicy: PublishPolicy.All,
+  access: SpaceAccess.Designated,
 };
 
 /** The settings a space of this kind starts with. */
 export function defaultsFor(kind: SpaceKind | null): Behaviour {
   return kind ? BY_KIND[kind] : NOT_SET_UP;
+}
+
+/** The cohort roles a new space of this kind starts with on its list. */
+export function startingListFor(kind: SpaceKind | null): readonly CohortRole[] {
+  return (kind && STARTING_LISTS[kind]) ?? [];
 }
 
 const KINDS = new Set<string>(Object.values(SpaceKind));

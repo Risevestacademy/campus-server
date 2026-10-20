@@ -276,6 +276,135 @@ describe('the call tables over a campus that already has spaces and people', () 
   });
 });
 
+/**
+ * The spaces rework shrinks two enums and drops two columns under a table
+ * that already holds the staging map's spaces. Every old value has to land
+ * somewhere, and a space that admitted the cohort has to keep admitting the
+ * same people once `cohort` is gone.
+ */
+describe('the spaces rework against spaces the old schema permitted', () => {
+  const FILE = '0018_spaces_rework.sql';
+  let pg: PGlite;
+  let ids: Record<string, string>;
+  let userId: string;
+
+  beforeEach(async () => {
+    pg = new PGlite();
+    for (const f of before(FILE)) {
+      await apply(pg, f);
+    }
+    userId = (
+      await pg.query<{ id: string }>(
+        "insert into users (email) values ('ada@campus.local') returning id",
+      )
+    ).rows[0].id;
+    const mapId = (
+      await pg.query<{ id: string }>(
+        "insert into maps (key, name, is_entry) values ('campus', 'Campus', true) returning id",
+      )
+    ).rows[0].id;
+    ids = {};
+    for (const [key, access, audio, publish] of [
+      ['grounds', 'open', 'proximity', 'all'],
+      ['classroom', 'cohort', 'boundary', 'all'],
+      ['pod', 'invite', 'boundary', 'all'],
+      ['booth', 'request', 'boundary', 'all'],
+      ['hall', 'open', 'broadcast', 'staff'],
+    ]) {
+      ids[key] = (
+        await pg.query<{ id: string }>(
+          `insert into spaces (map_id, key, name, access, audio_mode, publish_policy, is_map_default)
+           values ('${mapId}', '${key}', '${key}', '${access}', '${audio}', '${publish}', ${key === 'grounds'})
+           returning id`,
+        )
+      ).rows[0].id;
+    }
+    await pg.query(
+      `insert into space_memberships (space_id, user_id) values ('${ids.pod}', '${userId}')`,
+    );
+  });
+
+  const settings = async () =>
+    (
+      await pg.query<{ key: string; access: string; audio_mode: string }>(
+        'select key, access, audio_mode from spaces order by key',
+      )
+    ).rows;
+
+  it('makes open spaces normal and every other setting designated', async () => {
+    await apply(pg, FILE);
+
+    expect(await settings()).toEqual([
+      { key: 'booth', access: 'designated', audio_mode: 'boundary' },
+      { key: 'classroom', access: 'designated', audio_mode: 'boundary' },
+      { key: 'grounds', access: 'normal', audio_mode: 'proximity' },
+      { key: 'hall', access: 'normal', audio_mode: 'boundary' },
+      { key: 'pod', access: 'designated', audio_mode: 'boundary' },
+    ]);
+  });
+
+  it('lists the roles a cohort space admitted, and keeps every grant', async () => {
+    await apply(pg, FILE);
+
+    const rows = await pg.query<{
+      space_id: string;
+      user_id: string | null;
+      cohort_role: string | null;
+      granted_by: string | null;
+    }>(
+      'select space_id, user_id, cohort_role, granted_by from space_memberships order by cohort_role::text nulls first',
+    );
+    expect(rows.rows).toEqual([
+      {
+        space_id: ids.pod,
+        user_id: userId,
+        cohort_role: null,
+        granted_by: null,
+      },
+      {
+        space_id: ids.classroom,
+        user_id: null,
+        cohort_role: 'mentor',
+        granted_by: null,
+      },
+      {
+        space_id: ids.classroom,
+        user_id: null,
+        cohort_role: 'professor',
+        granted_by: null,
+      },
+      {
+        space_id: ids.classroom,
+        user_id: null,
+        cohort_role: 'student',
+        granted_by: null,
+      },
+    ]);
+  });
+
+  it('drops the speaking and outsider settings, and their types', async () => {
+    await apply(pg, FILE);
+
+    const left = await pg.query<{ name: string }>(
+      `select column_name as name from information_schema.columns
+       where table_name = 'spaces' and column_name in ('publish_policy', 'outsider_visibility')
+       union all
+       select typname as name from pg_type where typname in ('publish_policy', 'outsider_visibility', 'space_access_old', 'audio_mode_old')`,
+    );
+    expect(left.rows).toEqual([]);
+  });
+
+  it('refuses an entry naming two subjects once it has applied', async () => {
+    await apply(pg, FILE);
+
+    await expect(
+      pg.query(
+        `insert into space_memberships (space_id, user_id, cohort_role) values ('${ids.pod}', '${userId}', 'student')`,
+      ),
+    ).rejects.toThrow(/space_memberships_one_subject/);
+  });
+});
+
 describe('finding a migration by name', () => {
   it('fails clearly for a migration that is not there', () => {
     expect(() => before('0099_never_written.sql')).toThrow(

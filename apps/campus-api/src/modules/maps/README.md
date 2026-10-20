@@ -5,11 +5,11 @@ and how each space behaves. Where anything is, it does not know.
 
 ## Two homes
 
-| Lives in Sanity, read through `campus-world-map`           | Lives here                                         |
-| ---------------------------------------------------------- | -------------------------------------------------- |
-| The map files and every published version of them          | A row per map (`maps`)                             |
-| Walls, the spawn, portals, and where each space is         | A row per space (`spaces`), with its settings      |
-| A space's key, and the name and class the designer gave it | Who has been granted a space (`space_memberships`) |
+| Lives in Sanity, read through `campus-world-map`           | Lives here                                                |
+| ---------------------------------------------------------- | --------------------------------------------------------- |
+| The map files and every published version of them          | A row per map (`maps`)                                    |
+| Walls, the spawn, portals, and where each space is         | A row per space (`spaces`), with its settings             |
+| A space's key, and the name and class the designer gave it | Who is on a designated space's list (`space_memberships`) |
 
 The two are joined by key. `maps.key` is the map's ID in Sanity, and
 `spaces.key` is the object's name in Tiled, unique on its map. Renaming a
@@ -27,9 +27,14 @@ changes without a new map being published:
   gave the object in Tiled is a starting suggestion only, taken when it names
   a known kind. **A space with no kind is not set up yet, and nobody but
   admins may enter it.**
-- `access`, `audio_mode`, `publish_policy`, `outsider_visibility`,
-  `capacity`: who may enter, how people hear one another, who may speak, what
-  somebody outside is shown, and how many fit.
+- `access`: `normal` or `designated`. A normal space admits anybody in the
+  campus, unless the people inside have locked it; a designated one admits
+  whoever its list in `space_memberships` names. Admins enter either.
+- `audio_mode`: `proximity` (you hear whoever is near you) or `boundary`
+  (everybody in the space hears everybody). Sound never crosses a space's
+  edge. There are no broadcast spaces: an admin speaks to the whole campus
+  another way.
+- `capacity`: how many fit.
 - `audible_radius`, `subscribe_radius`, `hysteresis_factor`: the audio
   distances, in tiles. `subscribe_radius` is what the media server
   subscribes people by, so it is what decides the bill.
@@ -42,7 +47,7 @@ about three quarters of the floor.
 
 So a map has a default space, marked `is_map_default`: it is drawn nowhere,
 and is whatever is left. It gives those tiles an audio room, and it is
-always open, because it is the way to everywhere else.
+always normal, because it is the way to everywhere else.
 
 **The database stops a map having two. It does not make a map have one.**
 A map row can exist with no default space, and nothing here will object.
@@ -59,19 +64,18 @@ refused.
 
 ## Rules the database enforces
 
-| Rule                                                       | Constraint                                              |
-| ---------------------------------------------------------- | ------------------------------------------------------- |
-| A map is known by its key, once                            | `maps_key_unique`                                       |
-| At most one entry map, not counting retired ones           | `maps_single_entry`                                     |
-| A space is known by its key, once per map                  | `spaces_map_key_unique`                                 |
-| At most one default space per map, retired or not          | `spaces_one_default_per_map`                            |
-| The default space is open to everybody                     | `spaces_default_is_open`                                |
-| One town hall and one notice board on the campus           | `spaces_single_town_hall`, `spaces_single_notice_board` |
-| A broadcast is not one if everybody may speak              | `spaces_broadcast_restricts_publish`                    |
-| A capacity, when there is one, is at least 1               | `spaces_capacity_positive`                              |
-| A grant is to one person or one track, not both or neither | `space_memberships_one_subject`                         |
-| An audit entry about a space names one that exists         | `audit_log_space_id_spaces_id_fk`                       |
-| A grant does not end before it starts                      | `space_memberships_valid_window`                        |
+| Rule                                                             | Constraint                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------- |
+| A map is known by its key, once                                  | `maps_key_unique`                                       |
+| At most one entry map, not counting retired ones                 | `maps_single_entry`                                     |
+| A space is known by its key, once per map                        | `spaces_map_key_unique`                                 |
+| At most one default space per map, retired or not                | `spaces_one_default_per_map`                            |
+| The default space is normal: open to everybody                   | `spaces_default_is_normal`                              |
+| One town hall and one notice board on the campus                 | `spaces_single_town_hall`, `spaces_single_notice_board` |
+| A capacity, when there is one, is at least 1                     | `spaces_capacity_positive`                              |
+| A list entry names one person, track, cohort role or system role | `space_memberships_one_subject`                         |
+| An audit entry about a space names one that exists               | `audit_log_space_id_spaces_id_fk`                       |
+| A grant does not end before it starts                            | `space_memberships_valid_window`                        |
 
 They are tested against a real PostgreSQL engine, with the committed
 migrations applied, in `schema.db.spec.ts`.
@@ -122,7 +126,11 @@ keeps the kind and any other is left for an admin to decide. A space that
 already _had_ the kind is different: coming back, it keeps it ahead of any new
 space the map suggests for it, whatever order the map lists them in, and if a
 live space holds it the sync is refused (below). The settings
-each kind starts with are in [`space-defaults.ts`](./space-defaults.ts).
+each kind starts with are in [`space-defaults.ts`](./space-defaults.ts),
+with the list a designated kind starts with: students, professors and
+mentors for a classroom or live-coding room (everybody in the cohort but its
+guests), and nobody for a mentor pod until an admin adds somebody. The list
+is written once, when the sync adds the space, never again.
 
 `?dryRun=true` answers with what would change and changes nothing.
 
@@ -155,12 +163,16 @@ nothing writes none.
 ## Granting access
 
 `POST`, `GET` and `DELETE /v1/spaces/{id}/memberships`, admins only. This is
-the admin side of the `invite` and `request` settings: the rows they read
-from, and the only thing that writes them.
+the admin side of designated spaces: the entries on their lists. The sync
+writes a designated kind's starting list when it adds a space; after that,
+these routes are the only thing that writes them.
 
-A grant is to **one person or one cohort track, never both and never
-neither** — `cohort_track_id` names a `cohort_tracks` row, so it is a track
-some cohort actually runs, not a bare track. It starts the moment it is
+An entry names **exactly one subject**: a person (`userId`); everybody on a
+cohort track (`cohortTrackId`, a `cohort_tracks` row, so a track some cohort
+actually runs, and only that cohort's people); everybody holding a cohort
+role (`cohortRole`), in whichever cohort's campus they walk; or everybody
+holding a system role (`systemRole`). An entry on a normal space is allowed
+but does nothing: nobody is kept out of one to be let in. It starts the moment it is
 given and may carry an end date (`validTo`, in the future: a bare date,
 read as midnight UTC, or a timestamp with its zone); without one it has no
 end until an admin ends it. Ending sets `valid_to` and keeps the row,
@@ -179,8 +191,9 @@ two transactions, so it is tested on a server with more than one connection
 
 Refused, each with the status that says which: no such space or no such
 subject (404), a retired space or a subject that already holds a live grant
-(409), both subjects or neither, an id that is not a UUID, or an end date
-that has passed or is not a date or zoned timestamp (400).
+(409), more than one subject or none, an id that is not a UUID, a role there
+is not, or an end date that has passed or is not a date or zoned timestamp
+(400).
 
 **A track detached from its cohort.** A track grant points at the
 `cohort_tracks` row, so detaching the track
@@ -197,10 +210,13 @@ track holds the link with `key share`, so the two never cross: tested in
 
 ## Not here yet
 
-- **Nothing reads them yet.** Who may enter one is answered by
+- **Locks, and asking to enter.** Who may enter is answered by
   [`@campus/space-access`](../../../../../packages/space-access/README.md)'s
-  `mayEnter` — one pure function, for campus-api and world alike — but no
-  caller invokes it yet, so in practice every space is open.
+  `mayEnter`, which world asks on every step into a space, reading these
+  rows. A normal space cannot be locked yet, and nobody can ask into a
+  designated one. Both are live state for world to hold, not rows here.
+- **Mentorship groups on a list.** An entry naming a group comes once the
+  groups exist.
 - **Desks.** No desk is drawn on the map yet.
 - **Which version of a map is live.** Today `world` loads the latest
   published version. Whether the database should name it is undecided, so
