@@ -2,9 +2,11 @@ import { PGlite } from '@electric-sql/pglite';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { seatKey } from '../seat.js';
 import {
   ACCOUNT_QUERY,
   LIVE_MEMBERSHIP_QUERY,
+  LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
   looksLikeId,
 } from './accounts.js';
@@ -265,6 +267,24 @@ describe("world's cohort gate, against campus-api's schema", () => {
     return result.rows.length > 0;
   }
 
+  /** The sweep's question: one query for many seats, answered as seatKey. */
+  async function liveSeats(
+    seats: [string, string][],
+    now: Date = NOW,
+  ): Promise<string[]> {
+    const result = await db.query<{ user_id: string; cohort_id: string }>(
+      LIVE_MEMBERSHIPS_QUERY,
+      [
+        seats.map(([userId]) => userId),
+        seats.map(([, cohortId]) => cohortId),
+        now,
+      ],
+    );
+    return result.rows
+      .map((row) => seatKey({ userId: row.user_id, cohortId: row.cohort_id }))
+      .sort();
+  }
+
   async function member(
     userId: string,
     fields: {
@@ -402,6 +422,44 @@ describe("world's cohort gate, against campus-api's schema", () => {
   it('refuses an account with no membership at all', async () => {
     expect(await isMember('eeeeeeee-0000-4000-8000-000000000001', COHORT)).toBe(
       false,
+    );
+  });
+
+  /**
+   * The heartbeat's sweep asks about every open socket in one query. The
+   * same question, asked of many seats at once, must give the same answer
+   * as asking of one — or who belongs would depend on how many sockets
+   * happened to be open when the sweep ran.
+   */
+  it('answers for many seats at once exactly as it does one at a time', async () => {
+    const seats: [string, string][] = [
+      [STUDENT, COHORT],
+      [UNCLASSIFIED, COHORT],
+      [DISMISSED, COHORT],
+      [PROFESSOR, COHORT],
+      [DEPARTED, COHORT],
+      [GUEST, COHORT],
+      [LAPSED_GUEST, COHORT],
+      [ELSEWHERE, OTHER_COHORT],
+      [ELSEWHERE, COHORT],
+      ['eeeeeeee-0000-4000-8000-000000000001', COHORT],
+    ];
+
+    const live = await liveSeats(seats);
+
+    for (const [userId, cohortId] of seats) {
+      expect(
+        live.includes(seatKey({ userId, cohortId })),
+        `${userId} in ${cohortId}`,
+      ).toBe(await isMember(userId, cohortId));
+    }
+    expect(live).toEqual(
+      [
+        seatKey({ userId: STUDENT, cohortId: COHORT }),
+        seatKey({ userId: PROFESSOR, cohortId: COHORT }),
+        seatKey({ userId: GUEST, cohortId: COHORT }),
+        seatKey({ userId: ELSEWHERE, cohortId: OTHER_COHORT }),
+      ].sort(),
     );
   });
 

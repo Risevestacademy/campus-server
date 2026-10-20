@@ -25,7 +25,7 @@ import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
 import { spaceIndexFrom } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
-import type { Seat } from '../seat.js';
+import { seatKey, type Seat } from '../seat.js';
 import {
   DISPLACED_CHANNEL,
   MemoryPresenceStore,
@@ -43,6 +43,14 @@ type SeatIn = Pick<Seat, 'userId'> & Partial<Seat>;
 /** How the fake store keys a position: by account and cohort. */
 const positionKey = ({ userId, cohortId = COHORT }: SeatIn) =>
   `${userId}:${cohortId}`;
+
+/** As the database's own question: is this membership live at `now`? */
+const isLiveMembership = async ({ userId, cohortId }: Seat, now: Date) => {
+  const key = `${userId}:${cohortId}`;
+  if (accounts.notMembers.has(key)) return false;
+  const ends = accounts.visitEnds.get(key);
+  return ends === undefined || ends > now;
+};
 
 /** Answers for the database, so these tests need none. */
 const accounts = {
@@ -72,15 +80,17 @@ const accounts = {
         },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
-  /** As the database's own question: is this membership live at `now`? */
-  liveMembership: async (
-    { userId, cohortId }: Seat,
+  liveMembership: isLiveMembership,
+  /** The sweep's question, asked once for every socket: the same per seat. */
+  liveMemberships: async (
+    seats: readonly Seat[],
     now: Date,
-  ): Promise<boolean> => {
-    const key = `${userId}:${cohortId}`;
-    if (accounts.notMembers.has(key)) return false;
-    const ends = accounts.visitEnds.get(key);
-    return ends === undefined || ends > now;
+  ): Promise<Set<string>> => {
+    const live = new Set<string>();
+    for (const seat of seats) {
+      if (await isLiveMembership(seat, now)) live.add(seatKey(seat));
+    }
+    return live;
   },
   /** Who campus-api tells, through Postgres, when a profile changes. */
   profileListeners: [] as ((userId: string) => void)[],
@@ -847,13 +857,13 @@ describe('a socket following its login', () => {
 describe('re-checking the cohort a socket named', () => {
   const GUEST = 'guest-1';
 
-  async function arrive() {
+  async function arrive(who = GUEST) {
     const conn = connect({
       origin: ORIGIN,
       cookie: `campus_session=${await token(
         SessionScope.FullAccess,
         SECRET,
-        GUEST,
+        who,
       )}`,
     });
     await conn.first;
@@ -907,16 +917,65 @@ describe('re-checking the cohort a socket named', () => {
   it('leaves sockets alone when the membership check fails', async () => {
     const conn = await arrive();
 
-    const working = accounts.liveMembership;
-    accounts.liveMembership = async () => {
+    const working = accounts.liveMemberships;
+    accounts.liveMemberships = async () => {
       throw new Error('database unavailable');
     };
     await new Promise((resolve) => setTimeout(resolve, 2_500));
-    accounts.liveMembership = working;
+    accounts.liveMemberships = working;
 
     expect(conn.ws.readyState).toBe(WebSocket.OPEN);
     conn.ws.close();
     await conn.settled;
+  }, 15_000);
+
+  /**
+   * The sweep's economy: membership is asked once for every socket together,
+   * as the session check beside it asks for every login at once. One query
+   * per socket would put the whole campus's worth of queries in the sweep.
+   */
+  it('asks about every open socket’s membership in one query', async () => {
+    // An admin's socket rides along to be left out of the question: their
+    // role admits them, so the sweep never asks whether they belong.
+    accounts.admins.add('guest-admin');
+    const open = await Promise.all([
+      arrive(),
+      arrive('guest-2'),
+      arrive('guest-3'),
+      arrive('guest-admin'),
+    ]);
+    expect(world.gateway.connections.size).toBe(4);
+
+    const asked: Seat[][] = [];
+    const working = accounts.liveMemberships;
+    accounts.liveMemberships = async (seats, now) => {
+      asked.push([...seats]);
+      return working(seats, now);
+    };
+    try {
+      // Through at least one sweep.
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+    } finally {
+      accounts.liveMemberships = working;
+    }
+
+    // Every sweep that ran asked once, and the one question carried every
+    // non-admin seat — not one socket's worth at a time.
+    expect(asked.length).toBeGreaterThan(0);
+    for (const seats of asked) {
+      expect(seats.map(seatKey).sort()).toEqual(
+        [
+          seatKey({ userId: 'guest-1', cohortId: COHORT }),
+          seatKey({ userId: 'guest-2', cohortId: COHORT }),
+          seatKey({ userId: 'guest-3', cohortId: COHORT }),
+        ].sort(),
+      );
+    }
+
+    for (const conn of open) {
+      conn.ws.close();
+      await conn.settled;
+    }
   }, 15_000);
 });
 
