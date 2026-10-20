@@ -136,8 +136,12 @@ describe('AuditLogService', () => {
   // Entries written in one transaction share a created_at.
   it('keeps entries with the same time in one order across pages', async () => {
     await db.execute(sql`truncate audit_log`);
-    for (const label of ['a', 'b', 'c', 'd']) {
+    // Written in an order that is neither the id order nor its reverse, so
+    // only the id tie-break gives the pages below.
+    const ids = { a: '2', b: '4', c: '1', d: '3' };
+    for (const [label, digit] of Object.entries(ids)) {
       await entry(label, '2026-10-01T09:00:00Z', {
+        id: `00000000-0000-4000-8000-00000000000${digit}`,
         actorUserId: null,
         action: AuditAction.TrackCreated,
       });
@@ -147,7 +151,10 @@ describe('AuditLogService', () => {
       [1, 2].map((page) => labels({ page, perPage: 2 })),
     );
 
-    expect(pages.flat().sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect(pages).toEqual([
+      ['b', 'd'],
+      ['a', 'c'],
+    ]);
   });
 
   it('filters by action', async () => {
