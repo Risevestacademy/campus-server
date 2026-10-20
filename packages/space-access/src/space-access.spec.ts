@@ -87,6 +87,14 @@ const STANDINGS: ReadonlyArray<{ name: string; who: PersonFacts }> = [
     who: person({ membership: membership({ role: 'mentor', status: null }) }),
   },
   {
+    name: 'a member on no track',
+    who: person({ membership: membership({ trackId: null }) }),
+  },
+  {
+    name: 'a member with a role this package does not know',
+    who: person({ membership: membership({ role: 'alumnus', status: null }) }),
+  },
+  {
     name: 'a guest',
     who: person({
       membership: membership({
@@ -129,6 +137,18 @@ const NO_GRANT: Record<string, Record<SpaceAccess, boolean>> = {
   'a member': { open: true, cohort: true, invite: false, request: false },
   'a professor': { open: true, cohort: true, invite: false, request: false },
   'a mentor': { open: true, cohort: true, invite: false, request: false },
+  'a member on no track': {
+    open: true,
+    cohort: true,
+    invite: false,
+    request: false,
+  },
+  'a member with a role this package does not know': {
+    open: true,
+    cohort: true,
+    invite: false,
+    request: false,
+  },
   'a guest': { open: true, cohort: false, invite: false, request: false },
   'a member whose membership has ended': {
     open: false,
@@ -179,6 +199,8 @@ describe('every access setting against every standing', () => {
       'a member',
       'a professor',
       'a mentor',
+      'a member on no track',
+      'a member with a role this package does not know',
       'a guest',
       'a member whose membership has ended',
       'a guest whose visit has run out',
@@ -333,6 +355,29 @@ describe.each([SPACE_ACCESS.Invite, SPACE_ACCESS.Request])(
       ).toBe(false);
     });
 
+    it('refuses a track grant to a member on no track', () => {
+      const trackless = person({ membership: membership({ trackId: null }) });
+      const toTrack = grant({ toUserId: null, toTrackId: TRACK });
+      expect(
+        mayEnter(trackless, space({ access, grants: [toTrack] }), AT),
+      ).toBe(false);
+    });
+
+    it('admits a member on no track by a grant to them', () => {
+      const trackless = person({ membership: membership({ trackId: null }) });
+      expect(
+        mayEnter(trackless, space({ access, grants: [grant()] }), AT),
+      ).toBe(true);
+    });
+
+    it('refuses a grant naming neither a person nor a track', () => {
+      const trackless = person({ membership: membership({ trackId: null }) });
+      const nobody = grant({ toUserId: null, toTrackId: null });
+      expect(mayEnter(trackless, space({ access, grants: [nobody] }), AT)).toBe(
+        false,
+      );
+    });
+
     it('refuses a grant to somebody else entirely', () => {
       const theirs = grant({ toUserId: 'person-2' });
       expect(mayEnter(person(), space({ access, grants: [theirs] }), AT)).toBe(
@@ -354,23 +399,80 @@ describe.each([SPACE_ACCESS.Invite, SPACE_ACCESS.Request])(
   },
 );
 
-describe('a grant against the setting around it', () => {
-  it('opens nothing on a cohort space, where a guest is concerned', () => {
-    const guest = person({
+/*
+ * A guest may ask into a classroom, so a request space opens to a guest the
+ * way it opens to anybody: on a live grant. Cohort and invite spaces stay
+ * shut to them, grant or not.
+ */
+describe('a guest holding a grant', () => {
+  const guest = () =>
+    person({
       membership: membership({
         role: COHORT_ROLES.Guest,
         accessExpiresAt: new Date(AT.getTime() + DAY),
+        trackId: null,
       }),
     });
+
+  it('enters a request space while the grant is live', () => {
     expect(
       mayEnter(
-        guest,
+        guest(),
+        space({ access: SPACE_ACCESS.Request, grants: [grant()] }),
+        AT,
+      ),
+    ).toBe(true);
+  });
+
+  it('is refused at a request space once the grant has run out', () => {
+    const expired = grant({ validTo: new Date(AT.getTime() - 1) });
+    expect(
+      mayEnter(
+        guest(),
+        space({ access: SPACE_ACCESS.Request, grants: [expired] }),
+        AT,
+      ),
+    ).toBe(false);
+  });
+
+  it('is refused at an invite space, grant or not', () => {
+    expect(
+      mayEnter(
+        guest(),
+        space({ access: SPACE_ACCESS.Invite, grants: [grant()] }),
+        AT,
+      ),
+    ).toBe(false);
+  });
+
+  it('is refused at a cohort space, grant or not', () => {
+    expect(
+      mayEnter(
+        guest(),
         space({ access: SPACE_ACCESS.Cohort, grants: [grant()] }),
         AT,
       ),
     ).toBe(false);
   });
 
+  it('is refused at a request space once their visit has run out', () => {
+    const lapsed = person({
+      membership: membership({
+        role: COHORT_ROLES.Guest,
+        accessExpiresAt: new Date(AT.getTime() - DAY),
+      }),
+    });
+    expect(
+      mayEnter(
+        lapsed,
+        space({ access: SPACE_ACCESS.Request, grants: [grant()] }),
+        AT,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('a grant against the setting around it', () => {
   it('changes nothing on an open space, grant expired or not', () => {
     const expired = grant({ validTo: new Date(AT.getTime() - DAY) });
     expect(
@@ -467,21 +569,6 @@ describe('isLiveGrant', () => {
 });
 
 describe('the clock', () => {
-  it('reads the current moment when the caller names none', () => {
-    const live: SpaceGrantFacts = {
-      toUserId: 'person-1',
-      toTrackId: null,
-      validFrom: new Date(Date.now() - DAY),
-      validTo: null,
-    };
-    expect(
-      mayEnter(
-        person(),
-        space({ access: SPACE_ACCESS.Invite, grants: [live] }),
-      ),
-    ).toBe(true);
-  });
-
   it('answers the same for a standing space whichever side of now it is asked', () => {
     const past = new Date(AT.getTime() - DAY);
     expect(

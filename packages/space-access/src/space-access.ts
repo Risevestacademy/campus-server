@@ -20,7 +20,7 @@ import { hasAdminPowers } from '@campus/session';
 /**
  * `space_access`, the four ways in may be had. The same values campus-api
  * writes into the column; a value this does not know — one added to the
- * database before this package knew of it — admits nobody below, the way
+ * database before this package knew of it — admits admins only, the way
  * `hasAdminPowers` treats a system role it does not know: the safe way to be
  * wrong.
  */
@@ -172,23 +172,28 @@ export function isLiveGrant(grant: SpaceGrantFacts, at: Date): boolean {
  *    cohort — all no. "Open admits anybody *in the campus*", and the roster is
  *    the campus. A membership named for the wrong cohort is a check made
  *    wrong, so it reads as none: fail closed.
- * 5. **A guest enters open spaces only.** Their visit is live or they are not
- *    here at all (step 4), so this is a guest in good standing.
+ * 5. **A guest enters open spaces, and request spaces they hold a live grant
+ *    on.** A guest may ask into a classroom, and an approved request is a
+ *    grant; `cohort` and `invite` stay shut to them, grant or not. Their visit
+ *    is live or they are not here at all (step 4), so this is a guest in good
+ *    standing.
  * 6. **The access setting**: `open` and `cohort` say yes — they differ only in
  *    the guest rule above, since every guest is a live member of some cohort.
- *    `invite` and `request` are one door: both are opened by a live grant on
- *    this space, to the person or to their track in this cohort; how the grant
- *    came to exist is not something standing at the door can see. Anything
- *    else — an access value this package does not know — says no.
+ *    For everybody but a guest, `invite` and `request` are one door: both are
+ *    opened by a live grant on this space, to the person or to their track in
+ *    this cohort; how the grant came to exist is not something standing at
+ *    the door can see. Anything else — an access value this package does not
+ *    know — says no.
  *
  * A grant is only ever consulted for `invite` and `request`. It cannot widen
  * what the setting allows: nobody is excluded by `open`, so a grant on an open
- * space has nothing to do, and a guest stays out of a granted `cohort` space.
+ * space has nothing to do, and a guest stays out of a granted `cohort` or
+ * `invite` space.
  */
 export function mayEnter(
   person: PersonFacts,
   space: SpaceFacts,
-  at: Date = new Date(),
+  at: Date,
 ): boolean {
   if (space.retiredAt !== null) {
     return false;
@@ -205,7 +210,11 @@ export function mayEnter(
     return false;
   }
   if (membership.role === COHORT_ROLES.Guest) {
-    return space.access === SPACE_ACCESS.Open;
+    return (
+      space.access === SPACE_ACCESS.Open ||
+      (space.access === SPACE_ACCESS.Request &&
+        holdsLiveGrant(space, person, membership, at))
+    );
   }
 
   switch (space.access) {
@@ -214,13 +223,22 @@ export function mayEnter(
       return true;
     case SPACE_ACCESS.Invite:
     case SPACE_ACCESS.Request:
-      return space.grants.some(
-        (grant) =>
-          subjectIs(grant, person, membership) && isLiveGrant(grant, at),
-      );
+      return holdsLiveGrant(space, person, membership, at);
     default:
       return false;
   }
+}
+
+/** Whether a grant on this space names them and is live at `at`. */
+function holdsLiveGrant(
+  space: SpaceFacts,
+  person: PersonFacts,
+  membership: CohortMembershipFacts,
+  at: Date,
+): boolean {
+  return space.grants.some(
+    (grant) => subjectIs(grant, person, membership) && isLiveGrant(grant, at),
+  );
 }
 
 /**

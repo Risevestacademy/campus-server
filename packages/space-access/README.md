@@ -24,9 +24,11 @@ First match stands:
 4. **Everybody else must be in this campus**: a live membership in the cohort
    the check names. Ended, expired, absent — or held in some other cohort,
    which is no answer to this question — all say no.
-5. **A guest enters open spaces only.**
-6. **The access setting**: `open` and `cohort` say yes. `invite` and `request`
-   say yes only if a live grant on this space names this person, or their
+5. **A guest enters open spaces, and request spaces they hold a live grant
+   on.** A guest may ask into a classroom; `cohort` and `invite` stay shut to
+   them, grant or not.
+6. **The access setting**: `open` and `cohort` say yes. For everybody but a
+   guest, `invite` and `request` say yes only if a live grant on this space names this person, or their
    track in this cohort. Anything else says no.
 
 "Live", for a membership, means: not ended, a student explicitly `active`, a
@@ -47,6 +49,8 @@ Every access setting against every standing, on a space with no grant on it:
 | A member (student)                        | ✔      | ✔        | ✘        | ✘         |
 | A professor                               | ✔      | ✔        | ✘        | ✘         |
 | A mentor                                  | ✔      | ✔        | ✘        | ✘         |
+| A member on no track                      | ✔      | ✔        | ✘        | ✘         |
+| A member with a role this does not know   | ✔      | ✔        | ✘        | ✘         |
 | A guest                                   | ✔      | ✘        | ✘        | ✘         |
 | A member whose membership has ended       | ✘      | ✘        | ✘        | ✘         |
 | A guest whose visit has run out           | ✘      | ✘        | ✘        | ✘         |
@@ -56,7 +60,7 @@ Every access setting against every standing, on a space with no grant on it:
 Beside it: a space with **no kind** admits admins only (guests and members
 refused, whatever `access` says); a **retired** space admits nobody, admin
 included; on `invite` and `request` a **live grant** — to them, or to their
-track — turns a ✘ into a ✔, and an expired, not-yet-started, wrong-track or
+track — turns a ✘ into a ✔ (for a guest, on `request` only), and an expired, not-yet-started, wrong-track or
 somebody-else's grant does not.
 
 ## What the caller supplies
@@ -79,7 +83,8 @@ The spec left these open; here is where they landed.
 | Which cohort is "the cohort"                                     | The one the caller names: world's socket `cohortId`, the cohort an API route acts under | A space belongs to no cohort — every cohort walks the same map — so the campus context cannot come from the space. World already has it (the socket names its cohort and must hold a live membership in it), and an API route always knows which cohort it asks about. |
 | A guest whose visit has run out                                  | Not in the campus at all, so refused everywhere, open included                          | Their membership is not live, so rule 4 catches them before the guest rule — the same answer world reaches by closing the socket.                                                                                                                                      |
 | A membership that has ended, on `open`                           | Refused                                                                                 | "Open admits anybody _in the campus_." The roster is the campus.                                                                                                                                                                                                       |
-| `invite` vs `request` at the door                                | Identical                                                                               | The difference is how access is _obtained_, not whether a grant opens the door. Somebody standing at the door can only see the grant.                                                                                                                                  |
+| `invite` vs `request` at the door                                | Identical, except for a guest                                                           | The difference is how access is _obtained_, not whether a grant opens the door. Somebody standing at the door can only see the grant.                                                                                                                                  |
+| A guest with a grant                                             | Counts on `request`, nowhere else                                                       | A guest may ask into a classroom, and an approved request is a grant. `cohort` and `invite` stay shut to them, as the spec's "a guest enters open spaces" had it.                                                                                                      |
 | A grant on an `open` or `cohort` space                           | Ignored                                                                                 | Nobody is excluded by those settings, so there is nothing for a grant to widen. A grant never admits a guest to a `cohort` space.                                                                                                                                      |
 | A grant to a track, while walking another cohort                 | Does not count                                                                          | A track belongs to a cohort; the grant speaks for that cohort's campus, not someone else's.                                                                                                                                                                            |
 | A grant to the person, in any cohort                             | Counts                                                                                  | `space_memberships.user_id` has no cohort on it: the grant was given to them, not to their place.                                                                                                                                                                      |

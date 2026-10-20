@@ -106,6 +106,7 @@ export default defineRailway((ctx) => {
       watchPatterns: [
         '/apps/campus-api/**',
         '/packages/session/**',
+        '/packages/space-access/**',
         '/package.json',
         '/pnpm-lock.yaml',
         '/pnpm-workspace.yaml',
