@@ -16,6 +16,7 @@ NestJS backend for the campus application.
 - [Audit log](#audit-log)
 - [Maps](#maps)
 - [Feedback](#feedback)
+- [Calls](#calls)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
 - [Integration guide](#integration-guide)
@@ -79,6 +80,8 @@ a clear error.
 | `TRUST_PROXY_HOPS`                | `1`                                                    | Reverse proxies in front of the app (Railway: `1`). Makes `req.ip` the real client so rate limiting buckets per user; `0` trusts none                                                                                                                                                                                                                                                                                                      |
 | `SANITY_PROJECT_ID`               | _(unset)_                                              | The Sanity project the campus maps are published to. Read only by the map sync, with no token. Unset, the API runs and the sync answers 503                                                                                                                                                                                                                                                                                                |
 | `SANITY_DATASET`                  | `production`                                           | The dataset the sync reads (`staging` on staging). Keep it the same as world's                                                                                                                                                                                                                                                                                                                                                             |
+| `LIVEKIT_WEBHOOK_API_KEY`         | _(unset)_                                              | The key LiveKit signs its webhooks with. Both or neither with the secret; unset, `POST /v1/calls/webhook` answers 503                                                                                                                                                                                                                                                                                                                      |     |
+| `LIVEKIT_WEBHOOK_API_SECRET`      | _(unset)_                                              | Its secret, at least 32 characters. Only verifies webhooks; world holds the key pair that mints tokens                                                                                                                                                                                                                                                                                                                                     |     |
 | `FF_LOG_LEVEL`                    | `info`                                                 | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal`                                                                                                                                                                                                                                                                                                                                                                |
 | `FF_LOG_PRETTY`                   | `false`                                                | Enable human-readable pino-pretty output (`true`) or JSON lines (`false`)                                                                                                                                                                                                                                                                                                                                                                  |
 | `DEPLOYMENT_ENVIRONMENT`          | `development`                                          | Label sent with traces (`deployment.environment`)                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -150,6 +153,14 @@ Any member can send a bug, an idea or a report, and admins read them. The
 routes, the limit on how much one account may send, who is told about a
 report and the personal-data rules are in
 [src/modules/feedback/README.md](src/modules/feedback/README.md).
+
+## Calls
+
+world hands people the LiveKit call for the space they stand in; campus-api
+records the calls from LiveKit's webhooks: when each run of a space's room
+opens and closes, who joins and leaves, and whether a camera came on. The
+webhook route, how events that arrive late or twice are handled, and the
+tables are in [src/modules/calls/README.md](src/modules/calls/README.md).
 
 ## Logging
 

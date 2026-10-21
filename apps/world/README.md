@@ -119,12 +119,14 @@ database.
 src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
   index.ts              boot and graceful shutdown
-  infra/                env, logger, account lookup, Redis (positions, presence), the published map
+  infra/                env, logger, the database reads (accounts, memberships, spaces),
+                        Redis (positions, presence), the published map
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   status/               available, busy or away, and going away while idle — no sockets here
   socket/
-    gateway.ts          the /socket route: upgrade, heartbeat, tick, messages
+    gateway.ts          the /socket route: upgrade, heartbeat, tick, messages; for now also
+                        the doors (spaces read, mayEnter on a step), calls and nearby lists
     authenticate.ts     who may open a socket
     protocol.ts         every message, both directions, as zod schemas
     protocol.schema.ts  those schemas as JSON Schema, for the frontend
