@@ -58,7 +58,6 @@ export interface TrackSnapshot {
 export interface MentorshipGroupSnapshot {
   name: string;
   description: string | null;
-  spaceId: string | null;
 }
 
 /** A mentorship group as a whole: the editable fields plus its people. */
@@ -288,7 +287,12 @@ interface AuditEntryShapes {
   };
   [AuditAction.MentorshipGroupStudentAdded]: {
     subject: AuditSubjectType.MentorshipGroup;
-    details: { cohortId: string; cohortMemberId: string };
+    details: {
+      cohortId: string;
+      cohortMemberId: string;
+      /** Set when the student joined by accepting an invite, not by admin add. */
+      inviteId?: string;
+    };
   };
   [AuditAction.MentorshipGroupStudentRemoved]: {
     subject: AuditSubjectType.MentorshipGroup;

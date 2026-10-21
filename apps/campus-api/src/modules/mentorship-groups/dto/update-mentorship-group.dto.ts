@@ -1,17 +1,11 @@
 import { Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  IsUUID,
-  MaxLength,
-} from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 import { IsOptionalNotNull } from '../../../shared/dto/optional-not-null.js';
 import { MENTORSHIP_GROUP_NAME_MAX_LENGTH } from './create-mentorship-group.dto.js';
 
-/** A partial edit of the name, description or room. */
+/** A partial edit of the name or description. */
 export class UpdateMentorshipGroupDto {
   @ApiPropertyOptional({
     example: 'Pod A',
@@ -41,14 +35,4 @@ export class UpdateMentorshipGroupDto {
   @IsOptional()
   @IsString()
   description?: string | null;
-
-  @ApiPropertyOptional({
-    example: '88888888-8888-4888-8888-888888888888',
-    type: String,
-    nullable: true,
-    description: 'The pod’s room. null clears it.',
-  })
-  @IsOptional()
-  @IsUUID()
-  spaceId?: string | null;
 }

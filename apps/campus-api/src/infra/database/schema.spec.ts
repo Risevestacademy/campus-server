@@ -14,12 +14,6 @@ import {
 } from '../../modules/cohorts/schema.js';
 import { InviteStatus, invites } from '../../modules/invites/schema.js';
 import {
-  AudioMode,
-  SpaceAccess,
-  maps,
-  spaces,
-} from '../../modules/maps/schema.js';
-import {
   mentorshipGroupStudents,
   mentorshipGroups,
 } from '../../modules/mentorship-groups/schema.js';
@@ -524,7 +518,6 @@ describe('mentorship groups', () => {
     studentMemberId: string;
     otherStudentMemberId: string;
     secondMentorMemberId: string;
-    spaceId: string;
   };
 
   beforeEach(async () => {
@@ -594,28 +587,12 @@ describe('mentorship groups', () => {
       })
       .returning();
 
-    const [map] = await db
-      .insert(maps)
-      .values({ key: 'main', name: 'Main' })
-      .returning();
-    const [space] = await db
-      .insert(spaces)
-      .values({
-        mapId: map.id,
-        key: 'pod-a',
-        name: 'Pod A',
-        audioMode: AudioMode.Proximity,
-        access: SpaceAccess.Normal,
-      })
-      .returning();
-
     setup = {
       mentorMemberId: mentor.id,
       secondMentorMemberId: secondMentor.id,
       studentMemberId: student.id,
       otherMentorMemberId: otherMentor.id,
       otherStudentMemberId: otherStudent.id,
-      spaceId: space.id,
     };
   });
 
@@ -628,10 +605,6 @@ describe('mentorship groups', () => {
       name: 'Pod A',
       ...overrides,
     });
-
-  it('accepts a mentor of this cohort and a space', async () => {
-    await group({ spaceId: setup.spaceId });
-  });
 
   it('requires the mentor to be a member of the same cohort', async () => {
     await expectViolation(
@@ -673,18 +646,6 @@ describe('mentorship groups', () => {
     });
   });
 
-  it('keeps a space to one group', async () => {
-    await group({ spaceId: setup.spaceId });
-    await expectViolation(
-      group({
-        name: 'Pod B',
-        mentorMemberId: setup.secondMentorMemberId,
-        spaceId: setup.spaceId,
-      }),
-      'mentorship_groups_space_unique',
-    );
-  });
-
   it('accepts a student of this cohort', async () => {
     const [row] = await group().returning();
     await db.insert(mentorshipGroupStudents).values({
@@ -692,6 +653,18 @@ describe('mentorship groups', () => {
       cohortId: fixtures.cohortId,
       cohortMemberId: setup.studentMemberId,
     });
+  });
+
+  it('requires the student link cohort to match the group', async () => {
+    const [row] = await group().returning();
+    await expectViolation(
+      db.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: row.id,
+        cohortId: fixtures.otherCohortId,
+        cohortMemberId: setup.otherStudentMemberId,
+      }),
+      'mentorship_group_students_group_fk',
+    );
   });
 
   it('requires the student to be a member of the group cohort', async () => {

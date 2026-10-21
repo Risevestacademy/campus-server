@@ -1,5 +1,5 @@
 {
-  "id": "337cab57-db0f-4e11-96e7-39c9b5542cfd",
+  "id": "8c5dc62c-afd5-42a7-8b0b-19eda9424639",
   "prevId": "f31d7401-2e3e-4285-931a-d2dc3bad93f4",
   "version": "7",
   "dialect": "postgresql",
@@ -1428,19 +1428,6 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "invites_mentorship_group_id_mentorship_groups_id_fk": {
-          "name": "invites_mentorship_group_id_mentorship_groups_id_fk",
-          "tableFrom": "invites",
-          "tableTo": "mentorship_groups",
-          "columnsFrom": [
-            "mentorship_group_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "invites_mentorship_group_cohort_fk": {
           "name": "invites_mentorship_group_cohort_fk",
           "tableFrom": "invites",
@@ -2045,32 +2032,6 @@
         }
       },
       "foreignKeys": {
-        "mentorship_group_students_cohort_id_cohorts_id_fk": {
-          "name": "mentorship_group_students_cohort_id_cohorts_id_fk",
-          "tableFrom": "mentorship_group_students",
-          "tableTo": "cohorts",
-          "columnsFrom": [
-            "cohort_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "mentorship_group_students_member_fk": {
-          "name": "mentorship_group_students_member_fk",
-          "tableFrom": "mentorship_group_students",
-          "tableTo": "cohort_members",
-          "columnsFrom": [
-            "cohort_member_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "mentorship_group_students_group_fk": {
           "name": "mentorship_group_students_group_fk",
           "tableFrom": "mentorship_group_students",
@@ -2160,12 +2121,6 @@
             "type": "stored"
           }
         },
-        "space_id": {
-          "name": "space_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "name": {
           "name": "name",
           "type": "varchar(128)",
@@ -2236,22 +2191,6 @@
           "method": "btree",
           "with": {}
         },
-        "mentorship_groups_space_unique": {
-          "name": "mentorship_groups_space_unique",
-          "columns": [
-            {
-              "expression": "space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"mentorship_groups\".\"space_id\" is not null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "mentorship_groups_cohort_idx": {
           "name": "mentorship_groups_cohort_idx",
           "columns": [
@@ -2275,32 +2214,6 @@
           "tableTo": "cohorts",
           "columnsFrom": [
             "cohort_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "mentorship_groups_space_id_spaces_id_fk": {
-          "name": "mentorship_groups_space_id_spaces_id_fk",
-          "tableFrom": "mentorship_groups",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "space_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "mentorship_groups_mentor_member_id_cohort_members_id_fk": {
-          "name": "mentorship_groups_mentor_member_id_cohort_members_id_fk",
-          "tableFrom": "mentorship_groups",
-          "tableTo": "cohort_members",
-          "columnsFrom": [
-            "mentor_member_id"
           ],
           "columnsTo": [
             "id"

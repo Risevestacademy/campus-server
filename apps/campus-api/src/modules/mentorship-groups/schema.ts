@@ -13,7 +13,6 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { cohortMembers, cohortRoleEnum, cohorts } from '../cohorts/schema.js';
-import { spaces } from '../maps/schema.js';
 
 /**
  * A pod: one mentor and a set of students inside a cohort.
@@ -36,8 +35,6 @@ export const mentorshipGroups = pgTable(
     mentorRole: cohortRoleEnum('mentor_role')
       .notNull()
       .generatedAlwaysAs(sql`'mentor'::cohort_role`),
-    /** The pod's room. Null until one is assigned. */
-    spaceId: uuid('space_id').references(() => spaces.id),
     name: varchar('name', { length: 128 }).notNull(),
     description: text('description'),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -49,11 +46,6 @@ export const mentorshipGroups = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    foreignKey({
-      columns: [table.mentorMemberId],
-      foreignColumns: [cohortMembers.id],
-      name: 'mentorship_groups_mentor_member_id_cohort_members_id_fk',
-    }),
     // The mentor is a member of this cohort, holding the mentor role.
     foreignKey({
       columns: [table.mentorMemberId, table.cohortId, table.mentorRole],
@@ -78,10 +70,6 @@ export const mentorshipGroups = pgTable(
       table.cohortId,
       table.mentorMemberId,
     ),
-    // One group per space, but a group may have no space.
-    uniqueIndex('mentorship_groups_space_unique')
-      .on(table.spaceId)
-      .where(sql`${table.spaceId} is not null`),
     index('mentorship_groups_cohort_idx').on(table.cohortId),
   ],
 );
@@ -95,9 +83,7 @@ export const mentorshipGroupStudents = pgTable(
      * Kept here so the student rule can be one composite foreign key. It is
      * also what makes "one group per student per cohort" a plain unique index.
      */
-    cohortId: uuid('cohort_id')
-      .notNull()
-      .references(() => cohorts.id),
+    cohortId: uuid('cohort_id').notNull(),
     cohortMemberId: uuid('cohort_member_id').notNull(),
     /** Always 'student'; part of mentorship_group_students_student_in_cohort. */
     memberRole: cohortRoleEnum('member_role')
@@ -108,11 +94,6 @@ export const mentorshipGroupStudents = pgTable(
       .defaultNow(),
   },
   (table) => [
-    foreignKey({
-      columns: [table.cohortMemberId],
-      foreignColumns: [cohortMembers.id],
-      name: 'mentorship_group_students_member_fk',
-    }),
     // The group exists, and it belongs to the cohort named here.
     foreignKey({
       columns: [table.mentorshipGroupId, table.cohortId],

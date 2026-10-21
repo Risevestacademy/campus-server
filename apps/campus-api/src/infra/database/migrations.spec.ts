@@ -523,6 +523,6 @@ describe('0020 against invites that already name a group', () => {
         `insert into invites (email, token_hash, invited_by, expires_at, cohort_id, cohort_track_id, mentorship_group_id, cohort_role, system_role, status)
          values ('new@campus.local','new-hash','${adminId}', now() + interval '1 day', '${cohortId}', (select id from cohort_tracks limit 1), '00000000-0000-4000-8000-000000000002', 'student', 'user', 'pending')`,
       ),
-    ).rejects.toThrow(/invites_mentorship_group_id_mentorship_groups_id_fk/);
+    ).rejects.toThrow(/invites_mentorship_group_cohort_fk/);
   });
 });

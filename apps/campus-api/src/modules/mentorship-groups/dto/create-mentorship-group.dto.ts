@@ -45,12 +45,4 @@ export class CreateMentorshipGroupDto {
   @IsOptional()
   @IsString()
   description?: string | null;
-
-  @ApiPropertyOptional({
-    example: '88888888-8888-4888-8888-888888888888',
-    description: 'The pod’s room. A space belongs to at most one group.',
-  })
-  @IsOptional()
-  @IsUUID()
-  spaceId?: string;
 }

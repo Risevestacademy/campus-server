@@ -50,15 +50,6 @@ export class MentorshipGroupResponseDto {
   })
   description: string | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    example: null,
-    description: 'The pod’s room, or null when it has none.',
-  })
-  spaceId: string | null;
-
   @ApiProperty({ type: () => MentorshipGroupMentorDto })
   mentor: MentorshipGroupMentorDto;
 

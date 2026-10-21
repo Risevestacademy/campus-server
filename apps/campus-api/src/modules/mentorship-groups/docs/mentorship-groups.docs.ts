@@ -46,12 +46,11 @@ export function ApiCreateMentorshipGroup(): MethodDecorator {
       summary: 'Create a mentorship group (admin only)',
       description:
         'Creates an empty pod in a cohort: one mentor and a name, optionally ' +
-        'a description and a room. Students are added separately.\n\n' +
+        'a description. Students are added separately.\n\n' +
         'The mentor is a cohort membership, not a user: mentorMemberId is ' +
         'the `id` the roster returns. It must be a live mentor of this ' +
-        'cohort. Names are unique per cohort, ignoring case. A space belongs ' +
-        'to at most one group, and a mentor leads at most one group per ' +
-        'cohort.',
+        'cohort. Names are unique per cohort, ignoring case. A mentor leads ' +
+        'at most one group per cohort.',
     }),
     ApiCreatedResponse({ type: MentorshipGroupResponseDto }),
     ApiBadRequestResponse({
@@ -63,8 +62,7 @@ export function ApiCreateMentorshipGroup(): MethodDecorator {
     ApiAdminOnly(),
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
-      description:
-        'The cohort, the mentor membership or the space does not exist.',
+      description: 'The cohort or the mentor membership does not exist.',
       content: {
         'application/json': {
           examples: {
@@ -90,8 +88,8 @@ export function ApiCreateMentorshipGroup(): MethodDecorator {
     ApiConflictResponse({
       type: ApiErrorResponseDto,
       description:
-        'The name is already used in this cohort, the mentor already leads ' +
-        'a group there, or the space is already assigned.',
+        'The name is already used in this cohort, or the mentor already ' +
+        'leads a group there.',
       content: {
         'application/json': {
           examples: {
@@ -171,20 +169,19 @@ export function ApiUpdateMentorshipGroup(): MethodDecorator {
       description:
         'A partial edit: only the fields present are written. name is ' +
         'trimmed and must be unique in the cohort, ignoring case. ' +
-        'description and spaceId accept null to clear them. Changing the ' +
-        'mentor has its own route.',
+        'description accepts null to clear it. Changing the mentor has its ' +
+        'own route.',
     }),
     ApiOkResponse({ type: MentorshipGroupResponseDto }),
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
       description:
-        'A malformed field, a blank name, or a space or group that does not ' +
-        'belong here.',
+        'A malformed field, a blank name, or a group that does not belong here.',
     }),
     ApiAdminOnly(),
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
-      description: 'The cohort, group or space does not exist.',
+      description: 'The cohort or group does not exist.',
       content: {
         'application/json': {
           examples: { cohortNotFound, groupNotFound },
@@ -193,9 +190,7 @@ export function ApiUpdateMentorshipGroup(): MethodDecorator {
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,
-      description:
-        'Another group in the cohort has that name, or the space is already ' +
-        'assigned to one.',
+      description: 'Another group in the cohort has that name.',
     }),
   );
 }
@@ -327,9 +322,10 @@ export function ApiDeleteMentorshipGroup(): MethodDecorator {
       summary: 'Delete a mentorship group (admin only)',
       description:
         'Removes the group and its student links. The students stay in the ' +
-        'cohort. The group must belong to the cohort in the URL. A group ' +
-        'that an invite still names is refused with a 409: revoke or remove ' +
-        'the invite first.',
+        'cohort, and settled invites keep their row but lose the group id. ' +
+        'The group must belong to the cohort in the URL. A group that a ' +
+        'pending invite still names is refused with a 409: revoke the invite ' +
+        'first.',
     }),
     ApiNoContentResponse({ description: 'The group was deleted.' }),
     ApiBadRequestResponse({
@@ -348,20 +344,21 @@ export function ApiDeleteMentorshipGroup(): MethodDecorator {
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,
-      description: 'An invite still names the group.',
+      description: 'A pending invite still names the group.',
       content: {
         'application/json': {
           examples: {
             referencedByInvite: {
-              summary: 'Invite references the group',
+              summary: 'Pending invite references the group',
               value: {
                 error: {
                   code: 'CONFLICT',
                   message:
-                    'Mentorship group cannot be deleted while an invite names it',
+                    'Mentorship group cannot be deleted while a pending invite names it',
                   details: {
                     cohortId: '11111111-1111-4111-8111-111111111111',
                     groupId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                    inviteId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
                   },
                 },
               },

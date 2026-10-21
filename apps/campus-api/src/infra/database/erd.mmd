@@ -99,7 +99,6 @@ erDiagram
         uuid cohort_id FK
         uuid mentor_member_id FK
         cohort_role_enum mentor_role "generated: always 'mentor'; part of the mentor FK"
-        uuid space_id FK "the pod's room; nullable, one group per space"
         varchar name "unique per cohort, ignoring case"
         text description
         timestamptz created_at
@@ -439,7 +438,6 @@ erDiagram
     USERS ||--o{ INVITES : "revoked_by"
     COHORTS ||--o{ MENTORSHIP_GROUPS : "contains"
     COHORT_MEMBERS ||--o{ MENTORSHIP_GROUPS : "leads_as_mentor"
-    SPACES ||--o{ MENTORSHIP_GROUPS : "meets_in"
     MENTORSHIP_GROUPS ||--o{ MENTORSHIP_GROUP_STUDENTS : "includes"
     COHORT_MEMBERS ||--o{ MENTORSHIP_GROUP_STUDENTS : "joins_as_student"
 
@@ -536,7 +534,6 @@ erDiagram
 %%   mentorship_groups(cohort_id, lower(name))
 %%   mentorship_groups(cohort_id, mentor_member_id)
 %%   mentorship_groups(id, cohort_id)
-%%   mentorship_groups(space_id)                   WHERE space_id IS NOT NULL
 %%   mentorship_group_students(mentorship_group_id, cohort_member_id)
 %%   mentorship_group_students(cohort_id, cohort_member_id)
 %%   maps(key)

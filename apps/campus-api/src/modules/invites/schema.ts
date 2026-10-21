@@ -100,11 +100,6 @@ export const invites = pgTable(
     }),
     // The group exists, and it belongs to the invite's cohort.
     foreignKey({
-      columns: [table.mentorshipGroupId],
-      foreignColumns: [mentorshipGroups.id],
-      name: 'invites_mentorship_group_id_mentorship_groups_id_fk',
-    }),
-    foreignKey({
       columns: [table.mentorshipGroupId, table.cohortId],
       foreignColumns: [mentorshipGroups.id, mentorshipGroups.cohortId],
       name: 'invites_mentorship_group_cohort_fk',

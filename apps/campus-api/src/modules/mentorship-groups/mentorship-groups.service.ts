@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import {
   DRIZZLE,
@@ -29,7 +29,7 @@ import {
   cohortMembers,
   cohorts,
 } from '../cohorts/schema.js';
-import { spaces } from '../maps/schema.js';
+import { InviteStatus, invites } from '../invites/schema.js';
 import { users } from '../users/schema.js';
 import type { ChangeMentorDto } from './dto/change-mentor.dto.js';
 import type { CreateMentorshipGroupDto } from './dto/create-mentorship-group.dto.js';
@@ -50,7 +50,7 @@ import {
 } from './schema.js';
 
 /** The fields a PATCH may move, and so what an update entry compares. */
-const EDITABLE_FIELDS = ['name', 'description', 'spaceId'] as const;
+const EDITABLE_FIELDS = ['name', 'description'] as const;
 
 const userFields = {
   id: users.id,
@@ -82,16 +82,12 @@ export class MentorshipGroupsService {
       const row = await this.db.transaction(async (tx) => {
         await this.findCohort(tx, cohortId);
         await this.assertMentor(tx, cohortId, dto.mentorMemberId);
-        if (dto.spaceId) {
-          await this.assertSpace(tx, dto.spaceId);
-        }
 
         const [row] = await tx
           .insert(mentorshipGroups)
           .values({
             cohortId,
             mentorMemberId: dto.mentorMemberId,
-            spaceId: dto.spaceId ?? null,
             name: dto.name,
             description: dto.description ?? null,
           })
@@ -106,7 +102,6 @@ export class MentorshipGroupsService {
             name: row.name,
             description: row.description,
             mentorMemberId: row.mentorMemberId,
-            spaceId: row.spaceId,
           },
         });
         return row;
@@ -117,7 +112,6 @@ export class MentorshipGroupsService {
       throw this.translateWriteError(err, {
         cohortId,
         mentorMemberId: dto.mentorMemberId,
-        spaceId: dto.spaceId,
       });
     }
   }
@@ -170,20 +164,13 @@ export class MentorshipGroupsService {
     dto: UpdateMentorshipGroupDto,
     audit: AuditContext,
   ): Promise<MentorshipGroupResponseDto> {
-    if (
-      dto.name === undefined &&
-      dto.description === undefined &&
-      dto.spaceId === undefined
-    ) {
+    if (dto.name === undefined && dto.description === undefined) {
       return this.get(cohortId, groupId);
     }
 
     try {
       const row = await this.db.transaction(async (tx) => {
         const existing = await this.findGroup(tx, cohortId, groupId, true);
-        if (typeof dto.spaceId === 'string') {
-          await this.assertSpace(tx, dto.spaceId);
-        }
 
         const [row] = await tx
           .update(mentorshipGroups)
@@ -192,7 +179,6 @@ export class MentorshipGroupsService {
             ...(dto.description !== undefined
               ? { description: dto.description }
               : {}),
-            ...(dto.spaceId !== undefined ? { spaceId: dto.spaceId } : {}),
           })
           .where(eq(mentorshipGroups.id, groupId))
           .returning();
@@ -211,7 +197,7 @@ export class MentorshipGroupsService {
 
       return (await this.loadGroups(this.db, [row]))[0];
     } catch (err) {
-      throw this.translateWriteError(err, { cohortId, spaceId: dto.spaceId });
+      throw this.translateWriteError(err, { cohortId });
     }
   }
 
@@ -335,6 +321,42 @@ export class MentorshipGroupsService {
       await this.db.transaction(async (tx) => {
         const group = await this.findGroup(tx, cohortId, groupId, true);
 
+        // A pending invite is still an offer, so the pod has to stay while it
+        // can be accepted. Lapsed does not matter: a resend can bring the
+        // same pending row back, so the status is what is checked.
+        const [pending] = await tx
+          .select({ id: invites.id })
+          .from(invites)
+          .where(
+            and(
+              eq(invites.mentorshipGroupId, groupId),
+              eq(invites.status, InviteStatus.Pending),
+            ),
+          )
+          .limit(1);
+        if (pending) {
+          throw new MentorshipGroupConflictException(
+            'Mentorship group cannot be deleted while a pending invite names it',
+            { cohortId, groupId, inviteId: pending.id },
+          );
+        }
+
+        // Settled invites keep their row and every other column; only the
+        // pointer to the group goes, so the history stays readable. Setting
+        // updated_at to itself stops $onUpdate rewriting a settled row.
+        await tx
+          .update(invites)
+          .set({
+            mentorshipGroupId: null,
+            updatedAt: invites.updatedAt,
+          })
+          .where(
+            and(
+              eq(invites.mentorshipGroupId, groupId),
+              ne(invites.status, InviteStatus.Pending),
+            ),
+          );
+
         // The student links are not cascaded: a teacher deleting a pod should
         // not require emptying it first, and the audit entry below records the
         // group that went with them.
@@ -354,17 +376,15 @@ export class MentorshipGroupsService {
             name: group.name,
             description: group.description,
             mentorMemberId: group.mentorMemberId,
-            spaceId: group.spaceId,
           },
         });
       });
     } catch (err) {
-      // An invite is the only thing that still points at a group once its
-      // student links are gone. Keep the reference honest: revoke or remove
-      // the invite first rather than silently detaching it.
+      // A pending invite inserted between the check and the delete is the
+      // only thing the FKs can still refuse.
       if (isForeignKeyViolation(err)) {
         throw new MentorshipGroupConflictException(
-          'Mentorship group cannot be deleted while an invite names it',
+          'Mentorship group cannot be deleted while a pending invite names it',
           { cohortId, groupId },
         );
       }
@@ -449,7 +469,6 @@ export class MentorshipGroupsService {
         cohortId: row.cohortId,
         name: row.name,
         description: row.description,
-        spaceId: row.spaceId,
         mentor,
         students: studentsByGroup.get(row.id) ?? [],
         createdAt: row.createdAt,
@@ -601,22 +620,6 @@ export class MentorshipGroupsService {
     }
   }
 
-  private async assertSpace(
-    executor: DbExecutor,
-    spaceId: string,
-  ): Promise<void> {
-    const [space] = await executor
-      .select({ id: spaces.id })
-      .from(spaces)
-      .where(eq(spaces.id, spaceId))
-      .limit(1);
-    if (!space) {
-      throw new MentorshipGroupNotFoundException(`Space ${spaceId} not found`, {
-        spaceId,
-      });
-    }
-  }
-
   /**
    * Turns the named constraints the routes can trip into the answers a client
    * can act on. Anything else is a genuine failure and is rethrown.
@@ -634,12 +637,6 @@ export class MentorshipGroupsService {
     if (isUniqueViolation(err, 'mentorship_groups_one_per_mentor')) {
       return new MentorshipGroupConflictException(
         'That mentor already leads a mentorship group in this cohort',
-        context,
-      );
-    }
-    if (isUniqueViolation(err, 'mentorship_groups_space_unique')) {
-      return new MentorshipGroupConflictException(
-        'That space is already assigned to a mentorship group',
         context,
       );
     }
@@ -677,7 +674,7 @@ export class MentorshipGroupsService {
     }
     if (isForeignKeyViolation(err)) {
       return new MentorshipGroupNotFoundException(
-        'A referenced cohort, membership, group or space does not exist',
+        'A referenced cohort, membership or group does not exist',
         context,
       );
     }

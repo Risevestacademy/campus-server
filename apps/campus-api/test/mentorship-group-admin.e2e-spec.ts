@@ -16,7 +16,11 @@ import {
   disabledEmailSender,
   EMAIL_SENDER,
 } from './../src/infra/email/email-sender.js';
-import { AuditAction, auditLog } from './../src/modules/audit/schema.js';
+import {
+  AuditAction,
+  AuditSubjectType,
+  auditLog,
+} from './../src/modules/audit/schema.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import { InviteDecision } from './../src/modules/invites/dto/invite-decision.dto.js';
 import { InviteStatus, invites } from './../src/modules/invites/schema.js';
@@ -77,9 +81,10 @@ describe('mentorship group admin routes (e2e)', () => {
     user: { id: string; email: string },
     scope: SessionScope = SessionScope.FullAccess,
     inviteId?: string,
+    epoch = 0,
   ) => {
     const { token } = await signSessionToken(
-      { epoch: 0, userId: user.id, email: user.email, scope, inviteId },
+      { epoch, userId: user.id, email: user.email, scope, inviteId },
       { secret: SECRET, ttlMinutes: 15 },
     );
     return `${SESSION_COOKIE}=${token}`;
@@ -265,7 +270,6 @@ describe('mentorship group admin routes (e2e)', () => {
         cohortId: w.cohort.id,
         name: 'Pod A',
         description: 'Backend pod',
-        spaceId: null,
         mentor: { cohortMemberId: w.mentor1.id },
         students: [],
       });
@@ -383,6 +387,14 @@ describe('mentorship group admin routes (e2e)', () => {
         row.action.startsWith('mentorship_group'),
       )) {
         expect(entry.actorUserId).toBe(adminId);
+      }
+
+      const added = entries.filter(
+        (entry) => entry.action === AuditAction.MentorshipGroupStudentAdded,
+      );
+      expect(added).toHaveLength(2);
+      for (const entry of added) {
+        expect(entry.details).not.toHaveProperty('inviteId');
       }
     });
 
@@ -544,7 +556,7 @@ describe('mentorship group admin routes (e2e)', () => {
         await createGroup(otherCohort.id, otherMentor.id).expect(201)
       ).body;
 
-      await as(adminCookie)
+      const missing = await as(adminCookie)
         .post('/v1/invites', {
           email: 'nobody@campus.local',
           cohortId: w.cohort.id,
@@ -553,6 +565,11 @@ describe('mentorship group admin routes (e2e)', () => {
           mentorshipGroupId: MISSING,
         })
         .expect(404);
+      expect(missing.body.error).toMatchObject({
+        code: 'NOT_FOUND',
+        message: `Mentorship group ${MISSING} not found`,
+        details: { mentorshipGroupId: MISSING },
+      });
 
       const res = await as(adminCookie)
         .post('/v1/invites', {
@@ -568,27 +585,148 @@ describe('mentorship group admin routes (e2e)', () => {
       );
     });
 
-    it('refuses to delete a group an invite still names', async () => {
+    const inviteTo = async (
+      cohortId: string,
+      cohortTrackId: string,
+      groupId: string,
+      status: InviteStatus,
+      expiresAt = new Date(Date.now() + 86_400_000),
+    ) => {
+      const [row] = await db
+        .insert(invites)
+        .values({
+          email: `invite-${status}@campus.local`,
+          tokenHash: `invite-${status}-hash`,
+          invitedBy: adminId,
+          expiresAt,
+          cohortId,
+          cohortTrackId,
+          mentorshipGroupId: groupId,
+          cohortRole: CohortRole.Student,
+          systemRole: SystemRole.User,
+          status,
+        })
+        .returning();
+      return row;
+    };
+
+    const deleteGroup = (cohortId: string, groupId: string) =>
+      as(adminCookie).del(
+        `/v1/cohorts/${cohortId}/mentorship-groups/${groupId}`,
+      );
+
+    const deleteEntries = () =>
+      db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.MentorshipGroupDeleted));
+
+    it.each([
+      InviteStatus.Revoked,
+      InviteStatus.Expired,
+      InviteStatus.Accepted,
+      InviteStatus.Declined,
+    ])(
+      'deletes the group when the only invite is %s, clearing only its group id',
+      async (status) => {
+        const w = await world();
+        const group = (await createGroup(w.cohort.id, w.mentor1.id).expect(201))
+          .body;
+        const invite = await inviteTo(
+          w.cohort.id,
+          w.cohortTrackId,
+          group.id,
+          status,
+        );
+
+        await deleteGroup(w.cohort.id, group.id).expect(204);
+
+        const after = await db.query.invites.findFirst({
+          where: eq(invites.id, invite.id),
+        });
+        expect(after).toEqual({ ...invite, mentorshipGroupId: null });
+
+        const entries = await deleteEntries();
+        expect(entries).toEqual([
+          expect.objectContaining({
+            actorUserId: adminId,
+            subjectType: AuditSubjectType.MentorshipGroup,
+            subjectId: group.id,
+          }),
+        ]);
+      },
+    );
+
+    it('deletes after an invite is revoked through the route', async () => {
       const w = await world();
       const group = (await createGroup(w.cohort.id, w.mentor1.id).expect(201))
         .body;
+      const created = (
+        await as(adminCookie)
+          .post('/v1/invites', {
+            email: 'revoked-route@campus.local',
+            cohortId: w.cohort.id,
+            cohortRole: CohortRole.Student,
+            cohortTrackId: w.cohortTrackId,
+            mentorshipGroupId: group.id,
+          })
+          .expect(201)
+      ).body;
 
       await as(adminCookie)
-        .post('/v1/invites', {
-          email: 'invited@campus.local',
-          cohortId: w.cohort.id,
-          cohortRole: CohortRole.Student,
-          cohortTrackId: w.cohortTrackId,
-          mentorshipGroupId: group.id,
-        })
-        .expect(201);
+        .post(`/v1/invites/${created.id}/revoke`)
+        .expect(200);
 
-      const res = await as(adminCookie)
-        .del(`/v1/cohorts/${w.cohort.id}/mentorship-groups/${group.id}`)
-        .expect(409);
-      expect(res.body.error.message).toBe(
-        'Mentorship group cannot be deleted while an invite names it',
+      const revoked = await db.query.invites.findFirst({
+        where: eq(invites.id, created.id),
+      });
+      await deleteGroup(w.cohort.id, group.id).expect(204);
+
+      expect(
+        await db.query.invites.findFirst({
+          where: eq(invites.id, created.id),
+        }),
+      ).toEqual({ ...revoked, mentorshipGroupId: null });
+    });
+
+    it.each([
+      ['a live pending invite', new Date(Date.now() + 86_400_000)],
+      ['a lapsed-but-pending invite', new Date(Date.now() - 86_400_000)],
+    ])('refuses to delete for %s', async (_label, expiresAt) => {
+      const w = await world();
+      const group = (await createGroup(w.cohort.id, w.mentor1.id).expect(201))
+        .body;
+      const invite = await inviteTo(
+        w.cohort.id,
+        w.cohortTrackId,
+        group.id,
+        InviteStatus.Pending,
+        expiresAt,
       );
+
+      const res = await deleteGroup(w.cohort.id, group.id).expect(409);
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message:
+          'Mentorship group cannot be deleted while a pending invite names it',
+        details: {
+          cohortId: w.cohort.id,
+          groupId: group.id,
+          inviteId: invite.id,
+        },
+      });
+
+      expect(
+        await db.query.invites.findFirst({
+          where: eq(invites.id, invite.id),
+        }),
+      ).toEqual(invite);
+      expect(
+        await as(adminCookie)
+          .get(`/v1/cohorts/${w.cohort.id}/mentorship-groups/${group.id}`)
+          .expect(200),
+      ).toBeDefined();
+      expect(await deleteEntries()).toHaveLength(0);
     });
 
     it('puts an accepted group invite’s student into the group', async () => {
@@ -631,6 +769,130 @@ describe('mentorship group admin routes (e2e)', () => {
         expect.objectContaining({
           cohortMemberId: expect.any(String),
           user: expect.objectContaining({ id: invitee.id }),
+        }),
+      ]);
+
+      const student = await db.query.cohortMembers.findFirst({
+        where: eq(schema.cohortMembers.userId, invitee.id),
+      });
+      const addedEntries = () =>
+        db
+          .select()
+          .from(auditLog)
+          .where(eq(auditLog.action, AuditAction.MentorshipGroupStudentAdded));
+
+      expect(await addedEntries()).toEqual([
+        expect.objectContaining({
+          actorUserId: invitee.id,
+          subjectType: AuditSubjectType.MentorshipGroup,
+          subjectId: group.id,
+          details: {
+            cohortId: w.cohort.id,
+            cohortMemberId: student!.id,
+            inviteId: invite.id,
+          },
+        }),
+      ]);
+
+      // A refused replay writes nothing.
+      await request(app.getHttpServer())
+        .post('/v1/invites/decision')
+        .set(
+          'Cookie',
+          await cookieFor(invitee, SessionScope.Provisional, invite.id),
+        )
+        .set('Origin', 'http://localhost:3000')
+        .send({ decision: InviteDecision.Accept, inviteId: invite.id })
+        .expect(409);
+      expect(await addedEntries()).toHaveLength(1);
+
+      const accepted = await db.query.invites.findFirst({
+        where: eq(invites.id, invite.id),
+      });
+      await deleteGroup(w.cohort.id, group.id).expect(204);
+      expect(
+        await db.query.invites.findFirst({
+          where: eq(invites.id, invite.id),
+        }),
+      ).toEqual({ ...accepted, mentorshipGroupId: null });
+    });
+
+    it('adds a fresh link when a revived student accepts a group invite', async () => {
+      const w = await world();
+      const group = (await createGroup(w.cohort.id, w.mentor1.id).expect(201))
+        .body;
+      await as(adminCookie)
+        .post(
+          `/v1/cohorts/${w.cohort.id}/mentorship-groups/${group.id}/students`,
+          { cohortMemberId: w.student1.id },
+        )
+        .expect(201);
+
+      const studentUser = await db.query.users.findFirst({
+        where: eq(users.email, 'student1@campus.local'),
+      });
+      await as(adminCookie)
+        .post(
+          `/v1/cohorts/${w.cohort.id}/members/${studentUser!.id}/remove`,
+          {},
+        )
+        .expect(200);
+
+      // Ending the membership removed the group link.
+      expect(
+        await db.query.mentorshipGroupStudents.findMany({
+          where: eq(
+            schema.mentorshipGroupStudents.cohortMemberId,
+            w.student1.id,
+          ),
+        }),
+      ).toEqual([]);
+
+      // Ending the membership revoked the student's sessions, so the
+      // provisional token has to be minted against the new epoch.
+      const revivedUser = await db.query.users.findFirst({
+        where: eq(users.id, studentUser!.id),
+      });
+
+      const [invite] = await db
+        .insert(invites)
+        .values({
+          email: revivedUser!.email,
+          tokenHash: 'revived-group-hash',
+          invitedBy: adminId,
+          expiresAt: new Date(Date.now() + 86_400_000),
+          cohortId: w.cohort.id,
+          cohortTrackId: w.cohortTrackId,
+          mentorshipGroupId: group.id,
+          cohortRole: CohortRole.Student,
+          systemRole: SystemRole.User,
+          status: InviteStatus.Pending,
+        })
+        .returning();
+
+      await request(app.getHttpServer())
+        .post('/v1/invites/decision')
+        .set(
+          'Cookie',
+          await cookieFor(
+            revivedUser!,
+            SessionScope.Provisional,
+            invite.id,
+            revivedUser!.sessionEpoch,
+          ),
+        )
+        .set('Origin', 'http://localhost:3000')
+        .send({ decision: InviteDecision.Accept, inviteId: invite.id })
+        .expect(200);
+
+      const links = await db.query.mentorshipGroupStudents.findMany({
+        where: eq(schema.mentorshipGroupStudents.cohortMemberId, w.student1.id),
+      });
+      expect(links).toEqual([
+        expect.objectContaining({
+          mentorshipGroupId: group.id,
+          cohortId: w.cohort.id,
+          cohortMemberId: w.student1.id,
         }),
       ]);
     });

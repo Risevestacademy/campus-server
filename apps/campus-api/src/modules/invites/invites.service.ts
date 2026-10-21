@@ -314,11 +314,7 @@ export class InvitesService {
         // The group was found above, so this is one deleted in between.
         if (
           dto.mentorshipGroupId &&
-          (isForeignKeyViolation(
-            err,
-            'invites_mentorship_group_id_mentorship_groups_id_fk',
-          ) ||
-            isForeignKeyViolation(err, 'invites_mentorship_group_cohort_fk'))
+          isForeignKeyViolation(err, 'invites_mentorship_group_cohort_fk')
         ) {
           throw new InviteNotFoundException(
             `Mentorship group ${dto.mentorshipGroupId} not found`,
@@ -972,25 +968,28 @@ export class InvitesService {
     // The group and the membership commit together: an accepted invite never
     // leaves the student in the cohort but outside the group it promised.
     if (invite.mentorshipGroupId !== null) {
-      await tx
-        .insert(mentorshipGroupStudents)
-        .values({
-          mentorshipGroupId: invite.mentorshipGroupId,
+      // A live member cannot accept an invite, and ending a membership
+      // removes the student's group link, so there is never an existing link
+      // for a revived student. A conflict here would be a bug, not a move.
+      await tx.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: invite.mentorshipGroupId,
+        cohortId: invite.cohortId,
+        cohortMemberId: row.id,
+      });
+
+      await writeAuditEntry(tx, {
+        ...audit,
+        action: AuditAction.MentorshipGroupStudentAdded,
+        subject: {
+          type: AuditSubjectType.MentorshipGroup,
+          id: invite.mentorshipGroupId,
+        },
+        details: {
           cohortId: invite.cohortId,
           cohortMemberId: row.id,
-        })
-        .onConflictDoUpdate({
-          // One group per student per cohort: re-inviting into a different
-          // pod moves them rather than leaving two links.
-          target: [
-            mentorshipGroupStudents.cohortId,
-            mentorshipGroupStudents.cohortMemberId,
-          ],
-          set: {
-            mentorshipGroupId: invite.mentorshipGroupId,
-            joinedAt: now,
-          },
-        });
+          inviteId: invite.id,
+        },
+      });
     }
 
     if (previous) {

@@ -1,7 +1,7 @@
 # Mentorship groups
 
-A pod inside one cohort: one mentor, a set of students, an optional room, and a
-name. The routes are admin-only and live under
+A pod inside one cohort: one mentor, a set of students, and a name. The routes
+are admin-only and live under
 `/v1/cohorts/{cohortId}/mentorship-groups`.
 
 ## Decisions
@@ -23,15 +23,13 @@ name. The routes are admin-only and live under
   assigned.
 - **Names are unique per cohort, ignoring case.** `Pod A` and `pod a` collide.
   The name is trimmed and at most 128 characters.
-- **A space belongs to at most one group.** `space_id` is optional; a group may
-  have no room. A room cannot be shared by two groups.
 - **A group invite is a student invite.** `invites.mentorship_group_id` may
   only be set with `cohortRole = student`, and the group must belong to the
   invite's cohort. Accepting the invite enrols the student and puts them in the
-  group in the same transaction. If they were already in a group in that
-  cohort, the new invite moves them.
+  group in the same transaction.
 - **A group can be deleted.** Deleting it removes its student links; the
-  students stay in the cohort. It is refused while an invite still names it.
+  students stay in the cohort. Settled invites keep their row but have the
+  group id cleared. It is refused while a pending invite still names it.
   A cohort with groups cannot be deleted until its groups are deleted, like
   cohorts with tracks or invites.
 
@@ -47,6 +45,6 @@ plain foreign key can compare against `'mentor'` and `'student'`:
   the student link's cohort and its role is `student`.
 
 The rest of the named constraints are in
-`apps/campus-api/src/infra/database/migrations/0017_mentorship_groups.sql`.
+`apps/campus-api/src/infra/database/migrations/0020_mentorship_groups.sql`.
 The database tests assert each rule by name in
 `src/infra/database/schema.spec.ts`.
