@@ -13,6 +13,7 @@ NestJS backend for the campus application.
 - [Compile and run](#compile-and-run)
 - [Environment variables](#environment-variables)
 - [Databases & infra](#databases--infra)
+- [Role guards](#role-guards)
 - [Audit log](#audit-log)
 - [Maps](#maps)
 - [Feedback](#feedback)
@@ -131,6 +132,40 @@ $ pnpm run db:push       # push schema directly (dev only)
 $ pnpm run db:seed       # upsert the DEFAULT_ADMIN_EMAIL super admins (needs a build)
 $ pnpm run db:studio     # open Drizzle Studio
 ```
+
+## Role guards
+
+Authentication and cohort-role authorization are separate guards, run left to
+right. A route opts in with one line, after importing `SessionModule` and
+`CohortRoleModule` into its feature module:
+
+```ts
+@UseGuards(SessionGuard, ProfessorOfTrackGuard)
+```
+
+`SessionGuard` answers 401 when there is no usable session. The role guard
+then answers 403 `FORBIDDEN` when the signed-in caller does not hold the role.
+Roles are read from the database on every request, never from the token, the
+body or the query, so ending or changing a membership takes effect on the
+caller's next request.
+
+| Guard                                  | URL params                       | Passes when                                                                                            |
+| -------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `ProfessorOfTrackGuard`                | `cohortId`, `trackId`            | The caller has a live professor membership in this cohort, tied to this track, and the cohort runs it. |
+| `MentorOfGroupGuard`                   | `cohortId`, `groupId`            | The caller is the live mentor of this group, and the group belongs to this cohort.                     |
+| `ProfessorOfTrackOrMentorOfGroupGuard` | `cohortId`, `trackId`, `groupId` | Either of the two checks above passes.                                                                 |
+
+Only route params are read: `cohortId`, `trackId` and `groupId`, as named. A
+missing or malformed UUID is 400 `INVALID_ARGUMENT`. A valid id that names
+nothing is 403 rather than 404, so the guard does not reveal what exists.
+Admins pass these guards through `hasAdminPowers`, the same rule `AdminGuard`
+uses; a caller may also be a professor in one cohort and a student in another,
+and only the requested cohort is checked.
+
+When a membership matches, the guard puts it on the request as
+`req.cohortMembership` (`id`, `cohortId`, `role`, `cohortTrackId`,
+`mentorshipGroupId`) so the handler does not repeat the query. No route uses
+these guards yet.
 
 ## Audit log
 
