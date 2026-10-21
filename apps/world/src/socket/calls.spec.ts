@@ -221,6 +221,13 @@ const calls = (conn: Conn) =>
     .filter((m) => m.type === 'call')
     .map((m) => m.call as Record<string, unknown> | null);
 
+const movedTo =
+  (who: Conn, x: number, y: number) => (m: Record<string, unknown>) =>
+    m.type === 'moved' &&
+    (m.players as { userId: string; x: number; y: number }[]).some(
+      (p) => p.userId === who.userId && p.x === x && p.y === y,
+    );
+
 const nearbyLists = (conn: Conn) =>
   conn.messages
     .filter((m) => m.type === 'nearby')
@@ -303,6 +310,9 @@ describe('who is near enough to hear', () => {
     // its hysteresis, so still heard. Three: gone.
     await step(grace, 'down', 1);
     await step(grace, 'right', 2);
+    await waitFor(ada, movedTo(grace, 1, 1));
+    ada.ws.send(JSON.stringify({ type: 'ping' }));
+    await waitFor(ada, (m) => m.type === 'pong');
     expect(nearbyLists(ada).at(-1)).toEqual([grace.userId]);
     await step(grace, 'right', 3);
     await expect.poll(() => nearbyLists(ada).at(-1)).toEqual([]);
