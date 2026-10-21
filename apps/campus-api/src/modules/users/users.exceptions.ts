@@ -49,3 +49,8 @@ export class AccountStatusLockedException extends DomainException {
 export class ProfileNotFoundException extends DomainException {
   readonly code = ExceptionCode.NotFound;
 }
+
+/** The caller holds no live place in that cohort, and is not an admin. */
+export class CohortProfilesForbiddenException extends DomainException {
+  readonly code = ExceptionCode.Forbidden;
+}

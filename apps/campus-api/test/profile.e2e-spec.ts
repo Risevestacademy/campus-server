@@ -69,6 +69,7 @@ describe('profile routes (e2e)', () => {
   let grace: typeof users.$inferSelect;
   let adaToken: string;
   let graceToken: string;
+  let cohortId: string;
 
   // Real tokens from the real issuer, so these tests hold whatever a
   // session token is made to carry.
@@ -119,6 +120,7 @@ describe('profile routes (e2e)', () => {
       .insert(cohorts)
       .values({ name: 'Cohort 1', code: 'C1' })
       .returning();
+    cohortId = cohort.id;
     const [link] = await db
       .insert(cohortTracks)
       .values({ cohortId: cohort.id, trackId: track.id })
@@ -301,6 +303,28 @@ describe('profile routes (e2e)', () => {
 
     it('rejects an id that is not a UUID', async () => {
       await as(adaToken).get('/v1/users/not-a-uuid/profile').expect(400);
+    });
+  });
+
+  describe("a cohort's people", () => {
+    const path = () => `/v1/cohorts/${cohortId}/profiles`;
+
+    it('lists the cohort for one of its members', async () => {
+      const res = await as(adaToken).get(path()).expect(200);
+
+      expect(res.body).toEqual([
+        { id: ada.id, displayName: null, spriteKey: null },
+      ]);
+    });
+
+    it('refuses no session, somebody not in the cohort, and an id that is not one', async () => {
+      await request(app.getHttpServer()).get(path()).expect(401);
+      await as(graceToken).get(path()).expect(403);
+      await as(adaToken).get('/v1/cohorts/nope/profiles').expect(400);
+    });
+
+    it('leaves the admin roster beside it to admins', async () => {
+      await as(adaToken).get(`/v1/cohorts/${cohortId}/members`).expect(403);
     });
   });
 });

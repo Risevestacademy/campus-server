@@ -186,15 +186,16 @@ The client says which way, never where to. The server decides every position.
 **Everybody else means everybody in your cohort.** Each cohort is its own
 campus: the cohort named when the socket opened decides whose avatars you are
 told about, and nobody in another cohort appears in your `snapshot`, `joined`,
-`left`, `moved` or `statusChanged`, or you in theirs.
+`left`, `moved`, `statusChanged` or `spaceChanged`, or you in theirs.
 
-| Message         | When                                      | What to do                                         |
-| --------------- | ----------------------------------------- | -------------------------------------------------- |
-| `joined`        | Somebody arrived                          | Add their avatar, with its sprite, name and status |
-| `appearance`    | Somebody changed their sprite or name     | Redraw them with it                                |
-| `statusChanged` | Somebody's status changed, yours included | Show their new status                              |
-| `left`          | Somebody's socket in this cohort closed   | Remove their avatar                                |
-| `moved`         | Once per tick, if anybody moved or turned | Move each listed player                            |
+| Message         | When                                              | What to do                                         |
+| --------------- | ------------------------------------------------- | -------------------------------------------------- |
+| `joined`        | Somebody arrived                                  | Add their avatar, with its sprite, name and status |
+| `appearance`    | Somebody changed their sprite or name             | Redraw them with it                                |
+| `statusChanged` | Somebody's status changed, yours included         | Show their new status                              |
+| `spaceChanged`  | Somebody stepped into another space, you included | Move them to that space in your sidebar            |
+| `left`          | Somebody's socket in this cohort closed           | Remove their avatar                                |
+| `moved`         | Once per tick, if anybody moved or turned         | Move each listed player                            |
 
 About `moved`:
 
@@ -209,7 +210,7 @@ About `moved`:
 ### Drawing each person
 
 Somebody first appears as an `Avatar` — in the `snapshot`, or in `joined` —
-which is a `Player` plus three fields saying what to draw:
+which is a `Player` plus four fields saying what to draw:
 
 - **`spriteKey`**: which character. One of the keys campus-api accepts on
   `PATCH /v1/users/me` (listed in its API docs), or `null` when the person has
@@ -219,11 +220,28 @@ which is a `Player` plus three fields saying what to draw:
   set none.
 - **`status`**: `available`, `busy` or `away`, as it is now. Unlike the other
   two it changes while they are here; see [Status](#status).
+- **`spaceKey`**: the space they are standing in, a drawn space's key or
+  `_default` for the corridors and grounds. A `spaceChanged`
+  (`{ "type": "spaceChanged", "userId": "…", "spaceKey": "library" }`) follows
+  every step into another space, the moment it is taken, so it can arrive
+  before the `moved` that shows the step.
 
-Keep all three by `userId`. `moved` and `moveResult` carry a plain `Player` —
+Keep all four by `userId`. `moved` and `moveResult` carry a plain `Player` —
 position and facing only — so take what to draw from the `Avatar` and keep it
-until that person's `left`, or until an `appearance` or a `statusChanged`
-replaces part of it.
+until that person's `left`, or until an `appearance`, a `statusChanged` or a
+`spaceChanged` replaces part of it.
+
+**The sidebar.** Who is online in this cohort is who the socket has told you
+about: the `snapshot`, then `joined` and `left`. campus-api's
+`GET /v1/cohorts/{id}/profiles` lists everybody in the cohort with their name
+and sprite; anybody it lists that the socket has not is offline. Group people
+by `spaceKey` where two or more share one. An admin can be on the map without
+a membership, so the socket may tell you of somebody the list does not have:
+show them from their `Avatar`. Read the list again whenever the socket
+connects or reconnects, and when `joined` names somebody it does not have:
+that is how a new member appears. Somebody offline who changes their name or
+sprite shows the change when they next arrive, since their `Avatar` carries
+it.
 
 **A change shows straight away.** When somebody saves a new sprite or display
 name, everybody in their cohort, themselves included, gets:

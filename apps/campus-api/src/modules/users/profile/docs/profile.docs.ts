@@ -1,6 +1,7 @@
 import { applyDecorators } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -8,7 +9,11 @@ import {
 } from '@nestjs/swagger';
 
 import { ApiErrorResponseDto } from '../../../../shared/dto/api-error-response.dto.js';
-import { OwnProfileDto, ProfileCardDto } from '../dto/profile.dto.js';
+import {
+  CohortProfileDto,
+  OwnProfileDto,
+  ProfileCardDto,
+} from '../dto/profile.dto.js';
 
 const noSession = ApiUnauthorizedResponse({
   type: ApiErrorResponseDto,
@@ -76,6 +81,36 @@ export function ApiGetProfileCard(): MethodDecorator {
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
       description: 'No profile the caller may see under this id.',
+    }),
+  );
+}
+
+export function ApiListCohortProfiles(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: "List a cohort's people",
+      description:
+        'Everybody with a live place in the cohort, with their display name ' +
+        'and sprite, for the sidebar: the whole cohort in one response, ' +
+        'sorted by display name with unnamed people last. Who of them is ' +
+        'online, and where, comes from the world socket.\n\n' +
+        "For the cohort's live members and for admins. Suspended accounts " +
+        'are listed for admins only.',
+    }),
+    ApiOkResponse({ type: [CohortProfileDto] }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'The cohort id is not a UUID.',
+    }),
+    noSession,
+    ApiForbiddenResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The caller holds no live place in this cohort and is not an admin.',
+    }),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No cohort with that id (admins only; others get 403).',
     }),
   );
 }
