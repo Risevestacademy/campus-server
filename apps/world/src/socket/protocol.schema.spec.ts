@@ -66,6 +66,7 @@ describe('protocol.schema.json', () => {
         'AppearanceMessage',
         'LeftMessage',
         'StatusChangedMessage',
+        'SpaceChangedMessage',
         'ReplacedMessage',
         'MovedMessage',
         'MoveResultMessage',

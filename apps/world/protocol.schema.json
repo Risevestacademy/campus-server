@@ -106,6 +106,10 @@
         },
         "status": {
           "$ref": "#/definitions/Status"
+        },
+        "spaceKey": {
+          "type": "string",
+          "description": "The space they are standing in: a drawn space's key, or `_default` for the corridors and grounds."
         }
       },
       "required": [
@@ -115,10 +119,11 @@
         "facing",
         "displayName",
         "spriteKey",
-        "status"
+        "status",
+        "spaceKey"
       ],
       "additionalProperties": false,
-      "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message, and to their status as a `statusChanged`."
+      "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message, to their status as a `statusChanged`, and to their space as a `spaceChanged`."
     },
     "MoveOutcome": {
       "type": "string",
@@ -448,6 +453,29 @@
       "additionalProperties": false,
       "description": "Somebody in your cohort's status changed: chosen, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
     },
+    "SpaceChangedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "spaceChanged"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "spaceKey": {
+          "type": "string",
+          "description": "The space they are standing in: a drawn space's key, or `_default` for the corridors and grounds."
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "spaceKey"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody in your cohort stepped into another space. Sent to everybody in the cohort, you included when it is you, the moment the step is taken: it can arrive before the `moved` that shows the step."
+    },
     "ReplacedMessage": {
       "type": "object",
       "properties": {
@@ -559,6 +587,9 @@
         },
         {
           "$ref": "#/definitions/StatusChangedMessage"
+        },
+        {
+          "$ref": "#/definitions/SpaceChangedMessage"
         },
         {
           "$ref": "#/definitions/ReplacedMessage"

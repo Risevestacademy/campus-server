@@ -416,8 +416,13 @@ async function waitFor(
 /** Where everybody in a snapshot stands, leaving out what to draw for them. */
 function positionsIn(snapshot: Record<string, unknown>) {
   return (snapshot.players as Record<string, unknown>[]).map(
-    ({ displayName: _name, spriteKey: _sprite, status: _status, ...player }) =>
-      player,
+    ({
+      displayName: _name,
+      spriteKey: _sprite,
+      status: _status,
+      spaceKey: _space,
+      ...player
+    }) => player,
   );
 }
 
@@ -1316,6 +1321,7 @@ describe('movement', () => {
         displayName: null,
         spriteKey: null,
         status: 'available',
+        spaceKey: DEFAULT_SPACE_KEY,
       },
     });
     // Learns about themselves from the snapshot, not from a joined.
@@ -3271,6 +3277,73 @@ describe('movement', () => {
         waitFor(conn, (m) => m.type === 'error'),
       ).resolves.toMatchObject({ code: 'BAD_MESSAGE' });
       await leave(conn);
+    });
+  });
+
+  describe('where everybody is', () => {
+    const step = async (
+      conn: ReturnType<typeof connect>,
+      direction: string,
+      seq: number,
+    ) => {
+      move(conn, direction, seq);
+      const answer = await waitFor(
+        conn,
+        (m) => m.type === 'moveResult' && m.seq === seq,
+      );
+      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
+      return answer;
+    };
+    const spaceChanges = (conn: { messages: Record<string, unknown>[] }) =>
+      conn.messages
+        .filter((m) => m.type === 'spaceChanged')
+        .map(({ userId, spaceKey }) => ({ userId, spaceKey }));
+
+    it('shows the space of everybody in the snapshot and in joined', async () => {
+      const ada = person();
+      const grace = person();
+      store.positions.set(positionKey({ userId: ada }), {
+        x: 3,
+        y: 1,
+        facing: 'left',
+      });
+      const first = await arrive(ada);
+      const second = await arrive(grace);
+
+      const snapshot = await waitFor(second, (m) => m.type === 'snapshot');
+      expect(snapshot.players).toContainEqual(
+        expect.objectContaining({ userId: ada, spaceKey: 'library' }),
+      );
+      await expect(
+        waitFor(
+          first,
+          (m) =>
+            m.type === 'joined' &&
+            (m.player as { userId: string }).userId === grace,
+        ),
+      ).resolves.toMatchObject({ player: { spaceKey: DEFAULT_SPACE_KEY } });
+      await Promise.all([leave(first), leave(second)]);
+    });
+
+    it('tells the cohort, the walker included, when somebody steps into another space and out again', async () => {
+      const ada = person();
+      const walker = await arrive(ada);
+      const watcher = await arrive(person());
+      const elsewhere = await arrive(person(), 'cohort-frontend');
+
+      for (const seq of [1, 2, 3]) await step(walker, 'right', seq);
+      await step(walker, 'down', 4);
+      await step(walker, 'left', 5);
+      await quiet();
+
+      const expected = [
+        { userId: ada, spaceKey: 'library' },
+        { userId: ada, spaceKey: DEFAULT_SPACE_KEY },
+      ];
+      expect(spaceChanges(walker)).toEqual(expected);
+      expect(spaceChanges(watcher)).toEqual(expected);
+      expect(spaceChanges(elsewhere)).toEqual([]);
+      await Promise.all([leave(walker), leave(watcher), leave(elsewhere)]);
     });
   });
 

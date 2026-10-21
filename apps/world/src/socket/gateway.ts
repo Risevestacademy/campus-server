@@ -335,9 +335,9 @@ export function registerGateway(
   }
 
   /**
-   * After a move to `tile`: if it is in another space, records the new one
-   * in presence now, not at the next renewal. Skipped once shutdown has
-   * begun, as it would undo shutdown's removal. A failed write is put right
+   * After a move to `tile`: if it is in another space, tells the cohort and
+   * records the new one in presence now, not at the next renewal. Skipped
+   * once shutdown has begun, as the write would undo shutdown's removal. A failed write is put right
    * by the next renewal, which carries the space too.
    */
   function recordSpaceCrossing(connection: Connection, tile: Tile): void {
@@ -345,6 +345,11 @@ export function registerGateway(
     if (spaceKey === connection.spaceKey) return;
     connection.spaceKey = spaceKey;
     if (stopping) return;
+    broadcast(connection.cohortId, {
+      type: 'spaceChanged',
+      userId: connection.userId,
+      spaceKey,
+    });
     presence.changeSpace(presenceOf(connection)).then(
       (held) => {
         if (!held) lostPlace(connection);
@@ -488,7 +493,7 @@ export function registerGateway(
   }
 
   /**
-   * For arrivals and departures, which are rare enough to send at once. Only
+   * For what happens rarely enough to send at once, unlike moves. Only
    * to the cohort it happened in: each cohort is its own campus, and nobody
    * in one sees or hears of anybody in another, though they share this
    * process and the one map it loaded.
@@ -1294,6 +1299,7 @@ function avatarOf(player: Player, connection: Connection): Avatar {
     ...player,
     ...connection.appearance,
     status: connection.availability.shown,
+    spaceKey: connection.spaceKey,
   };
 }
 
