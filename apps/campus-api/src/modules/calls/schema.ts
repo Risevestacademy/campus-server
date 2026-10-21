@@ -58,6 +58,8 @@ export const sessions = pgTable(
   (table) => [
     index('sessions_cohort_idx').on(table.cohortId),
     index('sessions_space_idx').on(table.spaceId),
+    // One run of a LiveKit room is one session, however often it is heard of.
+    uniqueIndex('sessions_provider_room_unique').on(table.providerRoomId),
     // Everybody in a cohort's space is in the one call. Two open at once
     // would split the room between them. Other cohorts in the same space
     // are in calls of their own.
@@ -81,6 +83,11 @@ export const sessionParticipants = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id),
+    /**
+     * Who they were to the media server. A fresh one each time they enter,
+     * so the row a leave closes is the one that join opened.
+     */
+    providerIdentity: varchar('provider_identity', { length: 128 }).notNull(),
     joinedAt: timestamp('joined_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -95,6 +102,10 @@ export const sessionParticipants = pgTable(
   (table) => [
     index('session_participants_session_idx').on(table.sessionId),
     index('session_participants_user_idx').on(table.userId),
+    // Fresh for every entry, so a retried join or leave finds the one row.
+    uniqueIndex('session_participants_provider_identity_unique').on(
+      table.providerIdentity,
+    ),
     // An account has one world connection per cohort, so it is in a call
     // once. Somebody who leaves and comes back gets a new row.
     uniqueIndex('session_participants_one_open_per_person')

@@ -134,6 +134,13 @@
       "when": 1792521978082,
       "tag": "0018_spaces_rework",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792579335835,
+      "tag": "0019_participant_identity",
+      "breakpoints": true
     }
   ]
 }

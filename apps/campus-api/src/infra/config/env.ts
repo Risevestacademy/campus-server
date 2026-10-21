@@ -396,6 +396,39 @@ export class Env {
   @IsString()
   RESEND_INVITE_GUEST_TEMPLATE_ID?: string;
 
+  // LiveKit webhooks ------------------------------------------------------
+  // A key pair of the LiveKit project's, used only to check that a webhook
+  // came from it. Both or neither: unset, the webhook route answers 503.
+
+  @ValidateIf(
+    (o: Env) =>
+      o.LIVEKIT_WEBHOOK_API_KEY !== undefined ||
+      o.LIVEKIT_WEBHOOK_API_SECRET !== undefined,
+  )
+  @IsNotEmpty({
+    message:
+      'set both LIVEKIT_WEBHOOK_API_KEY and LIVEKIT_WEBHOOK_API_SECRET, or neither',
+  })
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  LIVEKIT_WEBHOOK_API_KEY?: string;
+
+  @ValidateIf(
+    (o: Env) =>
+      o.LIVEKIT_WEBHOOK_API_KEY !== undefined ||
+      o.LIVEKIT_WEBHOOK_API_SECRET !== undefined,
+  )
+  @IsString({
+    message:
+      'set both LIVEKIT_WEBHOOK_API_KEY and LIVEKIT_WEBHOOK_API_SECRET, or neither',
+  })
+  @MinLength(32)
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  LIVEKIT_WEBHOOK_API_SECRET?: string;
+
   // require_tld: false keeps http://localhost:3000 valid for local dev;
   // require_protocol: true still rejects bare words like "not-a-url".
   @IsUrl({ require_tld: false, require_protocol: true })

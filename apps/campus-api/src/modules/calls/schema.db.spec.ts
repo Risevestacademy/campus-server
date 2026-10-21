@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -182,7 +183,12 @@ describe('session_participants', () => {
   ) =>
     db
       .insert(sessionParticipants)
-      .values({ sessionId, userId, ...overrides })
+      .values({
+        sessionId,
+        userId,
+        providerIdentity: `${userId}:${randomUUID()}`,
+        ...overrides,
+      })
       .returning();
 
   const leave = (id: string, leftAt = new Date()) =>
