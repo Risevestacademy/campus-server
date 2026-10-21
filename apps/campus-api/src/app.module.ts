@@ -16,6 +16,7 @@ import { CohortAdminModule } from './modules/cohorts/cohort-admin.module.js';
 import { FeedbackModule } from './modules/feedback/feedback.module.js';
 import { InvitesModule } from './modules/invites/invites.module.js';
 import { MapsModule } from './modules/maps/maps.module.js';
+import { MentorshipGroupsModule } from './modules/mentorship-groups/mentorship-groups.module.js';
 import { TracksModule } from './modules/tracks/tracks.module.js';
 import { ProfileModule } from './modules/users/profile/profile.module.js';
 import { UserAdminModule } from './modules/users/user-admin.module.js';
@@ -31,6 +32,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     InvitesModule,
     TracksModule,
     CohortAdminModule,
+    MentorshipGroupsModule,
     UserAdminModule,
     ProfileModule,
     AuditModule,

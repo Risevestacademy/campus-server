@@ -22,6 +22,7 @@ import {
   type DbExecutor,
   type Tx,
 } from '../../infra/database/database.constants.js';
+import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
@@ -38,6 +39,10 @@ import {
   StudentStatus,
   type CohortMember,
 } from '../cohorts/schema.js';
+import {
+  mentorshipGroupStudents,
+  mentorshipGroups,
+} from '../mentorship-groups/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users, type User } from '../users/schema.js';
 import type { CreateInviteDto } from './dto/create-invite.dto.js';
@@ -305,6 +310,16 @@ export class InvitesService {
         }
         if (kind === 'token-collision' && attempt === 0) {
           continue;
+        }
+        // The group was found above, so this is one deleted in between.
+        if (
+          dto.mentorshipGroupId &&
+          isForeignKeyViolation(err, 'invites_mentorship_group_cohort_fk')
+        ) {
+          throw new InviteNotFoundException(
+            `Mentorship group ${dto.mentorshipGroupId} not found`,
+            { mentorshipGroupId: dto.mentorshipGroupId },
+          );
         }
         throw err;
       }
@@ -949,6 +964,34 @@ export class InvitesService {
       });
     }
 
+    // An invite that names a pod puts the student in it as it enrols them.
+    // The group and the membership commit together: an accepted invite never
+    // leaves the student in the cohort but outside the group it promised.
+    if (invite.mentorshipGroupId !== null) {
+      // A live member cannot accept an invite, and ending a membership
+      // removes the student's group link, so there is never an existing link
+      // for a revived student. A conflict here would be a bug, not a move.
+      await tx.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: invite.mentorshipGroupId,
+        cohortId: invite.cohortId,
+        cohortMemberId: row.id,
+      });
+
+      await writeAuditEntry(tx, {
+        ...audit,
+        action: AuditAction.MentorshipGroupStudentAdded,
+        subject: {
+          type: AuditSubjectType.MentorshipGroup,
+          id: invite.mentorshipGroupId,
+        },
+        details: {
+          cohortId: invite.cohortId,
+          cohortMemberId: row.id,
+          inviteId: invite.id,
+        },
+      });
+    }
+
     if (previous) {
       await writeAuditEntry(tx, {
         ...audit,
@@ -1159,6 +1202,16 @@ export class InvitesService {
     if (dto.cohortRole === CohortRole.Student && dto.cohortTrackId == null) {
       throw new InviteInvalidArgumentException(
         'cohortTrackId is required when cohortRole is student',
+      );
+    }
+    // invites_mentorship_group_student: a pod is a set of students.
+    if (
+      dto.mentorshipGroupId != null &&
+      dto.cohortRole !== CohortRole.Student
+    ) {
+      throw new InviteInvalidArgumentException(
+        'mentorshipGroupId is only allowed when cohortRole is student',
+        { cohortId: dto.cohortId ?? null, cohortRole: dto.cohortRole },
       );
     }
   }
@@ -1726,6 +1779,28 @@ export class InvitesService {
         throw new InviteInvalidArgumentException(
           'cohortTrackId does not belong to cohortId',
           { cohortId: dto.cohortId, cohortTrackId: dto.cohortTrackId },
+        );
+      }
+    }
+
+    if (dto.mentorshipGroupId) {
+      const group = await db.query.mentorshipGroups.findFirst({
+        where: eq(mentorshipGroups.id, dto.mentorshipGroupId),
+      });
+      if (!group) {
+        throw new InviteNotFoundException(
+          `Mentorship group ${dto.mentorshipGroupId} not found`,
+          { mentorshipGroupId: dto.mentorshipGroupId },
+        );
+      }
+      // invites_mentorship_group_cohort_fk: the pod must be in this cohort.
+      if (dto.cohortId && group.cohortId !== dto.cohortId) {
+        throw new InviteInvalidArgumentException(
+          'mentorshipGroupId does not belong to cohortId',
+          {
+            cohortId: dto.cohortId,
+            mentorshipGroupId: dto.mentorshipGroupId,
+          },
         );
       }
     }

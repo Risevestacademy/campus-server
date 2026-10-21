@@ -48,7 +48,8 @@ export function ApiCreateInvite(): MethodDecorator {
         'sees which pairing rule was broken rather than a constraint name. ' +
         'Note that { email } alone is no longer accepted: every invite but ' +
         'an admin one names a cohort, since an invite naming neither ' +
-        'accepts into nothing.',
+        'accepts into nothing. mentorshipGroupId is only for a student ' +
+        'invite, and the group must belong to the same cohort.',
       content: {
         'application/json': {
           examples: {
@@ -244,15 +245,16 @@ export function ApiCreateInvite(): MethodDecorator {
         },
       },
     }),
-    // A bad cohortId / cohortTrackId is a 404 here, not a 400: the body is
-    // well-formed, the thing it points at is simply absent. Worth stating so it
-    // is not confused with the shape errors above.
+    // A bad cohortId / cohortTrackId / mentorshipGroupId is a 404 here, not a
+    // 400: the body is well-formed, the thing it points at is simply absent.
+    // Worth stating so it is not confused with the shape errors above.
     ApiNotFoundResponse({
       type: ApiErrorResponseDto,
       description:
-        'A referenced cohort or cohort track does not exist. A track that ' +
-        'exists but belongs to a different cohort is a 400 instead — the ' +
-        'reference is well-formed, it is just the wrong pairing.',
+        'A referenced cohort, cohort track or mentorship group does not ' +
+        'exist. A track or group that exists but belongs to a different ' +
+        'cohort is a 400 instead — the reference is well-formed, it is just ' +
+        'the wrong pairing.',
       content: {
         'application/json': {
           examples: {

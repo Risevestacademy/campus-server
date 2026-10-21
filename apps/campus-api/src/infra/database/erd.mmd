@@ -98,8 +98,8 @@ erDiagram
         uuid id PK
         uuid cohort_id FK
         uuid mentor_member_id FK
-        uuid space_id FK "the pod's room; FK declared below"
-        varchar name
+        cohort_role_enum mentor_role "generated: always 'mentor'; part of the mentor FK"
+        varchar name "unique per cohort, ignoring case"
         text description
         timestamptz created_at
         timestamptz updated_at
@@ -108,7 +108,9 @@ erDiagram
     MENTORSHIP_GROUP_STUDENTS {
         uuid id PK
         uuid mentorship_group_id FK
+        uuid cohort_id FK "denormalised so the group/student rules are composite FKs"
         uuid cohort_member_id FK
+        cohort_role_enum member_role "generated: always 'student'; part of the student FK"
         timestamptz joined_at
     }
 
@@ -436,7 +438,6 @@ erDiagram
     USERS ||--o{ INVITES : "revoked_by"
     COHORTS ||--o{ MENTORSHIP_GROUPS : "contains"
     COHORT_MEMBERS ||--o{ MENTORSHIP_GROUPS : "leads_as_mentor"
-    SPACES ||--o{ MENTORSHIP_GROUPS : "meets_in"
     MENTORSHIP_GROUPS ||--o{ MENTORSHIP_GROUP_STUDENTS : "includes"
     COHORT_MEMBERS ||--o{ MENTORSHIP_GROUP_STUDENTS : "joins_as_student"
 
@@ -528,8 +529,13 @@ erDiagram
 %%   cohort_tracks(cohort_id, track_id)
 %%   cohort_tracks(id, cohort_id)
 %%   cohort_members(cohort_id, user_id)
+%%   cohort_members(id, cohort_id, role)
 %%   invites(token_hash)
+%%   mentorship_groups(cohort_id, lower(name))
+%%   mentorship_groups(cohort_id, mentor_member_id)
+%%   mentorship_groups(id, cohort_id)
 %%   mentorship_group_students(mentorship_group_id, cohort_member_id)
+%%   mentorship_group_students(cohort_id, cohort_member_id)
 %%   maps(key)
 %%   spaces(map_id, key)
 %%   desks(key)
@@ -555,6 +561,8 @@ erDiagram
 %%   invites: (cohort_id IS NULL) = (cohort_role IS NULL)
 %%   invites: cohort_id IS NOT NULL OR (cohort_track_id IS NULL AND mentorship_group_id IS NULL)
 %%   invites: cohort_role IS DISTINCT FROM 'student' OR cohort_track_id IS NOT NULL
+%%   invites: mentorship_group_id IS NULL OR cohort_role = 'student'
+%%   mentorship_groups: btrim(name) <> ''
 %%   invites: email = lower(email)
 %%   users: email = lower(email)
 %%   tracks: code = upper(code)

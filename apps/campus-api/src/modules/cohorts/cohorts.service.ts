@@ -383,12 +383,13 @@ export class CohortsService {
         });
       });
     } catch (err) {
-      // The FKs are restrictive on purpose: a cohort with tracks, members
-      // or invites is refused rather than emptied, so the message says what
-      // has to go first. Tracks come off with detachTrack.
+      // The FKs are restrictive on purpose: a cohort with tracks, members,
+      // invites or mentorship groups is refused rather than emptied, so the
+      // message says what has to go first. Tracks come off with detachTrack,
+      // and groups with DELETE /v1/cohorts/{cohortId}/mentorship-groups/{groupId}.
       if (isForeignKeyViolation(err)) {
         throw new CohortConflictException(
-          'Cohort cannot be deleted while it still has tracks, members or invites',
+          'Cohort cannot be deleted while it still has tracks, members, invites or mentorship groups',
           { cohortId: id },
         );
       }

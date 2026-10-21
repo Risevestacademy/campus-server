@@ -5,5 +5,6 @@ export * from '../../../modules/feedback/schema.js';
 export * from '../../../modules/auth/schema.js';
 export * from '../../../modules/invites/schema.js';
 export * from '../../../modules/maps/schema.js';
+export * from '../../../modules/mentorship-groups/schema.js';
 export * from '../../../modules/tracks/schema.js';
 export * from '../../../modules/users/schema.js';

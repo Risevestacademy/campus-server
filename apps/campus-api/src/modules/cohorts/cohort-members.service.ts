@@ -19,6 +19,10 @@ import type { CohortMemberResponseDto } from './dto/cohort-response.dto.js';
 import { MembershipEndAction } from './dto/end-membership.dto.js';
 import type { EndMembershipResponseDto } from './dto/end-membership.dto.js';
 import type { MoveMemberTrackResponseDto } from './dto/move-track.dto.js';
+import {
+  mentorshipGroupStudents,
+  mentorshipGroups,
+} from '../mentorship-groups/schema.js';
 import { hasAdminPowers, users } from '../users/schema.js';
 import {
   CohortRole,
@@ -359,11 +363,42 @@ export class CohortMembersService {
         );
       }
 
+      // A group always has a mentor. Ending the mentorship while they lead
+      // one would leave the pod pointing at somebody no longer in the cohort,
+      // so the admin has to hand it over first.
+      if (existing.role === CohortRole.Mentor) {
+        const [led] = await tx
+          .select({ id: mentorshipGroups.id })
+          .from(mentorshipGroups)
+          .where(eq(mentorshipGroups.mentorMemberId, existing.id))
+          .limit(1);
+        if (led) {
+          throw new CohortConflictException(
+            'Reassign this mentor’s mentorship group before ending their membership',
+            {
+              cohortId,
+              userId,
+              mentorshipGroupId: led.id,
+              action,
+            },
+          );
+        }
+      }
+
       const [row] = await tx
         .update(cohortMembers)
         .set({ status, leftAt: now, dismissalReason: reason ?? null })
         .where(eq(cohortMembers.id, existing.id))
         .returning();
+
+      // A student who leaves the cohort leaves their pod with them. The row
+      // goes in this transaction, so a failed end leaves the group intact.
+      if (existing.role === CohortRole.Student) {
+        await tx
+          .delete(mentorshipGroupStudents)
+          .where(eq(mentorshipGroupStudents.cohortMemberId, existing.id));
+      }
+
       await writeAuditEntry(tx, {
         ...audit,
         action: AuditAction.MembershipEnded,

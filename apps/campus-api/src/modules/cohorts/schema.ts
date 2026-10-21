@@ -139,6 +139,13 @@ export const cohortMembers = pgTable(
     // One row per person per cohort, ever: returning after leaving clears
     // left_at on the existing row rather than adding a second one.
     uniqueIndex('cohort_members_unique').on(table.cohortId, table.userId),
+    // Target for the composite foreign keys that keep a mentorship group's
+    // mentor a mentor of its cohort, and its students students of it.
+    unique('cohort_members_id_cohort_id_role_key').on(
+      table.id,
+      table.cohortId,
+      table.role,
+    ),
     check(
       'cohort_members_student_requires_track',
       sql`${table.role} is distinct from ${sql.raw(`'${CohortRole.Student}'`)} or ${table.cohortTrackId} is not null`,

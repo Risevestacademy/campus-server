@@ -17,6 +17,7 @@ import {
   cohortTracks,
   cohorts,
 } from '../cohorts/schema.js';
+import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import { SystemRole, systemRoleEnum, users } from '../users/schema.js';
 
 export enum InviteStatus {
@@ -46,7 +47,6 @@ export const invites = pgTable(
      */
     cohortId: uuid('cohort_id').references(() => cohorts.id),
     cohortTrackId: uuid('cohort_track_id'),
-    /** No FK yet: mentorship_groups does not exist. */
     mentorshipGroupId: uuid('mentorship_group_id'),
     cohortRole: cohortRoleEnum('cohort_role'),
     systemRole: systemRoleEnum('system_role')
@@ -97,6 +97,12 @@ export const invites = pgTable(
       columns: [table.cohortTrackId, table.cohortId],
       foreignColumns: [cohortTracks.id, cohortTracks.cohortId],
       name: 'invites_cohort_track_fk',
+    }),
+    // The group exists, and it belongs to the invite's cohort.
+    foreignKey({
+      columns: [table.mentorshipGroupId, table.cohortId],
+      foreignColumns: [mentorshipGroups.id, mentorshipGroups.cohortId],
+      name: 'invites_mentorship_group_cohort_fk',
     }),
     uniqueIndex('invites_token_hash_unique').on(table.tokenHash),
     // One live invite per address. Re-inviting means resolving the open one
@@ -171,6 +177,11 @@ export const invites = pgTable(
     check(
       'invites_student_requires_track',
       sql`${table.cohortRole} is distinct from ${sql.raw(`'${CohortRole.Student}'`)} or ${table.cohortTrackId} is not null`,
+    ),
+    // A group is a pod of students, so only a student invite may name one.
+    check(
+      'invites_mentorship_group_student',
+      sql`${table.mentorshipGroupId} is null or ${table.cohortRole} = ${sql.raw(`'${CohortRole.Student}'`)}`,
     ),
   ],
 );

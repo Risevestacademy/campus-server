@@ -28,8 +28,8 @@ export function ApiValidateUserInvite(): MethodDecorator {
         "invite and the caller, so nobody can read someone else's offer. " +
         'Returns 200 only for a live invite, so the decision screen can ' +
         'be rendered as-is. Not a re-send of the admin create-receipt: the ' +
-        'token, the shareable link and mentorshipGroupId (no MENTORSHIP_GROUPS ' +
-        'table) are withheld. The address under `invitee` is the signed-in ' +
+        'token, the shareable link and mentorshipGroupId are withheld. The ' +
+        'address under `invitee` is the signed-in ' +
         "account's own, read from its USERS row — the same string as the " +
         'invited address, because the two must match to get this far. Note ' +
         'this read is not ' +

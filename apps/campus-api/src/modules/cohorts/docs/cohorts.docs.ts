@@ -591,7 +591,7 @@ export function ApiDeleteCohort(): MethodDecorator {
       summary: 'Delete a cohort (admin only)',
       description:
         'Removes a cohort with nothing attached to it. A cohort that still ' +
-        'has tracks, members or invites is refused with a 409.',
+        'has tracks, members, invites or mentorship groups is refused with a 409.',
     }),
     ApiNoContentResponse({ description: 'The cohort was deleted.' }),
     ApiBadRequestResponse({
@@ -606,7 +606,8 @@ export function ApiDeleteCohort(): MethodDecorator {
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,
-      description: 'The cohort still has tracks, members or invites.',
+      description:
+        'The cohort still has tracks, members, invites or mentorship groups.',
       content: {
         'application/json': {
           examples: {
@@ -616,7 +617,7 @@ export function ApiDeleteCohort(): MethodDecorator {
                 error: {
                   code: 'CONFLICT',
                   message:
-                    'Cohort cannot be deleted while it still has tracks, members or invites',
+                    'Cohort cannot be deleted while it still has tracks, members, invites or mentorship groups',
                   details: { cohortId: '11111111-1111-4111-8111-111111111111' },
                 },
               },
