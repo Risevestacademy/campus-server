@@ -7,7 +7,7 @@ import {
   type SpaceRoom,
 } from '@campus/media';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt, isNull, lte, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull, lte, ne, sql, type SQL } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG } from '../../infra/config/config.constants.js';
@@ -123,16 +123,17 @@ export class CallsService {
         if (!userId || run.closed) return;
         if (await this.seen(tx, event.identity)) return;
         const joinedAt = event.joinedAt ?? at;
-        const mine = and(
+        const theirs = and(
           eq(sessionParticipants.sessionId, run.id),
           eq(sessionParticipants.userId, userId),
-          isNull(sessionParticipants.leftAt),
         );
         // Their later entry is already recorded: this one ended when it began.
         const [newer] = await tx
           .select({ joinedAt: sessionParticipants.joinedAt })
           .from(sessionParticipants)
-          .where(and(mine, gt(sessionParticipants.joinedAt, joinedAt)));
+          .where(and(theirs, gt(sessionParticipants.joinedAt, joinedAt)))
+          .orderBy(asc(sessionParticipants.joinedAt))
+          .limit(1);
         if (newer) {
           await tx.insert(sessionParticipants).values({
             sessionId: run.id,
@@ -147,7 +148,13 @@ export class CallsService {
         await tx
           .update(sessionParticipants)
           .set({ leftAt: leftAtNoEarlierThanJoin(joinedAt) })
-          .where(and(mine, lte(sessionParticipants.joinedAt, joinedAt)));
+          .where(
+            and(
+              theirs,
+              isNull(sessionParticipants.leftAt),
+              lte(sessionParticipants.joinedAt, joinedAt),
+            ),
+          );
         await tx.insert(sessionParticipants).values({
           sessionId: run.id,
           userId,

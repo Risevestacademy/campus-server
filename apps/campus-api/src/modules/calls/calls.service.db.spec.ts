@@ -245,6 +245,36 @@ describe('recording a space’s call', () => {
     ]);
   });
 
+  it('records an older join as over when the newer entry has already left', async () => {
+    const again = `${userId}:second`;
+    await record(joined(again), 3);
+    await record(left(again), 4);
+    await record(joined(identity), 1);
+
+    await expect(participants()).resolves.toEqual([
+      expect.objectContaining({
+        providerIdentity: identity,
+        joinedAt: at(1),
+        leftAt: at(3),
+      }),
+      expect.objectContaining({ providerIdentity: again, leftAt: at(4) }),
+    ]);
+  });
+
+  it('ends an older join at the first of the entries after it', async () => {
+    const second = `${userId}:second`;
+    const third = `${userId}:third`;
+    await record(joined(third), 5);
+    await record(joined(second), 3);
+    await record(joined(identity), 1);
+
+    await expect(participants()).resolves.toEqual([
+      expect.objectContaining({ providerIdentity: identity, leftAt: at(3) }),
+      expect.objectContaining({ providerIdentity: second, leftAt: at(5) }),
+      expect.objectContaining({ providerIdentity: third, leftAt: null }),
+    ]);
+  });
+
   it('records a leave that arrives before its join, with LiveKit’s join time, and the join changes nothing', async () => {
     await record(left(identity, RUN, at(1)), 5);
     await record(joined(identity, RUN, at(1)), 1);
