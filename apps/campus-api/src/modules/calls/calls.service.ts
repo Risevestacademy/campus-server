@@ -247,7 +247,11 @@ export class CallsService {
     if (known) return known;
 
     const [open] = await tx
-      .select({ id: sessions.id, openedAt: sessions.openedAt })
+      .select({
+        id: sessions.id,
+        openedAt: sessions.openedAt,
+        providerRoomId: sessions.providerRoomId,
+      })
       .from(sessions)
       .where(
         and(
@@ -258,6 +262,8 @@ export class CallsService {
       )
       .for('update');
     if (open) {
+      // Opened by another delivery of this run since the lookup above.
+      if (open.providerRoomId === roomId) return { id: open.id, closed: false };
       if (roomOpenedAt <= open.openedAt) return null;
       // A newer run has started, so the open one is over, whether or not
       // its finish was heard.
