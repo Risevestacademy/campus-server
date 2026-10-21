@@ -16,7 +16,11 @@ import {
 import { tracks } from '../../tracks/schema.js';
 import { ProfileService } from './profile.service.js';
 import { SystemRole, UserStatus, users } from '../schema.js';
-import { ProfileNotFoundException } from '../users.exceptions.js';
+import {
+  CohortProfilesForbiddenException,
+  ProfileNotFoundException,
+} from '../users.exceptions.js';
+import { CohortNotFoundException } from '../../cohorts/cohorts.exceptions.js';
 
 const MIGRATIONS = fileURLToPath(
   new URL('../../../infra/database/migrations', import.meta.url),
@@ -404,5 +408,115 @@ describe('profile card', () => {
     await expect(
       service.getCard(viewerOf(grace), '99999999-9999-4999-8999-999999999999'),
     ).rejects.toBeInstanceOf(ProfileNotFoundException);
+  });
+});
+
+describe("a cohort's people", () => {
+  const DAY = 86_400_000;
+
+  it('lists everybody live in the cohort, sorted by name with the unnamed last', async () => {
+    const ada = await person('ada@campus.local', { displayName: 'Ada' });
+    const bob = await person('bob@campus.local', { displayName: 'Bob' });
+    const cy = await person('cy@campus.local');
+    const gone = await person('gone@campus.local', { displayName: 'Gone' });
+    const elsewhere = await person('else@campus.local', {
+      displayName: 'Else',
+    });
+    await join(cy.id, c1, CohortRole.Mentor);
+    await join(bob.id, c1, CohortRole.Professor);
+    await join(ada.id, c1, CohortRole.Student);
+    await join(gone.id, c1, CohortRole.Professor, {
+      leftAt: new Date(Date.now() - DAY),
+    });
+    await join(elsewhere.id, c2, CohortRole.Professor);
+
+    const listed = await service.listCohort(viewerOf(ada), c1);
+
+    expect(listed.map((entry) => entry.id)).toEqual([ada.id, bob.id, cy.id]);
+    expect(listed[0]).toEqual({
+      id: ada.id,
+      displayName: 'Ada',
+      spriteKey: null,
+    });
+  });
+
+  it('sorts names without regard to case', async () => {
+    const zed = await person('zed@campus.local', { displayName: 'Zed' });
+    const ada = await person('ada@campus.local', { displayName: 'ada' });
+    await join(zed.id, c1, CohortRole.Professor);
+    await join(ada.id, c1, CohortRole.Professor);
+
+    const listed = await service.listCohort(viewerOf(zed), c1);
+
+    expect(listed.map((entry) => entry.displayName)).toEqual(['ada', 'Zed']);
+  });
+
+  it('gives a sprite that is offered, and null for one that is not', async () => {
+    const ada = await person('ada@campus.local', {
+      displayName: 'Ada',
+      spriteKey: 'placeholder-2',
+    });
+    const bob = await person('bob@campus.local', {
+      displayName: 'Bob',
+      spriteKey: 'retired-sprite',
+    });
+    await join(ada.id, c1, CohortRole.Professor);
+    await join(bob.id, c1, CohortRole.Professor);
+
+    const listed = await service.listCohort(viewerOf(ada), c1);
+
+    expect(listed.map((entry) => entry.spriteKey)).toEqual([
+      'placeholder-2',
+      null,
+    ]);
+  });
+
+  it('leaves a suspended account out, except for an admin', async () => {
+    const ada = await person('ada@campus.local', { displayName: 'Ada' });
+    const banned = await person('banned@campus.local', {
+      displayName: 'Banned',
+      status: UserStatus.Suspended,
+    });
+    const admin = await person('admin@campus.local', {
+      systemRole: SystemRole.Admin,
+    });
+    await join(ada.id, c1, CohortRole.Professor);
+    await join(banned.id, c1, CohortRole.Professor);
+
+    const seen = async (viewer: typeof users.$inferSelect) =>
+      (await service.listCohort(viewerOf(viewer), c1)).map((entry) => entry.id);
+
+    await expect(seen(ada)).resolves.toEqual([ada.id]);
+    await expect(seen(admin)).resolves.toEqual([ada.id, banned.id]);
+  });
+
+  it('refuses somebody with no live place in the cohort', async () => {
+    const outsider = await person('out@campus.local');
+    const ended = await person('ended@campus.local');
+    await join(outsider.id, c2, CohortRole.Professor);
+    await join(ended.id, c1, CohortRole.Professor, {
+      leftAt: new Date(Date.now() - DAY),
+    });
+
+    await expect(
+      service.listCohort(viewerOf(outsider), c1),
+    ).rejects.toBeInstanceOf(CohortProfilesForbiddenException);
+    await expect(
+      service.listCohort(viewerOf(ended), c1),
+    ).rejects.toBeInstanceOf(CohortProfilesForbiddenException);
+  });
+
+  it('lets an admin read any cohort, and tells an admin when there is none', async () => {
+    const admin = await person('admin@campus.local', {
+      systemRole: SystemRole.Admin,
+    });
+
+    await expect(service.listCohort(viewerOf(admin), c2)).resolves.toEqual([]);
+    await expect(
+      service.listCohort(
+        viewerOf(admin),
+        '99999999-9999-4999-8999-999999999999',
+      ),
+    ).rejects.toBeInstanceOf(CohortNotFoundException);
   });
 });

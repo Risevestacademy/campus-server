@@ -1,20 +1,27 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/session';
-import { eq, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 
 import {
   DRIZZLE,
   type Db,
 } from '../../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../../shared/auth/authenticated-user.js';
+import { isLiveMembership } from '../../cohorts/cohort-members.service.js';
+import { CohortNotFoundException } from '../../cohorts/cohorts.exceptions.js';
+import { cohortMembers, cohorts } from '../../cohorts/schema.js';
 import type {
+  CohortProfileDto,
   OwnProfileDto,
   ProfileCardDto,
   UpdateProfileDto,
 } from './dto/profile.dto.js';
 import { loadLiveMemberships } from '../live-memberships.js';
 import { hasAdminPowers, UserStatus, users, type User } from '../schema.js';
-import { ProfileNotFoundException } from '../users.exceptions.js';
+import {
+  CohortProfilesForbiddenException,
+  ProfileNotFoundException,
+} from '../users.exceptions.js';
 
 /** The fields a person may change about themselves. */
 const EDITABLE = [
@@ -150,6 +157,65 @@ export class ProfileService {
         role,
       })),
     };
+  }
+
+  /**
+   * Everybody with a live place in the cohort, for its live members and for
+   * admins. Suspended accounts are left out except for admins, as on the
+   * profile card.
+   */
+  async listCohort(
+    viewer: AuthenticatedUser,
+    cohortId: string,
+    now: Date = new Date(),
+  ): Promise<CohortProfileDto[]> {
+    const admin = hasAdminPowers(viewer.systemRole);
+    if (admin) {
+      const [cohort] = await this.db
+        .select({ id: cohorts.id })
+        .from(cohorts)
+        .where(eq(cohorts.id, cohortId))
+        .limit(1);
+      if (!cohort) {
+        throw new CohortNotFoundException(`No cohort with id ${cohortId}`);
+      }
+    }
+
+    const rows = await this.db
+      .select({
+        id: users.id,
+        displayName: users.displayName,
+        spriteKey: users.spriteKey,
+      })
+      .from(cohortMembers)
+      .innerJoin(users, eq(users.id, cohortMembers.userId))
+      .where(
+        and(
+          eq(cohortMembers.cohortId, cohortId),
+          isLiveMembership(now),
+          admin ? undefined : ne(users.status, UserStatus.Suspended),
+        ),
+      )
+      .orderBy(
+        sql`lower(${users.displayName}) asc nulls last`,
+        asc(users.displayName),
+        asc(users.id),
+      );
+
+    // A member is on their own list exactly when they hold a live place:
+    // SessionGuard has already turned a suspended caller away.
+    if (!admin && !rows.some((row) => row.id === viewer.id)) {
+      throw new CohortProfilesForbiddenException(
+        "Only the cohort's live members may list its people",
+        { cohortId },
+      );
+    }
+
+    return rows.map((row) => ({
+      id: row.id,
+      displayName: row.displayName,
+      spriteKey: spriteKeyOrNone(row.spriteKey),
+    }));
   }
 
   private async findUser(userId: string): Promise<User> {

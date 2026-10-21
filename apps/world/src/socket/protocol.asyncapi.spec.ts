@@ -76,6 +76,7 @@ describe('the AsyncAPI document', () => {
       'AppearanceMessage',
       'LeftMessage',
       'StatusChangedMessage',
+      'SpaceChangedMessage',
       'ReplacedMessage',
       'MovedMessage',
       'MoveResultMessage',

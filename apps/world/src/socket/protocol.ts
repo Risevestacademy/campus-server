@@ -1,3 +1,4 @@
+import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { z } from 'zod';
 
 import type { Appearance } from '../infra/accounts.js';
@@ -61,19 +62,31 @@ export const StatusSchema = z.enum(Status).meta({
     'cleared when they do something again. Lasts as long as their connection.',
 });
 
+const spaceKey = z
+  .string()
+  .describe(
+    "The space they are standing in: a drawn space's key, or " +
+      `\`${DEFAULT_SPACE_KEY}\` for the corridors and grounds.`,
+  );
+
 /**
  * Only where somebody first appears. `moved` and `moveResult` stay a bare
  * Player: they go out every tick, and what to draw changes rarely, so a
  * change has a message of its own (`appearance`, `statusChanged`).
  */
 export const Avatar = z
-  .object({ ...Player.shape, ...appearance, status: StatusSchema })
+  .object({
+    ...Player.shape,
+    ...appearance,
+    status: StatusSchema,
+    spaceKey,
+  })
   .meta({
     id: 'Avatar',
     description:
       'Somebody on the map and what to draw for them. A later change to their ' +
-      'sprite or name arrives as an `appearance` message, and to their status ' +
-      'as a `statusChanged`.',
+      'sprite or name arrives as an `appearance` message, to their status as ' +
+      'a `statusChanged`, and to their space as a `spaceChanged`.',
   });
 
 export const MoveOutcome = z
@@ -258,6 +271,20 @@ export const ServerMessage = z
           "Somebody in your cohort's status changed: chosen, or set to away " +
           'while idle and back again. Sent to everybody in the cohort, you ' +
           'included when it is yours.',
+      }),
+    z
+      .object({
+        type: z.literal('spaceChanged'),
+        userId: z.string(),
+        spaceKey,
+      })
+      .meta({
+        id: 'SpaceChangedMessage',
+        description:
+          'Somebody in your cohort stepped into another space. Sent to ' +
+          'everybody in the cohort, you included when it is you, the moment ' +
+          'the step is taken: it can arrive before the `moved` that shows ' +
+          'the step.',
       }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',
@@ -502,7 +529,10 @@ export type OutcomeMatchesMovement = Assert<
   Same<z.infer<typeof MoveOutcome>, MovementOutcome>
 >;
 export type AvatarMatchesAccount = Assert<
-  Same<z.infer<typeof Avatar>, MovementPlayer & Appearance & { status: Status }>
+  Same<
+    z.infer<typeof Avatar>,
+    MovementPlayer & Appearance & { status: Status; spaceKey: string }
+  >
 >;
 
 export type Avatar = z.infer<typeof Avatar>;

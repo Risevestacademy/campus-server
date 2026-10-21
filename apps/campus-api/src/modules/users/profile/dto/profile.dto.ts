@@ -239,3 +239,22 @@ export class ProfileCardDto {
   })
   memberships: ProfileCardMembershipDto[];
 }
+
+/** One person in a cohort, as the sidebar draws them. */
+export class CohortProfileDto {
+  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  id: string;
+
+  @ApiProperty({ type: String, nullable: true, example: 'Ada L.' })
+  displayName: string | null;
+
+  @ApiProperty({
+    type: String,
+    enum: SPRITE_KEYS,
+    nullable: true,
+    example: null,
+    description:
+      'Null when they have picked none, or picked one that is no longer offered.',
+  })
+  spriteKey: SpriteKey | null;
+}
