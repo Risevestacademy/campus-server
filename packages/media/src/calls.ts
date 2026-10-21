@@ -132,6 +132,9 @@ export async function verifyCallWebhook(
   const at = new Date(Number(received.createdAt) * 1000);
   const room = received.room?.name ?? '';
   const roomId = received.room?.sid ?? '';
+  // Runs are told apart by this time, so two created in the same second are
+  // only distinct on servers that send `creationTimeMs` (Cloud and current
+  // releases do); the whole-second fallbacks are for older ones.
   const roomOpenedAt =
     millis(received.room?.creationTimeMs, received.room?.creationTime) ?? at;
   const joinedAt = millis(
