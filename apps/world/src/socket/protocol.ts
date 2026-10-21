@@ -89,6 +89,35 @@ export const Avatar = z
       'a `statusChanged`, and to their space as a `spaceChanged`.',
   });
 
+export const Call = z
+  .object({
+    url: z.string().describe('The media server to connect to.'),
+    room: z.string(),
+    token: z
+      .string()
+      .describe('Lets you join this room only, for about ten minutes.'),
+    hearing: z
+      .enum(['room', 'proximity'])
+      .describe(
+        'room: subscribe to everybody in it. proximity: subscribe only to ' +
+          'the people the latest `nearby` names.',
+      ),
+    audibleRadius: z
+      .number()
+      .describe(
+        'In tiles, for proximity: fade a voice to nothing across this distance.',
+      ),
+    subscribeRadius: z
+      .number()
+      .describe('In tiles, for proximity: how far `nearby` reaches.'),
+  })
+  .meta({
+    id: 'Call',
+    description:
+      'The audio call for the space you are standing in. A participant’s ' +
+      'identity starts with their user id and a colon.',
+  });
+
 export const MoveOutcome = z
   .enum(['moved', 'blocked', 'refused', 'too_fast'])
   .meta({
@@ -286,6 +315,20 @@ export const ServerMessage = z
           'the step is taken: it can arrive before the `moved` that shows ' +
           'the step.',
       }),
+    z.object({ type: z.literal('call'), call: Call.nullable() }).meta({
+      id: 'CallMessage',
+      description:
+        'Sent on arrival and each time you step into another space: leave ' +
+        'the call you are in and join this one. Null where there is no ' +
+        'call to join.',
+    }),
+    z.object({ type: z.literal('nearby'), userIds: z.array(z.string()) }).meta({
+      id: 'NearbyMessage',
+      description:
+        'In a proximity space, who is close enough to hear, each time ' +
+        'that changes: subscribe to their audio and drop everybody ' +
+        'else’s. Can arrive before the `call` it applies to.',
+    }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',
       description:

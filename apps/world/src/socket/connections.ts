@@ -5,6 +5,14 @@ import type { Appearance } from '../infra/accounts.js';
 import type { Seat } from '../seat.js';
 import type { Availability } from '../status/availability.js';
 
+/** A space's call as a socket is told it, short of the token. */
+export interface CallSpec {
+  room: string;
+  hearing: 'room' | 'proximity';
+  audibleRadius: number;
+  subscribeRadius: number;
+}
+
 export interface Connection {
   id: string;
   userId: string;
@@ -33,6 +41,10 @@ export interface Connection {
    * admits on their role.
    */
   membership: CohortMembershipFacts | null;
+  /** The call this socket was last handed, until it leaves it. */
+  call?: CallSpec & { identity: string };
+  /** Whom the last `nearby` named. */
+  nearby: ReadonlySet<string>;
   socket: WebSocket;
   /**
    * When the access token this socket opened with runs out. Enforced only

@@ -73,13 +73,18 @@ server decides every position.
 - **Limits:**
   - per-socket message size and rate
   - a cap on what may wait unsent to a client that stops reading
+- **A call per space:** on arrival and on every step into another space,
+  a `call` message with a LiveKit token for that cohort's room in the space
+  (`LIVEKIT_*`; unset, no calls). World takes people out of a call they
+  left. In a proximity space, `nearby` names who is within the subscribe
+  radius (5 tiles to hear and 6 to subscribe where the space sets none),
+  each tick it changes. See [the protocol doc](../../docs/world-protocol.md#calls).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
 
 Not yet: more than one map, locking a space or asking to enter one, portals,
-live positions shared across
-instances (a player who moves to another instance starts from their last
-saved position), or audio and video rooms.
+an admin's broadcast, or live positions shared across instances (a player
+who moves to another instance starts from their last saved position).
 
 ## Running it
 
