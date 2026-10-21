@@ -15,7 +15,8 @@ const MIGRATIONS = fileURLToPath(
   new URL('../../infra/database/migrations', import.meta.url),
 );
 const db = drizzle(new PGlite());
-const service = new CallsService(db as never);
+const logger = { setContext: () => undefined, warn: () => undefined };
+const service = new CallsService(db as never, {} as never, logger as never);
 
 const T0 = new Date('2026-10-21T09:00:00.000Z');
 const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
@@ -62,27 +63,46 @@ beforeEach(async () => {
 const record = (event: CallEvent, minutes: number) =>
   service.record(event, at(minutes));
 const RUN = 'RM_1';
-const joined = (who = identity, roomId = RUN): CallEvent => ({
-  kind: 'participant_joined',
+/** When LiveKit created each run of the room: RM_2 is the room's second run. */
+const opened = (roomId: string) => (roomId === 'RM_2' ? at(20) : at(0));
+const inRoom = (roomId: string) => ({
   room,
   roomId,
-  identity: who,
+  roomOpenedAt: opened(roomId),
 });
-const left = (who = identity, roomId = RUN): CallEvent => ({
-  kind: 'participant_left',
-  room,
-  roomId,
+const joined = (
+  who = identity,
+  roomId = RUN,
+  joinedAt: Date | null = null,
+): CallEvent => ({
+  kind: 'participant_joined',
+  ...inRoom(roomId),
   identity: who,
+  joinedAt,
+});
+const left = (
+  who = identity,
+  roomId = RUN,
+  joinedAt: Date | null = null,
+): CallEvent => ({
+  kind: 'participant_left',
+  ...inRoom(roomId),
+  identity: who,
+  joinedAt,
 });
 const started = (roomId = RUN): CallEvent => ({
   kind: 'room_started',
-  room,
-  roomId,
+  ...inRoom(roomId),
 });
 const finished = (roomId = RUN): CallEvent => ({
   kind: 'room_finished',
-  room,
-  roomId,
+  ...inRoom(roomId),
+});
+const camera = (video: boolean): CallEvent => ({
+  kind: 'track_published',
+  ...inRoom(RUN),
+  identity,
+  video,
 });
 
 const calls = () =>
@@ -152,18 +172,12 @@ describe('recording a space’s call', () => {
 
   it('records that somebody turned their camera on, and not a microphone', async () => {
     await record(joined(), 0);
-    await record(
-      { kind: 'track_published', room, roomId: RUN, identity, video: false },
-      1,
-    );
+    await record(camera(false), 1);
     await expect(participants()).resolves.toEqual([
       expect.objectContaining({ videoEnabled: false }),
     ]);
 
-    await record(
-      { kind: 'track_published', room, roomId: RUN, identity, video: true },
-      2,
-    );
+    await record(camera(true), 2);
     await expect(participants()).resolves.toEqual([
       expect.objectContaining({ videoEnabled: true }),
     ]);
@@ -215,6 +229,52 @@ describe('recording a space’s call', () => {
     ]);
   });
 
+  it('records an older join that arrives after a newer one as over, leaving the newer one in the call', async () => {
+    const again = `${userId}:second`;
+    await record(joined(again), 3);
+    await record(joined(identity), 1);
+    await record(left(identity), 2);
+
+    await expect(participants()).resolves.toEqual([
+      expect.objectContaining({
+        providerIdentity: identity,
+        joinedAt: at(1),
+        leftAt: at(3),
+      }),
+      expect.objectContaining({ providerIdentity: again, leftAt: null }),
+    ]);
+  });
+
+  it('records a leave that arrives before its join, with LiveKit’s join time, and the join changes nothing', async () => {
+    await record(left(identity, RUN, at(1)), 5);
+    await record(joined(identity, RUN, at(1)), 1);
+
+    await expect(participants()).resolves.toEqual([
+      expect.objectContaining({ joinedAt: at(1), leftAt: at(5) }),
+    ]);
+  });
+
+  it('tells two runs of a room apart by when LiveKit created them, though their news arrives in the same second', async () => {
+    const second: CallEvent = {
+      kind: 'room_started',
+      room,
+      roomId: 'RM_B',
+      roomOpenedAt: new Date(at(0).getTime() + 400),
+    };
+    const first: CallEvent = {
+      kind: 'room_started',
+      room,
+      roomId: 'RM_A',
+      roomOpenedAt: new Date(at(0).getTime() + 100),
+    };
+    await service.record(second, at(0));
+    await service.record(first, at(0));
+
+    await expect(calls()).resolves.toEqual([
+      { openedAt: second.roomOpenedAt, closedAt: null },
+    ]);
+  });
+
   it('records nobody for an identity that names no user', async () => {
     await record(joined('somebody'), 0);
 
@@ -223,13 +283,19 @@ describe('recording a space’s call', () => {
 
   it('ignores a room that is not a space’s call, and a cohort that is gone', async () => {
     await record(
-      { kind: 'room_started', room: 'connection-check-1', roomId: 'RM_9' },
+      {
+        kind: 'room_started',
+        room: 'connection-check-1',
+        roomId: 'RM_9',
+        roomOpenedAt: at(0),
+      },
       0,
     );
     await record(
       {
         kind: 'room_started',
         roomId: 'RM_8',
+        roomOpenedAt: at(0),
         room: spaceRoomName({
           cohortId: '99999999-9999-4999-8999-999999999999',
           spaceId: '99999999-9999-4999-8999-999999999999',

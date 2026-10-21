@@ -15,7 +15,10 @@ export interface MediaCredentials {
 export interface RoomGrant {
   /** The room to join. Nothing else can be joined with this token. */
   room: string;
-  /** Who is joining. The user id, so a participant maps back to an account. */
+  /**
+   * Who is joining: the user id, or for a space's call the user id and a
+   * suffix (`participantIdentity`), so a participant maps back to an account.
+   */
   identity: string;
   /** What other participants see. */
   name?: string;
@@ -41,7 +44,7 @@ export const DEFAULT_ROOM_TOKEN_TTL_SECONDS = 10 * 60;
 const MAX_ROOM_NAME = 128;
 
 /** LiveKit signs with HMAC; below this a secret is guessable offline. */
-const MIN_SECRET_LENGTH = 32;
+export const MIN_SECRET_LENGTH = 32;
 
 export class InvalidMediaConfigError extends Error {}
 
@@ -72,8 +75,8 @@ export function assertMediaCredentials(credentials: MediaCredentials): void {
  * that is not media goes through world, where it is rate-limited and
  * checked, rather than around it on LiveKit's data channel.
  *
- * This is the only place LiveKit's own types are touched. Callers get plain
- * values back, so the provider stays swappable, as the schema intends
+ * LiveKit's own types stay in this package. Callers get plain values back,
+ * so the provider stays swappable, as the schema intends
  * (`sessions.provider`).
  */
 export async function mintRoomToken(

@@ -5,11 +5,11 @@ import {
   InvalidWebhookError,
   parseSpaceRoomName,
   participantIdentity,
-  signCallWebhook,
   spaceRoomName,
   userIdOfIdentity,
   verifyCallWebhook,
 } from './calls.js';
+import { signCallWebhook } from './testing.js';
 
 const COHORT = '11111111-1111-4111-8111-111111111111';
 const SPACE = '22222222-2222-4222-8222-222222222222';
@@ -58,13 +58,13 @@ describe('participant identities', () => {
 describe('verifying a webhook', () => {
   const room = spaceRoomName({ cohortId: COHORT, spaceId: SPACE });
 
-  it('reads a participant joining', async () => {
+  it('reads a participant joining, with LiveKit’s times to the millisecond', async () => {
     const { body, authorization } = await signed({
       event: 'participant_joined',
       id: 'EV_1',
       createdAt: '1792500000',
-      room: { name: room, sid: 'RM_1' },
-      participant: { identity: `${USER}:x` },
+      room: { name: room, sid: 'RM_1', creationTimeMs: '1792499990123' },
+      participant: { identity: `${USER}:x`, joinedAtMs: '1792499999456' },
     });
 
     await expect(verifyCallWebhook(KEYS, body, authorization)).resolves.toEqual(
@@ -75,10 +75,27 @@ describe('verifying a webhook', () => {
           kind: 'participant_joined',
           room,
           roomId: 'RM_1',
+          roomOpenedAt: new Date(1792499990123),
           identity: `${USER}:x`,
+          joinedAt: new Date(1792499999456),
         },
       },
     );
+  });
+
+  it('falls back to the event’s time for a room LiveKit gives no creation time', async () => {
+    const { body, authorization } = await signed({
+      event: 'room_started',
+      id: 'EV_6',
+      createdAt: '1792500000',
+      room: { name: room, sid: 'RM_1' },
+    });
+
+    await expect(
+      verifyCallWebhook(KEYS, body, authorization),
+    ).resolves.toMatchObject({
+      event: { roomOpenedAt: new Date(1792500000 * 1000) },
+    });
   });
 
   it('says whether a published track is video', async () => {

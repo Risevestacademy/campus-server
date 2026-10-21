@@ -1,19 +1,14 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
-  AccessToken,
   RoomServiceClient,
   TrackType,
   WebhookReceiver,
 } from 'livekit-server-sdk';
 
-import {
-  assertMediaCredentials,
-  InvalidMediaConfigError,
-  type MediaCredentials,
-} from './room-token.js';
+import { assertMediaCredentials, type MediaCredentials } from './room-token.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SPACE_ROOM = /^space:([0-9a-f-]{36}):([0-9a-f-]{36})$/i;
+const SPACE_ROOM = /^space:([^:]+):([^:]+)$/;
 
 /** The call a cohort holds in one space: every cohort has its own. */
 export interface SpaceRoom {
@@ -23,7 +18,7 @@ export interface SpaceRoom {
 
 export function spaceRoomName({ cohortId, spaceId }: SpaceRoom): string {
   if (!UUID.test(cohortId) || !UUID.test(spaceId)) {
-    throw new InvalidMediaConfigError('a space room is named by two uuids');
+    throw new RangeError('a space room is named by two uuids');
   }
   return `space:${cohortId}:${spaceId}`;
 }
@@ -85,6 +80,8 @@ interface InRoom {
   room: string;
   /** LiveKit's id for this run of the room: a room emptied and opened again gets a new one. */
   roomId: string;
+  /** When LiveKit created this run of the room, to the millisecond. */
+  roomOpenedAt: Date;
 }
 
 export type CallEvent =
@@ -92,6 +89,8 @@ export type CallEvent =
   | (InRoom & {
       kind: 'participant_joined' | 'participant_left';
       identity: string;
+      /** When LiveKit says they joined, if it says. */
+      joinedAt: Date | null;
     })
   | (InRoom & {
       kind: 'track_published' | 'track_unpublished';
@@ -133,17 +132,30 @@ export async function verifyCallWebhook(
   const at = new Date(Number(received.createdAt) * 1000);
   const room = received.room?.name ?? '';
   const roomId = received.room?.sid ?? '';
+  const roomOpenedAt =
+    millis(received.room?.creationTimeMs, received.room?.creationTime) ?? at;
+  const joinedAt = millis(
+    received.participant?.joinedAtMs,
+    received.participant?.joinedAt,
+  );
   const identity = received.participant?.identity ?? '';
   const event = ((): CallEvent | null => {
     if (!room || !roomId) return null;
     switch (received.event) {
       case 'room_started':
       case 'room_finished':
-        return { kind: received.event, room, roomId };
+        return { kind: received.event, room, roomId, roomOpenedAt };
       case 'participant_joined':
       case 'participant_left':
         return identity
-          ? { kind: received.event, room, roomId, identity }
+          ? {
+              kind: received.event,
+              room,
+              roomId,
+              roomOpenedAt,
+              identity,
+              joinedAt,
+            }
           : null;
       case 'track_published':
       case 'track_unpublished':
@@ -152,6 +164,7 @@ export async function verifyCallWebhook(
               kind: received.event,
               room,
               roomId,
+              roomOpenedAt,
               identity,
               video: received.track?.type === TrackType.VIDEO,
             }
@@ -163,12 +176,9 @@ export async function verifyCallWebhook(
   return { id: received.id, at, event };
 }
 
-/** The Authorization header LiveKit would send with `body`: for tests and local tools. */
-export async function signCallWebhook(
-  keys: Pick<MediaCredentials, 'apiKey' | 'apiSecret'>,
-  body: string,
-): Promise<string> {
-  const token = new AccessToken(keys.apiKey, keys.apiSecret);
-  token.sha256 = createHash('sha256').update(body).digest('base64');
-  return token.toJwt();
+/** A protobuf time as a Date: milliseconds when given, else seconds; null when neither. */
+function millis(ms?: bigint, seconds?: bigint): Date | null {
+  if (ms) return new Date(Number(ms));
+  if (seconds) return new Date(Number(seconds) * 1000);
+  return null;
 }

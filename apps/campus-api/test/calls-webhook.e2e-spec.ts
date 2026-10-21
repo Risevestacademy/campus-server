@@ -1,4 +1,5 @@
-import { signCallWebhook, spaceRoomName } from '@campus/media';
+import { spaceRoomName } from '@campus/media';
+import { signCallWebhook } from '@campus/media/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { ValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
