@@ -54,7 +54,7 @@ export interface AccountLookup {
    * queries however many spaces there are. `locked` is always false here:
    * world holds locks, not the database.
    */
-  spacesOn(mapKey: string, now: Date): Promise<Map<string, SpaceFacts>>;
+  spacesOn(mapKey: string, now: Date): Promise<Map<string, WorldSpace>>;
   /**
    * Calls `listener` whenever campus-api says something a space's door reads
    * has changed, and whenever listening (re)starts, since a change made while
@@ -167,8 +167,23 @@ export const MEMBERSHIP_ROWS_QUERY = `select user_id, cohort_id, role, left_at, 
     from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
   )`;
 
+/** What hearing defaults to in a proximity space with no radius set, in tiles. */
+export const DEFAULT_AUDIBLE_RADIUS = 5;
+export const DEFAULT_SUBSCRIBE_RADIUS = 6;
+
+/** A space's door, and how people in it hear one another. */
+export interface WorldSpace extends SpaceFacts {
+  id: string;
+  /** `proximity` or `boundary`, as `spaces.audio_mode` says. */
+  audioMode: string;
+  audibleRadius: number;
+  subscribeRadius: number;
+  hysteresisFactor: number;
+}
+
 /** Every space on one map, retired ones included. $1 the map's key. */
-export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.kind, spaces.access, spaces.retired_at
+export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.kind, spaces.access, spaces.retired_at,
+    spaces.audio_mode, spaces.audible_radius, spaces.subscribe_radius, spaces.hysteresis_factor
   from spaces
   join maps on maps.id = spaces.map_id
   where maps.key = $1`;
@@ -339,7 +354,7 @@ export function createAccountLookup(env: Env): AccountLookup {
         ]),
       );
     },
-    async spacesOn(mapKey, now): Promise<Map<string, SpaceFacts>> {
+    async spacesOn(mapKey, now): Promise<Map<string, WorldSpace>> {
       const spaces = await sql.unsafe<
         {
           id: string;
@@ -347,6 +362,10 @@ export function createAccountLookup(env: Env): AccountLookup {
           kind: string | null;
           access: string;
           retired_at: Date | null;
+          audio_mode: string;
+          audible_radius: string | null;
+          subscribe_radius: string | null;
+          hysteresis_factor: string;
         }[]
       >(SPACES_QUERY, [mapKey]);
       const lists = new Map<string, SpaceGrantFacts[]>(
@@ -379,11 +398,22 @@ export function createAccountLookup(env: Env): AccountLookup {
         spaces.map((space) => [
           space.key,
           {
+            id: space.id,
             kind: space.kind,
             access: space.access,
             retiredAt: space.retired_at,
             locked: false,
             grants: lists.get(space.id) ?? [],
+            audioMode: space.audio_mode,
+            audibleRadius:
+              space.audible_radius === null
+                ? DEFAULT_AUDIBLE_RADIUS
+                : Number(space.audible_radius),
+            subscribeRadius:
+              space.subscribe_radius === null
+                ? DEFAULT_SUBSCRIBE_RADIUS
+                : Number(space.subscribe_radius),
+            hysteresisFactor: Number(space.hysteresis_factor),
           },
         ]),
       );

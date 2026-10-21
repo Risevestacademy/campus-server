@@ -297,6 +297,33 @@ cohort sees which: `Avatar.status` says what it is when they appear, and a
 - **One status per cohort,** as there is one avatar per cohort. Somebody in
   two cohorts' campuses at once chooses, and goes idle, in each separately.
 
+## Calls
+
+Every space has an audio call per cohort. World hands you the one for the
+space you stand in; you join it with a LiveKit client.
+
+- **`call`** arrives after the `snapshot`, and again each time you step into
+  another space: leave the call you are in and join this one, with
+  `call.url` and `call.token`. `null` means there is no call where you
+  stand. World also takes you out of the old call itself, so a client that
+  stays is removed. A new `call` can also come without a step, when the
+  space's call changes (its row appears, or its hearing or radii change).
+  World restarting leaves you in your call; the `call` you get after
+  reconnecting replaces it.
+- **`call.hearing`** says whom to listen to:
+  - `room`: everybody in it. Subscribe to every participant.
+  - `proximity`: only the people the latest **`nearby`** names
+    (`{ "type": "nearby", "userIds": ["…"] }`). Turn auto-subscribe off,
+    subscribe to theirs, and drop everybody else's. Fade each voice by
+    distance, from full at your tile to nothing at `call.audibleRadius`
+    tiles, using the positions you already draw. `nearby` comes whenever
+    the list changes, and can arrive before the `call` it belongs to: keep
+    the latest. Stepping out of a proximity space sends an empty one.
+- **A participant's identity** is their user id, a colon, and a suffix that
+  changes each time they join. Match it to `nearby` and to avatars by the
+  part before the colon.
+- Nobody hears across a space's edge: everybody in a call is in that space.
+
 ## One connection per cohort
 
 **An account has one connection in each cohort's campus.** Somebody who

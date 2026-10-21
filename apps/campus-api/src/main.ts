@@ -71,7 +71,11 @@ async function bootstrap() {
 
   app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
+    rawBody: true,
   });
+  // LiveKit posts its webhooks as application/webhook+json, signed over the
+  // raw body.
+  app.useBodyParser('json', { type: 'application/webhook+json' });
 
   const logger = app.get(Logger);
   app.useLogger(logger);

@@ -11,6 +11,7 @@ import { EmailModule } from './infra/email/email.module.js';
 import { AppLoggerModule } from './infra/logger/logger.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { CallsModule } from './modules/calls/calls.module.js';
 import { CohortAdminModule } from './modules/cohorts/cohort-admin.module.js';
 import { FeedbackModule } from './modules/feedback/feedback.module.js';
 import { InvitesModule } from './modules/invites/invites.module.js';
@@ -35,6 +36,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     AuditModule,
     MapsModule,
     FeedbackModule,
+    CallsModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],
   controllers: [AppController],

@@ -200,6 +200,7 @@ erDiagram
         uuid id PK
         uuid session_id FK
         uuid user_id FK
+        varchar provider_identity "who they were to LiveKit, fresh each entry"
         timestamptz joined_at
         timestamptz left_at "null while in the call"
         boolean video_enabled "off unless they turned it on"

@@ -125,6 +125,48 @@
       "additionalProperties": false,
       "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message, to their status as a `statusChanged`, and to their space as a `spaceChanged`."
     },
+    "Call": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The media server to connect to."
+        },
+        "room": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string",
+          "description": "Lets you join this room only, for about ten minutes."
+        },
+        "hearing": {
+          "type": "string",
+          "enum": [
+            "room",
+            "proximity"
+          ],
+          "description": "room: subscribe to everybody in it. proximity: subscribe only to the people the latest `nearby` names."
+        },
+        "audibleRadius": {
+          "type": "number",
+          "description": "In tiles, for proximity: fade a voice to nothing across this distance."
+        },
+        "subscribeRadius": {
+          "type": "number",
+          "description": "In tiles, for proximity: how far `nearby` reaches."
+        }
+      },
+      "required": [
+        "url",
+        "room",
+        "token",
+        "hearing",
+        "audibleRadius",
+        "subscribeRadius"
+      ],
+      "additionalProperties": false,
+      "description": "The audio call for the space you are standing in. A participant’s identity starts with their user id and a colon."
+    },
     "MoveOutcome": {
       "type": "string",
       "enum": [
@@ -476,6 +518,52 @@
       "additionalProperties": false,
       "description": "Somebody in your cohort stepped into another space. Sent to everybody in the cohort, you included when it is you, the moment the step is taken: it can arrive before the `moved` that shows the step."
     },
+    "CallMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "call"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Call"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "call"
+      ],
+      "additionalProperties": false,
+      "description": "Sent on arrival and each time you step into another space: leave the call you are in and join this one. Null where there is no call to join."
+    },
+    "NearbyMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "nearby"
+        },
+        "userIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "userIds"
+      ],
+      "additionalProperties": false,
+      "description": "In a proximity space, who is close enough to hear, each time that changes: subscribe to their audio and drop everybody else’s. Can arrive before the `call` it applies to."
+    },
     "ReplacedMessage": {
       "type": "object",
       "properties": {
@@ -590,6 +678,12 @@
         },
         {
           "$ref": "#/definitions/SpaceChangedMessage"
+        },
+        {
+          "$ref": "#/definitions/CallMessage"
+        },
+        {
+          "$ref": "#/definitions/NearbyMessage"
         },
         {
           "$ref": "#/definitions/ReplacedMessage"

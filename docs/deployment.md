@@ -345,16 +345,24 @@ only world knows who is actually standing in which space: campus-api could
 check that someone _may_ enter a space, not that they did. world also sees
 the exit, so it can remove the participant through LiveKit's server API at
 once instead of waiting for the token to run out, and it owns the lifecycle
-of a space's room (open on first entry, close on last exit). So the LiveKit
-key and secret belong to world, and campus-api never holds them.
+of a space's room. So the key pair world mints with belongs to world.
+
+**campus-api records the calls**, from LiveKit's webhooks: when a space's
+call opens and closes, who joins and leaves it, and whether their camera
+came on (`sessions`, `session_participants`). It holds a key pair of its
+own, `LIVEKIT_WEBHOOK_API_KEY` and `LIVEKIT_WEBHOOK_API_SECRET`, used only to
+check a webhook came from LiveKit; unset, `POST /v1/calls/webhook` answers 503. In the LiveKit project, create a key pair for it and point a webhook at
+`https://<api host>/v1/calls/webhook` signed with that key.
 
 The minting itself lives in `packages/media` (`@campus/media`). Its secret
 must be at least 32 characters, and it refuses anything shorter. world reads
 `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` for the pre-join
 connection check (`POST /media/connection-check`, see
-[world's README](../apps/world/README.md#the-connection-check)), and will for
-rooms per space. All three or none: world refuses to boot with only some set.
-With none, it boots, and the check answers `503 MEDIA_NOT_CONFIGURED`.
+[world's README](../apps/world/README.md#the-connection-check)) and for each
+space's call, where it also takes somebody out of a call they left. All
+three or none: world refuses to boot with only some set. With none, it
+boots, the check answers `503 MEDIA_NOT_CONFIGURED`, and nobody is handed a
+call.
 
 To try the media server by hand, mint a token and join from any LiveKit
 client, such as LiveKit's hosted Meet page:

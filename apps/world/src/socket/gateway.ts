@@ -1,3 +1,9 @@
+import {
+  mintRoomToken,
+  participantIdentity,
+  participantRemover,
+  spaceRoomName,
+} from '@campus/media';
 import { DEFAULT_SPACE_KEY } from '@campus/session';
 import {
   SPACE_ACCESS,
@@ -9,8 +15,13 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import type { Account, AccountLookup, Appearance } from '../infra/accounts.js';
-import type { Env } from '../infra/env.js';
+import type {
+  Account,
+  AccountLookup,
+  Appearance,
+  WorldSpace,
+} from '../infra/accounts.js';
+import { mediaCredentials, type Env } from '../infra/env.js';
 import type {
   PositionStore,
   PositionToSave,
@@ -33,7 +44,7 @@ import {
   type Refusal,
   type UpgradeDecision,
 } from './authenticate.js';
-import { Connections, type Connection } from './connections.js';
+import { Connections, type CallSpec, type Connection } from './connections.js';
 import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
 import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
@@ -123,7 +134,7 @@ export function registerGateway(
    * or a list changed, and every heartbeat in case that word went missing.
    * A read that fails keeps what the doors had.
    */
-  let doors: ReadonlyMap<string, SpaceFacts> = new Map();
+  let doors: ReadonlyMap<string, WorldSpace> = new Map();
   /** Whether a read has ever succeeded, so a missing key means no row. */
   let doorsRead = false;
   let doorsLoading: Promise<void> | undefined;
@@ -145,6 +156,7 @@ export function registerGateway(
         try {
           doors = await accounts.spacesOn(map.id, new Date());
           doorsRead = true;
+          refreshCalls();
         } catch (err) {
           app.log.error(
             { err },
@@ -209,6 +221,22 @@ export function registerGateway(
    * step; per tick it is one frame per socket, however many moved.
    */
   function flushMoves(): void {
+    const touched = new Set(nearbyStale);
+    nearbyStale.clear();
+    for (const { cohortId } of pendingMoves.values()) touched.add(cohortId);
+    sendMoves();
+    if (!media || touched.size === 0) return;
+    const byCohort = new Map<string, Connection[]>();
+    for (const connection of connections.all()) {
+      if (!touched.has(connection.cohortId)) continue;
+      const inCohort = byCohort.get(connection.cohortId);
+      if (inCohort) inCohort.push(connection);
+      else byCohort.set(connection.cohortId, [connection]);
+    }
+    for (const inCohort of byCohort.values()) updateNearby(inCohort);
+  }
+
+  function sendMoves(): void {
     if (pendingMoves.size === 0) {
       return;
     }
@@ -246,6 +274,151 @@ export function registerGateway(
             encode({ type: 'moved', players: others }),
           );
         }
+      }
+    }
+  }
+
+  const media = mediaCredentials(env);
+  const removeFromCall = media ? participantRemover(media) : undefined;
+  /** Cohorts whose `nearby` lists may be out of date though nobody moved. */
+  const nearbyStale = new Set<string>();
+
+  /** The call the space a socket stands in has, or null where it has none. */
+  function callFor(connection: Connection): CallSpec | null {
+    const space = doors.get(connection.spaceKey);
+    if (!space) return null;
+    let room: string;
+    try {
+      room = spaceRoomName({
+        cohortId: connection.cohortId,
+        spaceId: space.id,
+      });
+    } catch {
+      return null;
+    }
+    return {
+      room,
+      hearing: space.audioMode === 'proximity' ? 'proximity' : 'room',
+      audibleRadius: space.audibleRadius,
+      subscribeRadius: space.subscribeRadius,
+    };
+  }
+
+  function sameCall(a: CallSpec | null, b: CallSpec | undefined): boolean {
+    if (!a || !b) return !a && !b;
+    return (
+      a.room === b.room &&
+      a.hearing === b.hearing &&
+      a.audibleRadius === b.audibleRadius &&
+      a.subscribeRadius === b.subscribeRadius
+    );
+  }
+
+  function leaveCall(connection: Connection): void {
+    const call = connection.call;
+    if (!call || !removeFromCall) return;
+    connection.call = undefined;
+    removeFromCall(call.room, call.identity).catch((err: unknown) => {
+      app.log.warn(
+        { err, userId: connection.userId, room: call.room },
+        'could not take somebody out of a call they left',
+      );
+    });
+  }
+
+  /** Hands the socket the call for the space it stands in, after taking it out of the last one. */
+  async function joinCall(connection: Connection): Promise<void> {
+    if (!media) return;
+    leaveCall(connection);
+    nearbyStale.add(connection.cohortId);
+    const call = callFor(connection);
+    if (!call) {
+      send(connection.socket, { type: 'call', call: null });
+      return;
+    }
+    const identity = participantIdentity(connection.userId);
+    connection.call = { ...call, identity };
+    let token;
+    try {
+      token = await mintRoomToken(media, {
+        room: call.room,
+        identity,
+        name: connection.appearance.displayName ?? undefined,
+        canPublish: true,
+      });
+    } catch (err) {
+      app.log.error(
+        { err, userId: connection.userId, spaceKey: connection.spaceKey },
+        'could not mint a token for a space’s call',
+      );
+      if (connection.call?.identity === identity) {
+        connection.call = undefined;
+        if (connections.has(connection)) {
+          send(connection.socket, { type: 'call', call: null });
+        }
+      }
+      return;
+    }
+    // Walked on, or gone, while the token was minted: that call is stale.
+    if (connection.call?.identity !== identity || !connections.has(connection))
+      return;
+    send(connection.socket, {
+      type: 'call',
+      call: { ...call, url: token.url, token: token.token },
+    });
+  }
+
+  /** After the spaces are read: a new call for anybody whose space's call is not the one they hold. */
+  function refreshCalls(): void {
+    if (!media || stopping) return;
+    for (const connection of connections.all()) {
+      if (!sameCall(callFor(connection), connection.call)) {
+        void joinCall(connection);
+      }
+    }
+  }
+
+  /**
+   * Who each person in a proximity space can hear: the others in the same
+   * space within its subscribe radius, kept until they are past the radius
+   * times its hysteresis, so standing on the line does not flicker. Leaving
+   * a proximity space empties the list, and says so.
+   */
+  function updateNearby(inCohort: readonly Connection[]): void {
+    const here = inCohort.flatMap((connection) => {
+      const player = players.get(connection);
+      return player ? [{ connection, player }] : [];
+    });
+    for (const { connection, player } of here) {
+      const space = doors.get(connection.spaceKey);
+      let next = new Set<string>();
+      if (space?.audioMode === 'proximity') {
+        for (const other of here) {
+          if (
+            other.connection === connection ||
+            other.connection.spaceKey !== connection.spaceKey
+          )
+            continue;
+          const distance = Math.hypot(
+            other.player.x - player.x,
+            other.player.y - player.y,
+          );
+          const reach = connection.nearby.has(other.connection.userId)
+            ? space.subscribeRadius * space.hysteresisFactor
+            : space.subscribeRadius;
+          if (distance <= reach) next.add(other.connection.userId);
+        }
+      } else if (connection.nearby.size === 0) {
+        continue;
+      } else {
+        next = new Set();
+      }
+      if (
+        next.size !== connection.nearby.size ||
+        [...next].some((userId) => !connection.nearby.has(userId))
+      ) {
+        connection.nearby = next;
+        send(connection.socket, { type: 'nearby', userIds: [...next].sort() });
       }
     }
   }
@@ -350,6 +523,7 @@ export function registerGateway(
       userId: connection.userId,
       spaceKey,
     });
+    void joinCall(connection);
     presence.changeSpace(presenceOf(connection)).then(
       (held) => {
         if (!held) lostPlace(connection);
@@ -459,6 +633,10 @@ export function registerGateway(
    * return is worse than a flicker for somebody who does.
    */
   function drop(connection: Connection, remember = true): void {
+    // A redeploy closes every socket, but LiveKit keeps running: calls are
+    // left to the clients, which reconnect and are handed new ones.
+    if (!stopping) leaveCall(connection);
+    nearbyStale.add(connection.cohortId);
     // A connection displaced here no longer holds the account's presence;
     // after shutdown began, everybody has been removed already.
     if (connections.has(connection) && !stopping) {
@@ -990,6 +1168,7 @@ export function registerGateway(
       spaceKey: DEFAULT_SPACE_KEY,
       systemRole: decision.account.systemRole,
       membership,
+      nearby: new Set(),
       availability: new Availability(
         replacing?.availability.chosen ?? Status.Available,
         Date.now(),
@@ -1203,6 +1382,7 @@ export function registerGateway(
       },
       players: avatarsIn(connection.cohortId),
     });
+    void joinCall(connection);
 
     // Handlers are on: whatever arrived during authentication is delivered
     // now, in the order it was sent.

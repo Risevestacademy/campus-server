@@ -1,6 +1,8 @@
 /**
- * Room tokens for the media server (LiveKit). world mints them, and holds the
- * key pair (see docs/deployment.md, "LiveKit"); the minting stays here so the
- * CLI can use it too. LiveKit's own types stay inside this package.
+ * The media server (LiveKit): room tokens and taking people out of rooms,
+ * which world does with its key pair, and reading webhooks, which campus-api
+ * does with its own (see docs/deployment.md, "LiveKit"). LiveKit's own types
+ * stay inside this package.
  */
 export * from './room-token.js';
+export * from './calls.js';

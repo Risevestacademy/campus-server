@@ -12,7 +12,9 @@ apps/
 packages/
   session/      What campus-api and world must agree on: session tokens, roles,
                 sprite keys, the default space's key
-  media/        LiveKit room tokens, minted by world
+  media/        LiveKit: room tokens and removals (world), webhook checks
+                (campus-api)
+  space-access/ Who may enter a space, for campus-api and world alike
 docs/           Cross-service docs: auth flow, deployment, world protocol
 docker-compose.local.yml   Local dev dependencies (Postgres, Redis, LiveKit, OTel Collector)
 livekit.yaml               LiveKit server config
@@ -69,8 +71,8 @@ Each app reads its config from the environment; see its `.env.example`.
 From the repo root, scoped to a single package:
 
 ```bash
-pnpm build:api       # builds @campus/session, then campus-api
-pnpm build:world     # builds @campus/session, then world
+pnpm build:api       # builds the packages campus-api uses, then campus-api
+pnpm build:world     # builds the packages world uses, then world
 pnpm --filter campus-api lint
 pnpm --filter campus-api test
 pnpm --filter campus-api db:migrate   # Drizzle migrations

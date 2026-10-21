@@ -405,6 +405,64 @@ describe('the spaces rework against spaces the old schema permitted', () => {
   });
 });
 
+describe('participant identities over calls already recorded', () => {
+  const FILE = '0019_participant_identity.sql';
+
+  it('gives a row from before an identity of its own, then requires one', async () => {
+    const pg = new PGlite();
+    for (const f of before(FILE)) {
+      await apply(pg, f);
+    }
+    const userId = (
+      await pg.query<{ id: string }>(
+        "insert into users (email) values ('ada@campus.local') returning id",
+      )
+    ).rows[0].id;
+    const cohortId = (
+      await pg.query<{ id: string }>(
+        "insert into cohorts (name, code) values ('C1', 'C1') returning id",
+      )
+    ).rows[0].id;
+    const mapId = (
+      await pg.query<{ id: string }>(
+        "insert into maps (key, name) values ('campus', 'Campus') returning id",
+      )
+    ).rows[0].id;
+    const spaceId = (
+      await pg.query<{ id: string }>(
+        `insert into spaces (map_id, key, name, audio_mode, access)
+         values ('${mapId}', 'library', 'Library', 'boundary', 'normal') returning id`,
+      )
+    ).rows[0].id;
+    const sessionId = (
+      await pg.query<{ id: string }>(
+        `insert into sessions (cohort_id, space_id, provider_room_id)
+         values ('${cohortId}', '${spaceId}', 'room-1') returning id`,
+      )
+    ).rows[0].id;
+    const rowId = (
+      await pg.query<{ id: string }>(
+        `insert into session_participants (session_id, user_id)
+         values ('${sessionId}', '${userId}') returning id`,
+      )
+    ).rows[0].id;
+
+    await apply(pg, FILE);
+
+    const res = await pg.query<{ provider_identity: string }>(
+      'select provider_identity from session_participants',
+    );
+    expect(res.rows).toEqual([
+      { provider_identity: `${userId}:before-${rowId}` },
+    ]);
+    await expect(
+      pg.query(
+        `insert into session_participants (session_id, user_id) values ('${sessionId}', '${userId}')`,
+      ),
+    ).rejects.toThrow(/provider_identity/);
+  });
+});
+
 describe('finding a migration by name', () => {
   it('fails clearly for a migration that is not there', () => {
     expect(() => before('0099_never_written.sql')).toThrow(

@@ -106,6 +106,7 @@ export default defineRailway((ctx) => {
       builder: 'RAILPACK',
       watchPatterns: [
         '/apps/campus-api/**',
+        '/packages/media/**',
         '/packages/session/**',
         '/packages/space-access/**',
         '/package.json',
@@ -149,6 +150,8 @@ export default defineRailway((ctx) => {
       GOOGLE_CLIENT_SECRET: preserve(),
       GOOGLE_MOBILE_CLIENT_IDS: preserve(),
       INVITE_TTL_DAYS: preserve(),
+      LIVEKIT_WEBHOOK_API_KEY: preserve(),
+      LIVEKIT_WEBHOOK_API_SECRET: preserve(),
       OTEL_SERVICE_NAME: preserve(),
       PORT: preserve(),
       POSTHOG_HOST: preserve(),
