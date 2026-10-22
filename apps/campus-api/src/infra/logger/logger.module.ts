@@ -1,8 +1,8 @@
-import { context, trace } from '@opentelemetry/api';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Global, Module } from '@nestjs/common';
 import { reportLoggedError } from '@campus/error-reporting';
+import { matchesPath, pathOf } from '@campus/telemetry/paths';
 import { LoggerModule } from 'nestjs-pino';
 
 import {
@@ -15,21 +15,12 @@ import {
   ErrorReportingModule,
   type ErrorReporter,
 } from '../error-reporting/error-reporting.module.js';
+import { QUIET_ROUTES } from './quiet-routes.js';
 
 export { CORRELATION_ID_HEADER };
 
-const UNLOGGED_PATHS = ['/v1/health', '/docs', '/docs-json'];
-
-/** Query strings stay out of the logs: the Google callback's carries the OAuth code. */
-export function pathOf(url: string | undefined): string {
-  return (url ?? '').split('?')[0] ?? '';
-}
-
 export function isUnloggedRoute(url: string | undefined): boolean {
-  const path = pathOf(url);
-  return UNLOGGED_PATHS.some(
-    (unlogged) => path === unlogged || path.startsWith(`${unlogged}/`),
-  );
+  return matchesPath(url, QUIET_ROUTES);
 }
 
 @Global()
@@ -53,13 +44,6 @@ export function isUnloggedRoute(url: string | undefined): boolean {
             const id = resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
             res.setHeader(CORRELATION_ID_HEADER, id);
             return id;
-          },
-          mixin: () => {
-            const span = trace.getSpan(context.active());
-            const traceId = span?.spanContext().traceId;
-            const spanId = span?.spanContext().spanId;
-            if (!traceId || !spanId) return {};
-            return { trace_id: traceId, span_id: spanId };
           },
           transport: config.FF_LOG_PRETTY
             ? {
