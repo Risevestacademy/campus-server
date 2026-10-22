@@ -4,6 +4,7 @@ import type { FastifyServerOptions } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
 import type { Env } from './env.js';
+import { failActiveSpan } from './traced.js';
 
 export const CORRELATION_ID_HEADER = 'x-correlation-id';
 
@@ -20,6 +21,7 @@ export function loggerOptions(
     hooks: {
       logMethod(args, method, level) {
         reportLoggedError(reporter, level, args, this.bindings());
+        failActiveSpan(level, args);
         method.apply(this, args);
       },
     },

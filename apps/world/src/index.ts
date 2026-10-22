@@ -1,6 +1,10 @@
+import { matchesPath } from '@campus/telemetry/paths';
+
 import { loadEnv } from './infra/env.js';
 
 const env = loadEnv();
+
+const UNTRACED_PATHS = ['/health'];
 
 // Telemetry patches modules as they load, so it starts before the app is
 // imported.
@@ -10,7 +14,20 @@ const telemetry = env.FF_OTEL_ENABLED
       version: env.RAILWAY_GIT_COMMIT_SHA ?? 'local',
       environment: env.DEPLOYMENT_ENVIRONMENT,
       metrics: env.FF_OTEL_METRICS_ENABLED,
-      untracedPaths: ['/health'],
+      untracedPaths: UNTRACED_PATHS,
+      // Imported, not required, so it goes through the ESM hook.
+      esmModules: ['ioredis'],
+      instrumentations: [
+        new (await import('@fastify/otel')).FastifyOtelInstrumentation({
+          registerOnInitialization: true,
+          ignorePaths: ({ url }) => matchesPath(url, UNTRACED_PATHS),
+        }),
+        // Only inside a span: the timers' own reads and writes, every few
+        // seconds for every socket, would bury everything else.
+        new (
+          await import('@opentelemetry/instrumentation-ioredis')
+        ).IORedisInstrumentation({ requireParentSpan: true }),
+      ],
     })
   : undefined;
 
