@@ -2,6 +2,7 @@ import { context, trace } from '@opentelemetry/api';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Global, Module } from '@nestjs/common';
+import { reportLoggedError } from '@campus/error-reporting';
 import { LoggerModule } from 'nestjs-pino';
 
 import {
@@ -9,13 +10,23 @@ import {
   resolveCorrelationId,
 } from '../../shared/http/correlation-id.js';
 import { CONFIG, type Env } from '../config/config.module.js';
+import {
+  ERROR_REPORTER,
+  ErrorReportingModule,
+  type ErrorReporter,
+} from '../error-reporting/error-reporting.module.js';
 
 export { CORRELATION_ID_HEADER };
 
 const UNLOGGED_PATHS = ['/v1/health', '/docs', '/docs-json'];
 
+/** Query strings stay out of the logs: the Google callback's carries the OAuth code. */
+export function pathOf(url: string | undefined): string {
+  return (url ?? '').split('?')[0] ?? '';
+}
+
 export function isUnloggedRoute(url: string | undefined): boolean {
-  const path = (url ?? '').split('?')[0] ?? '';
+  const path = pathOf(url);
   return UNLOGGED_PATHS.some(
     (unlogged) => path === unlogged || path.startsWith(`${unlogged}/`),
   );
@@ -25,10 +36,17 @@ export function isUnloggedRoute(url: string | undefined): boolean {
 @Module({
   imports: [
     LoggerModule.forRootAsync({
-      inject: [CONFIG],
-      useFactory: (config: Env) => ({
+      imports: [ErrorReportingModule],
+      inject: [CONFIG, ERROR_REPORTER],
+      useFactory: (config: Env, reporter: ErrorReporter) => ({
         pinoHttp: {
           level: config.FF_LOG_LEVEL,
+          hooks: {
+            logMethod(args, method, level) {
+              reportLoggedError(reporter, level, args, this.bindings());
+              method.apply(this, args);
+            },
+          },
           genReqId: (req: IncomingMessage, res: ServerResponse) => {
             // The one place the id is decided. What is returned here is
             // what the logs, the response header and any audit entry carry.
@@ -54,6 +72,12 @@ export function isUnloggedRoute(url: string | undefined): boolean {
                 },
               }
             : undefined,
+          // The request is serialized before routing; its route is known
+          // only once the response is done.
+          customProps: (req, res) =>
+            res.writableEnded
+              ? { route: (req as { route?: { path?: string } }).route?.path }
+              : {},
           autoLogging: {
             ignore: (req: IncomingMessage) => isUnloggedRoute(req.url),
           },
@@ -64,6 +88,9 @@ export function isUnloggedRoute(url: string | undefined): boolean {
               '*.password',
               '*.token',
               '*.secret',
+              '*.email',
+              '*.idToken',
+              '*.refreshToken',
             ],
             censor: '[REDACTED]',
           },
@@ -71,7 +98,7 @@ export function isUnloggedRoute(url: string | undefined): boolean {
             req: (req) => ({
               id: req.id,
               method: req.method,
-              url: req.url,
+              url: pathOf(req.url),
               remoteAddress: req.remoteAddress,
               remotePort: req.remotePort,
             }),

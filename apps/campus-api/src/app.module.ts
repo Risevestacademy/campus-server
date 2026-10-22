@@ -8,6 +8,7 @@ import { HealthModule } from './health/health.module.js';
 import { AppConfigModule } from './infra/config/config.module.js';
 import { DatabaseModule } from './infra/database/database.module.js';
 import { EmailModule } from './infra/email/email.module.js';
+import { ErrorReportingModule } from './infra/error-reporting/error-reporting.module.js';
 import { AppLoggerModule } from './infra/logger/logger.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
@@ -24,6 +25,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
 @Module({
   imports: [
     AppConfigModule,
+    ErrorReportingModule,
     AppLoggerModule,
     DatabaseModule,
     EmailModule,

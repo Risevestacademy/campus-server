@@ -1,5 +1,5 @@
 import { ArgumentsHost, Catch, ExceptionFilter } from '@nestjs/common';
-import { Request, Response } from 'express';
+import { Response } from 'express';
 
 import { DomainException } from '../exceptions/domain.exception.js';
 import {
@@ -8,6 +8,7 @@ import {
 } from '../exceptions/exception-code.enum.js';
 import type { ErrorResponse } from './error-response.js';
 import type { ErrorLogger } from './global-exception.filter.js';
+import { requestFields, type LoggedRequest } from './request-fields.js';
 
 const GENERIC_MESSAGE = 'An unexpected error occurred';
 
@@ -48,11 +49,7 @@ export class DomainExceptionFilter implements ExceptionFilter {
     // An unavailable dependency is logged too: it answers the caller, but
     // somebody still has to go and look at it.
     if (serverFault || unavailable) {
-      this.log(
-        exception,
-        ctx.getRequest<Request & { id?: string }>(),
-        unavailable ? 'Dependency unavailable' : 'Unhandled exception',
-      );
+      this.log(exception, status, ctx.getRequest<LoggedRequest>(), unavailable);
     }
 
     response.status(status).json(body);
@@ -60,17 +57,18 @@ export class DomainExceptionFilter implements ExceptionFilter {
 
   private log(
     exception: DomainException,
-    request: (Request & { id?: string }) | undefined,
-    message: string,
+    status: number,
+    request: LoggedRequest | undefined,
+    unavailable: boolean,
   ): void {
-    const payload: Record<string, unknown> = {
+    const message = unavailable
+      ? 'Dependency unavailable'
+      : 'Unhandled exception';
+    const payload = {
       err: exception,
-      method: request?.method,
-      url: request?.url,
+      ...requestFields(request, status),
+      ...(unavailable ? { severity: 'warning' } : {}),
     };
-    if (request?.id) {
-      payload.correlationId = request.id;
-    }
 
     if (this.logger) {
       this.logger.error(payload, message);

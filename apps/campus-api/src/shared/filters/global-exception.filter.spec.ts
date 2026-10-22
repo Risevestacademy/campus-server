@@ -20,7 +20,14 @@ function run(exception: unknown, logger?: { error: ReturnType<typeof vi.fn> }) {
           return this;
         },
       }),
-      getRequest: () => ({ id: 'corr-1', method: 'GET', url: '/v1/thing' }),
+      getRequest: () => ({
+        id: 'corr-1',
+        method: 'GET',
+        url: '/v1/things/42?token=secret',
+        path: '/v1/things/42',
+        route: { path: '/v1/things/:id' },
+        user: { id: 'user-1' },
+      }),
     }),
   };
 
@@ -54,6 +61,22 @@ describe('GlobalExceptionFilter', () => {
     const [payload, message] = logger.error.mock.calls[0];
     expect(message).toBe('Unhandled exception');
     expect(payload).toMatchObject({ err: boom, correlationId: 'corr-1' });
+  });
+
+  it('logs the route, the user and the status, never the query string', () => {
+    const logger = { error: vi.fn() };
+
+    run(new Error('boom'), logger);
+
+    const [payload] = logger.error.mock.calls[0];
+    expect(payload).toMatchObject({
+      method: 'GET',
+      path: '/v1/things/42',
+      route: '/v1/things/:id',
+      statusCode: 500,
+      userId: 'user-1',
+    });
+    expect(JSON.stringify(payload)).not.toContain('secret');
   });
 
   it('keeps the message of an HttpException, which was written for the caller', () => {
