@@ -1,4 +1,5 @@
 import { reportLoggedError, type ErrorReporter } from '@campus/error-reporting';
+import { pathOf } from '@campus/telemetry/paths';
 import type { FastifyServerOptions } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
@@ -53,7 +54,7 @@ export function loggerOptions(
       }) => ({
         id: req.id,
         method: req.method,
-        url: req.url.split('?')[0],
+        url: pathOf(req.url),
         route: req.routeOptions?.url,
       }),
       res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
