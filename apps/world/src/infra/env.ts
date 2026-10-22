@@ -41,6 +41,15 @@ const schema = z
     FF_LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
     FF_LOG_PRETTY: flag.default(false),
 
+    /** Error tracking, as in campus-api. Off unless switched on. */
+    FF_POSTHOG_ENABLED: flag.default(false),
+    POSTHOG_PROJECT_TOKEN: optionalText,
+    POSTHOG_HOST: z
+      .url({ protocol: /^https$/ })
+      .default('https://eu.i.posthog.com'),
+    /** Set by Railway on every deploy. */
+    RAILWAY_GIT_COMMIT_SHA: optionalText,
+
     /**
      * Browser origins allowed to open a socket. A WebSocket upgrade is not
      * subject to CORS, so this is the only thing standing between the campus
@@ -202,6 +211,18 @@ const schema = z
         path: ['LIVEKIT_URL'],
         message:
           'set all of LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET, or none',
+      });
+    }
+
+    if (
+      env.FF_POSTHOG_ENABLED &&
+      !env.POSTHOG_PROJECT_TOKEN?.startsWith('phc_')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['POSTHOG_PROJECT_TOKEN'],
+        message:
+          'must be set, and start with "phc_", while FF_POSTHOG_ENABLED is on',
       });
     }
 

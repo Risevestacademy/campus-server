@@ -1,3 +1,7 @@
+import {
+  createErrorReporter,
+  type ErrorReporter,
+} from '@campus/error-reporting';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 
@@ -25,6 +29,7 @@ export interface World {
   accounts: AccountLookup;
   positions: PositionStore;
   presence: PresenceStore;
+  reporter: ErrorReporter;
 }
 
 export async function buildWorld(
@@ -37,9 +42,17 @@ export async function buildWorld(
   presence?: PresenceStore,
   // The published entry map when left out, which is a call to Sanity.
   map?: WorldMap,
+  reporter: ErrorReporter = createErrorReporter({
+    enabled: env.FF_POSTHOG_ENABLED,
+    token: env.POSTHOG_PROJECT_TOKEN,
+    host: env.POSTHOG_HOST,
+    service: 'world',
+    environment: env.DEPLOYMENT_ENVIRONMENT,
+    release: env.RAILWAY_GIT_COMMIT_SHA,
+  }),
 ): Promise<World> {
   const app = Fastify({
-    logger: loggerOptions(env),
+    logger: loggerOptions(env, reporter),
     genReqId: (req) => correlationId(req.headers as Record<string, unknown>),
     bodyLimit: env.WORLD_MAX_MESSAGE_BYTES,
   });
@@ -53,7 +66,10 @@ export async function buildWorld(
   app.setErrorHandler((err: FastifyError, request, reply) => {
     const status = err.statusCode ?? 500;
     if (status >= 500) {
-      request.log.error({ err }, 'unhandled error');
+      request.log.error(
+        { err, route: request.routeOptions.url, statusCode: status },
+        'unhandled error',
+      );
     }
     void reply.status(status).send({
       error: {
@@ -145,5 +161,13 @@ export async function buildWorld(
     return docsPage;
   });
 
-  return { app, gateway, env, accounts, positions: store, presence: present };
+  return {
+    app,
+    gateway,
+    env,
+    accounts,
+    positions: store,
+    presence: present,
+    reporter,
+  };
 }

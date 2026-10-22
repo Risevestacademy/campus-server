@@ -1,3 +1,4 @@
+import { reportLoggedError, type ErrorReporter } from '@campus/error-reporting';
 import type { FastifyServerOptions } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
@@ -9,9 +10,18 @@ export const CORRELATION_ID_HEADER = 'x-correlation-id';
  * Same shape as campus-api's logging: one correlation id per request, echoed
  * back, so a trail through the API and a trail through here can be joined.
  */
-export function loggerOptions(env: Env): FastifyServerOptions['logger'] {
+export function loggerOptions(
+  env: Env,
+  reporter: ErrorReporter,
+): FastifyServerOptions['logger'] {
   return {
     level: env.FF_LOG_LEVEL,
+    hooks: {
+      logMethod(args, method, level) {
+        reportLoggedError(reporter, level, args, this.bindings());
+        method.apply(this, args);
+      },
+    },
     transport: env.FF_LOG_PRETTY
       ? {
           target: 'pino-pretty',
@@ -29,14 +39,22 @@ export function loggerOptions(env: Env): FastifyServerOptions['logger'] {
         'req.headers.cookie',
         '*.token',
         '*.secret',
+        '*.email',
       ],
       censor: '[REDACTED]',
     },
     serializers: {
-      req: (req: { id: string; method: string; url: string }) => ({
+      // The path alone: a query string can carry anything a client puts in it.
+      req: (req: {
+        id: string;
+        method: string;
+        url: string;
+        routeOptions?: { url?: string };
+      }) => ({
         id: req.id,
         method: req.method,
-        url: req.url,
+        url: req.url.split('?')[0],
+        route: req.routeOptions?.url,
       }),
       res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
     },

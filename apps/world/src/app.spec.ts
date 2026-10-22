@@ -1,7 +1,7 @@
 import { SessionScope, signSessionToken } from '@campus/session';
 import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 
 import { buildWorld } from './app.js';
@@ -147,6 +147,48 @@ describe('the HTTP surface', () => {
  * being down must cost somebody their saved position, never their way in,
  * and must not hold up a shutdown.
  */
+describe('error reporting', () => {
+  it('reports a 500 with its route and correlation id', async () => {
+    const reporter = { report: vi.fn(), shutdown: vi.fn() };
+    const { app, gateway } = await buildWorld(
+      loadEnv({
+        AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+        DEPLOYMENT_ENVIRONMENT: 'development',
+        DATABASE_URL: 'postgres://unused',
+        FF_LOG_LEVEL: 'error',
+      } as NodeJS.ProcessEnv),
+      accounts,
+      undefined,
+      undefined,
+      undefined,
+      reporter,
+    );
+    app.get('/broken/:id', async () => {
+      throw new Error('boom');
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/broken/7?token=secret',
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(reporter.report).toHaveBeenCalledWith(new Error('boom'), {
+      distinctId: undefined,
+      level: 'error',
+      properties: expect.objectContaining({
+        log_message: 'unhandled error',
+        route: '/broken/:id',
+        status_code: 500,
+        correlation_id: response.headers['x-correlation-id'],
+      }),
+    });
+    expect(JSON.stringify(reporter.report.mock.calls)).not.toContain('secret');
+    await gateway.stop();
+    await app.close();
+  });
+});
+
 describe('with the position store failing', () => {
   const failing = {
     load: () => Promise.reject(new Error('redis is down')),
