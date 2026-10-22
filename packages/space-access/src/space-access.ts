@@ -192,7 +192,7 @@ export function isLiveGrant(grant: SpaceGrantFacts, at: Date): boolean {
  *    cohort — all no. The roster is the campus. A membership named for the
  *    wrong cohort is a check made wrong, so it reads as none: fail closed.
  * 5. **A normal space** admits them unless it is locked. A guest is no
- *    different here; that they may not lock one is for whoever holds locks.
+ *    different here.
  * 6. **A designated space** admits them if a live entry on its list names
  *    them: by person, by their track in this cohort, by their role in this
  *    cohort, or by their system role. A guest gets in the same way, by an
