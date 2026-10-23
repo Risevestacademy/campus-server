@@ -1,4 +1,11 @@
-import { Controller, Get, INestApplication, Param } from '@nestjs/common';
+import {
+  CanActivate,
+  Controller,
+  Get,
+  INestApplication,
+  Param,
+  UseGuards,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Logger } from 'nestjs-pino';
 import request from 'supertest';
@@ -20,8 +27,21 @@ class UnavailableException extends DomainException {
   readonly code = ExceptionCode.ServiceUnavailable;
 }
 
+/** A guard that fails the way SessionGuard does when the database is down. */
+class BrokenGuard implements CanActivate {
+  canActivate(): boolean {
+    throw new Error('connect ECONNREFUSED');
+  }
+}
+
 @Controller('probe')
 class ProbeController {
+  @Get('guarded/:id')
+  @UseGuards(BrokenGuard)
+  guarded(@Param('id') _id: string) {
+    return 'never reached';
+  }
+
   @Get('crash/:id')
   crash(@Param('id') _id: string) {
     throw new Error('boom');
@@ -80,7 +100,7 @@ describe('Error reporting (e2e)', () => {
       distinctId: undefined,
       level: 'error',
       properties: expect.objectContaining({
-        log_context: 'Unhandled exception',
+        log_message: 'Unhandled exception',
         correlation_id: res.headers['x-correlation-id'],
         method: 'GET',
         route: '/v1/probe/crash/:id',
@@ -88,6 +108,21 @@ describe('Error reporting (e2e)', () => {
       }),
     });
     expect(JSON.stringify(context)).not.toContain('secret');
+  });
+
+  it('reports a 500 thrown by a guard, before the handler runs', async () => {
+    await request(app.getHttpServer()).get('/v1/probe/guarded/7').expect(500);
+
+    expect(reporter.report).toHaveBeenCalledTimes(1);
+    expect(reporter.report).toHaveBeenCalledWith(
+      new Error('connect ECONNREFUSED'),
+      expect.objectContaining({
+        properties: expect.objectContaining({
+          route: '/v1/probe/guarded/:id',
+          status_code: 500,
+        }),
+      }),
+    );
   });
 
   it('reports an unavailable dependency as a warning', async () => {

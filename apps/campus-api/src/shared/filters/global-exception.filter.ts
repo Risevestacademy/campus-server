@@ -14,9 +14,17 @@ import { requestFields, type LoggedRequest } from './request-fields.js';
 
 const GENERIC_MESSAGE = 'An unexpected error occurred';
 
-/** Structural, so the filter works with nestjs-pino or a plain console. */
+/**
+ * Structural, so the filter works with nestjs-pino or a plain console.
+ * nestjs-pino's Logger takes a lone trailing string as the context, not the
+ * message, so the context is passed too and the message survives.
+ */
 export interface ErrorLogger {
-  error(payload: Record<string, unknown>, message: string): void;
+  error(
+    payload: Record<string, unknown>,
+    message: string,
+    context: string,
+  ): void;
 }
 
 @Catch()
@@ -51,7 +59,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const payload = { err: exception, ...requestFields(request, status) };
 
     if (this.logger) {
-      this.logger.error(payload, 'Unhandled exception');
+      this.logger.error(
+        payload,
+        'Unhandled exception',
+        GlobalExceptionFilter.name,
+      );
       return;
     }
     console.error('Unhandled exception', payload);

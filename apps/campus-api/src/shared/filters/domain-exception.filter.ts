@@ -71,7 +71,7 @@ export class DomainExceptionFilter implements ExceptionFilter {
     };
 
     if (this.logger) {
-      this.logger.error(payload, message);
+      this.logger.error(payload, message, DomainExceptionFilter.name);
       return;
     }
     console.error(message, payload);
