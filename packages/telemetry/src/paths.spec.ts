@@ -85,3 +85,34 @@ describe('redactedRequestUrl', () => {
     ).toBeUndefined();
   });
 });
+
+describe('redactedRequestUrl, hosts', () => {
+  it('takes the port off a host that carries one', () => {
+    expect(
+      redactedRequestUrl({ host: 'livekit.internal:8080', path: '/x?k=v' }),
+    ).toBe('http://livekit.internal:8080/x?k=REDACTED');
+    expect(
+      redactedRequestUrl({
+        host: 'livekit.internal:8080',
+        port: 8080,
+        path: '/x?k=v',
+      }),
+    ).toBe('http://livekit.internal:8080/x?k=REDACTED');
+  });
+
+  it('keeps an IPv6 address in brackets', () => {
+    expect(
+      redactedRequestUrl({ hostname: '::1', port: 7880, path: '/x?k=v' }),
+    ).toBe('http://[::1]:7880/x?k=REDACTED');
+    expect(redactedRequestUrl({ host: '[::1]:7880', path: '/x?k=v' })).toBe(
+      'http://[::1]:7880/x?k=REDACTED',
+    );
+  });
+});
+
+describe('matchesPath, case', () => {
+  it('matches whatever the case, as Express routes do', () => {
+    expect(matchesPath('/V1/Health', ['/v1/health'])).toBe(true);
+    expect(matchesPath('/DOCS/assets/app.js', ['/docs'])).toBe(true);
+  });
+});
