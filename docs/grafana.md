@@ -7,9 +7,12 @@ setup is shared, in [`packages/telemetry`](../packages/telemetry).
 ## What is sent
 
 - **Traces:** an HTTP server span per request, health checks and the API
-  reference excepted, with Express spans under it in campus-api, and a span
-  per outgoing HTTP call. A span keeps a query string's parameter names but
-  not their values, and holds no client address.
+  reference excepted, with Express spans under it in campus-api, a span per
+  outgoing HTTP call or `fetch` (Google, LiveKit, Resend), and a span per
+  database query. A span keeps a query string's parameter names but not their
+  values, a query keeps its statement as sent, with `$1` placeholders but
+  never the values, a failed query is recorded by its SQLSTATE rather than
+  its message, and no span holds a client address.
 - **Logs:** every pino line, after the same redaction as the console, with the
   `trace_id` of the request that wrote it.
 - **Runtime metrics:** event-loop lag, GC, heap and CPU, when
