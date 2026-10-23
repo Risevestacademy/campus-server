@@ -49,12 +49,23 @@ Express in the list, spans lose their route.
 
 - HTTP: a server span per request, except `untracedPaths` and what is under
   them, matched regardless of case as Express matches routes. Client spans for
-  outgoing `http` calls.
+  outgoing `http` calls and for `fetch`, which Google, LiveKit, Resend and
+  PostHog are all called through.
 - A span keeps a query string's parameter names and never their values
   (`code=REDACTED&state=REDACTED`), on incoming and outgoing requests alike,
   and holds no client address.
 - pino: every log line carries the request's `trace_id` and `span_id`, and is
   sent over OTLP after the logger's own redaction.
+
+## Database queries
+
+postgres.js has no maintained instrumentation, so `@campus/telemetry/sql`
+exports `tracePostgres(sql)`. It hooks the one place postgres.js runs a
+query, so every client, transaction, savepoint and reserved connection gets
+one span per query, holding the statement as sent with `$n` placeholders and,
+on failure, the SQLSTATE but never the message, which can quote a value.
+Cursors are left out: their query never settles. Both services call it on
+their client while telemetry is on.
 
 ## Paths without the SDK
 
