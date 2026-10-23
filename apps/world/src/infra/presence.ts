@@ -91,6 +91,8 @@ export interface PresenceStore {
    */
   setStatus(presence: Presence): Promise<void>;
   online(cohortId: string): Promise<PresenceEntry[]>;
+  /** Who is online in one cohort, or in any: a person in two cohorts is one id. */
+  onlineUserIds(cohortId?: string): Promise<Set<string>>;
   /** Hears about every displacement, including of connections held elsewhere. */
   onDisplaced(listener: (displaced: Displacement) => void): void;
   close(): Promise<void>;
@@ -181,6 +183,17 @@ export class MemoryPresenceStore implements PresenceStore {
     return [...this.entries.values()]
       .filter((presence) => presence.cohortId === cohortId)
       .map((presence) => ({ ...presence, instanceId: this.instanceId }));
+  }
+
+  async onlineUserIds(cohortId?: string): Promise<Set<string>> {
+    return new Set(
+      [...this.entries.values()]
+        .filter(
+          (presence) =>
+            cohortId === undefined || presence.cohortId === cohortId,
+        )
+        .map((presence) => presence.userId),
+    );
   }
 
   onDisplaced(): void {
@@ -404,6 +417,41 @@ export class RedisPresenceStore implements PresenceStore {
       entries.push({ userId: userIds[i] as string, ...parsed.data });
     }
     return entries;
+  }
+
+  async onlineUserIds(cohortId?: string): Promise<Set<string>> {
+    const keys =
+      cohortId === undefined
+        ? await this.cohortIndexes()
+        : [cohortPresenceKey(cohortId)];
+    const batch = this.redis.pipeline();
+    for (const key of keys) {
+      batch.zrangebyscore(key, `(${Date.now()}`, '+inf');
+    }
+    const userIds = new Set<string>();
+    for (const [err, ids] of (await batch.exec()) ?? []) {
+      if (err) throw err;
+      for (const userId of ids as string[]) userIds.add(userId);
+    }
+    return userIds;
+  }
+
+  /** Every cohort's index of who is in it. Scanned, as only an admin's count asks. */
+  private async cohortIndexes(): Promise<string[]> {
+    const keys: string[] = [];
+    let cursor = '0';
+    do {
+      const [next, found] = await this.redis.scan(
+        cursor,
+        'MATCH',
+        cohortPresenceKey('*'),
+        'COUNT',
+        1000,
+      );
+      cursor = next;
+      keys.push(...found);
+    } while (cursor !== '0');
+    return keys;
   }
 
   onDisplaced(listener: (displaced: Displacement) => void): void {
