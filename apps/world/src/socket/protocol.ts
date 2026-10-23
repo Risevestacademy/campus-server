@@ -125,8 +125,8 @@ export const MoveOutcome = z
     description:
       'moved: one tile in the direction asked. blocked: the tile is not ' +
       'walkable; they turn to face it without moving. refused: the tile is ' +
-      'floor, but in a space they may not enter (designated, and not on its ' +
-      'list); they turn to face it without moving. too_fast: over walking ' +
+      'floor, but in a space they may not enter (designated and not on its ' +
+      'list, or locked); they turn to face it without moving. too_fast: over walking ' +
       'speed; nothing happens, not even the turn.',
   });
 
@@ -138,6 +138,7 @@ export const MoveOutcome = z
 export const ServerErrorCode = {
   Unauthorized: 'UNAUTHORIZED',
   BadMessage: 'BAD_MESSAGE',
+  NotAllowed: 'NOT_ALLOWED',
 } as const;
 
 export type ServerErrorCode =
@@ -195,6 +196,20 @@ export const ClientMessage = z
         'them back if they had. A `move` or `setStatus` counts already; a ' +
         '`ping` does not. No answer.',
     }),
+    z
+      .object({
+        type: z.literal('setLock'),
+        locked: z.boolean(),
+      })
+      .meta({
+        id: 'SetLockMessage',
+        description:
+          'Lock or unlock the space you are standing in, if `lockableSpaces` ' +
+          'names it. Anybody inside may, guests included. Answered, if it ' +
+          'changes anything, by the `lockChanged` everybody in your cohort ' +
+          'gets, you included; in a space that cannot be locked, by a ' +
+          'NOT_ALLOWED error. Counts as activity.',
+      }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
 
@@ -258,6 +273,15 @@ export const ServerMessage = z
           height: z.number().int().describe('In tiles.'),
         }),
         players: z.array(Avatar),
+        lockableSpaces: z
+          .array(z.string())
+          .describe(
+            'The spaces whoever stands inside may lock. No other space can ' +
+              'be, nor the corridors. The same in every cohort.',
+          ),
+        lockedSpaces: z
+          .array(z.string())
+          .describe('The spaces locked in your cohort right now.'),
       })
       .meta({
         id: 'SnapshotMessage',
@@ -329,6 +353,38 @@ export const ServerMessage = z
         'that changes: subscribe to their audio and drop everybody ' +
         'else’s. Can arrive before the `call` it applies to.',
     }),
+    z
+      .object({
+        type: z.literal('lockChanged'),
+        spaceKey: z.string(),
+        locked: z.boolean(),
+        userId: z
+          .string()
+          .nullable()
+          .describe(
+            'Who locked or unlocked it. Null when the lock ended on its ' +
+              'own: the last person inside left, or the space can no longer ' +
+              'be locked.',
+          ),
+      })
+      .meta({
+        id: 'LockChangedMessage',
+        description:
+          'A space in your cohort was locked or unlocked. While it is ' +
+          'locked, a step into it is refused, admins excepted. Sent to ' +
+          'everybody in the cohort, you included.',
+      }),
+    z
+      .object({
+        type: z.literal('lockableSpaces'),
+        spaceKeys: z.array(z.string()),
+      })
+      .meta({
+        id: 'LockableSpacesMessage',
+        description:
+          'Which spaces can be locked changed, because an admin changed a ' +
+          'space: replaces the list from `snapshot`.',
+      }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',
       description:
@@ -371,7 +427,9 @@ export const ServerMessage = z
         id: 'ErrorMessage',
         description:
           'UNAUTHORIZED comes just before the socket closes with 1008, `message` ' +
-          'being the reason. BAD_MESSAGE leaves the socket open.',
+          'being the reason. BAD_MESSAGE leaves the socket open. NOT_ALLOWED ' +
+          'answers a message the server understood but will not act on, and ' +
+          'leaves the socket open.',
       }),
   ])
   .meta({
