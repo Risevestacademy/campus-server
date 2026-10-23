@@ -84,7 +84,9 @@ describe('LiveKit webhooks (e2e)', () => {
     app = moduleFixture.createNestApplication<NestExpressApplication>({
       rawBody: true,
     });
-    app.useBodyParser('json', { type: 'application/webhook+json' });
+    app.useBodyParser('json', {
+      type: ['application/json', 'application/webhook+json'],
+    });
     app.setGlobalPrefix('v1');
     app.useGlobalPipes(
       new ValidationPipe({
@@ -170,6 +172,14 @@ describe('LiveKit webhooks (e2e)', () => {
     await post(forged.body).expect(401);
     await post(forged.body, forged.authorization).expect(401);
     await expect(db.select().from(sessions)).resolves.toEqual([]);
+  });
+
+  it('still parses ordinary application/json bodies', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/v1/auth/google/token')
+      .send({ idToken: 'not-a-real-token' });
+
+    expect(res.status).not.toBe(400);
   });
 
   it('answers 503 where no key pair is set', async () => {

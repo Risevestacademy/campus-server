@@ -74,8 +74,11 @@ async function bootstrap() {
     rawBody: true,
   });
   // LiveKit posts its webhooks as application/webhook+json, signed over the
-  // raw body.
-  app.useBodyParser('json', { type: 'application/webhook+json' });
+  // raw body. Registering a json parser replaces Nest's default one, so it
+  // has to take application/json too.
+  app.useBodyParser('json', {
+    type: ['application/json', 'application/webhook+json'],
+  });
 
   const logger = app.get(Logger);
   app.useLogger(logger);
