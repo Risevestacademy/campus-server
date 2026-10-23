@@ -10,10 +10,12 @@ export function matchesPath(
   url: string | undefined,
   paths: readonly string[],
 ): boolean {
-  const path = pathOf(url);
-  return paths.some(
-    (listed) => path === listed || path.startsWith(`${listed}/`),
-  );
+  // Express matches routes regardless of case, so this does too.
+  const path = pathOf(url).toLowerCase();
+  return paths.some((listed) => {
+    const quiet = listed.toLowerCase();
+    return path === quiet || path.startsWith(`${quiet}/`);
+  });
 }
 
 /** Keeps a query string's names and drops its values. */
@@ -46,6 +48,20 @@ export function redactUrl(
   };
 }
 
+/** A host's name and port, the port taken off and an IPv6 address bracketed. */
+function splitHost(host: string): { name: string; port?: string } {
+  const bracketed = /^(\[[^\]]+\])(?::(\d+))?$/.exec(host);
+  if (bracketed) {
+    return { name: bracketed[1], port: bracketed[2] };
+  }
+  const parts = host.split(':');
+  if (parts.length === 2) {
+    return { name: parts[0], port: parts[1] };
+  }
+  // More than one colon and no brackets: a bare IPv6 address.
+  return { name: parts.length > 2 ? `[${host}]` : host };
+}
+
 /** The full URL of an outgoing `http` request with its query values redacted. */
 export function redactedRequestUrl(
   options: Pick<
@@ -54,7 +70,9 @@ export function redactedRequestUrl(
   >,
 ): string | undefined {
   const protocol = options.protocol ?? 'http:';
-  const host = options.hostname ?? options.host ?? 'localhost';
-  const port = options.port != null ? `:${options.port}` : '';
-  return redactUrl(`${protocol}//${host}${port}`, options.path ?? '')?.full;
+  const host = splitHost(options.hostname ?? options.host ?? 'localhost');
+  const port = options.port ?? host.port;
+  const portText = port != null ? `:${port}` : '';
+  return redactUrl(`${protocol}//${host.name}${portText}`, options.path ?? '')
+    ?.full;
 }

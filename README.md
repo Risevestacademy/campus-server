@@ -15,6 +15,9 @@ packages/
   media/        LiveKit: room tokens and removals (world), webhook checks
                 (campus-api)
   space-access/ Who may enter a space, for campus-api and world alike
+  error-reporting/  Errors to PostHog from both services' logs, and the shared
+                redaction list
+  telemetry/    OpenTelemetry for both services: traces and logs over OTLP
 docs/           Cross-service docs: auth flow, deployment, world protocol
 docker-compose.local.yml   Local dev dependencies (Postgres, Redis, LiveKit, OTel Collector)
 livekit.yaml               LiveKit server config
