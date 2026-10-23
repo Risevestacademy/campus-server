@@ -214,3 +214,46 @@ describe('loadEnv', () => {
     });
   });
 });
+
+describe('error tracking', () => {
+  it('is off by default, pointed at the EU host', () => {
+    const env = loadEnv(minimal);
+
+    expect(env.FF_POSTHOG_ENABLED).toBe(false);
+    expect(env.POSTHOG_HOST).toBe('https://eu.i.posthog.com');
+  });
+
+  it('refuses to switch on without a project token', () => {
+    expect(() =>
+      loadEnv({ ...minimal, FF_POSTHOG_ENABLED: 'true' } as NodeJS.ProcessEnv),
+    ).toThrow(/POSTHOG_PROJECT_TOKEN/);
+    expect(() =>
+      loadEnv({
+        ...minimal,
+        FF_POSTHOG_ENABLED: 'true',
+        POSTHOG_PROJECT_TOKEN: 'not-a-project-token',
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/POSTHOG_PROJECT_TOKEN/);
+  });
+
+  it('refuses a host that is not HTTPS', () => {
+    expect(() =>
+      loadEnv({
+        ...minimal,
+        POSTHOG_HOST: 'http://eu.i.posthog.com',
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/POSTHOG_HOST/);
+  });
+
+  it('switches on with a project token', () => {
+    const env = loadEnv({
+      ...minimal,
+      FF_POSTHOG_ENABLED: 'true',
+      POSTHOG_PROJECT_TOKEN: 'phc_test',
+      RAILWAY_GIT_COMMIT_SHA: 'abc123',
+    } as NodeJS.ProcessEnv);
+
+    expect(env.POSTHOG_PROJECT_TOKEN).toBe('phc_test');
+    expect(env.RAILWAY_GIT_COMMIT_SHA).toBe('abc123');
+  });
+});

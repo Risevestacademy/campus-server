@@ -9,6 +9,9 @@ export default defineConfig({
   // and the boot smoke test in CI exercises that.
   resolve: {
     alias: {
+      '@campus/error-reporting': fileURLToPath(
+        new URL('../../packages/error-reporting/src/index.ts', import.meta.url),
+      ),
       '@campus/session': fileURLToPath(
         new URL('../../packages/session/src/index.ts', import.meta.url),
       ),

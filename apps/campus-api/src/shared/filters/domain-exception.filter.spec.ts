@@ -35,7 +35,13 @@ describe('DomainExceptionFilter', () => {
             };
           },
         }),
-        getRequest: () => ({ method: 'GET', url: '/probe', id: 'corr-1' }),
+        getRequest: () => ({
+          method: 'GET',
+          url: '/probe?code=secret',
+          path: '/probe',
+          route: { path: '/probe' },
+          id: 'corr-1',
+        }),
       }),
     } as unknown as ArgumentsHost;
 
@@ -106,8 +112,11 @@ describe('DomainExceptionFilter', () => {
     const [payload, message] = logger.error.mock.calls[0];
     expect(message).toBe('Unhandled exception');
     expect(payload.method).toBe('GET');
-    expect(payload.url).toBe('/probe');
+    expect(payload.path).toBe('/probe');
+    expect(payload.route).toBe('/probe');
     expect(payload.correlationId).toBe('corr-1');
+    expect(JSON.stringify(payload)).not.toContain('secret');
+    expect(payload.severity).toBeUndefined();
     expect(payload.err.details).toEqual({ inviteId: 'abc' });
   });
 
@@ -164,6 +173,7 @@ describe('DomainExceptionFilter', () => {
     expect(message).toBe('Dependency unavailable');
     expect(payload.correlationId).toBe('corr-1');
     expect(payload.err.details).toEqual({ reason: 'unreachable' });
+    expect(payload.severity).toBe('warning');
   });
 
   it('logs nothing on a 4xx', () => {

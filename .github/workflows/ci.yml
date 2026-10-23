@@ -85,7 +85,7 @@ jobs:
 
       # No test builds AppModule through main.ts's actual bootstrap() — e2e
       # tests go through Test.createTestingModule instead. This catches
-      # wiring bugs in main.ts itself (interceptor registration, shutdown
+      # wiring bugs in main.ts itself (error reporting, shutdown
       # handling) that nothing else would.
       - name: API boot smoke test
         working-directory: apps/campus-api

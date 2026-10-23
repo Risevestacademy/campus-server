@@ -7,6 +7,9 @@ export default defineConfig({
   // does not depend on whether it has been built yet.
   resolve: {
     alias: {
+      '@campus/error-reporting': fileURLToPath(
+        new URL('../../packages/error-reporting/src/index.ts', import.meta.url),
+      ),
       '@campus/media': fileURLToPath(
         new URL('../../packages/media/src/index.ts', import.meta.url),
       ),

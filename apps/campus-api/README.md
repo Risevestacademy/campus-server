@@ -89,7 +89,7 @@ a clear error.
 | `OTEL_SERVICE_NAME`               | `campus-api`                                           | Service name sent with traces                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `FF_OTEL_ENABLED`                 | `true`                                                 | Master switch for OpenTelemetry                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `FF_OTEL_METRICS_ENABLED`         | `true`                                                 | Enable Node.js runtime metrics export                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `FF_POSTHOG_ENABLED`              | `false`                                                | Master switch for PostHog analytics and error tracking. When `true`, `POSTHOG_PROJECT_TOKEN` is required and the app refuses to boot without it                                                                                                                                                                                                                                                                                            |
+| `FF_POSTHOG_ENABLED`              | `false`                                                | Master switch for PostHog error tracking. When `true`, `POSTHOG_PROJECT_TOKEN` is required and the app refuses to boot without it                                                                                                                                                                                                                                                                                                          |
 | `POSTHOG_PROJECT_TOKEN`           | _(unset)_                                              | PostHog project API key (`phc_…`). Use the project matching this environment, so frontend and backend events land together                                                                                                                                                                                                                                                                                                                 |
 | `POSTHOG_HOST`                    | `https://eu.i.posthog.com`                             | PostHog ingestion host; must be `https`                                                                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -335,20 +335,17 @@ $ docker compose -f docker-compose.local.yml up -d otel-collector
 The Collector config (`otel-collector.yaml` at repo root) receives OTLP on
 4317/4318 and prints spans to its debug console.
 
-**New Relic** (example):
+**Grafana Cloud**, where deployed environments send theirs (setup in
+[docs/grafana.md](../../docs/grafana.md)):
 
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.nr-data.net:4318 \
-OTEL_EXPORTER_OTLP_HEADERS=api-key=YOUR_NR_LICENSE_KEY \
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-<zone>.grafana.net/otlp \
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<token> \
 pnpm run start:prod
 ```
 
 The exporter sends `POST /v1/traces` with a `content-type:
-application/x-protobuf` body carrying the `api-key` header — this has been
-verified against a mock OTLP receiver.
-
-> Same pattern applies to Grafana Tempo, Jaeger, SigNoz, Honeycomb, etc. — set
-> the endpoint and any required headers and restart.
+application/x-protobuf` body and the headers given.
 
 ### The `FF_OTEL_ENABLED` switch
 

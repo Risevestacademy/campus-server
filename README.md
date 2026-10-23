@@ -139,4 +139,6 @@ Docs that span services live in [docs/](docs/):
 - [world-protocol.md](docs/world-protocol.md) — for client authors: connecting
   to world, moving, and handling closes. The message types themselves are in
   [apps/world/protocol.schema.json](apps/world/protocol.schema.json).
-- [posthog.md](docs/posthog.md) — product analytics.
+- [posthog.md](docs/posthog.md) — error tracking.
+- [grafana.md](docs/grafana.md) — traces and metrics, and setting up an
+  environment's Grafana Cloud stack.

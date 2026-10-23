@@ -37,6 +37,7 @@ import { Players, type Player } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
+import { SpaceLocks, lockableKeys } from '../spaces/locks.js';
 import { Availability, Status } from '../status/availability.js';
 import {
   decideUpgrade,
@@ -140,6 +141,10 @@ export function registerGateway(
   let doorsLoading: Promise<void> | undefined;
   let readDoorsAgain = false;
 
+  const locks = new SpaceLocks();
+  /** Which spaces may be locked, from the doors last read, sorted. */
+  let lockable: readonly string[] = [];
+
   /**
    * One read at a time. Asked again while one is running, the running one
    * reads once more when it is done, so a change that lands mid-read is
@@ -157,6 +162,7 @@ export function registerGateway(
           doors = await accounts.spacesOn(map.id, new Date());
           doorsRead = true;
           refreshCalls();
+          refreshLockable();
         } catch (err) {
           app.log.error(
             { err },
@@ -196,6 +202,8 @@ export function registerGateway(
     if (spaceKey === DEFAULT_SPACE_KEY) {
       return true;
     }
+    const space =
+      doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ);
     return mayEnter(
       {
         userId: connection.userId,
@@ -203,9 +211,82 @@ export function registerGateway(
         cohortId: connection.cohortId,
         membership: connection.membership,
       },
-      doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ),
+      locks.isLocked(connection.cohortId, spaceKey)
+        ? { ...space, locked: true }
+        : space,
       now,
     );
+  }
+
+  /**
+   * After the spaces are read: tells everybody when the lockable spaces have
+   * changed, and ends the locks on any that can no longer be locked.
+   */
+  function refreshLockable(): void {
+    if (stopping) return;
+    const next = lockableKeys(doors);
+    if (
+      next.length !== lockable.length ||
+      next.some((key, i) => key !== lockable[i])
+    ) {
+      lockable = next;
+      const frame = encode({ type: 'lockableSpaces', spaceKeys: next });
+      for (const connection of connections.all()) {
+        sendFrame(connection.socket, frame);
+      }
+    }
+    for (const { cohortId, spaceKey } of locks.all()) {
+      if (!lockable.includes(spaceKey)) unlock(cohortId, spaceKey, null);
+    }
+  }
+
+  function setLock(connection: Connection, locked: boolean): void {
+    const { cohortId, spaceKey, userId } = connection;
+    if (!lockable.includes(spaceKey)) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message: 'this space cannot be locked',
+      });
+      return;
+    }
+    if (!locked) {
+      unlock(cohortId, spaceKey, userId);
+    } else if (locks.lock(cohortId, spaceKey)) {
+      broadcast(cohortId, { type: 'lockChanged', spaceKey, locked, userId });
+    }
+  }
+
+  /** `userId` is who unlocked it, or null when the lock ended on its own. */
+  function unlock(
+    cohortId: string,
+    spaceKey: string,
+    userId: string | null,
+  ): void {
+    if (locks.unlock(cohortId, spaceKey)) {
+      broadcast(cohortId, {
+        type: 'lockChanged',
+        spaceKey,
+        locked: false,
+        userId,
+      });
+    }
+  }
+
+  /** A lock ends when the last person in that cohort's copy of the space leaves. */
+  function unlockIfEmpty(cohortId: string, spaceKey: string): void {
+    if (
+      locks.isLocked(cohortId, spaceKey) &&
+      !connections
+        .all()
+        .some(
+          (connection) =>
+            connection.cohortId === cohortId &&
+            connection.spaceKey === spaceKey,
+        )
+    ) {
+      unlock(cohortId, spaceKey, null);
+    }
   }
 
   /**
@@ -516,6 +597,7 @@ export function registerGateway(
   function recordSpaceCrossing(connection: Connection, tile: Tile): void {
     const spaceKey = spaceAt(map.spaces, tile);
     if (spaceKey === connection.spaceKey) return;
+    const left = connection.spaceKey;
     connection.spaceKey = spaceKey;
     if (stopping) return;
     broadcast(connection.cohortId, {
@@ -523,6 +605,7 @@ export function registerGateway(
       userId: connection.userId,
       spaceKey,
     });
+    unlockIfEmpty(connection.cohortId, left);
     void joinCall(connection);
     presence.changeSpace(presenceOf(connection)).then(
       (held) => {
@@ -643,6 +726,7 @@ export function registerGateway(
       leavePresence([connection]);
     }
     connections.remove(connection);
+    if (!stopping) unlockIfEmpty(connection.cohortId, connection.spaceKey);
     // Replaced in the same cohort: the avatar stays, and the new socket
     // stands for it. Their places in other cohorts are none of this.
     if (connections.holderOf(connection)) {
@@ -1191,15 +1275,22 @@ export function registerGateway(
     // when their row and the spaces were both read: a read that failed says
     // nothing about where they may stand, and the place would be lost for
     // good once the spawn was saved over it.
+    const savedIn = saved && spaceAt(map.spaces, saved);
     if (
       saved &&
+      savedIn &&
       membershipKnown &&
       doorsRead &&
-      !mayStepInto(connection, spaceAt(map.spaces, saved), new Date())
+      !mayStepInto(connection, savedIn, new Date())
     ) {
       app.log.info(
-        { userId: connection.userId, cohortId: connection.cohortId },
-        'saved position is in a space they may not enter, starting at the spawn',
+        {
+          userId: connection.userId,
+          cohortId: connection.cohortId,
+          spaceKey: savedIn,
+          locked: locks.isLocked(connection.cohortId, savedIn),
+        },
+        'saved position is in a space closed to them now, starting at the spawn',
       );
       saved = undefined;
     }
@@ -1324,6 +1415,10 @@ export function registerGateway(
             statusChanged(connection);
           }
           return;
+        case 'setLock':
+          noteActivity(connection);
+          setLock(connection, result.message.locked);
+          return;
         case 'move': {
           noteActivity(connection);
           const { direction, seq } = result.message;
@@ -1381,6 +1476,8 @@ export function registerGateway(
         height: map.grid.height,
       },
       players: avatarsIn(connection.cohortId),
+      lockableSpaces: [...lockable],
+      lockedSpaces: locks.in(connection.cohortId),
     });
     void joinCall(connection);
 

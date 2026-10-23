@@ -13,8 +13,10 @@ import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module.js';
 import { loadEnv, parseCorsOrigins } from './infra/config/env.js';
-import { initPostHog } from './infra/posthog/posthog.js';
-import { PostHogExceptionInterceptor } from './infra/posthog/posthog.interceptor.js';
+import {
+  ERROR_REPORTER,
+  type ErrorReporter,
+} from './infra/error-reporting/error-reporting.module.js';
 import { CORRELATION_ID_HEADER } from './infra/logger/logger.module.js';
 import { gracefulShutdown } from './infra/shutdown.js';
 import { ValidationException } from './shared/exceptions/index.js';
@@ -43,24 +45,19 @@ async function bootstrap() {
   const telemetry = config.FF_OTEL_ENABLED
     ? (await import('./infra/telemetry/telemetry.js')).initTelemetry({
         serviceName: config.OTEL_SERVICE_NAME,
-        version: '1.0.0',
+        version: config.RAILWAY_GIT_COMMIT_SHA ?? 'local',
         environment: config.DEPLOYMENT_ENVIRONMENT,
         enabled: true,
         metricsEnabled: config.FF_OTEL_METRICS_ENABLED,
       })
     : undefined;
-  const posthogClient = initPostHog({
-    apiKey: config.POSTHOG_PROJECT_TOKEN,
-    host: config.POSTHOG_HOST,
-    enabled: config.FF_POSTHOG_ENABLED,
-  });
-
   let app: NestExpressApplication | undefined;
+  let reporter: ErrorReporter | undefined;
 
   process.on('SIGTERM', () => {
     gracefulShutdown(app, [
       () => (telemetry ? telemetry.shutdown() : Promise.resolve()),
-      () => (posthogClient ? posthogClient.shutdown() : Promise.resolve()),
+      () => (reporter ? reporter.shutdown() : Promise.resolve()),
     ])
       .then(() => process.exit(0))
       .catch((err: unknown) => {
@@ -82,6 +79,7 @@ async function bootstrap() {
 
   const logger = app.get(Logger);
   app.useLogger(logger);
+  reporter = app.get<ErrorReporter>(ERROR_REPORTER);
 
   // Without this every request appears to come from the proxy
 
@@ -110,10 +108,6 @@ async function bootstrap() {
     new DomainExceptionFilter(logger),
     new ValidationExceptionFilter(),
   );
-
-  if (posthogClient) {
-    app.useGlobalInterceptors(new PostHogExceptionInterceptor(posthogClient));
-  }
 
   const documentConfig = new DocumentBuilder()
     .setTitle('campus-api')
