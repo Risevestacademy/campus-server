@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ErrorReporter } from './error-reporter.js';
-import { reportLoggedError } from './logged-error.js';
+import { reportLoggedError, reportingHooks } from './logged-error.js';
 
 const ERROR = 50;
 const WARN = 40;
@@ -33,7 +33,6 @@ describe('reportLoggedError', () => {
       level: 'error',
       properties: {
         log_message: 'Unhandled exception',
-        log_context: undefined,
         correlation_id: 'corr-1',
         method: 'POST',
         route: '/v1/invites/:id/revoke',
@@ -92,23 +91,6 @@ describe('reportLoggedError', () => {
     );
   });
 
-  it("keeps the context Nest's logger puts a trailing message in", () => {
-    const reporter = fakeReporter();
-
-    reportLoggedError(reporter, ERROR, [
-      { err: new Error('boom'), context: 'Unhandled exception' },
-    ]);
-
-    expect(reporter.report).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({
-        properties: expect.objectContaining({
-          log_context: 'Unhandled exception',
-        }),
-      }),
-    );
-  });
-
   it('falls back to the correlation id the logger is bound to', () => {
     const reporter = fakeReporter();
 
@@ -123,5 +105,47 @@ describe('reportLoggedError', () => {
       expect.objectContaining({ correlation_id: 'from-fastify' }),
       expect.objectContaining({ correlation_id: 'from-pino-http' }),
     ]);
+  });
+});
+
+describe('reportingHooks', () => {
+  function logger() {
+    return { bindings: vi.fn(() => ({ reqId: 'corr-1' })) };
+  }
+
+  it('reports an error line, tells the service, and still writes the line', () => {
+    const reporter = fakeReporter();
+    const alsoOnError = vi.fn();
+    const method = { apply: vi.fn() };
+    const line = [{ err: new Error('boom') }, 'could not'];
+    const bound = logger();
+
+    reportingHooks(reporter, alsoOnError).logMethod.call(
+      bound,
+      line,
+      method,
+      ERROR,
+    );
+
+    expect(reporter.report).toHaveBeenCalledTimes(1);
+    expect(alsoOnError).toHaveBeenCalledWith(ERROR, line);
+    expect(method.apply).toHaveBeenCalledWith(bound, line);
+  });
+
+  it('writes other lines without building the bindings', () => {
+    const reporter = fakeReporter();
+    const method = { apply: vi.fn() };
+    const bound = logger();
+
+    reportingHooks(reporter).logMethod.call(
+      bound,
+      [{ userId: 'u-1' }, 'request completed'],
+      method,
+      30,
+    );
+
+    expect(bound.bindings).not.toHaveBeenCalled();
+    expect(reporter.report).not.toHaveBeenCalled();
+    expect(method.apply).toHaveBeenCalledTimes(1);
   });
 });
