@@ -1,5 +1,7 @@
+import type { World } from './app.js';
 import { loadEnv } from './infra/env.js';
 import { flushAll } from './infra/exit.js';
+import { QUIET_ROUTES } from './quiet-routes.js';
 
 const env = loadEnv();
 
@@ -11,13 +13,21 @@ const telemetry = env.FF_OTEL_ENABLED
       version: env.RAILWAY_GIT_COMMIT_SHA ?? 'local',
       environment: env.DEPLOYMENT_ENVIRONMENT,
       metrics: env.FF_OTEL_METRICS_ENABLED,
-      untracedPaths: ['/health'],
+      untracedPaths: QUIET_ROUTES,
     })
   : undefined;
 
 const { buildWorld } = await import('./app.js');
-const { app, gateway, accounts, positions, presence, reporter } =
-  await buildWorld(env);
+let world: World;
+try {
+  world = await buildWorld(env);
+} catch (err) {
+  // No app yet, so no logger and no reporter: telemetry alone is flushed.
+  console.error('failed to build world', err);
+  await flushAll(console, [telemetry]);
+  process.exit(1);
+}
+const { app, gateway, accounts, positions, presence, reporter } = world;
 
 /** Last, so it sends whatever the steps before it logged. */
 const flush = () => flushAll(app.log, [reporter, telemetry]);
