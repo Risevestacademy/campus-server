@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
 import type { Env } from './env.js';
+import { failActiveSpan } from './traced.js';
 
 export const CORRELATION_ID_HEADER = 'x-correlation-id';
 
@@ -36,7 +37,7 @@ export function loggerOptions(
 ): FastifyServerOptions['logger'] {
   return {
     level: env.FF_LOG_LEVEL,
-    hooks: reportingHooks(reporter),
+    hooks: reportingHooks(reporter, failActiveSpan),
     transport: env.FF_LOG_PRETTY
       ? {
           target: 'pino-pretty',

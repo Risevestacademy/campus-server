@@ -7,6 +7,9 @@ export default defineConfig({
   // does not depend on whether it has been built yet.
   resolve: {
     alias: {
+      '@campus/telemetry/sql': fileURLToPath(
+        new URL('../../packages/telemetry/src/sql.ts', import.meta.url),
+      ),
       '@campus/telemetry/paths': fileURLToPath(
         new URL('../../packages/telemetry/src/paths.ts', import.meta.url),
       ),

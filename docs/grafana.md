@@ -7,9 +7,12 @@ setup is shared, in [`packages/telemetry`](../packages/telemetry).
 ## What is sent
 
 - **Traces:** an HTTP server span per request, health checks and the API
-  reference excepted, with Express spans under it in campus-api, and a span
-  per outgoing HTTP call. A span keeps a query string's parameter names but
-  not their values, and holds no client address.
+  reference excepted, with Express spans under it in campus-api, a span per
+  outgoing HTTP call or `fetch` (Google, LiveKit, Resend), and a span per
+  database query. A span keeps a query string's parameter names but not their
+  values, a query keeps its statement as sent, with `$1` placeholders but
+  never the values, a failed query is recorded by its SQLSTATE rather than
+  its message, and no span holds a client address.
 - **Logs:** every pino line, after the same redaction as the console, with the
   `trace_id` of the request that wrote it.
 - **Runtime metrics:** event-loop lag, GC, heap and CPU, when
@@ -17,6 +20,50 @@ setup is shared, in [`packages/telemetry`](../packages/telemetry).
 
 Everything carries `service.name`, `service.version` (the deployed commit)
 and `deployment.environment`.
+
+### world
+
+world's HTTP routes are traced through Fastify, except the socket's upgrade,
+whose reply the socket takes over. Sockets get spans for the work that waits
+on something, not for every message:
+
+| Span                   | Covers                                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `world.socket.open`    | Authenticating an upgrade and reading what it needs, as a trace of its own. `world.outcome`: opened, refused, failed or abandoned. |
+| `world.sweep.accounts` | The heartbeat's check that every open account is still welcome.                                                                    |
+| `world.sweep.sessions` | The heartbeat's check that every followed login is still live.                                                                     |
+| `world.spaces.read`    | One read of the spaces' doors, whatever asked for it.                                                                              |
+
+Redis commands are traced only inside one of these, so the timers' own reads
+and writes stay out. A span is marked failed when an `error` line with an
+error is logged inside it, so a database that stops answering shows on the
+sweeps although they carry on.
+
+With metrics on, world also sends:
+
+| Metric                               | Labels      | What it counts                                                                         |
+| ------------------------------------ | ----------- | -------------------------------------------------------------------------------------- |
+| `world.connections`                  | `cohort_id` | Open sockets, read at each export.                                                     |
+| `world.connections.opened`           |             | Sockets authenticated and joined.                                                      |
+| `world.connections.refused`          | `reason`    | Upgrades refused, by the close reason sent: the client's to fix, not world's.          |
+| `world.connections.failed`           |             | Upgrades world could not decide, closed with `internal_error`.                         |
+| `world.connections.abandoned`        |             | Clients gone before their upgrade was decided.                                         |
+| `world.connections.closed_by_server` | `reason`    | Open sockets world closed or cut off, including `heartbeat_missed` and `not_reading`.  |
+| `world.connections.closed`           | `code`      | Every close, by code. Codes other than world's own and the standard ones read `other`. |
+| `world.messages.received`            | `type`      | Frames received, by message type, or `invalid`.                                        |
+| `world.moves`                        | `outcome`   | Moves, by outcome.                                                                     |
+| `world.frames.sent`                  |             | Frames sent.                                                                           |
+| `world.socket.buffered`              |             | The most any one socket has waiting unsent, in bytes.                                  |
+
+Connect success, an SLO, is `opened ÷ (opened + failed + abandoned)`.
+Abandoned counts against world: a client that gives up while world is still
+deciding is most often waiting on a slow world. Refusals are left out: a
+signed-out tab or a wrong origin is not world failing.
+
+Every deploy closes each open socket with `server shutting down`, so
+`world.connections.closed_by_server{reason="server shutting down"}` rises in
+a burst at each release. That marks deploys; an alert on sockets world closes
+should leave that reason out.
 
 ## Setting up an environment
 
