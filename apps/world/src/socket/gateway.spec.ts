@@ -3967,6 +3967,363 @@ describe('movement', () => {
       await leave(inside);
     });
   });
+
+  /**
+   * Asking to enter the library from beside it: two steps right of the
+   * spawn, at (2, 0).
+   */
+  describe('asking to enter', () => {
+    const step = async (
+      conn: ReturnType<typeof connect>,
+      direction: string,
+      seq: number,
+    ) => {
+      move(conn, direction, seq);
+      const answer = await waitFor(
+        conn,
+        (m) => m.type === 'moveResult' && m.seq === seq,
+      );
+      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
+      return answer;
+    };
+
+    const toTheDoor = async (conn: ReturnType<typeof connect>) => {
+      await step(conn, 'right', 1);
+      await step(conn, 'right', 2);
+    };
+
+    const intoLibrary = async (conn: ReturnType<typeof connect>) => {
+      await toTheDoor(conn);
+      return step(conn, 'right', 3);
+    };
+
+    const send = (conn: { ws: WebSocket }, message: Record<string, unknown>) =>
+      conn.ws.send(JSON.stringify(message));
+
+    const ask = (conn: { ws: WebSocket }) =>
+      send(conn, { type: 'requestEntry', spaceKey: 'library' });
+
+    const answer = (conn: { ws: WebSocket }, userId: string, admit: boolean) =>
+      send(conn, { type: 'answerEntryRequest', userId, admit });
+
+    const requested = (conn: { messages: Record<string, unknown>[] }) =>
+      conn.messages.filter((m) => m.type === 'entryRequested');
+
+    const ended = (conn: { messages: Record<string, unknown>[] }) =>
+      waitFor(conn, (m) => m.type === 'entryRequestEnded');
+
+    const refusal = async (conn: { messages: Record<string, unknown>[] }) =>
+      (await waitFor(conn, (m) => m.type === 'error')).message;
+
+    /** Somebody standing in the library who has locked it. */
+    async function lockedInside(userId = person()) {
+      const conn = await arrive(userId);
+      await intoLibrary(conn);
+      send(conn, { type: 'setLock', locked: true });
+      await waitFor(conn, (m) => m.type === 'lockChanged');
+      return conn;
+    }
+
+    /** Somebody at the library's door who has asked to come in. */
+    async function askingAtTheDoor(userId = person()) {
+      const conn = await arrive(userId);
+      await toTheDoor(conn);
+      ask(conn);
+      await waitFor(conn, (m) => m.type === 'entryRequested');
+      return conn;
+    }
+
+    it('tells the asker and everybody inside, and a yes lets them through', async () => {
+      const ada = person();
+      const grace = person();
+      const inside = await lockedInside(ada);
+      const outside = await askingAtTheDoor(grace);
+
+      const request = {
+        type: 'entryRequested',
+        userId: grace,
+        spaceKey: 'library',
+      };
+      await expect(
+        waitFor(inside, (m) => m.type === 'entryRequested'),
+      ).resolves.toEqual(request);
+      expect(requested(outside)).toEqual([request]);
+
+      answer(inside, grace, true);
+
+      const admitted = {
+        type: 'entryRequestEnded',
+        userId: grace,
+        spaceKey: 'library',
+        outcome: 'admitted',
+        answeredBy: ada,
+      };
+      await expect(ended(outside)).resolves.toEqual(admitted);
+      await expect(ended(inside)).resolves.toEqual(admitted);
+      await expect(step(outside, 'right', 3)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('lets a yes lapse when they walk away from the door first', async () => {
+      const ada = person();
+      const inside = await lockedInside();
+      const outside = await askingAtTheDoor(ada);
+      answer(inside, ada, true);
+      await ended(outside);
+
+      await step(outside, 'left', 3);
+      await step(outside, 'right', 4);
+
+      await expect(step(outside, 'right', 5)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('keeps them out on a no, and makes them wait to ask again', async () => {
+      const ada = person();
+      const inside = await lockedInside();
+      const outside = await askingAtTheDoor(ada);
+
+      answer(inside, ada, false);
+
+      await expect(ended(outside)).resolves.toMatchObject({
+        outcome: 'declined',
+      });
+      await expect(step(outside, 'right', 3)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      ask(outside);
+      await expect(refusal(outside)).resolves.toBe(
+        'asked again too soon after a no',
+      );
+
+      vi.useFakeTimers({
+        toFake: ['Date'],
+        now: new Date(Date.now() + 30_000),
+      });
+      ask(outside);
+      try {
+        await waitFor(outside, () => requested(outside).length === 2);
+      } finally {
+        vi.useRealTimers();
+      }
+      await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('lets the first answer stand', async () => {
+      const admin = person();
+      accounts.admins.add(admin);
+      const ada = person();
+      const first = await lockedInside();
+      const second = await arrive(admin);
+      await intoLibrary(second);
+      const outside = await askingAtTheDoor(ada);
+      await waitFor(second, (m) => m.type === 'entryRequested');
+
+      answer(first, ada, false);
+      await ended(outside);
+      answer(second, ada, true);
+
+      await expect(refusal(second)).resolves.toBe(
+        'no request here for you to answer',
+      );
+      await expect(ended(outside)).resolves.toMatchObject({
+        outcome: 'declined',
+      });
+      await Promise.all([leave(first), leave(second), leave(outside)]);
+    });
+
+    it('sends an open request to somebody who steps in later', async () => {
+      const admin = person();
+      accounts.admins.add(admin);
+      const ada = person();
+      const inside = await lockedInside();
+      const outside = await askingAtTheDoor(ada);
+      const staff = await arrive(admin);
+      expect(requested(staff)).toEqual([]);
+
+      await intoLibrary(staff);
+
+      await expect(
+        waitFor(staff, (m) => m.type === 'entryRequested'),
+      ).resolves.toMatchObject({ userId: ada });
+      await Promise.all([leave(inside), leave(outside), leave(staff)]);
+    });
+
+    it.each([
+      [
+        'withdraws it',
+        (conn: ReturnType<typeof connect>) =>
+          send(conn, { type: 'withdrawEntryRequest' }),
+        'withdrawn',
+      ],
+      [
+        'walks away from the door',
+        (conn: ReturnType<typeof connect>) => void step(conn, 'left', 3),
+        'walked_away',
+      ],
+    ])(
+      'ends it, and tells everybody, when the asker %s',
+      async (_, act, outcome) => {
+        const inside = await lockedInside();
+        const outside = await askingAtTheDoor();
+        await waitFor(inside, (m) => m.type === 'entryRequested');
+
+        act(outside);
+
+        await expect(ended(inside)).resolves.toMatchObject({ outcome });
+        await expect(ended(outside)).resolves.toMatchObject({ outcome });
+        await Promise.all([leave(inside), leave(outside)]);
+      },
+    );
+
+    it('ends it when the asker disconnects', async () => {
+      const inside = await lockedInside();
+      const outside = await askingAtTheDoor();
+      await waitFor(inside, (m) => m.type === 'entryRequested');
+
+      await leave(outside);
+
+      await expect(ended(inside)).resolves.toMatchObject({
+        outcome: 'withdrawn',
+      });
+      await leave(inside);
+    });
+
+    it('ends it as not needed once the space is unlocked', async () => {
+      const inside = await lockedInside();
+      const outside = await askingAtTheDoor();
+
+      send(inside, { type: 'setLock', locked: false });
+
+      await expect(ended(outside)).resolves.toMatchObject({
+        outcome: 'not_needed',
+      });
+      await expect(step(outside, 'right', 3)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it.each([
+      [
+        'from the corridors',
+        async (conn: ReturnType<typeof connect>) => {
+          await step(conn, 'right', 1);
+        },
+        'ask from beside the space',
+      ],
+      [
+        'twice',
+        async (conn: ReturnType<typeof connect>) => {
+          await toTheDoor(conn);
+          ask(conn);
+          await waitFor(conn, (m) => m.type === 'entryRequested');
+        },
+        'you have a request open already',
+      ],
+    ])('refuses asking %s', async (_, before, message) => {
+      const inside = await lockedInside();
+      const outside = await arrive(person());
+      await before(outside);
+
+      ask(outside);
+
+      await expect(refusal(outside)).resolves.toBe(message);
+      await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('refuses asking into a space that is open anyway', async () => {
+      const conn = await arrive(person());
+      await toTheDoor(conn);
+
+      ask(conn);
+
+      await expect(refusal(conn)).resolves.toBe('this space takes no requests');
+      await leave(conn);
+    });
+
+    describe('a designated space', () => {
+      it('is asked only while somebody on its list is inside', async () => {
+        designateLibrary(listEntry({ toCohortRole: 'mentor' }));
+        await world.gateway.spacesChanged();
+        const conn = await arrive(person());
+        await toTheDoor(conn);
+
+        ask(conn);
+
+        await expect(refusal(conn)).resolves.toBe('nobody inside can answer');
+        await leave(conn);
+      });
+
+      it('is answered by people on its list, never by a visitor let in', async () => {
+        const ada = person();
+        const grace = person();
+        const linus = person();
+        designateLibrary(listEntry({ toUserId: ada }));
+        await world.gateway.spacesChanged();
+        const listed = await arrive(ada);
+        await intoLibrary(listed);
+
+        const visitor = await askingAtTheDoor(grace);
+        answer(listed, grace, true);
+        await ended(visitor);
+        await step(visitor, 'right', 3);
+
+        const next = await askingAtTheDoor(linus);
+        await waitFor(listed, () => requested(listed).length === 2);
+        expect(requested(visitor)).toEqual([
+          expect.objectContaining({ userId: grace }),
+        ]);
+        answer(visitor, linus, true);
+        await expect(refusal(visitor)).resolves.toBe(
+          'no request here for you to answer',
+        );
+        await Promise.all([leave(listed), leave(visitor), leave(next)]);
+      });
+
+      it('ends it when the last person who could answer leaves', async () => {
+        const ada = person();
+        designateLibrary(listEntry({ toUserId: ada }));
+        await world.gateway.spacesChanged();
+        const listed = await arrive(ada);
+        await intoLibrary(listed);
+        const outside = await askingAtTheDoor();
+
+        await step(listed, 'down', 4);
+        await step(listed, 'down', 5);
+
+        await expect(ended(outside)).resolves.toMatchObject({
+          outcome: 'nobody_inside',
+        });
+        await Promise.all([leave(listed), leave(outside)]);
+      });
+
+      it('ends it as not needed once the list names them', async () => {
+        const ada = person();
+        const grace = person();
+        designateLibrary(listEntry({ toUserId: ada }));
+        await world.gateway.spacesChanged();
+        const listed = await arrive(ada);
+        await intoLibrary(listed);
+        const outside = await askingAtTheDoor(grace);
+
+        designateLibrary(
+          listEntry({ toUserId: ada }),
+          listEntry({ toUserId: grace }),
+        );
+        await world.gateway.spacesChanged();
+
+        await expect(ended(outside)).resolves.toMatchObject({
+          outcome: 'not_needed',
+        });
+        await Promise.all([leave(listed), leave(outside)]);
+      });
+    });
+  });
 });
 
 /**

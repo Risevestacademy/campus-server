@@ -126,8 +126,31 @@ export const MoveOutcome = z
       'moved: one tile in the direction asked. blocked: the tile is not ' +
       'walkable; they turn to face it without moving. refused: the tile is ' +
       'floor, but in a space they may not enter (designated and not on its ' +
-      'list, or locked); they turn to face it without moving. too_fast: over walking ' +
+      'list, or locked); they turn to face it without moving, and may ask with ' +
+      '`requestEntry`. too_fast: over walking ' +
       'speed; nothing happens, not even the turn.',
+  });
+
+export const EntryRequestOutcome = z
+  .enum([
+    'admitted',
+    'declined',
+    'withdrawn',
+    'walked_away',
+    'nobody_inside',
+    'not_needed',
+    'cancelled',
+  ])
+  .meta({
+    id: 'EntryRequestOutcome',
+    description:
+      'admitted: a yes. Their next step into the space is let through; ' +
+      'walking away from beside it first lets the yes lapse. declined: a ' +
+      'no. withdrawn: the asker withdrew it, or disconnected. walked_away: ' +
+      'the asker left the tiles beside the space. nobody_inside: nobody ' +
+      'inside can answer any more. not_needed: they may walk in without ' +
+      'asking now, as the space was unlocked or its list names them. ' +
+      'cancelled: the space no longer takes requests.',
   });
 
 /**
@@ -210,10 +233,49 @@ export const ClientMessage = z
           'gets, you included; in a space that cannot be locked, by a ' +
           'NOT_ALLOWED error. Counts as activity.',
       }),
+    z
+      .object({
+        type: z.literal('requestEntry'),
+        spaceKey: z.string(),
+      })
+      .meta({
+        id: 'RequestEntryMessage',
+        description:
+          'Ask to enter a space you are refused: a locked one, or a ' +
+          'designated one whose list does not name you. Only from a tile ' +
+          'beside it, only while somebody inside can answer, and one request ' +
+          'at a time. Answered by `entryRequested`, to you and to whoever ' +
+          'inside can answer; otherwise by a NOT_ALLOWED error saying why. ' +
+          'After a no, the same space can be asked again 30 seconds later. ' +
+          'Counts as activity.',
+      }),
+    z.object({ type: z.literal('withdrawEntryRequest') }).meta({
+      id: 'WithdrawEntryRequestMessage',
+      description:
+        'Withdraw your open request, answered by its `entryRequestEnded`. ' +
+        'Nothing happens when you have none open. Counts as activity.',
+    }),
+    z
+      .object({
+        type: z.literal('answerEntryRequest'),
+        userId: z.string().describe('Who asked.'),
+        admit: z.boolean(),
+      })
+      .meta({
+        id: 'AnswerEntryRequestMessage',
+        description:
+          'Answer a request to enter the space you are standing in. Anybody ' +
+          'inside a locked space may; in a designated space, only somebody ' +
+          'its list names, or an admin. The first answer stands: one that ' +
+          'comes later, or from somebody who may not answer, gets a ' +
+          'NOT_ALLOWED error. Counts as activity.',
+      }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
 
 export type ClientMessage = z.infer<typeof ClientMessage>;
+
+export type EntryRequestOutcome = z.infer<typeof EntryRequestOutcome>;
 
 export const ServerMessage = z
   .discriminatedUnion('type', [
@@ -384,6 +446,38 @@ export const ServerMessage = z
         description:
           'Which spaces can be locked changed, because an admin changed a ' +
           'space: replaces the list from `snapshot`.',
+      }),
+    z
+      .object({
+        type: z.literal('entryRequested'),
+        userId: z.string().describe('Who is asking.'),
+        spaceKey: z.string(),
+      })
+      .meta({
+        id: 'EntryRequestedMessage',
+        description:
+          'Somebody asks to enter a space. Sent to the asker, and to each ' +
+          'person inside who may answer, as they become able to: on the ' +
+          'request, or on stepping in later. Every one is followed by an ' +
+          '`entryRequestEnded` for the same asker. Only answerable while you ' +
+          'stand in that space.',
+      }),
+    z
+      .object({
+        type: z.literal('entryRequestEnded'),
+        userId: z.string().describe('Who asked.'),
+        spaceKey: z.string(),
+        outcome: EntryRequestOutcome,
+        answeredBy: z
+          .string()
+          .nullable()
+          .describe('Who said yes or no. Null for every other outcome.'),
+      })
+      .meta({
+        id: 'EntryRequestEndedMessage',
+        description:
+          'A request to enter is over. Sent to the asker and to everybody ' +
+          'who was sent its `entryRequested`.',
       }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',

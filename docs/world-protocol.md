@@ -413,6 +413,51 @@ own locks.
 - **A step refused while it is locked** looks the same as any other
   `refused`. Use the locked list to tell the person why.
 
+## Asking to enter
+
+Somebody refused at a locked space, or at a designated space whose list
+does not name them, can ask to come in. Each cohort's requests are its own.
+
+- **Asking.** From a tile beside the space (one step from its floor), send
+  `{ "type": "requestEntry", "spaceKey": "…" }`. You and each person inside
+  who may answer get `{ "type": "entryRequested", "userId": "…",
+"spaceKey": "…" }`. One request at a time.
+- **Who answers.** In a locked space, anybody inside. In a designated space,
+  only people its list names, and admins; a visitor let in cannot let in
+  others. Somebody who steps in while a request is open, and may answer it,
+  gets its `entryRequested` then. Answer with `{ "type":
+"answerEntryRequest", "userId": "…", "admit": true }`, or `false`, only
+  while standing in that space. The first answer stands.
+- **How it ends.** Every `entryRequested` you get is followed by one
+  `{ "type": "entryRequestEnded", "userId": "…", "spaceKey": "…",
+"outcome": "…", "answeredBy": "…" }`, to the asker and to everybody who
+  was sent the request. `answeredBy` is set for `admitted` and `declined`
+  only. The outcomes:
+
+  | outcome         | What happened                                                 |
+  | --------------- | ------------------------------------------------------------- |
+  | `admitted`      | A yes                                                         |
+  | `declined`      | A no                                                          |
+  | `withdrawn`     | The asker sent `{ "type": "withdrawEntryRequest" }`, or left  |
+  | `walked_away`   | The asker stepped off the tiles beside the space              |
+  | `nobody_inside` | Nobody inside can answer any more                             |
+  | `not_needed`    | They may walk in without asking: unlocked, or now on the list |
+  | `cancelled`     | The space no longer takes requests                            |
+
+  Nothing ends a request on a timer: it stays open until one of these.
+
+- **A yes** lets the asker's next step into the space through. Walking away
+  from beside it first lets the yes lapse, and they ask again. Once inside
+  they stay until they step out, like anybody else.
+- **A no** means the same person may not ask the same space again for 30
+  seconds.
+- **Refusals** come as an `error` with code `NOT_ALLOWED`, and its message
+  says why: not beside the space, a space that takes no requests (open, the
+  corridors, or not set up), one they may walk into anyway, nobody inside
+  who can answer, a request already open, or too soon after a no. An answer
+  to a request that has ended, or that you may not answer, is refused the
+  same way.
+
 ## Errors and closing
 
 An `error` with code `BAD_MESSAGE` means the frame was not valid JSON or not a
