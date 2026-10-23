@@ -6,6 +6,7 @@ export {
   type ErrorReporterOptions,
 } from './error-reporter.js';
 export {
+  loggedError,
   reportLoggedError,
   reportingHooks,
   type LoggedErrorFields,

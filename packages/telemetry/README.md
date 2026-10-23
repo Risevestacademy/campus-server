@@ -37,8 +37,8 @@ such as a list of routes, has to import nothing that is instrumented.
 
 `http`, pino, and anything else loaded through `require` are patched without
 help. A package an ES module loads with `import` is not: Nest loads Express
-that way. Those go through OpenTelemetry's ESM hook, which this registers
-only for the packages named in `esmModules`.
+that way, and world imports ioredis. Those go through OpenTelemetry's ESM
+hook, which this registers only for the packages named in `esmModules`.
 
 The hook could wrap every module instead, but measured on campus-api that cost
 about a second of boot and a third more memory, which staging pays on every
@@ -62,6 +62,15 @@ Express in the list, spans lose their route.
 too: `pathOf`, `matchesPath` and the query redaction. It imports nothing, so a
 logger can use it without loading the SDK; the package root does load it, so
 import the helpers from `/paths`.
+
+## Versions
+
+Every OpenTelemetry package here is on the same line, instrumentation
+`0.222`, so one copy of the instrumentation base is shared. A library's next
+release can move to a newer line: `@fastify/otel` 0.21.3 needs `0.223`. So
+world pins `@fastify/otel` to exactly `0.21.2`, the last release on `0.222`,
+and a caret range would quietly bring in a second copy. Move the whole line
+together, and the pin with it.
 
 ## Shutdown
 

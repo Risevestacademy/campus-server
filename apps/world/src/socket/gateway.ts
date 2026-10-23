@@ -22,6 +22,8 @@ import type {
   WorldSpace,
 } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
+import { worldMetrics } from '../infra/metrics.js';
+import { annotate, traced } from '../infra/traced.js';
 import type {
   PositionStore,
   PositionToSave,
@@ -94,8 +96,13 @@ const NOT_YET_READ: SpaceFacts = {
  * with it. A reason is all a caller names, so the code it is sent with and
  * what the schema tells clients about it can never disagree.
  */
-function closeFor(socket: WebSocket, reason: CloseReason): void {
+function sendClose(socket: WebSocket, reason: CloseReason): void {
   socket.close(CLOSES[reason].code, reason);
+}
+
+/** How one upgrade ended, counted once, whichever way it ends. */
+interface Attempt {
+  outcome?: 'opened' | 'refused' | 'failed' | 'abandoned';
 }
 
 export interface Gateway {
@@ -112,6 +119,11 @@ export interface Gateway {
    */
   spacesChanged(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Stops the gauges reading the sockets. Not part of stop(), so the final
+   * flush after it still reads the last counts.
+   */
+  dispose(): void;
 }
 
 export function registerGateway(
@@ -123,6 +135,12 @@ export function registerGateway(
   map: WorldMap,
 ): Gateway {
   const connections = new Connections();
+  const metrics = worldMetrics(connections);
+
+  function closeFor(socket: WebSocket, reason: CloseReason): void {
+    metrics.closedByServer(reason);
+    sendClose(socket, reason);
+  }
   const players = new Players(
     map.grid,
     env.WORLD_STEP_MS,
@@ -159,7 +177,9 @@ export function registerGateway(
       do {
         readDoorsAgain = false;
         try {
-          doors = await accounts.spacesOn(map.id, new Date());
+          doors = await traced('world.spaces.read', () =>
+            accounts.spacesOn(map.id, new Date()),
+          );
           doorsRead = true;
           refreshCalls();
           refreshLockable();
@@ -1039,8 +1059,14 @@ export function registerGateway(
   const sweepFailed = (err: unknown): void => {
     app.log.error({ err }, 'heartbeat sweep failed');
   };
-  const sweepUnwelcome = oneAtATime(dropUnwelcome, sweepFailed);
-  const sweepSessions = oneAtATime(dropEndedSessions, sweepFailed);
+  const sweepUnwelcome = oneAtATime(
+    () => traced('world.sweep.accounts', dropUnwelcome),
+    sweepFailed,
+  );
+  const sweepSessions = oneAtATime(
+    () => traced('world.sweep.sessions', dropEndedSessions),
+    sweepFailed,
+  );
 
   const heartbeat = setInterval(() => {
     sweepUnwelcome();
@@ -1077,6 +1103,7 @@ export function registerGateway(
           'socket failed heartbeat, closing',
         );
         drop(connection);
+        metrics.closedByServer('heartbeat_missed');
         connection.socket.terminate();
         continue;
       }
@@ -1093,22 +1120,47 @@ export function registerGateway(
   // The handler returns its promise so @fastify/websocket can catch a
   // rejection; returning undefined would turn one bad socket into an
   // unhandled rejection that takes the whole process down.
-  app.get(SOCKET_PATH, { websocket: true }, async (socket, request) => {
-    await openConnection(
-      socket,
-      {
-        origin: request.headers.origin,
-        cookie: request.headers.cookie,
-        authorization: request.headers.authorization,
-      },
-      cohortIdFrom(request.query),
-    );
-  });
+  // Fastify's own span for an upgrade never ends: the socket takes the reply
+  // over. world.socket.open is the trace instead.
+  app.get(
+    SOCKET_PATH,
+    { websocket: true, config: { otel: false } },
+    async (socket, request) => {
+      const attempt: Attempt = {};
+      await traced(
+        'world.socket.open',
+        async () => {
+          try {
+            await openConnection(
+              socket,
+              {
+                origin: request.headers.origin,
+                cookie: request.headers.cookie,
+                authorization: request.headers.authorization,
+              },
+              cohortIdFrom(request.query),
+              attempt,
+            );
+          } catch (err) {
+            // Thrown before any outcome was counted: world's own failure.
+            if (attempt.outcome === undefined) {
+              attempt.outcome = 'failed';
+              metrics.failed();
+              annotate({ 'world.outcome': 'failed' });
+            }
+            throw err;
+          }
+        },
+        { root: true },
+      );
+    },
+  );
 
   async function openConnection(
     ws: WebSocket,
     headers: { origin?: string; cookie?: string; authorization?: string },
     cohortId: string | undefined,
+    attempt: Attempt,
   ): Promise<void> {
     // Authentication is asynchronous, and a client can be gone before it
     // finishes. Watching for that now means a socket that dies in the
@@ -1121,7 +1173,8 @@ export function registerGateway(
 
     let registered: Connection | undefined;
     let closed = false;
-    const onClose = (): void => {
+    const onClose = (code: number): void => {
+      metrics.closed(code);
       closed = true;
       if (registered) {
         drop(registered);
@@ -1141,11 +1194,19 @@ export function registerGateway(
       decision = await decideUpgrade(env, accounts, headers, cohortId);
     } catch (err) {
       app.log.error({ err }, 'could not decide socket upgrade');
+      attempt.outcome = 'failed';
+      metrics.failed();
+      annotate({ 'world.outcome': 'failed' });
       // Reading has to resume for the closing handshake to complete.
       ws.resume();
-      closeFor(ws, 'internal_error');
+      sendClose(ws, 'internal_error');
       return;
     }
+    // Known before the outcome, so a refusal leads to the person too.
+    annotate({
+      'world.cohort_id': cohortId,
+      'user.id': decision.ok ? decision.claims.userId : decision.userId,
+    });
 
     // Access taken away — the account suspended, or gone — forgets the
     // cohort this attempt named, and closes every socket the account holds,
@@ -1226,10 +1287,14 @@ export function registerGateway(
     await doorsReady;
 
     if (closed || ws.readyState !== ws.OPEN) {
+      attempt.outcome = 'abandoned';
+      metrics.abandoned();
+      annotate({ 'world.outcome': 'abandoned' });
       return;
     }
 
     if (!decision.ok) {
+      attempt.outcome = 'refused';
       refuse(ws, decision.refusal);
       return;
     }
@@ -1358,6 +1423,9 @@ export function registerGateway(
       },
       'socket opened',
     );
+    attempt.outcome = 'opened';
+    metrics.opened();
+    annotate({ 'world.outcome': 'opened' });
 
     ws.on('pong', () => {
       connection.alive = true;
@@ -1391,6 +1459,7 @@ export function registerGateway(
       // Frames over WORLD_MAX_MESSAGE_BYTES never arrive: ws enforces
       // maxPayload itself and closes with 1009 before this fires.
       const result = decode(raw.toString('utf8'));
+      metrics.received(result.ok ? result.message.type : 'invalid');
       if (!result.ok) {
         send(ws, {
           type: 'error',
@@ -1432,6 +1501,7 @@ export function registerGateway(
               mayStepInto(connection, into, new Date(now))
             );
           });
+          metrics.moved(moved.outcome);
           send(ws, {
             type: 'moveResult',
             seq,
@@ -1490,6 +1560,8 @@ export function registerGateway(
     // The upgrade has already completed by the time Fastify hands the socket
     // over, so a refusal is a close rather than an HTTP status.
     app.log.info({ refusal }, 'socket refused');
+    metrics.refused(refusal);
+    annotate({ 'world.outcome': 'refused', 'world.refusal': refusal });
     // Paused during authentication; the closing handshake needs it back.
     ws.resume();
     send(ws, {
@@ -1497,7 +1569,7 @@ export function registerGateway(
       code: ServerErrorCode.Unauthorized,
       message: refusal,
     });
-    closeFor(ws, refusal);
+    sendClose(ws, refusal);
   }
 
   function send(ws: WebSocket, message: ServerMessage): void {
@@ -1506,7 +1578,11 @@ export function registerGateway(
 
   function sendFrame(ws: WebSocket, frame: string): void {
     const bufferedBytes = ws.bufferedAmount;
-    if (deliver(ws, frame, env.WORLD_MAX_BUFFERED_BYTES) === 'lagging') {
+    const delivery = deliver(ws, frame, env.WORLD_MAX_BUFFERED_BYTES);
+    if (delivery === 'sent') {
+      metrics.sentFrame();
+    } else if (delivery === 'lagging') {
+      metrics.closedByServer('not_reading');
       app.log.warn({ bufferedBytes }, 'socket not reading, terminating');
     }
   }
@@ -1534,6 +1610,7 @@ export function registerGateway(
       }
     },
     spacesChanged: reloadDoors,
+    dispose: metrics.dispose,
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       clearInterval(tick);

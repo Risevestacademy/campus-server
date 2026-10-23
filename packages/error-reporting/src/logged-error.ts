@@ -37,6 +37,22 @@ function count(value: unknown): number | undefined {
 }
 
 /**
+ * The error an `error` or `fatal` log line carries: the line's first
+ * argument when that is an Error, otherwise its `err`. Undefined for any
+ * other line.
+ */
+export function loggedError(level: number, args: readonly unknown[]): unknown {
+  if (level < PINO_ERROR) {
+    return undefined;
+  }
+  const [first] = args;
+  if (first instanceof Error) {
+    return first;
+  }
+  return isObject(first) ? first.err : undefined;
+}
+
+/**
  * Reports an `error` or `fatal` log line that carries an error. Only named
  * fields go on: the rest of a log line can hold personal data.
  *
@@ -48,17 +64,14 @@ export function reportLoggedError(
   args: readonly unknown[],
   bindings: Record<string, unknown> = {},
 ): void {
-  if (level < PINO_ERROR) {
+  const error = loggedError(level, args);
+  if (error === undefined) {
     return;
   }
 
   const [first, second] = args;
   const fields: LineFields =
     isObject(first) && !(first instanceof Error) ? first : {};
-  const error = first instanceof Error ? first : fields.err;
-  if (error === undefined) {
-    return;
-  }
 
   const boundRequest = isObject(bindings.req) ? bindings.req : {};
   const traceId = trace.getActiveSpan()?.spanContext().traceId;
