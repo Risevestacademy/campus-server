@@ -14,3 +14,8 @@ export class NotAuthenticatedException extends DomainException {
 export class AccessDeniedException extends DomainException {
   readonly code = ExceptionCode.Forbidden;
 }
+
+/** The request itself is malformed, in a way the route DTOs did not catch. */
+export class InvalidArgumentException extends DomainException {
+  readonly code = ExceptionCode.InvalidArgument;
+}
