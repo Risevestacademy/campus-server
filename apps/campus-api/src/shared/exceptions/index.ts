@@ -1,5 +1,6 @@
 export {
   AccessDeniedException,
+  InvalidArgumentException,
   NotAuthenticatedException,
 } from './access.exception.js';
 export { DomainException } from './domain.exception.js';
