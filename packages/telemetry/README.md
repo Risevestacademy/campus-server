@@ -37,8 +37,8 @@ such as a list of routes, has to import nothing that is instrumented.
 
 `http`, pino, and anything else loaded through `require` are patched without
 help. A package an ES module loads with `import` is not: Nest loads Express
-that way. Those go through OpenTelemetry's ESM hook, which this registers
-only for the packages named in `esmModules`.
+that way, and world imports ioredis. Those go through OpenTelemetry's ESM
+hook, which this registers only for the packages named in `esmModules`.
 
 The hook could wrap every module instead, but measured on campus-api that cost
 about a second of boot and a third more memory, which staging pays on every
