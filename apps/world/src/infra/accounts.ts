@@ -9,6 +9,7 @@ import {
   type SpaceFacts,
   type SpaceGrantFacts,
 } from '@campus/space-access';
+import { installPostgresTracing } from '@campus/telemetry/sql';
 import postgres from 'postgres';
 
 import { seatKey, type Seat } from '../seat.js';
@@ -225,6 +226,9 @@ export function createAccountLookup(env: Env): AccountLookup {
     // waiting on a database that is not answering.
     connect_timeout: 5,
   });
+  if (env.FF_OTEL_ENABLED) {
+    installPostgresTracing(sql);
+  }
 
   return {
     async find(userId: string): Promise<Account | null> {

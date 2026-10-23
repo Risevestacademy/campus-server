@@ -3,6 +3,7 @@ import { register } from 'node:module';
 
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino';
+import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
 import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -81,16 +82,44 @@ describe('startTelemetry', () => {
     }
   });
 
-  it('instruments HTTP and pino, sending log lines, and adds what the app asks for', () => {
+  it('instruments HTTP, fetch and pino, sending log lines, and adds what the app asks for', () => {
     const extra = new HttpInstrumentation();
     startTelemetry({ ...options, instrumentations: [extra] });
 
     const { instrumentations } = sdkConfig();
     expect(instrumentations[0]).toBeInstanceOf(HttpInstrumentation);
-    const pino = instrumentations[1] as PinoInstrumentation;
-    expect(pino).toBeInstanceOf(PinoInstrumentation);
+    expect(
+      instrumentations.some((i) => i instanceof UndiciInstrumentation),
+    ).toBe(true);
+    const pino = instrumentations.find(
+      (i) => i instanceof PinoInstrumentation,
+    ) as PinoInstrumentation;
     expect(pino.getConfig().disableLogSending).not.toBe(true);
     expect(instrumentations.at(-1)).toBe(extra);
+  });
+
+  it('records no query values on a fetch', () => {
+    startTelemetry(options);
+
+    const undici = sdkConfig().instrumentations.find(
+      (i) => i instanceof UndiciInstrumentation,
+    ) as UndiciInstrumentation;
+    const hook = undici.getConfig().startSpanHook!;
+    expect(
+      hook({
+        origin: 'https://oauth2.googleapis.com',
+        path: '/tokeninfo?id_token=secret',
+      } as Parameters<typeof hook>[0]),
+    ).toEqual({
+      'url.full': 'https://oauth2.googleapis.com/tokeninfo?id_token=REDACTED',
+      'url.query': 'id_token=REDACTED',
+    });
+    expect(
+      hook({
+        origin: 'https://api.resend.com',
+        path: '/emails',
+      } as Parameters<typeof hook>[0]),
+    ).toEqual({});
   });
 
   it('leaves metrics off unless asked', () => {

@@ -118,9 +118,14 @@ database.
 ```
 src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
-  index.ts              boot and graceful shutdown
+  index.ts              boot and graceful shutdown; starts telemetry before the app loads
+  quiet-routes.ts       routes neither logged nor traced, with no imports, for index.ts
   infra/                env, logger, the database reads (accounts, memberships, spaces),
                         Redis (positions, presence), the published map
+    metrics.ts          the socket metrics: counters, gauges and running totals
+    traced.ts           spans for the work that waits: traced(), annotate(), failing a span
+    fastify-otel.ts     @fastify/otel's options, keeping query values off its span
+    exit.ts             flushing PostHog and telemetry on the way out
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   status/               available, busy or away, and going away while idle — no sockets here

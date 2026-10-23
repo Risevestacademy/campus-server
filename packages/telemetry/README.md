@@ -37,8 +37,8 @@ such as a list of routes, has to import nothing that is instrumented.
 
 `http`, pino, and anything else loaded through `require` are patched without
 help. A package an ES module loads with `import` is not: Nest loads Express
-that way. Those go through OpenTelemetry's ESM hook, which this registers
-only for the packages named in `esmModules`.
+that way, and world imports ioredis. Those go through OpenTelemetry's ESM
+hook, which this registers only for the packages named in `esmModules`.
 
 The hook could wrap every module instead, but measured on campus-api that cost
 about a second of boot and a third more memory, which staging pays on every
@@ -49,12 +49,29 @@ Express in the list, spans lose their route.
 
 - HTTP: a server span per request, except `untracedPaths` and what is under
   them, matched regardless of case as Express matches routes. Client spans for
-  outgoing `http` calls.
+  outgoing `http` calls and for `fetch`, which Google, LiveKit, Resend and
+  PostHog are all called through.
 - A span keeps a query string's parameter names and never their values
   (`code=REDACTED&state=REDACTED`), on incoming and outgoing requests alike,
   and holds no client address.
 - pino: every log line carries the request's `trace_id` and `span_id`, and is
   sent over OTLP after the logger's own redaction.
+
+## Database queries
+
+postgres.js has no maintained instrumentation, so `@campus/telemetry/sql`
+exports `installPostgresTracing(sql)`. It hooks the one place postgres.js
+runs a query, for the whole process, so every client, transaction, savepoint
+and reserved connection gets one span per query, holding the statement as
+sent with `$n` placeholders and, on failure, the SQLSTATE but never the
+message, which can quote a value. postgres.js's own errors, such as
+`CONNECTION_CLOSED`, are named in `error.type` only. Both services install it
+while telemetry is on.
+
+Cursors are left out: their query never settles. One other query never
+settles: with `target_session_attrs` set (in the URL or
+`PGTARGETSESSIONATTRS`), postgres.js checks each new connection with one, and
+each would leave a span that never ends. Nothing sets it today.
 
 ## Paths without the SDK
 
@@ -62,6 +79,15 @@ Express in the list, spans lose their route.
 too: `pathOf`, `matchesPath` and the query redaction. It imports nothing, so a
 logger can use it without loading the SDK; the package root does load it, so
 import the helpers from `/paths`.
+
+## Versions
+
+Every OpenTelemetry package here is on the same line, instrumentation
+`0.222`, so one copy of the instrumentation base is shared. A library's next
+release can move to a newer line: `@fastify/otel` 0.21.3 needs `0.223`. So
+world pins `@fastify/otel` to exactly `0.21.2`, the last release on `0.222`,
+and a caret range would quietly bring in a second copy. Move the whole line
+together, and the pin with it.
 
 ## Shutdown
 
