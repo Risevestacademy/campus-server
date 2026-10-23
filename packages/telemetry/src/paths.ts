@@ -27,27 +27,34 @@ export function redactQuery(url: string | undefined): string | undefined {
     .join('&');
 }
 
-const DEFAULT_PORTS: Record<string, string> = {
-  'http:': '80',
-  'https:': '443',
-};
+/**
+ * A request's full URL with its query values redacted, and the redacted
+ * query on its own. Undefined without a query string: nothing to hide.
+ */
+export function redactUrl(
+  origin: string,
+  path: string,
+): { full: string; query: string } | undefined {
+  const query = redactQuery(path);
+  if (query === undefined) {
+    return undefined;
+  }
+  // URL drops a port that is the scheme's default.
+  return {
+    full: `${new URL(pathOf(path), origin).toString()}?${query}`,
+    query,
+  };
+}
 
-/** The full URL of an outgoing request with its query values redacted. */
+/** The full URL of an outgoing `http` request with its query values redacted. */
 export function redactedRequestUrl(
   options: Pick<
     RequestOptions,
     'protocol' | 'hostname' | 'host' | 'port' | 'path'
   >,
 ): string | undefined {
-  const query = redactQuery(options.path ?? undefined);
-  if (query === undefined) {
-    return undefined;
-  }
   const protocol = options.protocol ?? 'http:';
   const host = options.hostname ?? options.host ?? 'localhost';
-  const port =
-    options.port != null && String(options.port) !== DEFAULT_PORTS[protocol]
-      ? `:${options.port}`
-      : '';
-  return `${protocol}//${host}${port}${pathOf(options.path ?? undefined)}?${query}`;
+  const port = options.port != null ? `:${options.port}` : '';
+  return redactUrl(`${protocol}//${host}${port}`, options.path ?? '')?.full;
 }

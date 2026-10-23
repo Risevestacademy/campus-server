@@ -3,7 +3,9 @@ export {
   pathOf,
   redactQuery,
   redactedRequestUrl,
+  redactUrl,
 } from './paths.js';
+export { operationOf, statementOf, tracePostgres } from './sql.js';
 export {
   startTelemetry,
   type Telemetry,

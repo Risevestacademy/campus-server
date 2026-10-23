@@ -5,6 +5,7 @@ import type { Instrumentation } from '@opentelemetry/instrumentation';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino';
 import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node';
+import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
 import {
   defaultResource,
   resourceFromAttributes,
@@ -15,7 +16,12 @@ import {
   ATTR_SERVICE_VERSION,
 } from '@opentelemetry/semantic-conventions';
 
-import { matchesPath, redactQuery, redactedRequestUrl } from './paths.js';
+import {
+  matchesPath,
+  redactQuery,
+  redactedRequestUrl,
+  redactUrl,
+} from './paths.js';
 
 /** Long enough to send what is buffered, short of a platform's kill. */
 const SHUTDOWN_TIMEOUT_MS = 3_000;
@@ -28,7 +34,7 @@ export interface TelemetryOptions {
   metrics: boolean;
   /** Paths, and what is under them, whose requests are not traced. */
   untracedPaths?: readonly string[];
-  /** What the app needs beyond HTTP and pino. */
+  /** What the app needs beyond HTTP, fetch and pino. */
   instrumentations?: Instrumentation[];
   /**
    * Instrumented packages the app loads through `import` rather than
@@ -82,6 +88,13 @@ export function startTelemetry(options: TelemetryOptions): Telemetry {
         startOutgoingSpanHook: (request: RequestOptions) => {
           const url = redactedRequestUrl(request);
           return url ? { 'url.full': url } : {};
+        },
+      }),
+      // fetch: Google, LiveKit and Resend are all called through it.
+      new UndiciInstrumentation({
+        startSpanHook: (request) => {
+          const url = redactUrl(request.origin, request.path);
+          return url ? { 'url.full': url.full, 'url.query': url.query } : {};
         },
       }),
       new PinoInstrumentation(),

@@ -5,6 +5,7 @@ import {
   pathOf,
   redactQuery,
   redactedRequestUrl,
+  redactUrl,
 } from './paths.js';
 
 describe('pathOf', () => {
@@ -83,5 +84,17 @@ describe('redactedRequestUrl', () => {
     expect(
       redactedRequestUrl({ hostname: 'api.resend.com', path: '/emails' }),
     ).toBeUndefined();
+  });
+});
+
+describe('redactUrl', () => {
+  it('rebuilds a fetch URL with its query values redacted, and gives the query', () => {
+    expect(
+      redactUrl('https://oauth2.googleapis.com', '/tokeninfo?id_token=x&a=b'),
+    ).toEqual({
+      full: 'https://oauth2.googleapis.com/tokeninfo?id_token=REDACTED&a=REDACTED',
+      query: 'id_token=REDACTED&a=REDACTED',
+    });
+    expect(redactUrl('https://api.resend.com', '/emails')).toBeUndefined();
   });
 });
