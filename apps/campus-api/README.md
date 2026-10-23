@@ -149,18 +149,20 @@ Roles are read from the database on every request, never from the token, the
 body or the query, so ending or changing a membership takes effect on the
 caller's next request.
 
-| Guard                                  | URL params                       | Passes when                                                                                            |
-| -------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `ProfessorOfTrackGuard`                | `cohortId`, `trackId`            | The caller has a live professor membership in this cohort, tied to this track, and the cohort runs it. |
-| `MentorOfGroupGuard`                   | `cohortId`, `groupId`            | The caller is the live mentor of this group, and the group belongs to this cohort.                     |
-| `ProfessorOfTrackOrMentorOfGroupGuard` | `cohortId`, `trackId`, `groupId` | Either of the two checks above passes.                                                                 |
+| Guard                   | URL params            | Passes when                                                                                            |
+| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `ProfessorOfTrackGuard` | `cohortId`, `trackId` | The caller has a live professor membership in this cohort, tied to this track, and the cohort runs it. |
+| `MentorOfGroupGuard`    | `cohortId`, `groupId` | The caller is the live mentor of this group, and the group belongs to this cohort.                     |
 
 Only route params are read: `cohortId`, `trackId` and `groupId`, as named. A
 missing or malformed UUID is 400 `INVALID_ARGUMENT`. A valid id that names
 nothing is 403 rather than 404, so the guard does not reveal what exists.
 Admins pass these guards through `hasAdminPowers`, the same rule `AdminGuard`
 uses; a caller may also be a professor in one cohort and a student in another,
-and only the requested cohort is checked.
+and only the requested cohort is checked. A handler must not assume
+`req.cohortMembership` is set: an admin passes without one, even when an id
+names nothing, so the handler must still return its own 404 for a resource
+that does not exist.
 
 When a membership matches, the guard puts it on the request as
 `req.cohortMembership` (`id`, `cohortId`, `role`, `cohortTrackId`,

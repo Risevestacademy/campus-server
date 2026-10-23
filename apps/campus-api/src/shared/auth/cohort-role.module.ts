@@ -3,7 +3,6 @@ import { Module } from '@nestjs/common';
 import {
   MentorOfGroupGuard,
   ProfessorOfTrackGuard,
-  ProfessorOfTrackOrMentorOfGroupGuard,
 } from './cohort-role.guard.js';
 import { CohortRoleService } from './cohort-role.service.js';
 
@@ -12,17 +11,7 @@ import { CohortRoleService } from './cohort-role.service.js';
  * and put the guard in @UseGuards beside SessionGuard.
  */
 @Module({
-  providers: [
-    CohortRoleService,
-    ProfessorOfTrackGuard,
-    MentorOfGroupGuard,
-    ProfessorOfTrackOrMentorOfGroupGuard,
-  ],
-  exports: [
-    CohortRoleService,
-    ProfessorOfTrackGuard,
-    MentorOfGroupGuard,
-    ProfessorOfTrackOrMentorOfGroupGuard,
-  ],
+  providers: [CohortRoleService, ProfessorOfTrackGuard, MentorOfGroupGuard],
+  exports: [CohortRoleService, ProfessorOfTrackGuard, MentorOfGroupGuard],
 })
 export class CohortRoleModule {}

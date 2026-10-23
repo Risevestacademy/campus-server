@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { isLiveMembership } from '../../modules/cohorts/cohort-members.service.js';
@@ -59,7 +59,6 @@ export class CohortRoleService {
           eq(cohortMembers.userId, userId),
           eq(cohortMembers.cohortId, cohortId),
           eq(cohortMembers.role, CohortRole.Professor),
-          eq(cohortTracks.cohortId, cohortId),
           eq(cohortTracks.trackId, trackId),
           isLiveMembership(now),
         ),
@@ -93,64 +92,8 @@ export class CohortRoleService {
           eq(cohortMembers.userId, userId),
           eq(cohortMembers.cohortId, cohortId),
           eq(cohortMembers.role, CohortRole.Mentor),
-          eq(mentorshipGroups.cohortId, cohortId),
           eq(mentorshipGroups.id, groupId),
           isLiveMembership(now),
-        ),
-      )
-      .limit(1);
-
-    return row ?? null;
-  }
-
-  /**
-   * Either role, in one query. The left joins keep a professor with no group
-   * and a mentor with no track in the same result shape.
-   */
-  async findProfessorOfTrackOrMentorOfGroup(
-    userId: string,
-    cohortId: string,
-    trackId: string,
-    groupId: string,
-    now: Date = new Date(),
-  ): Promise<CohortMembership | null> {
-    const professor = and(
-      eq(cohortMembers.role, CohortRole.Professor),
-      eq(cohortTracks.cohortId, cohortId),
-      eq(cohortTracks.trackId, trackId),
-    );
-    const mentor = and(
-      eq(cohortMembers.role, CohortRole.Mentor),
-      eq(mentorshipGroups.cohortId, cohortId),
-      eq(mentorshipGroups.id, groupId),
-    );
-
-    const [row] = await this.db
-      .select({
-        ...membershipFields,
-        mentorshipGroupId: mentorshipGroups.id,
-      })
-      .from(cohortMembers)
-      .leftJoin(
-        cohortTracks,
-        and(
-          eq(cohortTracks.id, cohortMembers.cohortTrackId),
-          eq(cohortTracks.cohortId, cohortMembers.cohortId),
-        ),
-      )
-      .leftJoin(
-        mentorshipGroups,
-        and(
-          eq(mentorshipGroups.mentorMemberId, cohortMembers.id),
-          eq(mentorshipGroups.cohortId, cohortMembers.cohortId),
-        ),
-      )
-      .where(
-        and(
-          eq(cohortMembers.userId, userId),
-          eq(cohortMembers.cohortId, cohortId),
-          isLiveMembership(now),
-          or(professor, mentor),
         ),
       )
       .limit(1);

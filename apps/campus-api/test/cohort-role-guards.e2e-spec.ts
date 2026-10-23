@@ -35,7 +35,6 @@ import type { AuthenticatedRequest } from './../src/shared/auth/authenticated-us
 import {
   MentorOfGroupGuard,
   ProfessorOfTrackGuard,
-  ProfessorOfTrackOrMentorOfGroupGuard,
 } from './../src/shared/auth/cohort-role.guard.js';
 import { CohortRoleModule } from './../src/shared/auth/cohort-role.module.js';
 import type { CohortMembership } from './../src/shared/auth/cohort-role.service.js';
@@ -85,15 +84,6 @@ class ProfessorGuardController {
 @UseGuards(SessionGuard, MentorOfGroupGuard)
 class MentorGuardController {
   @Get(':cohortId/groups/:groupId')
-  get(@Req() req: GuardedRequest): CohortMembership | null {
-    return req.cohortMembership ?? null;
-  }
-}
-
-@Controller('test-guards/professor-or-mentor')
-@UseGuards(SessionGuard, ProfessorOfTrackOrMentorOfGroupGuard)
-class CombinedGuardController {
-  @Get(':cohortId/tracks/:trackId/groups/:groupId')
   get(@Req() req: GuardedRequest): CohortMembership | null {
     return req.cohortMembership ?? null;
   }
@@ -171,7 +161,6 @@ describe('cohort role guards (e2e)', () => {
       controllers: [
         ProfessorGuardController,
         MentorGuardController,
-        CombinedGuardController,
         MissingParamController,
       ],
     })
@@ -290,10 +279,12 @@ describe('cohort role guards (e2e)', () => {
     const t1 = await insertTrack('T1');
     const t2 = await insertTrack('T2');
     const t3 = await insertTrack('T3');
+    const t4 = await insertTrack('T4');
     const ct1 = await linkTrack(c1.id, t1.id);
     const ct2 = await linkTrack(c1.id, t2.id);
     const ct1Other = await linkTrack(c2.id, t1.id);
     const ct2Other = await linkTrack(c2.id, t2.id);
+    await linkTrack(c2.id, t4.id);
 
     const admin = await insertUser('admin@campus.local', SystemRole.Admin);
     const professor1 = await insertUser('professor1@campus.local');
@@ -382,6 +373,7 @@ describe('cohort role guards (e2e)', () => {
       t1,
       t2,
       t3,
+      t4,
       ct1,
       ct2,
       ct1Other,
@@ -419,8 +411,6 @@ describe('cohort role guards (e2e)', () => {
     `/v1/test-guards/professor/${cohortId}/tracks/${trackId}`;
   const mentorPath = (cohortId: string, groupId: string) =>
     `/v1/test-guards/mentor/${cohortId}/groups/${groupId}`;
-  const combinedPath = (cohortId: string, trackId: string, groupId: string) =>
-    `/v1/test-guards/professor-or-mentor/${cohortId}/tracks/${trackId}/groups/${groupId}`;
 
   const expectForbidden = (res: Response): void => {
     expect(res.status).toBe(403);
@@ -498,13 +488,37 @@ describe('cohort role guards (e2e)', () => {
       expect(res.body).toEqual({});
     });
 
-    it('refuses a cohort or track that does not exist', async () => {
+    it('lets an admin through for ids that do not exist', async () => {
+      const w = await world();
+      const noCohort = await as(w.cookies.admin)
+        .get(professorPath(MISSING, w.t1.id))
+        .expect(200);
+      expect(noCohort.body).toEqual({});
+
+      const noTrack = await as(w.cookies.admin)
+        .get(professorPath(w.c1.id, MISSING))
+        .expect(200);
+      expect(noTrack.body).toEqual({});
+    });
+
+    it('refuses a cohort that does not exist', async () => {
       const w = await world();
       expectForbidden(
         await as(w.cookies.professor1).get(professorPath(MISSING, w.t1.id)),
       );
+    });
+
+    it('refuses a track that does not exist', async () => {
+      const w = await world();
       expectForbidden(
         await as(w.cookies.professor1).get(professorPath(w.c1.id, MISSING)),
+      );
+    });
+
+    it('refuses a track that belongs only to another cohort', async () => {
+      const w = await world();
+      expectForbidden(
+        await as(w.cookies.professor1).get(professorPath(w.c1.id, w.t4.id)),
       );
     });
 
@@ -629,34 +643,18 @@ describe('cohort role guards (e2e)', () => {
         .expect(200);
       expect(res.body).toEqual({});
     });
-  });
 
-  describe('ProfessorOfTrackOrMentorOfGroupGuard', () => {
-    it('allows a professor of the track', async () => {
+    it('lets an admin through for ids that do not exist', async () => {
       const w = await world();
-      await as(w.cookies.professor1)
-        .get(combinedPath(w.c1.id, w.t1.id, w.group1.id))
+      const noCohort = await as(w.cookies.admin)
+        .get(mentorPath(MISSING, w.group1.id))
         .expect(200);
-    });
+      expect(noCohort.body).toEqual({});
 
-    it('allows a mentor of the group even when the track does not match', async () => {
-      const w = await world();
-      const res = await as(w.cookies.mentor1)
-        .get(combinedPath(w.c1.id, w.t2.id, w.group1.id))
+      const noGroup = await as(w.cookies.admin)
+        .get(mentorPath(w.c1.id, MISSING))
         .expect(200);
-      expect(res.body).toMatchObject({
-        role: CohortRole.Mentor,
-        mentorshipGroupId: w.group1.id,
-      });
-    });
-
-    it('refuses a caller holding neither role', async () => {
-      const w = await world();
-      expectForbidden(
-        await as(w.cookies.student1).get(
-          combinedPath(w.c1.id, w.t1.id, w.group1.id),
-        ),
-      );
+      expect(noGroup.body).toEqual({});
     });
   });
 
