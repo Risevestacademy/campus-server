@@ -1,7 +1,6 @@
-import { matchesPath } from '@campus/telemetry/paths';
-
 import type { World } from './app.js';
 import { loadEnv } from './infra/env.js';
+import { fastifyOtelOptions } from './infra/fastify-otel.js';
 import { flushAll } from './infra/exit.js';
 import { QUIET_ROUTES } from './quiet-routes.js';
 
@@ -19,10 +18,9 @@ const telemetry = env.FF_OTEL_ENABLED
       // Imported, not required, so it goes through the ESM hook.
       esmModules: ['ioredis'],
       instrumentations: [
-        new (await import('@fastify/otel')).FastifyOtelInstrumentation({
-          registerOnInitialization: true,
-          ignorePaths: ({ url }) => matchesPath(url, QUIET_ROUTES),
-        }),
+        new (await import('@fastify/otel')).FastifyOtelInstrumentation(
+          fastifyOtelOptions(QUIET_ROUTES),
+        ),
         // Only inside a span: the timers' own reads and writes, every few
         // seconds for every socket, would bury everything else.
         new (
