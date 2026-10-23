@@ -211,6 +211,26 @@ The detach locks the link before it looks for grants, and a grant to a
 track holds the link with `key share`, so the two never cross: tested in
 `space-memberships.pg.spec.ts`.
 
+## Setting a space up
+
+`GET /v1/spaces`, `GET /v1/spaces/{id}` and `PATCH /v1/spaces/{id}`, admins
+only. The list is live spaces by name; `?needsKind=true` is the queue of
+spaces the map drew and no admin has set up yet. Reading one by id still
+works after it is retired.
+
+A `PATCH` is a partial edit of `name`, `kind`, `access`, `audioMode`,
+`capacity`, `audibleRadius`, `subscribeRadius` and `hysteresisFactor`. The
+key, the map and the default flag belong to the map and cannot be changed;
+naming one is a 400 that names the field, never a silent drop. `kind: null`
+puts a space back in the queue. An edit that moves nothing writes no audit
+entry.
+
+The database remains the source of truth for the combinations a space may
+not be. A default space that is not normal and a capacity below 1 answer 400
+and name the rule; a second town hall or notice board answers 409. Every
+successful edit writes a `space_updated` entry, in the same transaction as
+the row, with the admin, the space and each changed field's `from` and `to`.
+
 ## Not here yet
 
 - **Locks, and asking to enter.** Who may enter is answered by
@@ -224,6 +244,5 @@ track holds the link with `key share`, so the two never cross: tested in
 - **Which version of a map is live.** Today `world` loads the latest
   published version. Whether the database should name it is undecided, so
   the sync reports the version it read and stores none.
-- **Setting a space up.** No route changes a space's kind or settings yet.
 - **The sync does not reach `world`.** It loads its map at startup, so a new
   publish is live there after a restart, whether or not this has run.

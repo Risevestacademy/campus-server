@@ -136,6 +136,12 @@ export enum AuditAction {
    */
   SpaceMembershipEnded = 'space_membership_ended',
   /**
+   * An admin edited a space's settings. `details.changes` maps each field
+   * that actually moved to its `from` and `to`; an edit that moved nothing
+   * writes no entry. The subject is the space, and `space_id` names it too.
+   */
+  SpaceUpdated = 'space_updated',
+  /**
    * An admin created a mentorship group. `details` has the cohort, the name,
    * the mentor membership and the room it was given.
    */
@@ -165,6 +171,8 @@ export enum AuditSubjectType {
   CohortTrack = 'cohort_track',
   Track = 'track',
   Map = 'map',
+  /** A space's own settings, not a grant of access to it. */
+  Space = 'space',
   Feedback = 'feedback',
   /** One row of `space_memberships`: a grant of access to a space. */
   SpaceMembership = 'space_membership',

@@ -54,6 +54,22 @@ export interface TrackSnapshot {
   description: string | null;
 }
 
+/**
+ * What an admin can change on a space. The audio distances are the strings
+ * the numeric columns return, so an entry records exactly the value stored
+ * rather than a rounded copy.
+ */
+export interface SpaceSnapshot {
+  name: string;
+  kind: string | null;
+  access: string;
+  audioMode: string;
+  capacity: number | null;
+  audibleRadius: string | null;
+  subscribeRadius: string | null;
+  hysteresisFactor: string;
+}
+
 /** What an admin can change on a mentorship group. */
 export interface MentorshipGroupSnapshot {
   name: string;
@@ -229,6 +245,10 @@ interface AuditEntryShapes {
       /** When the admin brought it to an end; the row keeps saying so. */
       endedAt: Date;
     };
+  };
+  [AuditAction.SpaceUpdated]: {
+    subject: AuditSubjectType.Space;
+    details: { changes: FieldChanges<SpaceSnapshot> };
   };
   [AuditAction.CohortCreated]: {
     subject: AuditSubjectType.Cohort;
