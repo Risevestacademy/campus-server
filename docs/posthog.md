@@ -1,32 +1,58 @@
-# PostHog (campus-api)
+# PostHog
 
-Exception tracking only — no custom product events from the backend.
+campus-api and world send errors to PostHog Error Tracking. Neither sends
+product events yet.
 
-## How it's set up
+## What is reported
 
-- Env vars: `FF_POSTHOG_ENABLED`, `POSTHOG_PROJECT_TOKEN` (must start with `phc_`),
-  `POSTHOG_HOST` (must be HTTPS) — validated at boot in
-  [env.ts](../apps/campus-api/src/infra/config/env.ts). Disabled by default;
-  set per Railway environment only.
-- Reporting is handled by PostHog's own `PostHogInterceptor`
-  (`posthog-node/nestjs`), registered in
-  [main.ts](../apps/campus-api/src/main.ts) . Only captures
-  responses ≥ 500 (4xx is expected traffic, not a bug), with method, path,
-  status code, IP, and user agent attached automatically.
+Every `error` or `fatal` log line that carries an error (`err`, or an `Error`
+logged on its own) is reported. A `warn` line never is. So the log level
+decides: `error` means somebody has to look, `warn` means it was handled.
 
-## Frontend correlation
+- campus-api's exception filters log every 5xx at `error`, so every 5xx is
+  reported, including those thrown by guards. 4xx responses are not.
+- A `SERVICE_UNAVAILABLE` 503 is reported at the `warning` level, so it
+  groups apart from bugs.
+- Uncaught exceptions are reported before the process exits, once the
+  reporter exists. In campus-api it is built with the Nest app, so a crash
+  before that, such as invalid configuration, is only in the logs. world
+  builds it first, when the app is built.
 
-Reads the `X-PostHog-Distinct-Id` header (PostHog's own standard header) to
-attribute an exception to a user. **The frontend doesn't send this yet** —
-until it does, backend exceptions show with no linked person.
+Each report carries the service, environment and release (the deployed
+commit, from `RAILWAY_GIT_COMMIT_SHA`), and, where the log line has them, the
+person's `users.id`, the message, the correlation id, the method, the route
+template, the status code and the trace id: the fields `LoggedErrorFields`
+names. Nothing else from the log line goes, since it can hold personal data.
+No IP address is sent.
 
-`POSTHOG_HOST` must match whichever region (EU/US) the frontend's PostHog
-project actually uses — they're separate infrastructures, and a mismatch
-means the backend silently reports into a project no one is looking at.
+The exception itself goes with its type, message and stack. A failed
+query's message can carry the values it was given (drizzle appends them as
+`params:`, and Postgres quotes the value it rejected), so those keep only the
+statement and the SQLSTATE, causes included. Any other message is sent as
+written: **an error's message must not carry personal data**. Put an id in
+it, not an email or a name.
+
+On shutdown the reporter has 3 seconds to send what it holds.
+
+The shared code is in [`packages/error-reporting`](../packages/error-reporting):
+the reporter, the pino hooks both apps install with `reportingHooks`, and
+`LOG_REDACT_PATHS`, the one list of fields both apps redact from their logs.
+
+## Configuration
+
+Both services read the same three variables, validated at boot:
+
+- `FF_POSTHOG_ENABLED`: off by default.
+- `POSTHOG_PROJECT_TOKEN`: required when on, and must start with `phc_`.
+- `POSTHOG_HOST`: HTTPS, `https://eu.i.posthog.com` by default.
+
+Use one PostHog project per environment, the same one for both services.
 
 ## How to verify it works
 
-1. Trigger a 500 → shows up in PostHog Error Tracking.
-2. Trigger a 4xx → nothing captured.
-3. Enable the flag with a missing/malformed key → app fails to boot with a
-   clear error, not a silent no-op.
+1. Trigger a 500 → it shows up in PostHog Error Tracking with its route and
+   correlation id. The id matches the response's `x-correlation-id` header
+   and the request's log lines.
+2. Trigger a 4xx → nothing is reported.
+3. Enable the flag with a missing or malformed token → the service fails to
+   boot with a clear error, not a silent no-op.

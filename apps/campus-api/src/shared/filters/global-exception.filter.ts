@@ -5,17 +5,26 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
+import { Response } from 'express';
 
 import { ExceptionCode } from '../exceptions/exception-code.enum.js';
 import { resolveExceptionStatus } from '../exceptions/resolve-status.js';
 import type { ErrorResponse } from './error-response.js';
+import { requestFields, type LoggedRequest } from './request-fields.js';
 
 const GENERIC_MESSAGE = 'An unexpected error occurred';
 
-/** Structural, so the filter works with nestjs-pino or a plain console. */
+/**
+ * Structural, so the filter works with nestjs-pino or a plain console.
+ * nestjs-pino's Logger takes a lone trailing string as the context, not the
+ * message, so the context is passed too and the message survives.
+ */
 export interface ErrorLogger {
-  error(payload: Record<string, unknown>, message: string): void;
+  error(
+    payload: Record<string, unknown>,
+    message: string,
+    context: string,
+  ): void;
 }
 
 @Catch()
@@ -29,7 +38,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const status = resolveExceptionStatus(exception);
 
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.logUnhandled(exception, ctx.getRequest<Request & { id?: string }>());
+      this.logUnhandled(exception, status, ctx.getRequest<LoggedRequest>());
     }
 
     const body: ErrorResponse = {
@@ -44,19 +53,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   private logUnhandled(
     exception: unknown,
-    request?: Request & { id?: string },
+    status: number,
+    request?: LoggedRequest,
   ): void {
-    const payload: Record<string, unknown> = {
-      err: exception,
-      method: request?.method,
-      url: request?.url,
-    };
-    if (request?.id) {
-      payload.correlationId = request.id;
-    }
+    const payload = { err: exception, ...requestFields(request, status) };
 
     if (this.logger) {
-      this.logger.error(payload, 'Unhandled exception');
+      this.logger.error(
+        payload,
+        'Unhandled exception',
+        GlobalExceptionFilter.name,
+      );
       return;
     }
     console.error('Unhandled exception', payload);

@@ -25,6 +25,7 @@
     "ws": "^8.22.0"
   },
   "dependencies": {
+    "@campus/error-reporting": "workspace:*",
     "@campus/media": "workspace:*",
     "@campus/session": "workspace:*",
     "@campus/space-access": "workspace:*",

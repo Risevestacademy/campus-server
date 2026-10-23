@@ -1,6 +1,7 @@
 import { buildWorld } from './app.js';
 
-const { app, gateway, env, accounts, positions, presence } = await buildWorld();
+const { app, gateway, env, accounts, positions, presence, reporter } =
+  await buildWorld();
 
 /**
  * Sockets first, then the HTTP server: a client that is told to go away can
@@ -16,9 +17,11 @@ async function shutdown(signal: string): Promise<void> {
     await accounts.close();
     await positions.close();
     await presence.close();
+    await reporter.shutdown();
     process.exit(0);
   } catch (err) {
     app.log.error({ err }, 'error during shutdown');
+    await reporter.shutdown();
     process.exit(1);
   }
 }
@@ -40,5 +43,6 @@ try {
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
 } catch (err) {
   app.log.error({ err }, 'failed to start');
+  await reporter.shutdown();
   process.exit(1);
 }

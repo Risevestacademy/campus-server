@@ -328,6 +328,11 @@ export class Env {
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
 
+  /** Set by Railway on every deploy; the release errors and traces name. */
+  @IsOptional()
+  @IsString()
+  RAILWAY_GIT_COMMIT_SHA?: string;
+
   // Maps (Sanity) ------------------------------------------------------
   // Where the campus maps are published. Read only by the admin's map sync,
   // which fills `maps` and `spaces` from what is published; no token, the

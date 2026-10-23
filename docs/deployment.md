@@ -81,9 +81,11 @@ change to either reaches both apps:
   poll; a signed-in browser refreshing its token also wakes it.
 - Healthcheck path: `/v1/health`
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
-  `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED=false` (no collector deployed),
+  `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED`, `FF_OTEL_METRICS_ENABLED`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` (see
+  [grafana.md](./grafana.md)),
   `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST` (see
-  [posthog.md](./posthog.md) — region must match the frontend's project),
+  [posthog.md](./posthog.md)),
   `DEFAULT_ADMIN_EMAIL` (the super admins the pre-deploy seed creates or promotes:
   one Google address, or several separated by commas; set it per
   environment before the first deploy, or the seed step fails),
@@ -275,6 +277,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   suspended, so a ban reaches open sockets instead of waiting out the token).
   `PORT` is injected by Railway. `REDIS_URL` (the Redis service's internal
   URL) keeps where each player last stood between visits, and presence.
+  `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST`, the
+  same project as campus-api (see [posthog.md](./posthog.md)).
 - Tuning, all defaulted — see `apps/world/.env.example`: `WORLD_DB_POOL`,
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
@@ -388,5 +392,3 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 - World on Railway's own domain cannot get the cookie: `up.railway.app` is a
   public suffix, so no `Domain` can span two services there. It works once
   both sit under the custom domain with `AUTH_COOKIE_DOMAIN` set.
-- Frontend↔backend PostHog correlation isn't wired yet — see
-  [posthog.md](./posthog.md).
