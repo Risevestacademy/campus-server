@@ -166,6 +166,17 @@ describe('startTelemetry', () => {
     });
   });
 
+  it('sends no OAuth code or state from the Google callback', () => {
+    startTelemetry(options);
+
+    const hook = http().getConfig().startIncomingSpanHook!;
+    const attributes = hook({
+      url: '/v1/auth/google/callback?code=4/0Aabc-code&state=xyz-state',
+    } as IncomingMessage);
+    expect(attributes['url.query']).toBe('code=REDACTED&state=REDACTED');
+    expect(JSON.stringify(attributes)).not.toMatch(/4\/0Aabc-code|xyz-state/);
+  });
+
   it('records no query values on an outgoing call', () => {
     startTelemetry(options);
 

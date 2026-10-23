@@ -46,7 +46,7 @@ export async function buildWorld(
     enabled: env.FF_POSTHOG_ENABLED,
     token: env.POSTHOG_PROJECT_TOKEN,
     host: env.POSTHOG_HOST,
-    service: 'world',
+    service: env.OTEL_SERVICE_NAME,
     environment: env.DEPLOYMENT_ENVIRONMENT,
     release: env.RAILWAY_GIT_COMMIT_SHA,
   }),

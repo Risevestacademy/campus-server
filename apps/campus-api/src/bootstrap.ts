@@ -40,16 +40,22 @@ export async function bootstrap(config: Env, telemetry?: Telemetry) {
   let app: NestExpressApplication | undefined;
   let reporter: ErrorReporter | undefined;
 
+  /** Closes the app, then sends what telemetry and PostHog still hold. */
+  async function exit(code: number): Promise<never> {
+    try {
+      await gracefulShutdown(app, [
+        () => (telemetry ? telemetry.shutdown() : Promise.resolve()),
+        () => (reporter ? reporter.shutdown() : Promise.resolve()),
+      ]);
+    } catch (err) {
+      console.error('Error during shutdown', err);
+      code = 1;
+    }
+    process.exit(code);
+  }
+
   process.on('SIGTERM', () => {
-    gracefulShutdown(app, [
-      () => (telemetry ? telemetry.shutdown() : Promise.resolve()),
-      () => (reporter ? reporter.shutdown() : Promise.resolve()),
-    ])
-      .then(() => process.exit(0))
-      .catch((err: unknown) => {
-        console.error('Error during shutdown', err);
-        process.exit(1);
-      });
+    void exit(0);
   });
 
   app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -67,6 +73,20 @@ export async function bootstrap(config: Env, telemetry?: Telemetry) {
   app.useLogger(logger);
   reporter = app.get<ErrorReporter>(ERROR_REPORTER);
 
+  try {
+    await configureAndListen(app, config, logger);
+  } catch (err) {
+    // Logged at error, so it is reported, and flushed before the exit.
+    logger.error({ err }, 'Failed to start', 'bootstrap');
+    await exit(1);
+  }
+}
+
+async function configureAndListen(
+  app: NestExpressApplication,
+  config: Env,
+  logger: Logger,
+) {
   // Without this every request appears to come from the proxy
 
   app.set('trust proxy', config.TRUST_PROXY_HOPS);

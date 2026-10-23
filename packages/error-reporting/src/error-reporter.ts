@@ -1,5 +1,10 @@
 import { PostHog } from 'posthog-node';
 
+import { scrubError, scrubExceptionList } from './scrub.js';
+
+/** Long enough to send what is queued, short of a platform's kill. */
+const SHUTDOWN_TIMEOUT_MS = 3_000;
+
 export type ErrorLevel = 'fatal' | 'error' | 'warning';
 
 export interface ErrorContext {
@@ -41,19 +46,29 @@ export function createErrorReporter(
     environment: options.environment,
     release: options.release,
   };
-  // Uncaught exceptions are captured too; Node still exits on them.
+  // Uncaught exceptions are captured too, once this client exists; Node
+  // still exits on them.
   const client = new PostHog(options.token, {
     host: options.host,
     disableGeoip: true,
     enableExceptionAutocapture: true,
     before_send: (event) =>
-      event && { ...event, properties: { ...event.properties, ...stamp } },
+      event && {
+        ...event,
+        properties: {
+          ...event.properties,
+          ...stamp,
+          $exception_list: scrubExceptionList(
+            event.properties?.$exception_list,
+          ),
+        },
+      },
   });
 
   return {
     report(error, { distinctId, level = 'error', properties } = {}) {
       try {
-        client.captureException(error, distinctId, {
+        client.captureException(scrubError(error), distinctId, {
           ...properties,
           $exception_level: level,
         });
@@ -61,6 +76,6 @@ export function createErrorReporter(
         console.error('Could not report an error to PostHog', err);
       }
     },
-    shutdown: () => client.shutdown(),
+    shutdown: () => client.shutdown(SHUTDOWN_TIMEOUT_MS),
   };
 }

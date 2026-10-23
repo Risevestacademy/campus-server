@@ -1,4 +1,5 @@
 import { loadEnv } from './infra/env.js';
+import { flushAll } from './infra/exit.js';
 
 const env = loadEnv();
 
@@ -18,18 +19,8 @@ const { buildWorld } = await import('./app.js');
 const { app, gateway, accounts, positions, presence, reporter } =
   await buildWorld(env);
 
-/** Last, so it sends whatever the steps before it logged. Never throws. */
-async function flush(): Promise<void> {
-  const results = await Promise.allSettled([
-    reporter.shutdown(),
-    telemetry?.shutdown(),
-  ]);
-  for (const result of results) {
-    if (result.status === 'rejected') {
-      app.log.warn({ err: result.reason }, 'could not flush on exit');
-    }
-  }
-}
+/** Last, so it sends whatever the steps before it logged. */
+const flush = () => flushAll(app.log, [reporter, telemetry]);
 
 /**
  * Sockets first, then the HTTP server: a client that is told to go away can

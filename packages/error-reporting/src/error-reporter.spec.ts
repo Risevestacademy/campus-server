@@ -114,9 +114,41 @@ describe('createErrorReporter', () => {
     }
   });
 
-  it('flushes on shutdown', async () => {
+  it('flushes on shutdown, giving up after 3 seconds', async () => {
     await createErrorReporter(options).shutdown();
 
-    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledWith(3_000);
+  });
+
+  it('reports a failed query without the values it was given', () => {
+    const reporter = createErrorReporter(options);
+    const failed = Object.assign(
+      new Error('invalid input syntax for type uuid: "ada@example.com"'),
+      { name: 'PostgresError', code: '22P02', severity: 'ERROR' },
+    );
+
+    reporter.report(failed);
+
+    const [sent] = captureException.mock.calls[0] as [Error];
+    expect(sent.message).toBe('SQLSTATE 22P02');
+    expect(JSON.stringify([sent.message, sent.stack])).not.toContain(
+      'ada@example.com',
+    );
+  });
+
+  it('scrubs an exception PostHog captured on its own', () => {
+    createErrorReporter(options);
+
+    const event = beforeSend()({
+      event: '$exception',
+      properties: {
+        $exception_list: [
+          { type: 'Error', value: 'Failed query: select $1\nparams: secret' },
+        ],
+      },
+    }) as { properties: { $exception_list: { value: string }[] } };
+    expect(event.properties.$exception_list[0].value).toBe(
+      'Failed query: select $1',
+    );
   });
 });

@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "oxlint": "catalog:",
+    "pino": "^10.3.1",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
