@@ -13,16 +13,30 @@ decides: `error` means somebody has to look, `warn` means it was handled.
   reported, including those thrown by guards. 4xx responses are not.
 - A `SERVICE_UNAVAILABLE` 503 is reported at the `warning` level, so it
   groups apart from bugs.
-- Uncaught exceptions are reported before the process exits.
+- Uncaught exceptions are reported before the process exits, once the
+  reporter exists. In campus-api it is built with the Nest app, so a crash
+  before that, such as invalid configuration, is only in the logs. world
+  builds it first, when the app is built.
 
 Each report carries the service, environment and release (the deployed
 commit, from `RAILWAY_GIT_COMMIT_SHA`), and, where the log line has them, the
-person's `users.id`, the correlation id, the method, the route template, the
-status code and the trace id. Nothing else from the log line goes, since it
-can hold personal data. No IP address is sent.
+person's `users.id`, the message, the correlation id, the method, the route
+template, the status code and the trace id: the fields `LoggedErrorFields`
+names. Nothing else from the log line goes, since it can hold personal data.
+No IP address is sent.
 
-The shared code is in [`packages/error-reporting`](../packages/error-reporting).
-Each app wires it into its logger with a pino `logMethod` hook.
+The exception itself goes with its type, message and stack. A failed
+query's message can carry the values it was given (drizzle appends them as
+`params:`, and Postgres quotes the value it rejected), so those keep only the
+statement and the SQLSTATE, causes included. Any other message is sent as
+written: **an error's message must not carry personal data**. Put an id in
+it, not an email or a name.
+
+On shutdown the reporter has 3 seconds to send what it holds.
+
+The shared code is in [`packages/error-reporting`](../packages/error-reporting):
+the reporter, the pino hooks both apps install with `reportingHooks`, and
+`LOG_REDACT_PATHS`, the one list of fields both apps redact from their logs.
 
 ## Configuration
 
