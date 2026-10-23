@@ -5,4 +5,10 @@ export {
   type ErrorReporter,
   type ErrorReporterOptions,
 } from './error-reporter.js';
-export { reportLoggedError } from './logged-error.js';
+export {
+  reportLoggedError,
+  reportingHooks,
+  type LoggedErrorFields,
+} from './logged-error.js';
+export { LOG_REDACT_PATHS } from './redact.js';
+export { scrubError, scrubExceptionList } from './scrub.js';

@@ -272,6 +272,9 @@ importers:
       oxlint:
         specifier: 'catalog:'
         version: 1.81.0
+      pino:
+        specifier: ^10.3.1
+        version: 10.3.1
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
@@ -1528,6 +1531,7 @@ packages:
   '@opentelemetry/sdk-trace-node@2.11.0':
     resolution: {integrity: sha512-CuvCMJmZxswhNLlM2LfuLOW3h3fZujA4hsG4B+Sz4dX2zvaXO8Ng74cnDHWD64gLszTlhiG3c0iNUjj4g+0/sA==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 

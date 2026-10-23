@@ -5,9 +5,26 @@ import type { ErrorReporter } from './error-reporter.js';
 const PINO_ERROR = 50;
 const PINO_FATAL = 60;
 
-type Fields = Record<string, unknown>;
+/**
+ * The fields of an error log line that are reported, by these names. A
+ * logger that wants them reported writes them under exactly these keys.
+ */
+export interface LoggedErrorFields {
+  err?: unknown;
+  /** The `users.id` of the person it happened to. */
+  userId?: string;
+  correlationId?: string;
+  method?: string;
+  route?: string;
+  statusCode?: number;
+  /** Reported as a warning rather than an error. */
+  severity?: 'warning';
+}
 
-function isFields(value: unknown): value is Fields {
+/** A log line's first argument, read only through the names above. */
+type LineFields = { [K in keyof LoggedErrorFields]?: unknown };
+
+function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -29,20 +46,21 @@ export function reportLoggedError(
   reporter: ErrorReporter,
   level: number,
   args: readonly unknown[],
-  bindings: Fields = {},
+  bindings: Record<string, unknown> = {},
 ): void {
   if (level < PINO_ERROR) {
     return;
   }
 
   const [first, second] = args;
-  const fields = isFields(first) && !(first instanceof Error) ? first : {};
+  const fields: LineFields =
+    isObject(first) && !(first instanceof Error) ? first : {};
   const error = first instanceof Error ? first : fields.err;
   if (error === undefined) {
     return;
   }
 
-  const boundRequest = isFields(bindings.req) ? bindings.req : {};
+  const boundRequest = isObject(bindings.req) ? bindings.req : {};
   const traceId = trace.getActiveSpan()?.spanContext().traceId;
 
   reporter.report(error, {
@@ -55,7 +73,6 @@ export function reportLoggedError(
           : 'error',
     properties: {
       log_message: text(second),
-      log_context: text(fields.context),
       correlation_id:
         text(fields.correlationId) ??
         text(bindings.reqId) ??
@@ -66,4 +83,30 @@ export function reportLoggedError(
       trace_id: traceId,
     },
   });
+}
+
+/**
+ * pino `hooks` that report error lines, for campus-api and world alike.
+ * `alsoOnError` runs for the same lines, for anything else a service does
+ * with them. The level is checked before the logger's bindings are built,
+ * so other lines cost nothing.
+ */
+export function reportingHooks(
+  reporter: ErrorReporter,
+  alsoOnError?: (level: number, args: readonly unknown[]) => void,
+) {
+  return {
+    logMethod(
+      this: { bindings(): Record<string, unknown> },
+      args: unknown[],
+      method: { apply(thisArg: unknown, args: unknown[]): unknown },
+      level: number,
+    ): void {
+      if (level >= PINO_ERROR) {
+        reportLoggedError(reporter, level, args, this.bindings());
+        alsoOnError?.(level, args);
+      }
+      method.apply(this, args);
+    },
+  };
 }

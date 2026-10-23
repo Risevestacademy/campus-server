@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Global, Module } from '@nestjs/common';
-import { reportLoggedError } from '@campus/error-reporting';
+import { LOG_REDACT_PATHS, reportingHooks } from '@campus/error-reporting';
 import { matchesPath, pathOf } from '@campus/telemetry/paths';
 import { LoggerModule } from 'nestjs-pino';
 
@@ -19,6 +19,36 @@ import { QUIET_ROUTES } from './quiet-routes.js';
 
 export { CORRELATION_ID_HEADER };
 
+/** A request as the request log shows it: the path, never the query string. */
+export function serializeRequest(req: {
+  id?: unknown;
+  method?: string;
+  url?: string;
+  remoteAddress?: string;
+  remotePort?: number;
+}) {
+  return {
+    id: req.id,
+    method: req.method,
+    url: pathOf(req.url),
+    remoteAddress: req.remoteAddress,
+    remotePort: req.remotePort,
+  };
+}
+
+/**
+ * The route a finished request matched. The request is serialized before
+ * routing, so the route is added only once the response is done.
+ */
+export function routeOnceFinished(
+  req: object,
+  res: { writableEnded: boolean },
+): { route?: string } {
+  return res.writableEnded
+    ? { route: (req as { route?: { path?: string } }).route?.path }
+    : {};
+}
+
 export function isUnloggedRoute(url: string | undefined): boolean {
   return matchesPath(url, QUIET_ROUTES);
 }
@@ -32,12 +62,7 @@ export function isUnloggedRoute(url: string | undefined): boolean {
       useFactory: (config: Env, reporter: ErrorReporter) => ({
         pinoHttp: {
           level: config.FF_LOG_LEVEL,
-          hooks: {
-            logMethod(args, method, level) {
-              reportLoggedError(reporter, level, args, this.bindings());
-              method.apply(this, args);
-            },
-          },
+          hooks: reportingHooks(reporter),
           genReqId: (req: IncomingMessage, res: ServerResponse) => {
             // The one place the id is decided. What is returned here is
             // what the logs, the response header and any audit entry carry.
@@ -56,36 +81,16 @@ export function isUnloggedRoute(url: string | undefined): boolean {
                 },
               }
             : undefined,
-          // The request is serialized before routing; its route is known
-          // only once the response is done.
-          customProps: (req, res) =>
-            res.writableEnded
-              ? { route: (req as { route?: { path?: string } }).route?.path }
-              : {},
+          customProps: (req, res) => routeOnceFinished(req, res),
           autoLogging: {
             ignore: (req: IncomingMessage) => isUnloggedRoute(req.url),
           },
           redact: {
-            paths: [
-              'req.headers.authorization',
-              'req.headers.cookie',
-              '*.password',
-              '*.token',
-              '*.secret',
-              '*.email',
-              '*.idToken',
-              '*.refreshToken',
-            ],
+            paths: [...LOG_REDACT_PATHS],
             censor: '[REDACTED]',
           },
           serializers: {
-            req: (req) => ({
-              id: req.id,
-              method: req.method,
-              url: pathOf(req.url),
-              remoteAddress: req.remoteAddress,
-              remotePort: req.remotePort,
-            }),
+            req: serializeRequest,
             res: (res) => ({
               statusCode: res.statusCode,
             }),
