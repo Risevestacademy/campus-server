@@ -30,12 +30,7 @@ export interface TelemetryOptions {
   untracedPaths?: readonly string[];
   /** What the app needs beyond HTTP and pino. */
   instrumentations?: Instrumentation[];
-  /**
-   * Instrumented packages the app loads through `import` rather than
-   * `require`, such as Express under Nest. Only these go through the ESM
-   * hook: wrapping every module would cost a second of boot and the memory
-   * of a copy of each.
-   */
+  /** Instrumented packages loaded through `import`: see the README. */
   esmModules?: readonly string[];
 }
 
@@ -44,13 +39,7 @@ export interface Telemetry {
   shutdown(): Promise<void>;
 }
 
-/**
- * Exports traces and logs over OTLP, and runtime metrics when asked. The
- * exporters, endpoint and headers come from the standard `OTEL_*` variables.
- *
- * Instrumentation patches modules as they load, so this has to run before
- * the app is imported: the app is imported dynamically after it.
- */
+/** Starts the SDK. Call it before importing the app: see the README. */
 export function startTelemetry(options: TelemetryOptions): Telemetry {
   if (options.esmModules?.length) {
     register('@opentelemetry/instrumentation/hook.mjs', import.meta.url, {

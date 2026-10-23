@@ -1,11 +1,11 @@
 import { matchesPath } from '@campus/telemetry/paths';
 
+import type { World } from './app.js';
 import { loadEnv } from './infra/env.js';
 import { flushAll } from './infra/exit.js';
+import { QUIET_ROUTES } from './quiet-routes.js';
 
 const env = loadEnv();
-
-const UNTRACED_PATHS = ['/health'];
 
 // Telemetry patches modules as they load, so it starts before the app is
 // imported.
@@ -15,13 +15,13 @@ const telemetry = env.FF_OTEL_ENABLED
       version: env.RAILWAY_GIT_COMMIT_SHA ?? 'local',
       environment: env.DEPLOYMENT_ENVIRONMENT,
       metrics: env.FF_OTEL_METRICS_ENABLED,
-      untracedPaths: UNTRACED_PATHS,
+      untracedPaths: QUIET_ROUTES,
       // Imported, not required, so it goes through the ESM hook.
       esmModules: ['ioredis'],
       instrumentations: [
         new (await import('@fastify/otel')).FastifyOtelInstrumentation({
           registerOnInitialization: true,
-          ignorePaths: ({ url }) => matchesPath(url, UNTRACED_PATHS),
+          ignorePaths: ({ url }) => matchesPath(url, QUIET_ROUTES),
         }),
         // Only inside a span: the timers' own reads and writes, every few
         // seconds for every socket, would bury everything else.
@@ -33,8 +33,16 @@ const telemetry = env.FF_OTEL_ENABLED
   : undefined;
 
 const { buildWorld } = await import('./app.js');
-const { app, gateway, accounts, positions, presence, reporter } =
-  await buildWorld(env);
+let world: World;
+try {
+  world = await buildWorld(env);
+} catch (err) {
+  // No app yet, so no logger and no reporter: telemetry alone is flushed.
+  console.error('failed to build world', err);
+  await flushAll(console, [telemetry]);
+  process.exit(1);
+}
+const { app, gateway, accounts, positions, presence, reporter } = world;
 
 /** Last, so it sends whatever the steps before it logged. */
 const flush = () => flushAll(app.log, [reporter, telemetry]);

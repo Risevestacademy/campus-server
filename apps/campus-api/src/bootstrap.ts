@@ -36,12 +36,17 @@ function loadApiDescription(): string {
   }
 }
 
-export async function bootstrap(config: Env, telemetry?: Telemetry) {
+export async function bootstrap(
+  config: Env,
+  telemetry?: Telemetry,
+  exitProcess: (code: number) => void = (code) => process.exit(code),
+) {
   let app: NestExpressApplication | undefined;
+  let logger: Logger | undefined;
   let reporter: ErrorReporter | undefined;
 
   /** Closes the app, then sends what telemetry and PostHog still hold. */
-  async function exit(code: number): Promise<never> {
+  async function exit(code: number): Promise<void> {
     try {
       await gracefulShutdown(app, [
         () => (telemetry ? telemetry.shutdown() : Promise.resolve()),
@@ -51,33 +56,39 @@ export async function bootstrap(config: Env, telemetry?: Telemetry) {
       console.error('Error during shutdown', err);
       code = 1;
     }
-    process.exit(code);
+    exitProcess(code);
   }
 
   process.on('SIGTERM', () => {
     void exit(0);
   });
 
-  app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    bufferLogs: true,
-    rawBody: true,
-  });
-  // LiveKit posts its webhooks as application/webhook+json, signed over the
-  // raw body. Registering a json parser replaces Nest's default one, so it
-  // has to take application/json too.
-  app.useBodyParser('json', {
-    type: ['application/json', 'application/webhook+json'],
-  });
-
-  const logger = app.get(Logger);
-  app.useLogger(logger);
-  reporter = app.get<ErrorReporter>(ERROR_REPORTER);
-
   try {
-    await configureAndListen(app, config, logger);
+    app = await NestFactory.create<NestExpressApplication>(AppModule, {
+      bufferLogs: true,
+      rawBody: true,
+    });
+    // LiveKit posts its webhooks as application/webhook+json, signed over the
+    // raw body. Registering a json parser replaces Nest's default one, so it
+    // has to take application/json too.
+    app.useBodyParser('json', {
+      type: ['application/json', 'application/webhook+json'],
+    });
+
+    const appLogger = app.get(Logger);
+    logger = appLogger;
+    app.useLogger(appLogger);
+    reporter = app.get<ErrorReporter>(ERROR_REPORTER);
+
+    await configureAndListen(app, config, appLogger);
   } catch (err) {
-    // Logged at error, so it is reported, and flushed before the exit.
-    logger.error({ err }, 'Failed to start', 'bootstrap');
+    // Through the Nest logger once there is one, so it is reported; before
+    // that, nothing reports it, and the exit flushes telemetry alone.
+    if (logger) {
+      logger.error({ err }, 'Failed to start', 'bootstrap');
+    } else {
+      console.error('Failed to start', err);
+    }
     await exit(1);
   }
 }

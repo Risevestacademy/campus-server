@@ -10,10 +10,12 @@ export function matchesPath(
   url: string | undefined,
   paths: readonly string[],
 ): boolean {
-  const path = pathOf(url);
-  return paths.some(
-    (listed) => path === listed || path.startsWith(`${listed}/`),
-  );
+  // Express matches routes regardless of case, so this does too.
+  const path = pathOf(url).toLowerCase();
+  return paths.some((listed) => {
+    const quiet = listed.toLowerCase();
+    return path === quiet || path.startsWith(`${quiet}/`);
+  });
 }
 
 /** Keeps a query string's names and drops its values. */
@@ -32,6 +34,20 @@ const DEFAULT_PORTS: Record<string, string> = {
   'https:': '443',
 };
 
+/** A host's name and port, the port taken off and an IPv6 address bracketed. */
+function splitHost(host: string): { name: string; port?: string } {
+  const bracketed = /^(\[[^\]]+\])(?::(\d+))?$/.exec(host);
+  if (bracketed) {
+    return { name: bracketed[1], port: bracketed[2] };
+  }
+  const parts = host.split(':');
+  if (parts.length === 2) {
+    return { name: parts[0], port: parts[1] };
+  }
+  // More than one colon and no brackets: a bare IPv6 address.
+  return { name: parts.length > 2 ? `[${host}]` : host };
+}
+
 /** The full URL of an outgoing request with its query values redacted. */
 export function redactedRequestUrl(
   options: Pick<
@@ -44,10 +60,9 @@ export function redactedRequestUrl(
     return undefined;
   }
   const protocol = options.protocol ?? 'http:';
-  const host = options.hostname ?? options.host ?? 'localhost';
-  const port =
-    options.port != null && String(options.port) !== DEFAULT_PORTS[protocol]
-      ? `:${options.port}`
-      : '';
-  return `${protocol}//${host}${port}${pathOf(options.path ?? undefined)}?${query}`;
+  const host = splitHost(options.hostname ?? options.host ?? 'localhost');
+  const port = options.port ?? host.port;
+  const portText =
+    port != null && String(port) !== DEFAULT_PORTS[protocol] ? `:${port}` : '';
+  return `${protocol}//${host.name}${portText}${pathOf(options.path ?? undefined)}?${query}`;
 }
