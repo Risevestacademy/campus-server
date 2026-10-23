@@ -100,6 +100,11 @@ function sendClose(socket: WebSocket, reason: CloseReason): void {
   socket.close(CLOSES[reason].code, reason);
 }
 
+/** How one upgrade ended, counted once, whichever way it ends. */
+interface Attempt {
+  outcome?: 'opened' | 'refused' | 'failed' | 'abandoned';
+}
+
 export interface Gateway {
   connections: Connections;
   players: Players;
@@ -114,6 +119,11 @@ export interface Gateway {
    */
   spacesChanged(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Stops the gauges reading the sockets. Not part of stop(), so the final
+   * flush after it still reads the last counts.
+   */
+  dispose(): void;
 }
 
 export function registerGateway(
@@ -1116,18 +1126,31 @@ export function registerGateway(
     SOCKET_PATH,
     { websocket: true, config: { otel: false } },
     async (socket, request) => {
+      const attempt: Attempt = {};
       await traced(
         'world.socket.open',
-        () =>
-          openConnection(
-            socket,
-            {
-              origin: request.headers.origin,
-              cookie: request.headers.cookie,
-              authorization: request.headers.authorization,
-            },
-            cohortIdFrom(request.query),
-          ),
+        async () => {
+          try {
+            await openConnection(
+              socket,
+              {
+                origin: request.headers.origin,
+                cookie: request.headers.cookie,
+                authorization: request.headers.authorization,
+              },
+              cohortIdFrom(request.query),
+              attempt,
+            );
+          } catch (err) {
+            // Thrown before any outcome was counted: world's own failure.
+            if (attempt.outcome === undefined) {
+              attempt.outcome = 'failed';
+              metrics.failed();
+              annotate({ 'world.outcome': 'failed' });
+            }
+            throw err;
+          }
+        },
         { root: true },
       );
     },
@@ -1137,6 +1160,7 @@ export function registerGateway(
     ws: WebSocket,
     headers: { origin?: string; cookie?: string; authorization?: string },
     cohortId: string | undefined,
+    attempt: Attempt,
   ): Promise<void> {
     // Authentication is asynchronous, and a client can be gone before it
     // finishes. Watching for that now means a socket that dies in the
@@ -1170,6 +1194,7 @@ export function registerGateway(
       decision = await decideUpgrade(env, accounts, headers, cohortId);
     } catch (err) {
       app.log.error({ err }, 'could not decide socket upgrade');
+      attempt.outcome = 'failed';
       metrics.failed();
       annotate({ 'world.outcome': 'failed' });
       // Reading has to resume for the closing handshake to complete.
@@ -1177,6 +1202,11 @@ export function registerGateway(
       sendClose(ws, 'internal_error');
       return;
     }
+    // Known before the outcome, so a refusal leads to the person too.
+    annotate({
+      'world.cohort_id': cohortId,
+      'user.id': decision.ok ? decision.claims.userId : decision.userId,
+    });
 
     // Access taken away — the account suspended, or gone — forgets the
     // cohort this attempt named, and closes every socket the account holds,
@@ -1257,12 +1287,14 @@ export function registerGateway(
     await doorsReady;
 
     if (closed || ws.readyState !== ws.OPEN) {
+      attempt.outcome = 'abandoned';
       metrics.abandoned();
       annotate({ 'world.outcome': 'abandoned' });
       return;
     }
 
     if (!decision.ok) {
+      attempt.outcome = 'refused';
       refuse(ws, decision.refusal);
       return;
     }
@@ -1391,12 +1423,9 @@ export function registerGateway(
       },
       'socket opened',
     );
+    attempt.outcome = 'opened';
     metrics.opened();
-    annotate({
-      'world.outcome': 'opened',
-      'world.cohort_id': connection.cohortId,
-      'user.id': connection.userId,
-    });
+    annotate({ 'world.outcome': 'opened' });
 
     ws.on('pong', () => {
       connection.alive = true;
@@ -1581,8 +1610,8 @@ export function registerGateway(
       }
     },
     spacesChanged: reloadDoors,
+    dispose: metrics.dispose,
     async stop(): Promise<void> {
-      metrics.dispose();
       clearInterval(heartbeat);
       clearInterval(tick);
       clearInterval(periodicSave);

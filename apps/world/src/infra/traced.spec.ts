@@ -1,10 +1,10 @@
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import {
-  BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+  TracerProvider,
+} from '@opentelemetry/sdk-trace';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { annotate, failActiveSpan, traced } from './traced.js';
@@ -16,8 +16,8 @@ beforeAll(() => {
     new AsyncLocalStorageContextManager().enable(),
   );
   trace.setGlobalTracerProvider(
-    new BasicTracerProvider({
-      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    new TracerProvider({
+      spanProcessors: [new SimpleSpanProcessor({ exporter })],
     }),
   );
 });

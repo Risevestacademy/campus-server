@@ -17,7 +17,7 @@
     "@electric-sql/pglite": "^0.5.8",
     "@opentelemetry/context-async-hooks": "^2.11.0",
     "@opentelemetry/sdk-metrics": "^2.11.0",
-    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@opentelemetry/sdk-trace": "^2.11.0",
     "@types/node": "catalog:",
     "@types/ws": "^8.18.1",
     "json-schema-to-typescript": "15.0.4",

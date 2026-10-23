@@ -1,8 +1,11 @@
+import { loggedError } from '@campus/error-reporting';
 import { SpanStatusCode, trace, type Attributes } from '@opentelemetry/api';
 
 const tracer = trace.getTracer('world');
 
-const PINO_ERROR = 50;
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
 
 /**
  * Runs `work` in a span of its own, ended when it settles. `root` starts a
@@ -21,7 +24,7 @@ export async function traced<T>(
     try {
       return await work();
     } catch (err) {
-      span.recordException(err as Error);
+      span.recordException(asError(err));
       span.setStatus({ code: SpanStatusCode.ERROR });
       throw err;
     } finally {
@@ -30,9 +33,14 @@ export async function traced<T>(
   });
 }
 
-/** Adds to whichever span is running, if any. */
-export function annotate(attributes: Attributes): void {
-  trace.getActiveSpan()?.setAttributes(attributes);
+/** Adds to whichever span is running, if any, leaving out what is unknown. */
+export function annotate(
+  attributes: Record<string, string | number | boolean | undefined>,
+): void {
+  const known = Object.fromEntries(
+    Object.entries(attributes).filter(([, value]) => value !== undefined),
+  ) as Attributes;
+  trace.getActiveSpan()?.setAttributes(known);
 }
 
 /**
@@ -42,25 +50,11 @@ export function annotate(attributes: Attributes): void {
  * `logMethod` hook.
  */
 export function failActiveSpan(level: number, args: readonly unknown[]): void {
-  if (level < PINO_ERROR) {
-    return;
-  }
   const span = trace.getActiveSpan();
-  if (!span) {
+  const error = loggedError(level, args);
+  if (!span || error === undefined) {
     return;
   }
-  const [first] = args;
-  const error =
-    first instanceof Error
-      ? first
-      : typeof first === 'object' && first !== null
-        ? (first as { err?: unknown }).err
-        : undefined;
-  if (error === undefined) {
-    return;
-  }
-  span.recordException(
-    error instanceof Error ? error : new Error(String(error)),
-  );
+  span.recordException(asError(error));
   span.setStatus({ code: SpanStatusCode.ERROR });
 }

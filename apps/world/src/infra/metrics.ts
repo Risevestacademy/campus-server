@@ -6,7 +6,12 @@ import {
 } from '@opentelemetry/api';
 
 import type { MoveOutcome } from '../movement/players.js';
-import { CloseCode, type CloseReason } from '../socket/protocol.js';
+import {
+  CloseCode,
+  type ClientMessage,
+  type CloseReason,
+  type Refusal,
+} from '../socket/protocol.js';
 
 /** What the gauges read at each collection. */
 export interface OpenSockets {
@@ -18,14 +23,14 @@ export type ServerClose = CloseReason | 'heartbeat_missed' | 'not_reading';
 
 export interface WorldMetrics {
   opened(): void;
-  refused(reason: string): void;
+  refused(reason: Refusal): void;
   /** The upgrade could not be decided: world's fault, not the client's. */
   failed(): void;
   /** The client went before its upgrade was decided. */
   abandoned(): void;
   closedByServer(reason: ServerClose): void;
   closed(code: number): void;
-  received(type: string): void;
+  received(type: ClientMessage['type'] | 'invalid'): void;
   moved(outcome: MoveOutcome): void;
   sentFrame(): void;
   /** Stops the gauges reading the sockets. */
@@ -46,8 +51,8 @@ const KNOWN_CODES = new Set<number>([
 /**
  * Counters and gauges for the sockets. Through the OpenTelemetry API, so
  * without a running SDK every instrument is a no-op. What happens per frame
- * or per step is kept as a plain total and read at export, so the hot paths
- * pay for an increment and nothing more.
+ * or per step is kept as a plain total, a number or a map entry, and read at
+ * export, so the hot paths never go through the SDK.
  */
 export function worldMetrics(
   sockets: OpenSockets,
