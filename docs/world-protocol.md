@@ -123,10 +123,11 @@ it. The map's edge blocks too. `width` and `height` are in tiles.
 One map for now, the one people enter the campus on. Portals are read from
 it by the client but mean nothing to the server yet.
 
-**Spaces have doors.** Most spaces admit anybody in the campus. A
-_designated_ space admits only the people its list names (an admin keeps
-the list in campus-api); a step into one you are not on is answered
-`refused`, like a wall you cannot see. The corridors and grounds (every tile
+**Spaces have doors.** Most spaces admit anybody in the campus unless the
+people inside have locked them (see [Locks](#locks)). A _designated_ space
+admits only the people its list names (an admin keeps the list in
+campus-api). A step into a space you may not enter is answered `refused`,
+like a wall you cannot see. The corridors and grounds (every tile
 in no drawn space) are always open. Only the step _into_ a space is asked
 about: somebody already inside stays until they step out, whatever changes
 meanwhile. You cannot predict a refusal, so draw the step and let the
@@ -386,11 +387,39 @@ world is closed with `not_a_member` at the next one — the same reason an
 upgrade into that cohort would now be refused. Admins are excepted, as at the
 upgrade.
 
+## Locks
+
+Anybody standing in a lockable space can lock it, guests included, and
+anybody inside can unlock it. While it is locked, a step into it is
+`refused`; admins walk in anyway. Each cohort's copy of the campus has its
+own locks.
+
+- **Which spaces.** `snapshot.lockableSpaces` lists them, the same for every
+  cohort: normal spaces that hear as one room. Proximity spaces, the notice
+  board, designated spaces and the corridors are never lockable. Show a lock
+  control only while the person stands in one of these. If an admin changes
+  a space, a `lockableSpaces` message (`{ "type": "lockableSpaces",
+"spaceKeys": ["…"] }`) replaces the list.
+- **Which are locked.** `snapshot.lockedSpaces` lists the spaces locked in
+  your cohort when you arrive.
+- **Locking.** Send `{ "type": "setLock", "locked": true }` to lock the space
+  you stand in, or `false` to unlock it. Everybody in the cohort, you
+  included, gets `{ "type": "lockChanged", "spaceKey": "…", "locked": true,
+"userId": "…" }`. Asking for what is already so sends nothing back. In a
+  space that cannot be locked, you get an `error` with code `NOT_ALLOWED`.
+- **It ends on its own** when the last person in it leaves, by stepping out
+  or disconnecting, or when the space stops being lockable. The
+  `lockChanged` then has `userId: null`. A world restart ends every lock.
+- **A step refused while it is locked** looks the same as any other
+  `refused`. Use the locked list to tell the person why.
+
 ## Errors and closing
 
 An `error` with code `BAD_MESSAGE` means the frame was not valid JSON or not a
 message the server knows. The socket stays open. Seeing one means a client
-bug, so log it.
+bug, so log it. `NOT_ALLOWED` means the server understood the message but will
+not act on it, such as locking a space that cannot be locked. The socket stays
+open.
 
 When the socket closes:
 
