@@ -1,3 +1,5 @@
+import type { LoggedErrorFields } from '@campus/error-reporting';
+
 import type { AuthenticatedRequest } from '../auth/authenticated-user.js';
 
 export type LoggedRequest = AuthenticatedRequest & { id?: string };
@@ -9,7 +11,7 @@ export type LoggedRequest = AuthenticatedRequest & { id?: string };
 export function requestFields(
   request: LoggedRequest | undefined,
   statusCode: number,
-): Record<string, unknown> {
+): Omit<LoggedErrorFields, 'err' | 'severity'> & { path?: string } {
   return {
     method: request?.method,
     path: request?.path,
