@@ -52,8 +52,15 @@ With metrics on, world also sends:
 | `world.frames.sent`                  |             | Frames sent.                                                                           |
 | `world.socket.buffered`              |             | The most any one socket has waiting unsent, in bytes.                                  |
 
-Connect success, an SLO, is `opened ÷ (opened + failed)`. Refusals are left
-out: a signed-out tab or a wrong origin is not world failing.
+Connect success, an SLO, is `opened ÷ (opened + failed + abandoned)`.
+Abandoned counts against world: a client that gives up while world is still
+deciding is most often waiting on a slow world. Refusals are left out: a
+signed-out tab or a wrong origin is not world failing.
+
+Every deploy closes each open socket with `server shutting down`, so
+`world.connections.closed_by_server{reason="server shutting down"}` rises in
+a burst at each release. That marks deploys; an alert on sockets world closes
+should leave that reason out.
 
 ## Setting up an environment
 
