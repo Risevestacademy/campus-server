@@ -257,9 +257,19 @@ SDK, the same way in campus-api and world. It sends, over OTLP:
 
 - **Traces**: an HTTP server span per request (`/v1/health` and the API
   reference excepted, the same routes the request log leaves out), Express
-  spans under it with the route template, and client spans for outbound HTTP.
-  A span keeps a query string's parameter names but not their values, and
-  holds no client address.
+  spans under it with the route template, client spans for outbound HTTP and
+  `fetch`, and a span per database query. A span keeps a query string's
+  parameter names but not their values, a database span keeps the statement
+  as sent, with `$1` placeholders but never the values, and no span holds a
+  client address. A failed query is recorded by its SQLSTATE, not its
+  message, which can quote the value Postgres rejected.
+
+  postgres.js has no maintained instrumentation, so `database.module.ts`
+  calls `installPostgresTracing` from `@campus/telemetry/sql` while telemetry is on.
+  It hooks the one place postgres.js runs a query, so transactions,
+  savepoints and reserved connections are covered; cursors are not, since
+  their query never settles. world's account lookups use it too.
+
 - **Logs**: every pino line, after redaction, linked to its trace.
 - **Runtime metrics** when `FF_OTEL_METRICS_ENABLED=true`: event-loop lag,
   GC, heap and CPU.
