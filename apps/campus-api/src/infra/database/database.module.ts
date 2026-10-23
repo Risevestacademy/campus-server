@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { drizzle } from 'drizzle-orm/postgres-js';
+import { tracePostgres } from '@campus/telemetry/sql';
 import postgres from 'postgres';
 
 import { CONFIG } from '../config/config.constants.js';
@@ -19,7 +20,9 @@ import * as schema from './schema/index.js';
         // stop a serverless deployment ever going to sleep. The next query
         // reconnects on its own.
         const sql = postgres(config.DATABASE_URL, { idle_timeout: 20 });
-        return drizzle(sql, { schema });
+        return drizzle(config.FF_OTEL_ENABLED ? tracePostgres(sql) : sql, {
+          schema,
+        });
       },
     },
   ],
