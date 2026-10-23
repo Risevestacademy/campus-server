@@ -15,6 +15,9 @@ packages/
   media/        LiveKit: room tokens and removals (world), webhook checks
                 (campus-api)
   space-access/ Who may enter a space, for campus-api and world alike
+  error-reporting/  Errors to PostHog from both services' logs, and the shared
+                redaction list
+  telemetry/    OpenTelemetry for both services: traces and logs over OTLP
 docs/           Cross-service docs: auth flow, deployment, world protocol
 docker-compose.local.yml   Local dev dependencies (Postgres, Redis, LiveKit, OTel Collector)
 livekit.yaml               LiveKit server config
@@ -140,5 +143,5 @@ Docs that span services live in [docs/](docs/):
   to world, moving, and handling closes. The message types themselves are in
   [apps/world/protocol.schema.json](apps/world/protocol.schema.json).
 - [posthog.md](docs/posthog.md) — error tracking.
-- [grafana.md](docs/grafana.md) — traces and metrics, and setting up an
+- [grafana.md](docs/grafana.md) — traces, logs and metrics, and setting up an
   environment's Grafana Cloud stack.

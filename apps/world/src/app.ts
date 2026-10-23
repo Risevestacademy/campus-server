@@ -15,8 +15,10 @@ import {
   CORRELATION_ID_HEADER,
   correlationId,
   loggerOptions,
+  silenceRoutes,
 } from './infra/logger.js';
 import type { WorldMap } from './movement/world-map.js';
+import { QUIET_ROUTES } from './quiet-routes.js';
 import { registerGateway, type Gateway } from './socket/gateway.js';
 import { protocolAsyncApi } from './socket/protocol.asyncapi.js';
 import { protocolDocsPage } from './socket/protocol.docs.js';
@@ -46,7 +48,7 @@ export async function buildWorld(
     enabled: env.FF_POSTHOG_ENABLED,
     token: env.POSTHOG_PROJECT_TOKEN,
     host: env.POSTHOG_HOST,
-    service: 'world',
+    service: env.OTEL_SERVICE_NAME,
     environment: env.DEPLOYMENT_ENVIRONMENT,
     release: env.RAILWAY_GIT_COMMIT_SHA,
   }),
@@ -56,6 +58,8 @@ export async function buildWorld(
     genReqId: (req) => correlationId(req.headers as Record<string, unknown>),
     bodyLimit: env.WORLD_MAX_MESSAGE_BYTES,
   });
+
+  silenceRoutes(app, QUIET_ROUTES);
 
   app.addHook('onSend', async (request, reply) => {
     void reply.header(CORRELATION_ID_HEADER, request.id);

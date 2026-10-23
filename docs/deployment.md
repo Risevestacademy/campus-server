@@ -279,6 +279,9 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   URL) keeps where each player last stood between visits, and presence.
   `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST`, the
   same project as campus-api (see [posthog.md](./posthog.md)).
+  `FF_OTEL_ENABLED`, `FF_OTEL_METRICS_ENABLED`, `OTEL_SERVICE_NAME=world`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` (see
+  [grafana.md](./grafana.md)).
 - Tuning, all defaulted — see `apps/world/.env.example`: `WORLD_DB_POOL`,
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit

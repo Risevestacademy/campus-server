@@ -3,7 +3,8 @@ import {
   reportingHooks,
   type ErrorReporter,
 } from '@campus/error-reporting';
-import type { FastifyServerOptions } from 'fastify';
+import { matchesPath, pathOf } from '@campus/telemetry/paths';
+import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
 import type { Env } from './env.js';
@@ -20,7 +21,7 @@ export function serializeRequest(req: {
   return {
     id: req.id,
     method: req.method,
-    url: req.url.split('?')[0],
+    url: pathOf(req.url),
     route: req.routeOptions?.url,
   };
 }
@@ -56,6 +57,18 @@ export function loggerOptions(
       res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
     },
   };
+}
+
+/** Routes on these paths log nothing about their requests. */
+export function silenceRoutes(
+  app: FastifyInstance,
+  paths: readonly string[],
+): void {
+  app.addHook('onRoute', (route) => {
+    if (matchesPath(route.url, paths)) {
+      route.logLevel = 'silent';
+    }
+  });
 }
 
 export function correlationId(headers: Record<string, unknown>): string {

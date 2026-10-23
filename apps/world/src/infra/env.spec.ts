@@ -257,3 +257,24 @@ describe('error tracking', () => {
     expect(env.RAILWAY_GIT_COMMIT_SHA).toBe('abc123');
   });
 });
+
+describe('telemetry', () => {
+  it('is off by default, and names itself world', () => {
+    const env = loadEnv(minimal);
+
+    expect(env.FF_OTEL_ENABLED).toBe(false);
+    expect(env.FF_OTEL_METRICS_ENABLED).toBe(true);
+    expect(env.OTEL_SERVICE_NAME).toBe('world');
+  });
+
+  it('switches on, with metrics off if asked', () => {
+    const env = loadEnv({
+      ...minimal,
+      FF_OTEL_ENABLED: 'true',
+      FF_OTEL_METRICS_ENABLED: 'false',
+    } as NodeJS.ProcessEnv);
+
+    expect(env.FF_OTEL_ENABLED).toBe(true);
+    expect(env.FF_OTEL_METRICS_ENABLED).toBe(false);
+  });
+});

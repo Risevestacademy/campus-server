@@ -18,8 +18,10 @@ decides: `error` means somebody has to look, `warn` means it was handled.
   before that, such as invalid configuration, is only in the logs. world
   builds it first, when the app is built.
 
-Each report carries the service, environment and release (the deployed
-commit, from `RAILWAY_GIT_COMMIT_SHA`), and, where the log line has them, the
+Each report carries the service (`OTEL_SERVICE_NAME`: `campus-api` or
+`world`, the same name its traces and logs carry in Grafana, so keep those
+names; changing one splits that service's history in both), the environment
+and the release (the deployed commit, from `RAILWAY_GIT_COMMIT_SHA`), and, where the log line has them, the
 person's `users.id`, the message, the correlation id, the method, the route
 template, the status code and the trace id: the fields `LoggedErrorFields`
 names. Nothing else from the log line goes, since it can hold personal data.

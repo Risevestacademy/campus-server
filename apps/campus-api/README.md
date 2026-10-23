@@ -217,22 +217,19 @@ Key behaviors:
   traces can be joined in an observability backend.
 - **Log level** comes from `FF_LOG_LEVEL` (default `info`); use `trace`/`debug` for
   verbose local debugging without changing runtime mode.
-- **Redaction**: `authorization`, `cookie`, `password`, `token` and `secret`
-  fields are redacted as `[REDACTED]`.
+- **Redaction**: `authorization`, `cookie`, `password`, `token`, `secret`,
+  `email`, `idToken` and `refreshToken` fields are redacted as `[REDACTED]`,
+  and request URLs are logged without their query string.
 - **Route noise**: `/v1/health`, `/docs` and `/docs-json` are excluded from
   request logging — uptime probes and the API reference say nothing useful.
 
-### How trace IDs get into logs (no interceptor)
+### How trace IDs get into logs
 
-There is **no interceptor** involved. Trace/span IDs are attached through a pino
-`mixin` configured on the HTTP logger (`logger.module.ts`). The `mixin` runs for
-every log line and reads the **active span** from OpenTelemetry's async-local
-context (`trace.getSpan(context.active())`). Because that context is propagated
-automatically throughout the lifetime of a request (HTTP → middleware →
-controller → service), any log line produced inside a request — from
-`PinoLogger`, `@InjectPinoLogger`, or the auto-logged request — inherits the same
-`trace_id`/`span_id`. No span is manually started or threaded through parameters;
-you can just use the injected logger normally and correlation happens for free.
+OpenTelemetry's pino instrumentation adds `trace_id`, `span_id` and
+`trace_flags` to every log line written inside a span. The context follows the
+request through middleware, controllers and services, so any line from
+`PinoLogger`, `@InjectPinoLogger` or the request log carries the same
+`trace_id`, with nothing passed by hand. With telemetry off, lines carry none.
 
 Using the logger in your code:
 
@@ -251,75 +248,57 @@ export class SomeService {
 }
 ```
 
-## Telemetry (OpenTelemetry tracing)
+## Telemetry (OpenTelemetry)
 
-### What is instrumented
+### What is sent
 
-`src/infra/telemetry/telemetry.ts` boots the OpenTelemetry Node SDK with the
-standard **HTTP** and **Express** auto-instrumentations. This gives you, for
-free:
+[`@campus/telemetry`](../../packages/telemetry) starts the OpenTelemetry Node
+SDK, the same way in campus-api and world. It sends, over OTLP:
 
-- an **HTTP server span** per incoming request (method, route, status code,
-  duration)
-- client spans for outbound HTTP calls made by the service
-- child spans for Express routing layers when custom spans are created later
+- **Traces**: an HTTP server span per request (`/v1/health` and the API
+  reference excepted, the same routes the request log leaves out), Express
+  spans under it with the route template, and client spans for outbound HTTP.
+  A span keeps a query string's parameter names but not their values, and
+  holds no client address.
+- **Logs**: every pino line, after redaction, linked to its trace.
+- **Runtime metrics** when `FF_OTEL_METRICS_ENABLED=true`: event-loop lag,
+  GC, heap and CPU.
 
-The span lifecycle follows the request through the whole process using the
-async-local context manager — the same mechanism the logger `mixin` relies on.
+### Why telemetry starts before the app is imported
 
-### Metrics
+Instrumentation patches `http`, pino and Express as they first load, so
+`src/main.ts` validates the environment and starts the SDK, and only then
+imports `src/bootstrap.ts`, which builds the Nest app. Imported any earlier,
+they would load unpatched and nothing would be traced.
 
-When `FF_OTEL_METRICS_ENABLED=true`, the SDK also collects and exports
-**Node.js runtime metrics** via `RuntimeNodeInstrumentation` (event-loop lag,
-GC/CPU, heap, event-loop utilization, process metrics). The metric reader is
-built from the standard `OTEL_METRICS_EXPORTER` env var (default `otlp`), so
-metrics flow to the same OTLP endpoint as traces — with `FF_OTEL_METRICS_ENABLED=false`
-the metric reader is disabled and the runtime instrumentation is skipped, while
-traces continue independently.
-
-### Why telemetry starts before Nest
-
-`initTelemetry()` runs at the very top of `bootstrap()` in `src/main.ts`,
-**before** `NestFactory.create()`. Auto-instrumentations patch Node.js modules
-at load time, so the SDK must be started before the framework and its transports
-are instantiated. If it were started after, the HTTP/Express patches would miss
-already-loaded modules and no spans would be captured.
-
-### Startup sequence
-
-1. Validate environment variables (`loadEnv()`).
-2. `initTelemetry()` — start OTel SDK (unless `FF_OTEL_ENABLED=false`).
-3. `NestFactory.create()` with `bufferLogs: true` (pino output is buffered until
-   the logger is attached so no framework logs are lost).
-4. `app.useLogger(app.get(Logger))` — Nest logger routes through pino.
-5. Global pipes, exception filters, OpenAPI/Scalar docs, listen.
+Nest loads Express through `import`, which only OpenTelemetry's ESM hook can
+patch, so `main.ts` names it in `esmModules`. The hook wraps that package
+alone: wrapping every module costs about a second of boot and a third more
+memory.
 
 ### Configuration
 
-The app-owned knobs are the `FF_`-prefixed validated flags in the `Env` class:
+The app-owned knobs are the validated flags in the `Env` class:
 
-| Variable                  | Default       | Meaning                                                                                                                         |
-| ------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `FF_OTEL_ENABLED`         | `true`        | Master switch. `false` fully skips SDK startup.                                                                                 |
-| `FF_OTEL_METRICS_ENABLED` | `true`        | Enable Node.js runtime metrics. `false` keeps traces on but disables the metric reader and the runtime metrics instrumentation. |
-| `OTEL_SERVICE_NAME`       | `campus-api`  | Value reported as `service.name` on every span.                                                                                 |
-| `DEPLOYMENT_ENVIRONMENT`  | `development` | Value reported as `deployment.environment`.                                                                                     |
+| Variable                  | Default       | Meaning                                                                     |
+| ------------------------- | ------------- | --------------------------------------------------------------------------- |
+| `FF_OTEL_ENABLED`         | `true`        | Master switch. `false` skips the SDK entirely: it is not even loaded.       |
+| `FF_OTEL_METRICS_ENABLED` | `true`        | Node.js runtime metrics. `false` keeps traces and logs, and drops metrics.  |
+| `OTEL_SERVICE_NAME`       | `campus-api`  | `service.name` on everything sent.                                          |
+| `DEPLOYMENT_ENVIRONMENT`  | `development` | `deployment.environment` on everything sent.                                |
+| `RAILWAY_GIT_COMMIT_SHA`  | _(unset)_     | `service.version`, the deployed commit. Set by Railway; `local` without it. |
 
-The **exporter endpoint and headers are NOT hardcoded**. The exporter
-is constructed with no arguments (`telemetry.ts`), which makes the OTel SDK fall
-back to the standard OpenTelemetry **environment variables**, read straight from
-`process.env` (this is why they are not part of the validated `Env` class):
+Where to send comes from the standard OpenTelemetry variables, read by the SDK
+straight from the environment:
 
-| Variable                             | Meaning                                                                                       |
-| ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`        | Base URL of your OTLP endpoint (e.g. `http://localhost:4318`). The SDK appends `/v1/traces`.  |
-| `OTEL_EXPORTER_OTLP_HEADERS`         | Extra headers sent with every export, e.g. `api-key=...` (comma-separated `key=value` pairs). |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Signal-specific endpoint (takes precedence).                                                  |
-| `OTEL_EXPORTER_OTLP_COMPRESSION`     | `gzip` or `none` for the export payload.                                                      |
+| Variable                         | Meaning                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------ |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`    | Base URL of the OTLP endpoint. The SDK appends `/v1/traces`, `/v1/logs` and `/v1/metrics`. |
+| `OTEL_EXPORTER_OTLP_HEADERS`     | Headers sent with every export, as comma-separated `key=value` pairs.                      |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | `gzip` or `none` for the export payload.                                                   |
 
-If none are set, the SDK defaults to `http://localhost:4318/v1/traces` — which is
-exactly the local Collector in `docker-compose.local.yml`, so **local tracing
-works with zero configuration**.
+If none are set, the SDK sends to `http://localhost:4318`, which is the local
+Collector in `docker-compose.local.yml`.
 
 ### Pointing at different backends
 
@@ -333,7 +312,7 @@ $ docker compose -f docker-compose.local.yml up -d otel-collector
 ```
 
 The Collector config (`otel-collector.yaml` at repo root) receives OTLP on
-4317/4318 and prints spans to its debug console.
+4317/4318 and prints what it receives to its debug console.
 
 **Grafana Cloud**, where deployed environments send theirs (setup in
 [docs/grafana.md](../../docs/grafana.md)):
@@ -344,28 +323,11 @@ OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<token> \
 pnpm run start:prod
 ```
 
-The exporter sends `POST /v1/traces` with a `content-type:
-application/x-protobuf` body and the headers given.
-
-### The `FF_OTEL_ENABLED` switch
-
-When `FF_OTEL_ENABLED=false`, `initTelemetry` constructs the SDK but **never calls
-`start()`**. This is deliberate:
-
-- Instrumentations are never applied.
-- No global tracer provider is registered, so the OTel API uses its no-op
-  default.
-- The pino `mixin` finds no active span, so log lines carry no `trace_id` /
-  `span_id`.
-
-In other words, disabled means a complete opt-out — not "trace and discard".
-There is a single startup path (`sdk.start()` inside `initTelemetry`), so nothing
-is started elsewhere when disabled.
-
 ### Graceful shutdown
 
-On `SIGTERM` the SDK's `shutdown()` is awaited so in-flight spans are flushed
-before the process exits.
+On `SIGTERM` the SDK's `shutdown()` is awaited, so spans and log lines still
+buffered are sent before the process exits. It gives up after 3 seconds, so an
+endpoint that does not answer cannot hold the exit up.
 
 ## Run tests
 

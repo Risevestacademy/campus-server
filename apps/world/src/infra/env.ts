@@ -51,6 +51,14 @@ const schema = z
     RAILWAY_GIT_COMMIT_SHA: optionalText,
 
     /**
+     * Traces and logs over OTLP, to the `OTEL_EXPORTER_OTLP_*` endpoint. Off
+     * unless switched on, so a deployment without an endpoint sends nothing.
+     */
+    FF_OTEL_ENABLED: flag.default(false),
+    FF_OTEL_METRICS_ENABLED: flag.default(true),
+    OTEL_SERVICE_NAME: z.string().trim().min(1).default('world'),
+
+    /**
      * Browser origins allowed to open a socket. A WebSocket upgrade is not
      * subject to CORS, so this is the only thing standing between the campus
      * and a socket opened from any page the user happens to have open.
