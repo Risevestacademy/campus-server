@@ -7,6 +7,9 @@ const MAX_STATEMENT_LENGTH = 2_000;
 
 const TRACED = Symbol.for('@campus/telemetry/sql');
 
+/** A Postgres error code; postgres.js's own codes, like `CONNECTION_CLOSED`, are not. */
+const SQLSTATE = /^[0-9A-Z]{5}$/;
+
 /** What a postgres.js query holds that a span reads. */
 interface RunningQuery {
   executed: boolean;
@@ -33,21 +36,33 @@ export function operationOf(statement: string): string {
   return /^\s*([a-z]+)/i.exec(statement)?.[1]?.toUpperCase() ?? 'QUERY';
 }
 
+/** Cut without splitting a `$n` placeholder or a surrogate pair. */
+function cut(statement: string): string {
+  if (statement.length <= MAX_STATEMENT_LENGTH) {
+    return statement;
+  }
+  return statement
+    .slice(0, MAX_STATEMENT_LENGTH)
+    .replace(/[\uD800-\uDBFF]$/, '')
+    .replace(/\$\d*$/, '');
+}
+
 function finish(span: Span, query: RunningQuery, error?: unknown): void {
   const statement = (query.string ?? statementOf(query.strings)).trim();
   const operation = operationOf(statement);
   span.updateName(operation);
   span.setAttributes({
     'db.operation.name': operation,
-    'db.query.text': statement.slice(0, MAX_STATEMENT_LENGTH),
+    'db.query.text': cut(statement),
   });
   if (error !== undefined) {
     // The SQLSTATE and the error's type, never its message: Postgres quotes
     // the value it could not use, as in `invalid input syntax for type uuid`.
     const code = (error as { code?: unknown }).code;
-    const sqlState = typeof code === 'string' ? code : undefined;
+    const named = typeof code === 'string' ? code : undefined;
+    const sqlState = named && SQLSTATE.test(named) ? named : undefined;
     span.setAttributes({
-      'error.type': sqlState ?? (error instanceof Error ? error.name : 'Error'),
+      'error.type': named ?? (error instanceof Error ? error.name : 'Error'),
       ...(sqlState ? { 'db.response.status_code': sqlState } : {}),
     });
     span.setStatus({ code: SpanStatusCode.ERROR });
@@ -56,27 +71,18 @@ function finish(span: Span, query: RunningQuery, error?: unknown): void {
 }
 
 /**
- * Gives every query that `sql`'s postgres.js runs a span, from when it runs
- * until it settles: tagged templates, `unsafe` (which drizzle uses), and
- * those inside `begin`, `savepoint`, `reserve` and `forEach`, plus the type
- * lookup postgres.js runs on each new connection. Cursors are left out:
- * their query never settles, so their span would never end.
- *
- * The hook is on postgres.js's own `handle`, which every query passes
- * through exactly once, so any client of the same postgres.js is covered
- * and calling this again does nothing. The statement keeps its `$n`
- * placeholders; values are never recorded.
- *
- * A query's failure is observed for its span, so one that nobody awaits no
- * longer surfaces as an unhandled rejection.
+ * Hooks the `handle` of the postgres.js `sql` comes from, so every client of
+ * that copy is traced, not only `sql`, and installing twice does nothing.
+ * Failures are observed, so an unawaited query no longer surfaces as an
+ * unhandled rejection. What is traced and left out: the package README.
  */
-export function tracePostgres<S extends object>(sql: S): S {
+export function installPostgresTracing(sql: object): void {
   const sample = (sql as unknown as (
     s: TemplateStringsArray,
   ) => object)`select 1`;
   const prototype = Object.getPrototypeOf(sample) as QueryPrototype;
   if (prototype[TRACED]) {
-    return sql;
+    return;
   }
   const handle = prototype.handle;
   prototype.handle = function (this: RunningQuery) {
@@ -95,5 +101,4 @@ export function tracePostgres<S extends object>(sql: S): S {
     return handle.call(this);
   };
   prototype[TRACED] = true;
-  return sql;
 }

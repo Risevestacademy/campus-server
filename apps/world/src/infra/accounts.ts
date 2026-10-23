@@ -9,7 +9,7 @@ import {
   type SpaceFacts,
   type SpaceGrantFacts,
 } from '@campus/space-access';
-import { tracePostgres } from '@campus/telemetry/sql';
+import { installPostgresTracing } from '@campus/telemetry/sql';
 import postgres from 'postgres';
 
 import { seatKey, type Seat } from '../seat.js';
@@ -220,13 +220,15 @@ export function looksLikeId(value: string): boolean {
  * to a shared package and this can move with it.
  */
 export function createAccountLookup(env: Env): AccountLookup {
-  const client = postgres(env.DATABASE_URL, {
+  const sql = postgres(env.DATABASE_URL, {
     max: env.WORLD_DB_POOL,
     // Read-only lookups on the hot path: fail fast rather than hold a socket
     // waiting on a database that is not answering.
     connect_timeout: 5,
   });
-  const sql = env.FF_OTEL_ENABLED ? tracePostgres(client) : client;
+  if (env.FF_OTEL_ENABLED) {
+    installPostgresTracing(sql);
+  }
 
   return {
     async find(userId: string): Promise<Account | null> {

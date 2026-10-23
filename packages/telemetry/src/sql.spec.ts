@@ -4,13 +4,25 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
   TracerProvider,
+  type SpanProcessor,
 } from '@opentelemetry/sdk-trace';
 import postgres from 'postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { operationOf, statementOf, tracePostgres } from './sql.js';
+import { installPostgresTracing, operationOf, statementOf } from './sql.js';
 
 const exporter = new InMemorySpanExporter();
+
+/** Spans started, ended or not: one that never ends is never exported. */
+let started = 0;
+const counter: SpanProcessor = {
+  onStart: () => {
+    started += 1;
+  },
+  onEnd: () => undefined,
+  forceFlush: async () => undefined,
+  shutdown: async () => undefined,
+};
 
 beforeAll(() => {
   context.setGlobalContextManager(
@@ -18,7 +30,7 @@ beforeAll(() => {
   );
   trace.setGlobalTracerProvider(
     new TracerProvider({
-      spanProcessors: [new SimpleSpanProcessor({ exporter })],
+      spanProcessors: [new SimpleSpanProcessor({ exporter }), counter],
     }),
   );
 });
@@ -30,6 +42,7 @@ afterAll(() => {
 
 beforeEach(() => {
   exporter.reset();
+  started = 0;
 });
 
 function spans() {
@@ -105,9 +118,14 @@ function fakeSql(sent: string, outcome: () => Promise<unknown>) {
     new FakeQuery(strings, sent, outcome);
 }
 
-describe('tracePostgres', () => {
+function traced<S extends object>(sql: S): S {
+  installPostgresTracing(sql);
+  return sql;
+}
+
+describe('installPostgresTracing', () => {
   it('spans a query once, however often it is awaited, with the statement as sent', async () => {
-    const sql = tracePostgres(
+    const sql = traced(
       fakeSql('select * from users where id in ($1, $2)', async () => [
         { id: 1 },
       ]),
@@ -129,7 +147,7 @@ describe('tracePostgres', () => {
   });
 
   it('records a failure by its code, never its message', async () => {
-    const sql = tracePostgres(
+    const sql = traced(
       fakeSql('select $1::uuid', async () => {
         throw Object.assign(
           new Error('invalid input syntax for type uuid: "not-a-uuid"'),
@@ -149,10 +167,38 @@ describe('tracePostgres', () => {
     ).not.toContain('not-a-uuid');
   });
 
+  it("names postgres.js's own errors without calling them a SQLSTATE", async () => {
+    const sql = traced(
+      fakeSql('select 1', async () => {
+        throw Object.assign(new Error('write CONNECTION_CLOSED'), {
+          code: 'CONNECTION_CLOSED',
+        });
+      }),
+    );
+
+    await expect(sql`select 1`).rejects.toThrow();
+
+    const [span] = spans();
+    expect(span.status.code).toBe(SpanStatusCode.ERROR);
+    expect(span.attributes['error.type']).toBe('CONNECTION_CLOSED');
+    expect(span.attributes).not.toHaveProperty('db.response.status_code');
+  });
+
+  it('cuts a long statement without splitting a placeholder', async () => {
+    const statement = `select ${'x'.repeat(1_988)} = $12`;
+    const sql = traced(fakeSql(statement, async () => []));
+
+    await sql`select 1`;
+
+    expect(spans()[0].attributes['db.query.text']).toBe(
+      `select ${'x'.repeat(1_988)} = `,
+    );
+  });
+
   it('hooks a postgres.js only once', async () => {
     const sql = fakeSql('select 1', async () => []);
-    tracePostgres(sql);
-    tracePostgres(sql);
+    installPostgresTracing(sql);
+    installPostgresTracing(sql);
 
     await sql`select 1`;
 
@@ -162,9 +208,9 @@ describe('tracePostgres', () => {
 
 const databaseUrl = process.env.CAMPUS_TEST_DATABASE_URL;
 
-describe.skipIf(!databaseUrl)('tracePostgres against Postgres', () => {
+describe.skipIf(!databaseUrl)('installPostgresTracing against Postgres', () => {
   // No type lookup on connect: it is traced too, and would come first.
-  const sql = tracePostgres(
+  const sql = traced(
     postgres(databaseUrl ?? '', { max: 2, fetch_types: false }),
   );
 
@@ -206,9 +252,13 @@ describe.skipIf(!databaseUrl)('tracePostgres against Postgres', () => {
     });
 
     expect(result).toBe(2);
-    expect(statements()).toEqual(
-      expect.arrayContaining(['select 1 as outer_query', 'select 2 as n']),
-    );
+    expect(statements()).toEqual([
+      'begin',
+      'select 1 as outer_query',
+      'savepoint "s0"',
+      'select 2 as n',
+      'commit',
+    ]);
   });
 
   it('spans a reserved connection, and leaves a cursor working and untraced', async () => {
@@ -223,6 +273,7 @@ describe.skipIf(!databaseUrl)('tracePostgres against Postgres', () => {
 
     expect(rows).toHaveLength(3);
     expect(statements()).toEqual(['select 3 as reserved_query']);
+    expect(started).toBe(1);
   });
 
   it('keeps a value Postgres rejects out of the span', async () => {

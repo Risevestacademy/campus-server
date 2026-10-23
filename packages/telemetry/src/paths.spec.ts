@@ -5,7 +5,7 @@ import {
   pathOf,
   redactQuery,
   redactedRequestUrl,
-  redactUrl,
+  redactedUrlParts,
 } from './paths.js';
 
 describe('pathOf', () => {
@@ -87,15 +87,20 @@ describe('redactedRequestUrl', () => {
   });
 });
 
-describe('redactUrl', () => {
+describe('redactedUrlParts', () => {
   it('rebuilds a fetch URL with its query values redacted, and gives the query', () => {
     expect(
-      redactUrl('https://oauth2.googleapis.com', '/tokeninfo?id_token=x&a=b'),
+      redactedUrlParts(
+        'https://oauth2.googleapis.com',
+        '/tokeninfo?id_token=x&a=b',
+      ),
     ).toEqual({
       full: 'https://oauth2.googleapis.com/tokeninfo?id_token=REDACTED&a=REDACTED',
       query: 'id_token=REDACTED&a=REDACTED',
     });
-    expect(redactUrl('https://api.resend.com', '/emails')).toBeUndefined();
+    expect(
+      redactedUrlParts('https://api.resend.com', '/emails'),
+    ).toBeUndefined();
   });
 });
 
@@ -120,6 +125,12 @@ describe('redactedRequestUrl, hosts', () => {
     expect(redactedRequestUrl({ host: '[::1]:7880', path: '/x?k=v' })).toBe(
       'http://[::1]:7880/x?k=REDACTED',
     );
+  });
+
+  it('still redacts when URL cannot parse the host, as with a zone id', () => {
+    expect(
+      redactedRequestUrl({ hostname: 'fe80::1%eth0', path: '/x?k=v' }),
+    ).toBe('http://[fe80::1%eth0]/x?k=REDACTED');
   });
 });
 

@@ -265,7 +265,7 @@ SDK, the same way in campus-api and world. It sends, over OTLP:
   message, which can quote the value Postgres rejected.
 
   postgres.js has no maintained instrumentation, so `database.module.ts`
-  calls `tracePostgres` from `@campus/telemetry/sql` while telemetry is on.
+  calls `installPostgresTracing` from `@campus/telemetry/sql` while telemetry is on.
   It hooks the one place postgres.js runs a query, so transactions,
   savepoints and reserved connections are covered; cursors are not, since
   their query never settles. world's account lookups use it too.

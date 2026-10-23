@@ -60,12 +60,18 @@ Express in the list, spans lose their route.
 ## Database queries
 
 postgres.js has no maintained instrumentation, so `@campus/telemetry/sql`
-exports `tracePostgres(sql)`. It hooks the one place postgres.js runs a
-query, so every client, transaction, savepoint and reserved connection gets
-one span per query, holding the statement as sent with `$n` placeholders and,
-on failure, the SQLSTATE but never the message, which can quote a value.
-Cursors are left out: their query never settles. Both services call it on
-their client while telemetry is on.
+exports `installPostgresTracing(sql)`. It hooks the one place postgres.js
+runs a query, for the whole process, so every client, transaction, savepoint
+and reserved connection gets one span per query, holding the statement as
+sent with `$n` placeholders and, on failure, the SQLSTATE but never the
+message, which can quote a value. postgres.js's own errors, such as
+`CONNECTION_CLOSED`, are named in `error.type` only. Both services install it
+while telemetry is on.
+
+Cursors are left out: their query never settles. One other query never
+settles: with `target_session_attrs` set (in the URL or
+`PGTARGETSESSIONATTRS`), postgres.js checks each new connection with one, and
+each would leave a span that never ends. Nothing sets it today.
 
 ## Paths without the SDK
 

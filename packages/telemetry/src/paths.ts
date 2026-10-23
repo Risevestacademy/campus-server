@@ -33,7 +33,7 @@ export function redactQuery(url: string | undefined): string | undefined {
  * A request's full URL with its query values redacted, and the redacted
  * query on its own. Undefined without a query string: nothing to hide.
  */
-export function redactUrl(
+export function redactedUrlParts(
   origin: string,
   path: string,
 ): { full: string; query: string } | undefined {
@@ -41,11 +41,16 @@ export function redactUrl(
   if (query === undefined) {
     return undefined;
   }
-  // URL drops a port that is the scheme's default.
-  return {
-    full: `${new URL(pathOf(path), origin).toString()}?${query}`,
-    query,
-  };
+  return { full: `${normalised(origin, pathOf(path))}?${query}`, query };
+}
+
+/** URL drops a port that is the scheme's default; it throws on a zone id. */
+function normalised(origin: string, path: string): string {
+  try {
+    return new URL(path, origin).toString();
+  } catch {
+    return `${origin}${path}`;
+  }
 }
 
 /** A host's name and port, the port taken off and an IPv6 address bracketed. */
@@ -73,6 +78,8 @@ export function redactedRequestUrl(
   const host = splitHost(options.hostname ?? options.host ?? 'localhost');
   const port = options.port ?? host.port;
   const portText = port != null ? `:${port}` : '';
-  return redactUrl(`${protocol}//${host.name}${portText}`, options.path ?? '')
-    ?.full;
+  return redactedUrlParts(
+    `${protocol}//${host.name}${portText}`,
+    options.path ?? '',
+  )?.full;
 }

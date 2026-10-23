@@ -20,7 +20,7 @@ import {
   matchesPath,
   redactQuery,
   redactedRequestUrl,
-  redactUrl,
+  redactedUrlParts,
 } from './paths.js';
 
 /** Long enough to send what is buffered, short of a platform's kill. */
@@ -79,10 +79,10 @@ export function startTelemetry(options: TelemetryOptions): Telemetry {
           return url ? { 'url.full': url } : {};
         },
       }),
-      // fetch: Google, LiveKit and Resend are all called through it.
+      // fetch: the README lists who is called through it.
       new UndiciInstrumentation({
         startSpanHook: (request) => {
-          const url = redactUrl(request.origin, request.path);
+          const url = redactedUrlParts(request.origin, request.path);
           return url ? { 'url.full': url.full, 'url.query': url.query } : {};
         },
       }),
