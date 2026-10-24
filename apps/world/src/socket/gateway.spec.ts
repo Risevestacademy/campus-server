@@ -248,6 +248,7 @@ const presence = {
     }
   },
   online: async () => [],
+  onlineUserIds: async () => new Set<string>(),
   onDisplaced: (listener: (displaced: Displacement) => void) => {
     presence.listeners.push(listener);
   },
