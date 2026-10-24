@@ -236,7 +236,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   the **internal** URL.
 - It holds state that is cheap to lose but should not vanish on every
   restart: each player's last position between visits, who is online where
-  (presence), and the messages between world instances.
+  (presence, which the admin dashboard's online count also reads), and the
+  messages between world instances.
 - **Persistence on.** A restart that empties Redis sends everyone back to
   the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
 - **Eviction `noeviction` (Redis's default).** Any other policy would drop
@@ -250,7 +251,9 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   for more. Redis going down never keeps anybody out: a position that cannot
   be read means starting at the spawn, one that cannot be written is lost,
   and somebody whose presence cannot be written, or whose change of space
-  cannot, is put right by the next renewal once Redis returns.
+  cannot, is put right by the next renewal once Redis returns. Only the
+  admin's online count (`GET /admin/online`) stops: it answers `503
+PRESENCE_UNAVAILABLE` until Redis is back.
 
 ## world
 

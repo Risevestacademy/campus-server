@@ -9,14 +9,14 @@ import {
   isLiveMembership,
   isNotLiveMembership,
 } from './cohort-members.service.js';
-import { CohortNotFoundException } from './cohorts.exceptions.js';
+import { assertCohortExists } from './assert-cohort-exists.js';
 import {
   MembershipState,
   RosterScope,
   type ListRosterQueryDto,
   type RosterMemberDto,
 } from './dto/cohort-roster.dto.js';
-import { CohortRole, cohortMembers, cohorts, cohortTracks } from './schema.js';
+import { CohortRole, cohortMembers, cohortTracks } from './schema.js';
 
 /**
  * Who is in a cohort: the admin's roster. Apart from CohortMembersService,
@@ -43,16 +43,7 @@ export class CohortRosterService {
     query: ListRosterQueryDto,
     now: Date = new Date(),
   ): Promise<PaginatedResponseDto<RosterMemberDto>> {
-    const [cohort] = await this.db
-      .select({ id: cohorts.id })
-      .from(cohorts)
-      .where(eq(cohorts.id, cohortId))
-      .limit(1);
-    if (!cohort) {
-      throw new CohortNotFoundException(`Cohort ${cohortId} not found`, {
-        cohortId,
-      });
-    }
+    await assertCohortExists(this.db, cohortId);
 
     const live = isLiveMembership(now);
     const filter = and(
