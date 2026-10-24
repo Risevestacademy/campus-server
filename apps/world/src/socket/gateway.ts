@@ -9,6 +9,7 @@ import {
   SPACE_ACCESS,
   mayEnter,
   type CohortMembershipFacts,
+  type PersonFacts,
   type SpaceFacts,
 } from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
@@ -40,6 +41,11 @@ import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
 import { SpaceLocks, lockableKeys } from '../spaces/locks.js';
+import {
+  EntryRequests,
+  besideSpace,
+  type EntryRequest,
+} from '../spaces/requests.js';
 import { Availability, Status } from '../status/availability.js';
 import {
   decideUpgrade,
@@ -58,6 +64,7 @@ import {
   encode,
   type Avatar,
   type CloseReason,
+  type EntryRequestOutcome,
   type ServerMessage,
 } from './protocol.js';
 
@@ -183,6 +190,7 @@ export function registerGateway(
           doorsRead = true;
           refreshCalls();
           refreshLockable();
+          reviewRequests();
         } catch (err) {
           app.log.error(
             { err },
@@ -225,12 +233,7 @@ export function registerGateway(
     const space =
       doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ);
     return mayEnter(
-      {
-        userId: connection.userId,
-        systemRole: connection.systemRole,
-        cohortId: connection.cohortId,
-        membership: connection.membership,
-      },
+      personOf(connection),
       locks.isLocked(connection.cohortId, spaceKey)
         ? { ...space, locked: true }
         : space,
@@ -290,6 +293,7 @@ export function registerGateway(
         locked: false,
         userId,
       });
+      reviewRequests(cohortId, spaceKey);
     }
   }
 
@@ -306,6 +310,221 @@ export function registerGateway(
         )
     ) {
       unlock(cohortId, spaceKey, null);
+    }
+  }
+
+  const requests = new EntryRequests();
+  /** Who has been sent each open request's `entryRequested`, by the asker's seat. */
+  const told = new Map<string, Set<Connection>>();
+
+  /** Whether asking is a way in: a locked normal space, or a designated one. */
+  function takesRequests(cohortId: string, spaceKey: string): boolean {
+    const space = doors.get(spaceKey);
+    if (!space || space.retiredAt !== null || space.kind === null) return false;
+    return (
+      space.access === SPACE_ACCESS.Designated ||
+      (space.access === SPACE_ACCESS.Normal &&
+        locks.isLocked(cohortId, spaceKey))
+    );
+  }
+
+  /**
+   * Anybody inside a locked space may answer; in a designated one, only
+   * somebody its list names, or an admin, not a visitor let in.
+   */
+  function mayAnswer(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): boolean {
+    const space = doors.get(spaceKey);
+    if (!space || connection.spaceKey !== spaceKey) return false;
+    return (
+      space.access !== SPACE_ACCESS.Designated ||
+      mayEnter(personOf(connection), { ...space, locked: false }, now)
+    );
+  }
+
+  function answerersIn(
+    cohortId: string,
+    spaceKey: string,
+    now: Date,
+  ): Connection[] {
+    return connections
+      .all()
+      .filter(
+        (connection) =>
+          connection.cohortId === cohortId &&
+          mayAnswer(connection, spaceKey, now),
+      );
+  }
+
+  /** A yes not yet walked through, while the space still takes requests. */
+  function hasPass(connection: Connection, spaceKey: string): boolean {
+    return (
+      requests.passFor(connection) === spaceKey &&
+      takesRequests(connection.cohortId, spaceKey)
+    );
+  }
+
+  function whyNotAsk(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): string | null {
+    if (spaceKey === connection.spaceKey) return 'you are inside it already';
+    if (!takesRequests(connection.cohortId, spaceKey)) {
+      return 'this space takes no requests';
+    }
+    if (
+      mayStepInto(connection, spaceKey, now) ||
+      hasPass(connection, spaceKey)
+    ) {
+      return 'you may walk in';
+    }
+    const player = players.get(connection);
+    if (!player || !besideSpace(map.grid, map.spaces, player, spaceKey)) {
+      return 'ask from beside the space';
+    }
+    if (answerersIn(connection.cohortId, spaceKey, now).length === 0) {
+      return 'nobody inside can answer';
+    }
+    return null;
+  }
+
+  function requestEntry(connection: Connection, spaceKey: string): void {
+    const now = new Date();
+    let refusal = whyNotAsk(connection, spaceKey, now);
+    if (!refusal) {
+      const asked = requests.ask(connection, spaceKey, now.getTime());
+      if (asked === 'already_asking') {
+        refusal = 'you have a request open already';
+      } else if (asked === 'too_soon') {
+        refusal = 'asked again too soon after a no';
+      }
+    }
+    if (refusal) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message: refusal,
+      });
+      return;
+    }
+    told.set(seatKey(connection), new Set());
+    send(connection.socket, {
+      type: 'entryRequested',
+      userId: connection.userId,
+      spaceKey,
+    });
+    reviewRequests(connection.cohortId, spaceKey);
+  }
+
+  function answerEntryRequest(
+    connection: Connection,
+    userId: string,
+    admit: boolean,
+  ): void {
+    const seat: Seat = { userId, cohortId: connection.cohortId };
+    const now = new Date();
+    const request = requests.openFor(seat);
+    if (!request || !mayAnswer(connection, request.spaceKey, now)) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message: 'no request here for you to answer',
+      });
+      return;
+    }
+    if (admit) requests.admit(seat);
+    else requests.decline(seat, now.getTime());
+    announceEnded(request, admit ? 'admitted' : 'declined', connection.userId);
+  }
+
+  function endRequest(seat: Seat, outcome: EntryRequestOutcome): void {
+    const request = requests.close(seat);
+    if (request) announceEnded(request, outcome, null);
+  }
+
+  /** To the asker, and everybody who was sent the request. */
+  function announceEnded(
+    request: EntryRequest,
+    outcome: EntryRequestOutcome,
+    answeredBy: string | null,
+  ): void {
+    const key = seatKey(request);
+    const recipients = new Set(told.get(key));
+    told.delete(key);
+    const asker = connections.holderOf(request);
+    if (asker) recipients.add(asker);
+    const frame = encode({
+      type: 'entryRequestEnded',
+      userId: request.userId,
+      spaceKey: request.spaceKey,
+      outcome,
+      answeredBy,
+    });
+    for (const connection of recipients) {
+      if (connections.has(connection)) sendFrame(connection.socket, frame);
+    }
+  }
+
+  /**
+   * After anything that changes who may enter or answer: ends the requests
+   * no longer needed or no longer answerable, and sends the rest to anybody
+   * inside who may answer and has not been sent them yet.
+   */
+  function reviewRequests(cohortId?: string, spaceKey?: string): void {
+    if (stopping) return;
+    const now = new Date();
+    for (const request of requests.all(cohortId, spaceKey)) {
+      const asker = connections.holderOf(request);
+      if (!asker) {
+        endRequest(request, 'withdrawn');
+        continue;
+      }
+      if (mayStepInto(asker, request.spaceKey, now)) {
+        endRequest(request, 'not_needed');
+        continue;
+      }
+      if (!takesRequests(request.cohortId, request.spaceKey)) {
+        endRequest(request, 'cancelled');
+        continue;
+      }
+      const answerers = answerersIn(request.cohortId, request.spaceKey, now);
+      if (answerers.length === 0) {
+        endRequest(request, 'nobody_inside');
+        continue;
+      }
+      const key = seatKey(request);
+      const sent = told.get(key) ?? new Set<Connection>();
+      told.set(key, sent);
+      const frame = encode({
+        type: 'entryRequested',
+        userId: request.userId,
+        spaceKey: request.spaceKey,
+      });
+      for (const answerer of answerers) {
+        if (sent.has(answerer)) continue;
+        sent.add(answerer);
+        sendFrame(answerer.socket, frame);
+      }
+    }
+  }
+
+  /** After a step: leaving the tiles beside a space ends a request to it, and lets a yes lapse. */
+  function leaveTheDoor(connection: Connection, tile: Tile): void {
+    const request = requests.openFor(connection);
+    if (request && !besideSpace(map.grid, map.spaces, tile, request.spaceKey)) {
+      endRequest(connection, 'walked_away');
+    }
+    const pass = requests.passFor(connection);
+    if (
+      pass !== undefined &&
+      (connection.spaceKey === pass ||
+        !besideSpace(map.grid, map.spaces, tile, pass))
+    ) {
+      requests.dropPass(connection);
     }
   }
 
@@ -626,6 +845,8 @@ export function registerGateway(
       spaceKey,
     });
     unlockIfEmpty(connection.cohortId, left);
+    reviewRequests(connection.cohortId, left);
+    reviewRequests(connection.cohortId, spaceKey);
     void joinCall(connection);
     presence.changeSpace(presenceOf(connection)).then(
       (held) => {
@@ -746,7 +967,12 @@ export function registerGateway(
       leavePresence([connection]);
     }
     connections.remove(connection);
-    if (!stopping) unlockIfEmpty(connection.cohortId, connection.spaceKey);
+    if (!stopping) {
+      unlockIfEmpty(connection.cohortId, connection.spaceKey);
+      endRequest(connection, 'withdrawn');
+      requests.dropPass(connection);
+      reviewRequests(connection.cohortId, connection.spaceKey);
+    }
     // Replaced in the same cohort: the avatar stays, and the new socket
     // stands for it. Their places in other cohorts are none of this.
     if (connections.holderOf(connection)) {
@@ -942,6 +1168,7 @@ export function registerGateway(
         closeFor(connection.socket, reason);
       }
     }
+    reviewRequests();
   }
 
   /**
@@ -1488,6 +1715,22 @@ export function registerGateway(
           noteActivity(connection);
           setLock(connection, result.message.locked);
           return;
+        case 'requestEntry':
+          noteActivity(connection);
+          requestEntry(connection, result.message.spaceKey);
+          return;
+        case 'withdrawEntryRequest':
+          noteActivity(connection);
+          endRequest(connection, 'withdrawn');
+          return;
+        case 'answerEntryRequest':
+          noteActivity(connection);
+          answerEntryRequest(
+            connection,
+            result.message.userId,
+            result.message.admit,
+          );
+          return;
         case 'move': {
           noteActivity(connection);
           const { direction, seq } = result.message;
@@ -1498,7 +1741,8 @@ export function registerGateway(
             const into = spaceAt(map.spaces, target);
             return (
               into === connection.spaceKey ||
-              mayStepInto(connection, into, new Date(now))
+              mayStepInto(connection, into, new Date(now)) ||
+              hasPass(connection, into)
             );
           });
           metrics.moved(moved.outcome);
@@ -1510,6 +1754,7 @@ export function registerGateway(
           });
           if (moved.outcome === 'moved') {
             recordSpaceCrossing(connection, moved.player);
+            leaveTheDoor(connection, moved.player);
           }
           if (moved.changed) {
             // The two fields copied out, not the connection: these maps
@@ -1550,6 +1795,7 @@ export function registerGateway(
       lockedSpaces: locks.in(connection.cohortId),
     });
     void joinCall(connection);
+    reviewRequests(connection.cohortId, connection.spaceKey);
 
     // Handlers are on: whatever arrived during authentication is delivered
     // now, in the order it was sent.
@@ -1640,6 +1886,15 @@ export function registerGateway(
         closeFor(connection.socket, 'server shutting down');
       }
     },
+  };
+}
+
+function personOf(connection: Connection): PersonFacts {
+  return {
+    userId: connection.userId,
+    systemRole: connection.systemRole,
+    cohortId: connection.cohortId,
+    membership: connection.membership,
   };
 }
 
