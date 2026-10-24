@@ -29,6 +29,20 @@ const presenceOf = (
 });
 
 describe('MemoryPresenceStore', () => {
+  it('counts each person online once, across the campus or in one cohort', async () => {
+    const store = new MemoryPresenceStore();
+    await store.enter(presenceOf('ada'));
+    await store.enter(presenceOf('ada', { cohortId: 'cohort-2' }));
+    await store.enter(presenceOf('grace', { cohortId: 'cohort-2' }));
+
+    await expect(store.onlineUserIds()).resolves.toEqual(
+      new Set(['ada', 'grace']),
+    );
+    await expect(store.onlineUserIds('cohort-1')).resolves.toEqual(
+      new Set(['ada']),
+    );
+  });
+
   it('lists who is online in a cohort, and nobody from another', async () => {
     const store = new MemoryPresenceStore();
     const ada = presenceOf('ada');
@@ -509,6 +523,33 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     await expect(
       a.redis.zscore(cohortPresenceKey(cohort), user),
     ).resolves.toBeNull();
+  });
+
+  it('counts each person online once, across every cohort and instance, or in one', async () => {
+    const { user: ada, cohort } = fresh();
+    const { user: grace, cohort: elsewhere } = fresh();
+    const lapsed = fresh();
+    const a = instance();
+    const b = instance();
+    const brief = instance(0.2);
+    await a.store.enter(presenceOf(ada, { cohortId: cohort }));
+    await b.store.enter(presenceOf(ada, { cohortId: elsewhere }));
+    await b.store.enter(presenceOf(grace, { cohortId: elsewhere }));
+    await brief.store.enter(
+      presenceOf(lapsed.user, { cohortId: lapsed.cohort }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const everybody = await a.store.onlineUserIds();
+    expect(everybody).toContain(ada);
+    expect(everybody).toContain(grace);
+    expect(everybody).not.toContain(lapsed.user);
+    await expect(a.store.onlineUserIds(elsewhere)).resolves.toEqual(
+      new Set([ada, grace]),
+    );
+    await expect(a.store.onlineUserIds(randomUUID())).resolves.toEqual(
+      new Set(),
+    );
   });
 });
 

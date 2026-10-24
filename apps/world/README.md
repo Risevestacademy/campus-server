@@ -81,8 +81,10 @@ server decides every position.
   each tick it changes. See [the protocol doc](../../docs/world-protocol.md#calls).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
+- **Who is online, for admins:** a count for the admin dashboard, across the
+  campus or in one cohort. See [below](#the-online-count).
 
-Not yet: more than one map, locking a space or asking to enter one, portals,
+Not yet: more than one map, asking to enter a space, portals,
 an admin's broadcast, or live positions shared across instances (a player
 who moves to another instance starts from their last saved position).
 
@@ -118,6 +120,7 @@ database.
 ```
 src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
+  admin/                GET /admin/online, the online count for admins
   index.ts              boot and graceful shutdown; starts telemetry before the app loads
   quiet-routes.ts       routes neither logged nor traced, with no imports, for index.ts
   infra/                env, logger, the database reads (accounts, memberships, spaces),
@@ -214,6 +217,28 @@ Media is configured by `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 some of them set, or with values `@campus/media` would refuse: a URL that is
 not `ws://` or `wss://`, or a secret under 32 characters. Locally, the values
 in `.env.example` point at the LiveKit container in `docker-compose.local.yml`.
+
+## The online count
+
+`GET /admin/online` says how many people are online now, for the admin
+dashboard. campus-api has the dashboard's other figures; it never asks world
+for this one.
+
+- **Who:** an admin, signed in the same way as for the connection check
+  (the `campus_session` cookie from an origin in `CORS_ORIGINS`, or
+  `Authorization: Bearer <token>`). CORS is answered here, preflight included.
+- **What:** `?cohortId=<uuid>` counts one cohort; without it, the whole
+  campus, where somebody in two cohorts' campuses counts once. Read from
+  presence, so it covers every world instance.
+- **What comes back** (`200`, `Cache-Control: no-store`): `{ "online": 12 }`.
+- **Errors**, in the same shape as the connection check's:
+
+  | Status | `code`                 | When                                                                                     |
+  | ------ | ---------------------- | ---------------------------------------------------------------------------------------- |
+  | 400    | `INVALID_ARGUMENT`     | `cohortId` is not a UUID                                                                 |
+  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal, as for the connection check |
+  | 403    | `FORBIDDEN`            | Signed in but not an admin, or the page's origin is not in `CORS_ORIGINS`                |
+  | 503    | `PRESENCE_UNAVAILABLE` | Redis cannot be read. Try again shortly                                                  |
 
 ## Tests
 
