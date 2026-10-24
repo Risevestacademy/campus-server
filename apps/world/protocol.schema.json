@@ -179,7 +179,7 @@
         },
         "token": {
           "type": "string",
-          "description": "Lets you join this room only, for about ten minutes."
+          "description": "Lets you join this room only: within a minute if you may speak, ten if you only listen. Join with it straight away."
         },
         "canSpeak": {
           "type": "boolean",
@@ -631,7 +631,7 @@
         "call"
       ],
       "additionalProperties": false,
-      "description": "Sent on arrival, and again when you are made or stop being an admin: leave the broadcast room you are in and join this one. Null where there is none to join."
+      "description": "Sent on arrival, and again when you are made or stop being an admin: leave the broadcast room you are in and join this one. Null where there is none to join; when a token could not be made, another comes within a heartbeat."
     },
     "NearbyMessage": {
       "type": "object",

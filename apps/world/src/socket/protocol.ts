@@ -124,7 +124,10 @@ export const BroadcastCall = z
     room: z.string(),
     token: z
       .string()
-      .describe('Lets you join this room only, for about ten minutes.'),
+      .describe(
+        'Lets you join this room only: within a minute if you may speak, ' +
+          'ten if you only listen. Join with it straight away.',
+      ),
     canSpeak: z
       .boolean()
       .describe(
@@ -379,7 +382,8 @@ export const ServerMessage = z
         description:
           'Sent on arrival, and again when you are made or stop being an ' +
           'admin: leave the broadcast room you are in and join this one. ' +
-          'Null where there is none to join.',
+          'Null where there is none to join; when a token could not be ' +
+          'made, another comes within a heartbeat.',
       }),
     z.object({ type: z.literal('nearby'), userIds: z.array(z.string()) }).meta({
       id: 'NearbyMessage',

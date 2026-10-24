@@ -470,6 +470,15 @@ export function registerGateway(
     });
   }
 
+  /**
+   * How long a token that may speak in the broadcast room lasts. Only for
+   * joining, as LiveKit keeps a connected participant's token fresh itself;
+   * short, so an admin who stops being one cannot rejoin with it and speak.
+   */
+  const SPEAKING_TOKEN_TTL_SECONDS = 60;
+  /** Sockets whose broadcast token could not be minted: the heartbeat tries again. */
+  const broadcastMissing = new WeakSet<Connection>();
+
   function leaveBroadcast(connection: Connection): void {
     const broadcast = connection.broadcast;
     if (!broadcast || !removeFromCall) return;
@@ -488,6 +497,7 @@ export function registerGateway(
    */
   async function joinBroadcast(connection: Connection): Promise<void> {
     if (!media) return;
+    broadcastMissing.delete(connection);
     leaveBroadcast(connection);
     let room: string;
     try {
@@ -507,6 +517,7 @@ export function registerGateway(
         name: connection.appearance.displayName ?? undefined,
         canPublish: canSpeak,
         audioOnly: true,
+        ttlSeconds: canSpeak ? SPEAKING_TOKEN_TTL_SECONDS : undefined,
       });
     } catch (err) {
       app.log.error(
@@ -516,6 +527,7 @@ export function registerGateway(
       if (connection.broadcast?.identity === identity) {
         connection.broadcast = undefined;
         if (connections.has(connection)) {
+          broadcastMissing.add(connection);
           send(connection.socket, { type: 'broadcast', call: null });
         }
       }
@@ -977,9 +989,11 @@ export function registerGateway(
           showAppearance(connection, account);
           connection.systemRole = account.systemRole;
           // Made or unmade an admin: a new token, to speak or only listen.
+          // Or the last one could not be minted: try again.
           if (
-            connection.broadcast &&
-            connection.broadcast.canSpeak !== account.admin
+            broadcastMissing.has(connection) ||
+            (connection.broadcast &&
+              connection.broadcast.canSpeak !== account.admin)
           ) {
             void joinBroadcast(connection);
           }

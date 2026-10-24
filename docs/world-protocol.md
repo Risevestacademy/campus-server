@@ -335,7 +335,12 @@ stand.
   it beside your space's call and stay in it as you walk: it does not
   change with spaces. A new `broadcast` comes when you are made an admin or
   stop being one (within a heartbeat): leave the room and join with the new
-  token. `null` means there is none to join.
+  token. `null` means there is none to join; if world could not make a
+  token, it tries again and sends a new `broadcast` within a heartbeat.
+- **Join straight away.** A token that may speak is only good for joining
+  within a minute; one to listen, ten. Once you are in, LiveKit keeps you
+  connected. Somebody who stops being an admin is taken out of the room and
+  handed a token to listen.
 - **Listening:** subscribe to every audio track in the broadcast room. Play
   it over everything else, with your space's call carrying on quieter
   underneath, and give no way to mute it.

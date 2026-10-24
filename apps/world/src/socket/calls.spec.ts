@@ -243,13 +243,40 @@ const broadcasts = (conn: Conn) =>
     .filter((m) => m.type === 'broadcast')
     .map((m) => m.call as Record<string, unknown> | null);
 
-/** What LiveKit would read from a token's grant; the signature is the media package's to test. */
-const grantOf = (token: string) =>
-  (
-    JSON.parse(
-      Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
-    ) as { video: Record<string, unknown> }
-  ).video;
+/** What LiveKit would read from a token; the signature is the media package's to test. */
+const claimsOf = (token: string) =>
+  JSON.parse(
+    Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
+  ) as { video: Record<string, unknown>; exp: number; nbf: number };
+
+const grantOf = (token: string) => claimsOf(token).video;
+
+/** A world of its own with a heartbeat every second, for changes the heartbeat picks up. */
+async function withHeartbeat(run: () => Promise<void>) {
+  const own = await buildWorld(
+    { ...env, WORLD_HEARTBEAT_SECONDS: 1 },
+    {
+      ...accounts,
+      liveMemberships: async (
+        seats: readonly { userId: string; cohortId: string }[],
+      ) => new Set(seats.map(seatKey)),
+    },
+    undefined,
+    new MemoryPresenceStore(),
+    map,
+  );
+  await own.app.listen({ port: 0, host: '127.0.0.1' });
+  const { port } = own.app.server.address() as AddressInfo;
+  const saved = url;
+  url = `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`;
+  try {
+    await run();
+  } finally {
+    url = saved;
+    await own.gateway.stop();
+    await own.app.close();
+  }
+}
 
 const nearbyLists = (conn: Conn) =>
   conn.messages
@@ -396,6 +423,21 @@ describe('the broadcast room', () => {
     await leave(admin);
   });
 
+  it('gives a token to speak a minute to join with, and one to listen ten', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+
+    const lifetime = async (conn: Conn) => {
+      const { call } = await waitFor(conn, (m) => m.type === 'broadcast');
+      const { exp, nbf } = claimsOf((call as { token: string }).token);
+      return exp - nbf;
+    };
+
+    await expect(lifetime(admin)).resolves.toBe(60);
+    await expect(lifetime(ada)).resolves.toBe(600);
+    await leave(admin, ada);
+  });
+
   it('keeps you in it as you walk between spaces', async () => {
     const ada = await arrive();
     await waitFor(ada, (m) => m.type === 'broadcast');
@@ -420,23 +462,7 @@ describe('the broadcast room', () => {
   });
 
   it('hands out a token to speak, at the next heartbeat, to somebody made an admin', async () => {
-    const own = await buildWorld(
-      { ...env, WORLD_HEARTBEAT_SECONDS: 1 },
-      {
-        ...accounts,
-        liveMemberships: async (
-          seats: readonly { userId: string; cohortId: string }[],
-        ) => new Set(seats.map(seatKey)),
-      },
-      undefined,
-      new MemoryPresenceStore(),
-      map,
-    );
-    await own.app.listen({ port: 0, host: '127.0.0.1' });
-    const { port } = own.app.server.address() as AddressInfo;
-    const saved = url;
-    url = `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`;
-    try {
+    await withHeartbeat(async () => {
       const ada = await arrive();
       await waitFor(ada, (m) => m.type === 'broadcast');
 
@@ -451,11 +477,27 @@ describe('the broadcast room', () => {
         .poll(() => removedFor(ada, 'broadcast'))
         .toEqual([`broadcast:${COHORT}`]);
       await leave(ada);
-    } finally {
-      url = saved;
-      await own.gateway.stop();
-      await own.app.close();
-    }
+    });
+  });
+
+  it('takes the token to speak away, at the next heartbeat, from somebody no longer an admin', async () => {
+    await withHeartbeat(async () => {
+      const admin = await arrive({ admin: true });
+      await waitFor(admin, (m) => m.type === 'broadcast');
+
+      admins.delete(admin.userId);
+
+      await expect
+        .poll(() => broadcasts(admin).map((call) => call?.canSpeak), {
+          timeout: 3_000,
+        })
+        .toEqual([true, false]);
+      // Taken out of the room under the identity that could speak.
+      await expect
+        .poll(() => removedFor(admin, 'broadcast'))
+        .toEqual([`broadcast:${COHORT}`]);
+      await leave(admin);
+    });
   });
 });
 
