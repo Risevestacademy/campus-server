@@ -62,11 +62,15 @@ function apiHost(url: string): string {
 }
 
 /**
- * Takes participants out of rooms, with one client for the key pair. A room
- * or participant already gone is not an error.
+ * Takes participants out of rooms, with one client for the key pair, and
+ * revokes the tokens that identity was issued, so a removed participant
+ * cannot rejoin with one. Every token names a fresh identity
+ * (`participantIdentity`), so nobody else's is touched. A room or
+ * participant already gone is not an error.
  */
 export function participantRemover(
   credentials: MediaCredentials,
+  now: () => number = Date.now,
 ): (room: string, identity: string) => Promise<void> {
   assertMediaCredentials(credentials);
   const client = new RoomServiceClient(
@@ -76,7 +80,11 @@ export function participantRemover(
   );
   return async (room, identity) => {
     try {
-      await client.removeParticipant(room, identity);
+      await client.removeParticipant(room, identity, {
+        // A token's nbf is its issue time in whole seconds: one second on,
+        // so a token issued this very second is revoked too.
+        revokeTokenTs: BigInt(Math.floor(now() / 1000) + 1),
+      });
     } catch (err) {
       if ((err as { status?: number }).status === 404) {
         return;

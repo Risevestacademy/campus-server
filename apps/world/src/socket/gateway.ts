@@ -686,16 +686,45 @@ export function registerGateway(
     );
   }
 
+  /**
+   * Removals LiveKit has not yet confirmed, by room and identity: kept until
+   * one succeeds, and tried again at every heartbeat, so somebody who left a
+   * room, or lost the right to speak in one, is never left in it.
+   */
+  const pendingRemovals = new Map<string, { room: string; identity: string }>();
+  const removing = new Set<string>();
+
+  /** Takes an identity out of a room, revoking its tokens; retried until LiveKit confirms. */
+  function removeFromRoom(room: string, identity: string): void {
+    if (!removeFromCall) return;
+    const key = `${room}\u0000${identity}`;
+    pendingRemovals.set(key, { room, identity });
+    if (removing.has(key)) return;
+    removing.add(key);
+    removeFromCall(room, identity)
+      .then(
+        () => pendingRemovals.delete(key),
+        (err: unknown) => {
+          app.log.warn(
+            { err, room },
+            'could not take somebody out of a room, trying again at the heartbeat',
+          );
+        },
+      )
+      .finally(() => removing.delete(key));
+  }
+
+  function retryRemovals(): void {
+    for (const { room, identity } of pendingRemovals.values()) {
+      removeFromRoom(room, identity);
+    }
+  }
+
   function leaveCall(connection: Connection): void {
     const call = connection.call;
-    if (!call || !removeFromCall) return;
+    if (!call) return;
     connection.call = undefined;
-    removeFromCall(call.room, call.identity).catch((err: unknown) => {
-      app.log.warn(
-        { err, userId: connection.userId, room: call.room },
-        'could not take somebody out of a call they left',
-      );
-    });
+    removeFromRoom(call.room, call.identity);
   }
 
   /** Hands the socket the call for the space it stands in, after taking it out of the last one. */
@@ -751,14 +780,9 @@ export function registerGateway(
 
   function leaveBroadcast(connection: Connection): void {
     const broadcast = connection.broadcast;
-    if (!broadcast || !removeFromCall) return;
+    if (!broadcast) return;
     connection.broadcast = undefined;
-    removeFromCall(broadcast.room, broadcast.identity).catch((err: unknown) => {
-      app.log.warn(
-        { err, userId: connection.userId, room: broadcast.room },
-        'could not take somebody out of the broadcast room',
-      );
-    });
+    removeFromRoom(broadcast.room, broadcast.identity);
   }
 
   /**
@@ -1444,6 +1468,7 @@ export function registerGateway(
     sweepUnwelcome();
     sweepSessions();
     void reloadDoors();
+    if (!stopping) retryRemovals();
     const now = Date.now();
     players.forgetExpired(now);
     for (const connection of connections.all()) {

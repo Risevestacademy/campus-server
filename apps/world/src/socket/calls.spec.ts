@@ -22,7 +22,11 @@ const CORRIDOR = '55555555-5555-4555-8555-555555555555';
 const LIBRARY = '66666666-6666-4666-8666-666666666666';
 
 /** Stands in for LiveKit's server API: records who world takes out of which room. */
-const removed: { room: string; identity: string }[] = [];
+/** Removals LiveKit confirmed, as world asked for them. */
+const removed: { room: string; identity: string; revokeTokenTs?: string }[] =
+  [];
+/** How many removals to refuse next, as a LiveKit that is down would. */
+const refusals = { left: 0, seen: 0 };
 let livekit: Server;
 
 function space(id: string, audioMode: string, radius = 1): WorldSpace {
@@ -111,7 +115,14 @@ beforeAll(async () => {
     request.on('data', (chunk) => (body += chunk));
     request.on('end', () => {
       if (request.url?.endsWith('/RemoveParticipant')) {
-        removed.push(JSON.parse(body) as { room: string; identity: string });
+        if (refusals.left > 0) {
+          refusals.left -= 1;
+          refusals.seen += 1;
+          response.writeHead(503, { 'content-type': 'application/json' });
+          response.end('{"code":"unavailable","msg":"down"}');
+          return;
+        }
+        removed.push(JSON.parse(body) as (typeof removed)[number]);
       }
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end('{}');
@@ -152,6 +163,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   removed.length = 0;
+  refusals.left = 0;
+  refusals.seen = 0;
   admins.clear();
   spaces.clear();
   spaces.set(DEFAULT_SPACE_KEY, space(CORRIDOR, 'proximity'));
@@ -247,7 +260,12 @@ const broadcasts = (conn: Conn) =>
 const claimsOf = (token: string) =>
   JSON.parse(
     Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
-  ) as { video: Record<string, unknown>; exp: number; nbf: number };
+  ) as {
+    video: Record<string, unknown>;
+    sub: string;
+    exp: number;
+    nbf: number;
+  };
 
 const grantOf = (token: string) => claimsOf(token).video;
 
@@ -398,6 +416,11 @@ describe('the broadcast room', () => {
     const ada = await arrive();
 
     const { call } = await waitFor(ada, (m) => m.type === 'broadcast');
+    // After the snapshot, as the protocol says.
+    const types = ada.messages.map((m) => m.type);
+    expect(types.indexOf('broadcast')).toBeGreaterThan(
+      types.indexOf('snapshot'),
+    );
     expect(call).toMatchObject({
       room: `broadcast:${COHORT}`,
       canSpeak: false,
@@ -480,6 +503,21 @@ describe('the broadcast room', () => {
     });
   });
 
+  it('tries a removal LiveKit refused again at the next heartbeat, until it takes', async () => {
+    await withHeartbeat(async () => {
+      const ada = await arrive();
+      const { call } = await waitFor(ada, (m) => m.type === 'broadcast');
+      refusals.left = 2;
+
+      await leave(ada);
+
+      await expect
+        .poll(() => removedFor(ada, 'broadcast'), { timeout: 5_000 })
+        .toEqual([(call as { room: string }).room]);
+      expect(refusals.seen).toBeGreaterThanOrEqual(1);
+    });
+  });
+
   it('takes the token to speak away, at the next heartbeat, from somebody no longer an admin', async () => {
     await withHeartbeat(async () => {
       const admin = await arrive({ admin: true });
@@ -496,6 +534,13 @@ describe('the broadcast room', () => {
       await expect
         .poll(() => removedFor(admin, 'broadcast'))
         .toEqual([`broadcast:${COHORT}`]);
+      // And that identity's tokens revoked, the one to speak included, so
+      // it cannot rejoin with it.
+      const speaking = claimsOf(
+        (broadcasts(admin)[0] as { token: string }).token,
+      );
+      const removal = removed.find(({ identity }) => identity === speaking.sub);
+      expect(Number(removal?.revokeTokenTs)).toBeGreaterThan(speaking.nbf);
       await leave(admin);
     });
   });
