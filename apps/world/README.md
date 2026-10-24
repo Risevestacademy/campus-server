@@ -85,10 +85,17 @@ server decides every position.
   [the protocol doc](../../docs/world-protocol.md#broadcast).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
+- **Who is online, for admins:** a count for the admin dashboard, across the
+  campus or in one cohort. See [below](#the-online-count).
+- **Locks and asking to enter:** anybody inside a normal whole-room space
+  may lock it; somebody refused at a locked or designated space may ask
+  from beside it, and somebody inside answers. Both are held in this
+  process, per cohort. See
+  [the protocol doc](../../docs/world-protocol.md#locks).
 
-Not yet: more than one map, asking to enter a space, portals,
-or live positions shared across instances (a player
-who moves to another instance starts from their last saved position).
+Not yet: more than one map, portals, or live positions shared across
+instances (a player who moves to another instance starts from their last
+saved position).
 
 ## Running it
 
@@ -124,6 +131,10 @@ src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
   index.ts              boot and graceful shutdown; starts telemetry before the app loads
   quiet-routes.ts       routes neither logged nor traced, with no imports, for index.ts
+  admin/                GET /admin/online, the online count for admins
+  http/
+    routes.ts           what world's HTTP routes share: CORS and preflight, signing in, error bodies
+    routes.testing.ts   the route specs' shared env, accounts and session; left out of the build
   infra/                env, logger, the database reads (accounts, memberships, spaces),
                         Redis (positions, presence), the published map
     metrics.ts          the socket metrics: counters, gauges and running totals
@@ -133,6 +144,7 @@ src/
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   status/               available, busy or away, and going away while idle — no sockets here
+  spaces/               locks, and requests to enter — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages; for now also
                         the doors (spaces read, mayEnter on a step), calls and nearby lists
@@ -218,6 +230,32 @@ Media is configured by `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 some of them set, or with values `@campus/media` would refuse: a URL that is
 not `ws://` or `wss://`, or a secret under 32 characters. Locally, the values
 in `.env.example` point at the LiveKit container in `docker-compose.local.yml`.
+
+## The online count
+
+`GET /admin/online` says how many people are online now, for the admin
+dashboard. campus-api has the dashboard's other figures; it never asks world
+for this one.
+
+- **Who:** an admin, signed in the same way as for the connection check
+  (the `campus_session` cookie from an origin in `CORS_ORIGINS`, or
+  `Authorization: Bearer <token>`). CORS is answered here, preflight included.
+- **What:** `?cohortId=<uuid>` counts one cohort; without it, the whole
+  campus, where somebody in two cohorts' campuses counts once. Read from
+  presence, so it covers every world instance.
+- **Beside campus-api's figures** (`GET /v1/dashboard`): world does not know
+  which cohorts exist, so a cohort that does not counts `0` here where
+  campus-api answers 404. And campus-api counts suspended accounts as
+  members, while world never lets them in, so they are never online.
+- **What comes back** (`200`, `Cache-Control: no-store`): `{ "online": 12 }`.
+- **Errors**, in the same shape as the connection check's:
+
+  | Status | `code`                 | When                                                                                                           |
+  | ------ | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+  | 400    | `INVALID_ARGUMENT`     | `cohortId` is not a UUID                                                                                       |
+  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal, as for the connection check                       |
+  | 403    | `FORBIDDEN`            | Signed in but not an admin, the page's origin is not in `CORS_ORIGINS`, or a cookie came with no origin at all |
+  | 503    | `PRESENCE_UNAVAILABLE` | Redis cannot be read. Try again shortly                                                                        |
 
 ## Tests
 

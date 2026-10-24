@@ -18,17 +18,10 @@ import {
   writeAuditEntry,
 } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { assertCohortExists } from '../cohorts/assert-cohort-exists.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
-import {
-  CohortMemberNotFoundException,
-  CohortNotFoundException,
-} from '../cohorts/cohorts.exceptions.js';
-import {
-  CohortRole,
-  StudentStatus,
-  cohortMembers,
-  cohorts,
-} from '../cohorts/schema.js';
+import { CohortMemberNotFoundException } from '../cohorts/cohorts.exceptions.js';
+import { CohortRole, StudentStatus, cohortMembers } from '../cohorts/schema.js';
 import { InviteStatus, invites } from '../invites/schema.js';
 import { users } from '../users/schema.js';
 import type { ChangeMentorDto } from './dto/change-mentor.dto.js';
@@ -80,7 +73,7 @@ export class MentorshipGroupsService {
   ): Promise<MentorshipGroupResponseDto> {
     try {
       const row = await this.db.transaction(async (tx) => {
-        await this.findCohort(tx, cohortId);
+        await assertCohortExists(tx, cohortId);
         await this.assertMentor(tx, cohortId, dto.mentorMemberId);
 
         const [row] = await tx
@@ -120,7 +113,7 @@ export class MentorshipGroupsService {
     cohortId: string,
     query: PaginationQueryDto,
   ): Promise<PaginatedResponseDto<MentorshipGroupResponseDto>> {
-    await this.findCohort(this.db, cohortId);
+    await assertCohortExists(this.db, cohortId);
 
     const [rows, [{ total }]] = await Promise.all([
       this.db
@@ -475,22 +468,6 @@ export class MentorshipGroupsService {
         updatedAt: row.updatedAt,
       };
     });
-  }
-
-  private async findCohort(
-    executor: DbExecutor,
-    cohortId: string,
-  ): Promise<void> {
-    const [cohort] = await executor
-      .select({ id: cohorts.id })
-      .from(cohorts)
-      .where(eq(cohorts.id, cohortId))
-      .limit(1);
-    if (!cohort) {
-      throw new CohortNotFoundException(`Cohort ${cohortId} not found`, {
-        cohortId,
-      });
-    }
   }
 
   private async findGroup(
