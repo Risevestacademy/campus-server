@@ -325,6 +325,28 @@ space you stand in; you join it with a LiveKit client.
   part before the colon.
 - Nobody hears across a space's edge: everybody in a call is in that space.
 
+### Broadcast
+
+Admins can speak to everybody in the cohort's campus at once, wherever they
+stand.
+
+- **`broadcast`** arrives after the `snapshot`, with `broadcast.url`,
+  `broadcast.token` and `broadcast.room`, the cohort's broadcast room. Join
+  it beside your space's call and stay in it as you walk: it does not
+  change with spaces. A new `broadcast` comes when you are made an admin or
+  stop being one (within a heartbeat): leave the room and join with the new
+  token. `null` means there is none to join.
+- **Listening:** subscribe to every audio track in the broadcast room. Play
+  it over everything else, with your space's call carrying on quieter
+  underneath, and give no way to mute it.
+- **Speaking:** `broadcast.canSpeak` is true for admins only. They may
+  publish their microphone in this room and nothing else: no camera and no
+  screen. Several admins may speak at once.
+- **When a broadcast is on** is LiveKit's to say: it starts when an audio
+  track is published in the broadcast room and ends when it is
+  unpublished. Show who is speaking from the participant's identity, as for
+  a space's call.
+
 ## One connection per cohort
 
 **An account has one connection in each cohort's campus.** Somebody who

@@ -23,6 +23,17 @@ export function spaceRoomName({ cohortId, spaceId }: SpaceRoom): string {
   return `space:${cohortId}:${spaceId}`;
 }
 
+/**
+ * The room a cohort's admins broadcast in: everybody in the cohort listens,
+ * beside their space's call. Not a space's call, so nothing records it.
+ */
+export function broadcastRoomName(cohortId: string): string {
+  if (!UUID.test(cohortId)) {
+    throw new RangeError('a broadcast room is named by a cohort uuid');
+  }
+  return `broadcast:${cohortId}`;
+}
+
 /** Null for a room that is not a space's call, such as a connection check. */
 export function parseSpaceRoomName(name: string): SpaceRoom | null {
   const match = SPACE_ROOM.exec(name);

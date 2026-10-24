@@ -1,10 +1,11 @@
 import {
+  broadcastRoomName,
   mintRoomToken,
   participantIdentity,
   participantRemover,
   spaceRoomName,
 } from '@campus/media';
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
 import {
   SPACE_ACCESS,
   mayEnter,
@@ -469,6 +470,68 @@ export function registerGateway(
     });
   }
 
+  function leaveBroadcast(connection: Connection): void {
+    const broadcast = connection.broadcast;
+    if (!broadcast || !removeFromCall) return;
+    connection.broadcast = undefined;
+    removeFromCall(broadcast.room, broadcast.identity).catch((err: unknown) => {
+      app.log.warn(
+        { err, userId: connection.userId, room: broadcast.room },
+        'could not take somebody out of the broadcast room',
+      );
+    });
+  }
+
+  /**
+   * Hands the socket its cohort's broadcast room, beside the space's call:
+   * admins may speak there, microphone only; everybody else listens.
+   */
+  async function joinBroadcast(connection: Connection): Promise<void> {
+    if (!media) return;
+    leaveBroadcast(connection);
+    let room: string;
+    try {
+      room = broadcastRoomName(connection.cohortId);
+    } catch {
+      send(connection.socket, { type: 'broadcast', call: null });
+      return;
+    }
+    const canSpeak = hasAdminPowers(connection.systemRole);
+    const identity = participantIdentity(connection.userId);
+    connection.broadcast = { room, identity, canSpeak };
+    let token;
+    try {
+      token = await mintRoomToken(media, {
+        room,
+        identity,
+        name: connection.appearance.displayName ?? undefined,
+        canPublish: canSpeak,
+        audioOnly: true,
+      });
+    } catch (err) {
+      app.log.error(
+        { err, userId: connection.userId },
+        'could not mint a token for the broadcast room',
+      );
+      if (connection.broadcast?.identity === identity) {
+        connection.broadcast = undefined;
+        if (connections.has(connection)) {
+          send(connection.socket, { type: 'broadcast', call: null });
+        }
+      }
+      return;
+    }
+    if (
+      connection.broadcast?.identity !== identity ||
+      !connections.has(connection)
+    )
+      return;
+    send(connection.socket, {
+      type: 'broadcast',
+      call: { url: token.url, room, token: token.token, canSpeak },
+    });
+  }
+
   /** After the spaces are read: a new call for anybody whose space's call is not the one they hold. */
   function refreshCalls(): void {
     if (!media || stopping) return;
@@ -738,7 +801,10 @@ export function registerGateway(
   function drop(connection: Connection, remember = true): void {
     // A redeploy closes every socket, but LiveKit keeps running: calls are
     // left to the clients, which reconnect and are handed new ones.
-    if (!stopping) leaveCall(connection);
+    if (!stopping) {
+      leaveCall(connection);
+      leaveBroadcast(connection);
+    }
     nearbyStale.add(connection.cohortId);
     // A connection displaced here no longer holds the account's presence;
     // after shutdown began, everybody has been removed already.
@@ -910,6 +976,13 @@ export function registerGateway(
           // caught here, a heartbeat late at worst.
           showAppearance(connection, account);
           connection.systemRole = account.systemRole;
+          // Made or unmade an admin: a new token, to speak or only listen.
+          if (
+            connection.broadcast &&
+            connection.broadcast.canSpeak !== account.admin
+          ) {
+            void joinBroadcast(connection);
+          }
           if (!account.admin && rows !== undefined) {
             connection.membership = rows.get(seatKey(connection)) ?? null;
           }
@@ -1550,6 +1623,7 @@ export function registerGateway(
       lockedSpaces: locks.in(connection.cohortId),
     });
     void joinCall(connection);
+    void joinBroadcast(connection);
 
     // Handlers are on: whatever arrived during authentication is delivered
     // now, in the order it was sent.

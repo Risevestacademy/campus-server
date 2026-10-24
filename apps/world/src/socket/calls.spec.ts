@@ -41,13 +41,14 @@ function space(id: string, audioMode: string, radius = 1): WorldSpace {
 }
 
 const spaces = new Map<string, WorldSpace>();
+const admins = new Set<string>();
 
 const accounts = {
   find: async (id: string) => ({
     id,
     suspended: false,
-    admin: false,
-    systemRole: 'user',
+    admin: admins.has(id),
+    systemRole: admins.has(id) ? 'admin' : 'user',
     sessionEpoch: 0,
     displayName: null,
     spriteKey: null,
@@ -151,14 +152,16 @@ afterAll(async () => {
 
 beforeEach(async () => {
   removed.length = 0;
+  admins.clear();
   spaces.clear();
   spaces.set(DEFAULT_SPACE_KEY, space(CORRIDOR, 'proximity'));
   spaces.set('library', space(LIBRARY, 'boundary'));
   await world.gateway.spacesChanged();
 });
 
-async function arrive() {
+async function arrive({ admin = false } = {}) {
   const userId = randomUUID();
+  if (admin) admins.add(userId);
   const { token } = await signSessionToken(
     {
       epoch: 0,
@@ -210,10 +213,17 @@ async function leave(...conns: Conn[]) {
   }
 }
 
-/** Removals of this person: another test's closing socket can land late. */
-const removedFor = (conn: Conn) =>
+/**
+ * Removals of this person from space calls, or from the broadcast room:
+ * another test's closing socket can land late.
+ */
+const removedFor = (conn: Conn, from: 'space' | 'broadcast' = 'space') =>
   removed
-    .filter(({ identity }) => userIdOfIdentity(identity) === conn.userId)
+    .filter(
+      ({ identity, room }) =>
+        userIdOfIdentity(identity) === conn.userId &&
+        room.startsWith(`${from}:`),
+    )
     .map(({ room }) => room);
 
 const calls = (conn: Conn) =>
@@ -227,6 +237,19 @@ const movedTo =
     (m.players as { userId: string; x: number; y: number }[]).some(
       (p) => p.userId === who.userId && p.x === x && p.y === y,
     );
+
+const broadcasts = (conn: Conn) =>
+  conn.messages
+    .filter((m) => m.type === 'broadcast')
+    .map((m) => m.call as Record<string, unknown> | null);
+
+/** What LiveKit would read from a token's grant; the signature is the media package's to test. */
+const grantOf = (token: string) =>
+  (
+    JSON.parse(
+      Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
+    ) as { video: Record<string, unknown> }
+  ).video;
 
 const nearbyLists = (conn: Conn) =>
   conn.messages
@@ -343,6 +366,99 @@ describe('who is near enough to hear', () => {
   });
 });
 
+describe('the broadcast room', () => {
+  it('hands every arrival their cohort’s broadcast room, to listen in', async () => {
+    const ada = await arrive();
+
+    const { call } = await waitFor(ada, (m) => m.type === 'broadcast');
+    expect(call).toMatchObject({
+      room: `broadcast:${COHORT}`,
+      canSpeak: false,
+    });
+    expect(grantOf((call as { token: string }).token)).toMatchObject({
+      room: `broadcast:${COHORT}`,
+      canPublish: false,
+      canSubscribe: true,
+    });
+    await leave(ada);
+  });
+
+  it('lets an admin speak there, with the microphone only', async () => {
+    const admin = await arrive({ admin: true });
+
+    const { call } = await waitFor(admin, (m) => m.type === 'broadcast');
+    expect(call).toMatchObject({ canSpeak: true });
+    expect(grantOf((call as { token: string }).token)).toMatchObject({
+      canPublish: true,
+      canPublishSources: ['microphone'],
+      canPublishData: false,
+    });
+    await leave(admin);
+  });
+
+  it('keeps you in it as you walk between spaces', async () => {
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'broadcast');
+
+    for (const seq of [1, 2, 3]) await step(ada, 'right', seq);
+    await expect.poll(() => calls(ada)).toHaveLength(2);
+
+    expect(broadcasts(ada)).toHaveLength(1);
+    expect(removedFor(ada, 'broadcast')).toEqual([]);
+    await leave(ada);
+  });
+
+  it('takes you out of it when your socket closes', async () => {
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'broadcast');
+
+    await leave(ada);
+
+    await expect
+      .poll(() => removedFor(ada, 'broadcast'))
+      .toEqual([`broadcast:${COHORT}`]);
+  });
+
+  it('hands out a token to speak, at the next heartbeat, to somebody made an admin', async () => {
+    const own = await buildWorld(
+      { ...env, WORLD_HEARTBEAT_SECONDS: 1 },
+      {
+        ...accounts,
+        liveMemberships: async (
+          seats: readonly { userId: string; cohortId: string }[],
+        ) => new Set(seats.map(seatKey)),
+      },
+      undefined,
+      new MemoryPresenceStore(),
+      map,
+    );
+    await own.app.listen({ port: 0, host: '127.0.0.1' });
+    const { port } = own.app.server.address() as AddressInfo;
+    const saved = url;
+    url = `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`;
+    try {
+      const ada = await arrive();
+      await waitFor(ada, (m) => m.type === 'broadcast');
+
+      admins.add(ada.userId);
+
+      await expect
+        .poll(() => broadcasts(ada).map((call) => call?.canSpeak), {
+          timeout: 3_000,
+        })
+        .toEqual([false, true]);
+      await expect
+        .poll(() => removedFor(ada, 'broadcast'))
+        .toEqual([`broadcast:${COHORT}`]);
+      await leave(ada);
+    } finally {
+      url = saved;
+      await own.gateway.stop();
+      await own.app.close();
+    }
+  });
+});
+
 describe('keeping calls current', () => {
   it('tells somebody walking out of a proximity space that nobody is near any more', async () => {
     // Wide enough that grace is still in range at the library's door.
@@ -413,6 +529,7 @@ describe('keeping calls current', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(removedFor(ada)).toEqual([]);
+      expect(removedFor(ada, 'broadcast')).toEqual([]);
     } finally {
       url = saved;
       await own.app.close();

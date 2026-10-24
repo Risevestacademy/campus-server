@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   InvalidWebhookError,
+  broadcastRoomName,
   parseSpaceRoomName,
   participantIdentity,
   spaceRoomName,
@@ -38,6 +39,19 @@ describe('space room names', () => {
 
   it('refuses to name a room from anything but ids', () => {
     expect(() => spaceRoomName({ cohortId: 'c1', spaceId: SPACE })).toThrow();
+  });
+});
+
+describe('broadcast room names', () => {
+  it('names one per cohort, which no space’s call can be mistaken for', () => {
+    const name = broadcastRoomName(COHORT);
+
+    expect(name).toBe(`broadcast:${COHORT}`);
+    expect(parseSpaceRoomName(name)).toBeNull();
+  });
+
+  it('refuses to name a room from anything but a cohort id', () => {
+    expect(() => broadcastRoomName('c1')).toThrow();
   });
 });
 

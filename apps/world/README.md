@@ -79,11 +79,15 @@ server decides every position.
   left. In a proximity space, `nearby` names who is within the subscribe
   radius (5 tiles to hear and 6 to subscribe where the space sets none),
   each tick it changes. See [the protocol doc](../../docs/world-protocol.md#calls).
+- **The admin broadcast:** everybody also gets a token for their cohort's
+  broadcast room, to listen beside their space's call; admins' tokens may
+  publish the microphone there. See
+  [the protocol doc](../../docs/world-protocol.md#broadcast).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
 
-Not yet: more than one map, locking a space or asking to enter one, portals,
-an admin's broadcast, or live positions shared across instances (a player
+Not yet: more than one map, asking to enter a space, portals,
+or live positions shared across instances (a player
 who moves to another instance starts from their last saved position).
 
 ## Running it
