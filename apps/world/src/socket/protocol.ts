@@ -118,6 +118,35 @@ export const Call = z
       'identity starts with their user id and a colon.',
   });
 
+export const BroadcastCall = z
+  .object({
+    url: z.string().describe('The media server to connect to.'),
+    room: z.string(),
+    token: z
+      .string()
+      .describe(
+        'Lets you join this room only: within a minute if you may speak, ' +
+          'ten if you only listen. Join with it straight away.',
+      ),
+    canSpeak: z
+      .boolean()
+      .describe(
+        'You are an admin: you may publish your microphone here, and ' +
+          'nothing else. Everybody else only listens.',
+      ),
+  })
+  .meta({
+    id: 'BroadcastCall',
+    description:
+      'Your cohort’s broadcast room, where admins speak to everybody in ' +
+      'the campus. Join it beside the call for your space and stay in it ' +
+      'wherever you walk. Subscribe to every audio track in it and play ' +
+      'it over everything else, with the call for your space carrying on ' +
+      'quieter underneath; it cannot be muted. Several admins may speak at ' +
+      'once. A broadcast starts and stops as a track is published and ' +
+      'unpublished in this room.',
+  });
+
 export const MoveOutcome = z
   .enum(['moved', 'blocked', 'refused', 'too_fast'])
   .meta({
@@ -418,6 +447,16 @@ export const ServerMessage = z
         'the call you are in and join this one. Null where there is no ' +
         'call to join.',
     }),
+    z
+      .object({ type: z.literal('broadcast'), call: BroadcastCall.nullable() })
+      .meta({
+        id: 'BroadcastMessage',
+        description:
+          'Sent on arrival, and again when you are made or stop being an ' +
+          'admin: leave the broadcast room you are in and join this one. ' +
+          'Null where there is none to join; when a token could not be ' +
+          'made, another comes within a heartbeat.',
+      }),
     z.object({ type: z.literal('nearby'), userIds: z.array(z.string()) }).meta({
       id: 'NearbyMessage',
       description:

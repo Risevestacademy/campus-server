@@ -307,7 +307,8 @@ space you stand in; you join it with a LiveKit client.
   another space: leave the call you are in and join this one, with
   `call.url` and `call.token`. `null` means there is no call where you
   stand. World also takes you out of the old call itself, so a client that
-  stays is removed. A new `call` can also come without a step, when the
+  stays is removed, and revokes the old call's token, so it cannot rejoin
+  with it. A new `call` can also come without a step, when the
   space's call changes (its row appears, or its hearing or radii change).
   World restarting leaves you in your call; the `call` you get after
   reconnecting replaces it.
@@ -324,6 +325,35 @@ space you stand in; you join it with a LiveKit client.
   changes each time they join. Match it to `nearby` and to avatars by the
   part before the colon.
 - Nobody hears across a space's edge: everybody in a call is in that space.
+
+### Broadcast
+
+Admins can speak to everybody in the cohort's campus at once, wherever they
+stand.
+
+- **`broadcast`** arrives after the `snapshot`: `{ "type": "broadcast",
+"call": { "url": "…", "room": "…", "token": "…", "canSpeak": false } }`.
+  `call.room` is the cohort's broadcast room: join it with `call.url` and
+  `call.token`, beside your space's call, and stay in it as you walk. It
+  does not change with spaces. A new `broadcast` comes when you are made an admin or
+  stop being one (within a heartbeat): leave the room and join with the new
+  token. `null` means there is none to join; if world could not make a
+  token, it tries again and sends a new `broadcast` within a heartbeat.
+- **Join straight away.** A token that may speak is only good for joining
+  within a minute; one to listen, ten. Once you are in, LiveKit keeps you
+  connected. Somebody who stops being an admin is taken out of the room,
+  their old tokens revoked so they cannot rejoin with one, and is handed a
+  token to listen.
+- **Listening:** subscribe to every audio track in the broadcast room. Play
+  it over everything else, with your space's call carrying on quieter
+  underneath, and give no way to mute it.
+- **Speaking:** `call.canSpeak` is true for admins only. They may
+  publish their microphone in this room and nothing else: no camera and no
+  screen. Several admins may speak at once.
+- **When a broadcast is on** is LiveKit's to say: it starts when an audio
+  track is published in the broadcast room and ends when it is
+  unpublished. Show who is speaking from the participant's identity, as for
+  a space's call.
 
 ## One connection per cohort
 

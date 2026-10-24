@@ -83,6 +83,32 @@ describe('mintRoomToken', () => {
     });
   });
 
+  it('can let somebody publish their microphone and nothing else', async () => {
+    const minted = await mintRoomToken(credentials, {
+      room: 'r',
+      identity: 'user-1',
+      canPublish: true,
+      audioOnly: true,
+    });
+
+    expect((await verify(minted.token)).video).toMatchObject({
+      canPublish: true,
+      canPublishSources: ['microphone'],
+    });
+  });
+
+  it('leaves the sources open unless asked', async () => {
+    const minted = await mintRoomToken(credentials, {
+      room: 'r',
+      identity: 'user-1',
+      canPublish: true,
+    });
+
+    expect(
+      (await verify(minted.token)).video?.canPublishSources,
+    ).toBeUndefined();
+  });
+
   it('expires after ten minutes by default, and says exactly when', async () => {
     const before = Date.now();
     const minted = await mintRoomToken(credentials, {

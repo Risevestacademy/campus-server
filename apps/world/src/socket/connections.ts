@@ -43,6 +43,8 @@ export interface Connection {
   membership: CohortMembershipFacts | null;
   /** The call this socket was last handed, until it leaves it. */
   call?: CallSpec & { identity: string };
+  /** The cohort's broadcast room this socket was handed, and whether it may speak there. */
+  broadcast?: { room: string; identity: string; canSpeak: boolean };
   /** Whom the last `nearby` named. */
   nearby: ReadonlySet<string>;
   socket: WebSocket;

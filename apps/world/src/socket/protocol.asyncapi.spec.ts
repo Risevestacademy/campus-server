@@ -82,6 +82,7 @@ describe('the AsyncAPI document', () => {
       'StatusChangedMessage',
       'SpaceChangedMessage',
       'CallMessage',
+      'BroadcastMessage',
       'NearbyMessage',
       'LockChangedMessage',
       'LockableSpacesMessage',

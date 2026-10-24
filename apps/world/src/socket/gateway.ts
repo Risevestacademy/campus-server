@@ -1,10 +1,11 @@
 import {
+  broadcastRoomName,
   mintRoomToken,
   participantIdentity,
   participantRemover,
   spaceRoomName,
 } from '@campus/media';
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
 import {
   SPACE_ACCESS,
   mayEnter,
@@ -685,16 +686,45 @@ export function registerGateway(
     );
   }
 
+  /**
+   * Removals LiveKit has not yet confirmed, by room and identity: kept until
+   * one succeeds, and tried again at every heartbeat, so somebody who left a
+   * room, or lost the right to speak in one, is never left in it.
+   */
+  const pendingRemovals = new Map<string, { room: string; identity: string }>();
+  const removing = new Set<string>();
+
+  /** Takes an identity out of a room, revoking its tokens; retried until LiveKit confirms. */
+  function removeFromRoom(room: string, identity: string): void {
+    if (!removeFromCall) return;
+    const key = `${room}\u0000${identity}`;
+    pendingRemovals.set(key, { room, identity });
+    if (removing.has(key)) return;
+    removing.add(key);
+    removeFromCall(room, identity)
+      .then(
+        () => pendingRemovals.delete(key),
+        (err: unknown) => {
+          app.log.warn(
+            { err, room },
+            'could not take somebody out of a room, trying again at the heartbeat',
+          );
+        },
+      )
+      .finally(() => removing.delete(key));
+  }
+
+  function retryRemovals(): void {
+    for (const { room, identity } of pendingRemovals.values()) {
+      removeFromRoom(room, identity);
+    }
+  }
+
   function leaveCall(connection: Connection): void {
     const call = connection.call;
-    if (!call || !removeFromCall) return;
+    if (!call) return;
     connection.call = undefined;
-    removeFromCall(call.room, call.identity).catch((err: unknown) => {
-      app.log.warn(
-        { err, userId: connection.userId, room: call.room },
-        'could not take somebody out of a call they left',
-      );
-    });
+    removeFromRoom(call.room, call.identity);
   }
 
   /** Hands the socket the call for the space it stands in, after taking it out of the last one. */
@@ -736,6 +766,75 @@ export function registerGateway(
     send(connection.socket, {
       type: 'call',
       call: { ...call, url: token.url, token: token.token },
+    });
+  }
+
+  /**
+   * How long a token that may speak in the broadcast room lasts. Only for
+   * joining, as LiveKit keeps a connected participant's token fresh itself;
+   * short, so an admin who stops being one cannot rejoin with it and speak.
+   */
+  const SPEAKING_TOKEN_TTL_SECONDS = 60;
+  /** Sockets whose broadcast token could not be minted: the heartbeat tries again. */
+  const broadcastMissing = new WeakSet<Connection>();
+
+  function leaveBroadcast(connection: Connection): void {
+    const broadcast = connection.broadcast;
+    if (!broadcast) return;
+    connection.broadcast = undefined;
+    removeFromRoom(broadcast.room, broadcast.identity);
+  }
+
+  /**
+   * Hands the socket its cohort's broadcast room, beside the space's call:
+   * admins may speak there, microphone only; everybody else listens.
+   */
+  async function joinBroadcast(connection: Connection): Promise<void> {
+    if (!media) return;
+    broadcastMissing.delete(connection);
+    leaveBroadcast(connection);
+    let room: string;
+    try {
+      room = broadcastRoomName(connection.cohortId);
+    } catch {
+      send(connection.socket, { type: 'broadcast', call: null });
+      return;
+    }
+    const canSpeak = hasAdminPowers(connection.systemRole);
+    const identity = participantIdentity(connection.userId);
+    connection.broadcast = { room, identity, canSpeak };
+    let token;
+    try {
+      token = await mintRoomToken(media, {
+        room,
+        identity,
+        name: connection.appearance.displayName ?? undefined,
+        canPublish: canSpeak,
+        audioOnly: true,
+        ttlSeconds: canSpeak ? SPEAKING_TOKEN_TTL_SECONDS : undefined,
+      });
+    } catch (err) {
+      app.log.error(
+        { err, userId: connection.userId },
+        'could not mint a token for the broadcast room',
+      );
+      if (connection.broadcast?.identity === identity) {
+        connection.broadcast = undefined;
+        if (connections.has(connection)) {
+          broadcastMissing.add(connection);
+          send(connection.socket, { type: 'broadcast', call: null });
+        }
+      }
+      return;
+    }
+    if (
+      connection.broadcast?.identity !== identity ||
+      !connections.has(connection)
+    )
+      return;
+    send(connection.socket, {
+      type: 'broadcast',
+      call: { url: token.url, room, token: token.token, canSpeak },
     });
   }
 
@@ -1010,7 +1109,10 @@ export function registerGateway(
   function drop(connection: Connection, remember = true): void {
     // A redeploy closes every socket, but LiveKit keeps running: calls are
     // left to the clients, which reconnect and are handed new ones.
-    if (!stopping) leaveCall(connection);
+    if (!stopping) {
+      leaveCall(connection);
+      leaveBroadcast(connection);
+    }
     nearbyStale.add(connection.cohortId);
     // A connection displaced here no longer holds the account's presence;
     // after shutdown began, everybody has been removed already.
@@ -1194,6 +1296,15 @@ export function registerGateway(
           // caught here, a heartbeat late at worst.
           showAppearance(connection, account);
           connection.systemRole = account.systemRole;
+          // Made or unmade an admin: a new token, to speak or only listen.
+          // Or the last one could not be minted: try again.
+          if (
+            broadcastMissing.has(connection) ||
+            (connection.broadcast &&
+              connection.broadcast.canSpeak !== account.admin)
+          ) {
+            void joinBroadcast(connection);
+          }
           if (!account.admin && rows !== undefined) {
             connection.membership = rows.get(seatKey(connection)) ?? null;
           }
@@ -1357,6 +1468,7 @@ export function registerGateway(
     sweepUnwelcome();
     sweepSessions();
     void reloadDoors();
+    if (!stopping) retryRemovals();
     const now = Date.now();
     players.forgetExpired(now);
     for (const connection of connections.all()) {
@@ -1856,6 +1968,7 @@ export function registerGateway(
       lockedSpaces: locks.in(connection.cohortId),
     });
     void joinCall(connection);
+    void joinBroadcast(connection);
     reviewRequests(connection.cohortId, connection.spaceKey);
 
     // Handlers are on: whatever arrived during authentication is delivered
