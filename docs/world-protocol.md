@@ -444,10 +444,17 @@ does not name them, can ask to come in. Each cohort's requests are its own.
   | `not_needed`    | They may walk in without asking: unlocked, or now on the list |
   | `cancelled`     | The space no longer takes requests                            |
 
-  Nothing ends a request on a timer: it stays open until one of these. A
-  world restart ends every request with the socket, with no
-  `entryRequestEnded`: treat the close as the end. Opening the same cohort
-  in another tab ends the old tab's request as `withdrawn`.
+  Nothing ends a request on a timer: it stays open until one of these.
+
+  Two closes end requests without an `entryRequestEnded`, so treat the
+  close as the end of every request that socket was sent:
+
+  - a world restart, for every socket;
+  - opening the same cohort in another tab, for the old tab once it is
+    `replaced`. If it asked, it is sent its request's end, `withdrawn`,
+    first; any yes it held is dropped, and the new tab asks again. If it
+    was inside and could answer, the new tab is sent the open requests
+    instead.
 
 - **A yes** lets the asker's next step into the space through. Walking away
   from beside it first lets the yes lapse, and they ask again; so does the
@@ -458,9 +465,10 @@ does not name them, can ask to come in. Each cohort's requests are its own.
   seconds.
 - **Refusals** come as an `error` with code `NOT_ALLOWED`, and its message
   says why: a space the map does not draw, one you are inside already, one
-  you may walk into anyway (open, or a yes in hand), one that takes no
-  requests (the corridors, or not set up), not beside the space, nobody
-  inside who can answer, a request already open, or too soon after a no. An answer
+  you may walk into anyway (open, the corridors, or a yes in hand), one
+  that takes no requests (not set up, or retired), not beside the space,
+  nobody inside who can answer, a request already open, or too soon after
+  a no. An answer
   to a request that has ended, or that you may not answer, is refused the
   same way.
 

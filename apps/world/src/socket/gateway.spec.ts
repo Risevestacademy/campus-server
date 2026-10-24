@@ -4066,6 +4066,43 @@ describe('movement', () => {
       await Promise.all([leave(inside), leave(fresh)]);
     });
 
+    it('drops a yes when its tab is replaced, so the new tab asks again', async () => {
+      const ada = person();
+      const inside = await lockedInside();
+      const old = await askingAtTheDoor(ada);
+      answer(inside, ada, true);
+      await ended(old);
+
+      const fresh = await arrive(ada);
+      await old.settled;
+
+      await expect(step(fresh, 'right', 3)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(inside), leave(fresh)]);
+    });
+
+    it('hands the open requests to the new tab of somebody inside who could answer', async () => {
+      const ada = person();
+      const grace = person();
+      const old = await lockedInside(ada);
+      const outside = await askingAtTheDoor(grace);
+      await waitFor(old, (m) => m.type === 'entryRequested');
+
+      const fresh = await arrive(ada);
+      await old.settled;
+
+      await expect(
+        waitFor(fresh, (m) => m.type === 'entryRequested'),
+      ).resolves.toMatchObject({ userId: grace });
+      answer(fresh, grace, true);
+      await expect(ended(outside)).resolves.toMatchObject({
+        outcome: 'admitted',
+        answeredBy: ada,
+      });
+      await Promise.all([leave(fresh), leave(outside)]);
+    });
+
     it('lets a yes lapse when they walk away from the door first', async () => {
       const ada = person();
       const inside = await lockedInside();
@@ -4234,6 +4271,16 @@ describe('movement', () => {
 
       await expect(refusal(outside)).resolves.toBe(message);
       await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('tells somebody asking into the corridors that they may walk in', async () => {
+      const conn = await arrive(person());
+      await walkToLibrary(conn);
+
+      send(conn, { type: 'requestEntry', spaceKey: DEFAULT_SPACE_KEY });
+
+      await expect(refusal(conn)).resolves.toBe('you may walk in');
+      await leave(conn);
     });
 
     it('refuses asking into a space the map does not draw', async () => {

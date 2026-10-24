@@ -400,7 +400,9 @@ export function registerGateway(
     spaceKey: string,
     now: Date,
   ): string | null {
-    if (!map.spaces.keys.includes(spaceKey)) return 'no such space';
+    if (spaceKey !== DEFAULT_SPACE_KEY && !map.spaces.keys.includes(spaceKey)) {
+      return 'no such space';
+    }
     if (spaceKey === connection.spaceKey) return 'you are inside it already';
     if (hasPass(connection, spaceKey)) return REFUSALS.may_walk_in;
     const found = obstacle(requestFacts(connection, spaceKey, now));
