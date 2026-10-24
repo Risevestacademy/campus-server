@@ -68,6 +68,7 @@ describe('the AsyncAPI document', () => {
       'SetStatusMessage',
       'ActiveMessage',
       'SetLockMessage',
+      'SayMessage',
     ]);
     expect(namesIn(subscribe)).toEqual([
       'WelcomeMessage',
@@ -82,6 +83,7 @@ describe('the AsyncAPI document', () => {
       'NearbyMessage',
       'LockChangedMessage',
       'LockableSpacesMessage',
+      'SaidMessage',
       'ReplacedMessage',
       'MovedMessage',
       'MoveResultMessage',

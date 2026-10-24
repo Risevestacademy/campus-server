@@ -79,6 +79,9 @@ server decides every position.
   left. In a proximity space, `nearby` names who is within the subscribe
   radius (5 tiles to hear and 6 to subscribe where the space sets none),
   each tick it changes. See [the protocol doc](../../docs/world-protocol.md#calls).
+- **Chat:** `say` reaches whoever can hear the speaker, by the space's
+  hearing, and is never stored. See
+  [the protocol doc](../../docs/world-protocol.md#chat).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
 

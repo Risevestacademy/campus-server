@@ -271,6 +271,26 @@
       "additionalProperties": false,
       "description": "Lock or unlock the space you are standing in, if `lockableSpaces` names it. Anybody inside may, guests included. Answered, if it changes anything, by the `lockChanged` everybody in your cohort gets, you included; in a space that cannot be locked, by a NOT_ALLOWED error. Counts as activity."
     },
+    "SayMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "say"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": false,
+      "description": "A line of chat to whoever can hear you: everybody in a whole-room space, or the people within its subscribe radius in a proximity space, as for its call. Up to 500 characters, trimmed. Answered by the `said` you and they get; five lines at once, then one a second, after which a NOT_ALLOWED error. Never stored. Counts as activity."
+    },
     "ClientMessage": {
       "oneOf": [
         {
@@ -287,6 +307,9 @@
         },
         {
           "$ref": "#/definitions/SetLockMessage"
+        },
+        {
+          "$ref": "#/definitions/SayMessage"
         }
       ],
       "description": "Every frame a client may send."
@@ -652,6 +675,44 @@
       "additionalProperties": false,
       "description": "Which spaces can be locked changed, because an admin changed a space: replaces the list from `snapshot`."
     },
+    "SaidMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "said"
+        },
+        "id": {
+          "type": "string",
+          "description": "Unique to this line."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Who said it."
+        },
+        "spaceKey": {
+          "type": "string",
+          "description": "The space they said it in, so a meeting’s chat can be kept apart."
+        },
+        "text": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string",
+          "description": "When world relayed it, as an ISO timestamp."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "userId",
+        "spaceKey",
+        "text",
+        "at"
+      ],
+      "additionalProperties": false,
+      "description": "A line of chat from somebody who could be heard where you stand when they said it, or your own. World keeps none of it: a line reaches whoever is in earshot at that moment and nobody later."
+    },
     "ReplacedMessage": {
       "type": "object",
       "properties": {
@@ -779,6 +840,9 @@
         },
         {
           "$ref": "#/definitions/LockableSpacesMessage"
+        },
+        {
+          "$ref": "#/definitions/SaidMessage"
         },
         {
           "$ref": "#/definitions/ReplacedMessage"
