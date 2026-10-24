@@ -81,10 +81,15 @@ server decides every position.
   each tick it changes. See [the protocol doc](../../docs/world-protocol.md#calls).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
+- **Locks and asking to enter:** anybody inside a normal whole-room space
+  may lock it; somebody refused at a locked or designated space may ask
+  from beside it, and somebody inside answers. Both are held in this
+  process, per cohort. See
+  [the protocol doc](../../docs/world-protocol.md#locks).
 
-Not yet: more than one map, locking a space or asking to enter one, portals,
-an admin's broadcast, or live positions shared across instances (a player
-who moves to another instance starts from their last saved position).
+Not yet: more than one map, portals, an admin's broadcast, or live
+positions shared across instances (a player who moves to another instance
+starts from their last saved position).
 
 ## Running it
 
@@ -129,6 +134,7 @@ src/
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   status/               available, busy or away, and going away while idle — no sockets here
+  spaces/               locks, and requests to enter — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages; for now also
                         the doors (spaces read, mayEnter on a step), calls and nearby lists

@@ -44,7 +44,11 @@ import { SpaceLocks, lockableKeys } from '../spaces/locks.js';
 import {
   EntryRequests,
   besideSpace,
+  obstacle,
+  takesRequests,
   type EntryRequest,
+  type Obstacle,
+  type RequestFacts,
 } from '../spaces/requests.js';
 import { Availability, Status } from '../status/availability.js';
 import {
@@ -313,24 +317,32 @@ export function registerGateway(
     }
   }
 
-  const requests = new EntryRequests();
-  /** Who has been sent each open request's `entryRequested`, by the asker's seat. */
-  const told = new Map<string, Set<Connection>>();
+  const requests = new EntryRequests<Connection>();
 
-  /** Whether asking is a way in: a locked normal space, or a designated one. */
-  function takesRequests(cohortId: string, spaceKey: string): boolean {
-    const space = doors.get(spaceKey);
-    if (!space || space.retiredAt !== null || space.kind === null) return false;
-    return (
-      space.access === SPACE_ACCESS.Designated ||
-      (space.access === SPACE_ACCESS.Normal &&
-        locks.isLocked(cohortId, spaceKey))
+  const REFUSALS: Record<Obstacle, string> = {
+    may_walk_in: 'you may walk in',
+    no_requests: 'this space takes no requests',
+    not_beside: 'ask from beside the space',
+    nobody_inside: 'nobody inside can answer',
+  };
+  const ENDINGS: Record<Obstacle, EntryRequestOutcome> = {
+    may_walk_in: 'not_needed',
+    no_requests: 'cancelled',
+    not_beside: 'walked_away',
+    nobody_inside: 'nobody_inside',
+  };
+
+  function spaceTakesRequests(cohortId: string, spaceKey: string): boolean {
+    return takesRequests(
+      doors.get(spaceKey),
+      locks.isLocked(cohortId, spaceKey),
     );
   }
 
   /**
-   * Anybody inside a locked space may answer; in a designated one, only
-   * somebody its list names, or an admin, not a visitor let in.
+   * Anybody inside a locked space may answer, somebody let in included; in
+   * a designated one, only somebody its list names, or an admin, not a
+   * visitor let in.
    */
   function mayAnswer(
     connection: Connection,
@@ -359,11 +371,27 @@ export function registerGateway(
       );
   }
 
+  function requestFacts(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): RequestFacts {
+    const player = players.get(connection);
+    return {
+      mayWalkIn: mayStepInto(connection, spaceKey, now),
+      takesRequests: spaceTakesRequests(connection.cohortId, spaceKey),
+      beside:
+        player !== undefined &&
+        besideSpace(map.grid, map.spaces, player, spaceKey),
+      answerers: answerersIn(connection.cohortId, spaceKey, now).length,
+    };
+  }
+
   /** A yes not yet walked through, while the space still takes requests. */
   function hasPass(connection: Connection, spaceKey: string): boolean {
     return (
       requests.passFor(connection) === spaceKey &&
-      takesRequests(connection.cohortId, spaceKey)
+      spaceTakesRequests(connection.cohortId, spaceKey)
     );
   }
 
@@ -372,31 +400,23 @@ export function registerGateway(
     spaceKey: string,
     now: Date,
   ): string | null {
+    if (!map.spaces.keys.includes(spaceKey)) return 'no such space';
     if (spaceKey === connection.spaceKey) return 'you are inside it already';
-    if (!takesRequests(connection.cohortId, spaceKey)) {
-      return 'this space takes no requests';
-    }
-    if (
-      mayStepInto(connection, spaceKey, now) ||
-      hasPass(connection, spaceKey)
-    ) {
-      return 'you may walk in';
-    }
-    const player = players.get(connection);
-    if (!player || !besideSpace(map.grid, map.spaces, player, spaceKey)) {
-      return 'ask from beside the space';
-    }
-    if (answerersIn(connection.cohortId, spaceKey, now).length === 0) {
-      return 'nobody inside can answer';
-    }
-    return null;
+    if (hasPass(connection, spaceKey)) return REFUSALS.may_walk_in;
+    const found = obstacle(requestFacts(connection, spaceKey, now));
+    return found && REFUSALS[found];
   }
 
   function requestEntry(connection: Connection, spaceKey: string): void {
     const now = new Date();
     let refusal = whyNotAsk(connection, spaceKey, now);
     if (!refusal) {
-      const asked = requests.ask(connection, spaceKey, now.getTime());
+      const asked = requests.ask(
+        connection,
+        spaceKey,
+        now.getTime(),
+        connection,
+      );
       if (asked === 'already_asking') {
         refusal = 'you have a request open already';
       } else if (asked === 'too_soon') {
@@ -411,7 +431,6 @@ export function registerGateway(
       });
       return;
     }
-    told.set(seatKey(connection), new Set());
     send(connection.socket, {
       type: 'entryRequested',
       userId: connection.userId,
@@ -446,17 +465,12 @@ export function registerGateway(
     if (request) announceEnded(request, outcome, null);
   }
 
-  /** To the asker, and everybody who was sent the request. */
+  /** The asker is told even once replaced: its socket is still open, and it asked. */
   function announceEnded(
-    request: EntryRequest,
+    request: EntryRequest<Connection>,
     outcome: EntryRequestOutcome,
     answeredBy: string | null,
   ): void {
-    const key = seatKey(request);
-    const recipients = new Set(told.get(key));
-    told.delete(key);
-    const asker = connections.holderOf(request);
-    if (asker) recipients.add(asker);
     const frame = encode({
       type: 'entryRequestEnded',
       userId: request.userId,
@@ -464,52 +478,65 @@ export function registerGateway(
       outcome,
       answeredBy,
     });
-    for (const connection of recipients) {
-      if (connections.has(connection)) sendFrame(connection.socket, frame);
+    if (request.asker.socket.readyState === request.asker.socket.OPEN) {
+      sendFrame(request.asker.socket, frame);
+    }
+    for (const connection of request.told) {
+      if (connection !== request.asker && connections.has(connection)) {
+        sendFrame(connection.socket, frame);
+      }
     }
   }
 
   /**
    * After anything that changes who may enter or answer: ends the requests
-   * no longer needed or no longer answerable, and sends the rest to anybody
-   * inside who may answer and has not been sent them yet.
+   * no longer needed or answerable, sends the rest to anybody inside who may
+   * answer and has not been sent them, and drops the yeses no longer good.
    */
   function reviewRequests(cohortId?: string, spaceKey?: string): void {
     if (stopping) return;
     const now = new Date();
     for (const request of requests.all(cohortId, spaceKey)) {
-      const asker = connections.holderOf(request);
-      if (!asker) {
+      if (connections.holderOf(request) !== request.asker) {
         endRequest(request, 'withdrawn');
         continue;
       }
-      if (mayStepInto(asker, request.spaceKey, now)) {
-        endRequest(request, 'not_needed');
+      const found = obstacle(
+        requestFacts(request.asker, request.spaceKey, now),
+      );
+      if (found) {
+        endRequest(request, ENDINGS[found]);
         continue;
       }
-      if (!takesRequests(request.cohortId, request.spaceKey)) {
-        endRequest(request, 'cancelled');
-        continue;
-      }
-      const answerers = answerersIn(request.cohortId, request.spaceKey, now);
-      if (answerers.length === 0) {
-        endRequest(request, 'nobody_inside');
-        continue;
-      }
-      const key = seatKey(request);
-      const sent = told.get(key) ?? new Set<Connection>();
-      told.set(key, sent);
       const frame = encode({
         type: 'entryRequested',
         userId: request.userId,
         spaceKey: request.spaceKey,
       });
-      for (const answerer of answerers) {
-        if (sent.has(answerer)) continue;
-        sent.add(answerer);
+      for (const answerer of answersIn(request, now)) {
+        request.told.add(answerer);
         sendFrame(answerer.socket, frame);
       }
     }
+    // Nobody inside does not undo a yes: it was given while somebody was.
+    for (const pass of requests.allPasses(cohortId, spaceKey)) {
+      const holder = connections.holderOf(pass);
+      const found =
+        holder && obstacle(requestFacts(holder, pass.spaceKey, now));
+      if (!holder || (found && found !== 'nobody_inside')) {
+        requests.dropPass(pass);
+      }
+    }
+  }
+
+  /** Those inside who may answer a request and have not been sent it. */
+  function answersIn(
+    request: EntryRequest<Connection>,
+    now: Date,
+  ): Connection[] {
+    return answerersIn(request.cohortId, request.spaceKey, now).filter(
+      (answerer) => !request.told.has(answerer),
+    );
   }
 
   /** After a step: leaving the tiles beside a space ends a request to it, and lets a yes lapse. */
@@ -966,11 +993,18 @@ export function registerGateway(
     if (connections.has(connection) && !stopping) {
       leavePresence([connection]);
     }
+    // A replaced socket's request and yes were ended at the swap, and the
+    // seat is the new socket's now: a late close must not touch them.
+    const held = connections.has(connection);
     connections.remove(connection);
     if (!stopping) {
       unlockIfEmpty(connection.cohortId, connection.spaceKey);
-      endRequest(connection, 'withdrawn');
-      requests.dropPass(connection);
+      if (held) {
+        if (requests.openFor(connection)?.asker === connection) {
+          endRequest(connection, 'withdrawn');
+        }
+        requests.dropPass(connection);
+      }
       reviewRequests(connection.cohortId, connection.spaceKey);
     }
     // Replaced in the same cohort: the avatar stays, and the new socket
@@ -1612,6 +1646,9 @@ export function registerGateway(
         },
         'socket displaced, account entered this cohort elsewhere',
       );
+      // Before the new socket can ask: the old one's request ends with it.
+      endRequest(displaced, 'withdrawn');
+      requests.dropPass(displaced);
       send(displaced.socket, { type: 'replaced' });
       closeFor(displaced.socket, 'entered_elsewhere');
       // Only an idle tab replaced by an active one changes what is shown. Not

@@ -422,9 +422,9 @@ does not name them, can ask to come in. Each cohort's requests are its own.
   `{ "type": "requestEntry", "spaceKey": "…" }`. You and each person inside
   who may answer get `{ "type": "entryRequested", "userId": "…",
 "spaceKey": "…" }`. One request at a time.
-- **Who answers.** In a locked space, anybody inside. In a designated space,
-  only people its list names, and admins; a visitor let in cannot let in
-  others. Somebody who steps in while a request is open, and may answer it,
+- **Who answers.** In a locked space, anybody inside, somebody let in with
+  a yes included. In a designated space, only people its list names, and
+  admins; a visitor let in cannot let in others. Somebody who steps in while a request is open, and may answer it,
   gets its `entryRequested` then. Answer with `{ "type":
 "answerEntryRequest", "userId": "…", "admit": true }`, or `false`, only
   while standing in that space. The first answer stands.
@@ -444,17 +444,23 @@ does not name them, can ask to come in. Each cohort's requests are its own.
   | `not_needed`    | They may walk in without asking: unlocked, or now on the list |
   | `cancelled`     | The space no longer takes requests                            |
 
-  Nothing ends a request on a timer: it stays open until one of these.
+  Nothing ends a request on a timer: it stays open until one of these. A
+  world restart ends every request with the socket, with no
+  `entryRequestEnded`: treat the close as the end. Opening the same cohort
+  in another tab ends the old tab's request as `withdrawn`.
 
 - **A yes** lets the asker's next step into the space through. Walking away
-  from beside it first lets the yes lapse, and they ask again. Once inside
-  they stay until they step out, like anybody else.
+  from beside it first lets the yes lapse, and they ask again; so does the
+  space opening (unlocked, or the list naming them) before they step in,
+  so a lock that comes back needs a new yes. Once inside they stay until
+  they step out, like anybody else.
 - **A no** means the same person may not ask the same space again for 30
   seconds.
 - **Refusals** come as an `error` with code `NOT_ALLOWED`, and its message
-  says why: not beside the space, a space that takes no requests (open, the
-  corridors, or not set up), one they may walk into anyway, nobody inside
-  who can answer, a request already open, or too soon after a no. An answer
+  says why: a space the map does not draw, one you are inside already, one
+  you may walk into anyway (open, or a yes in hand), one that takes no
+  requests (the corridors, or not set up), not beside the space, nobody
+  inside who can answer, a request already open, or too soon after a no. An answer
   to a request that has ended, or that you may not answer, is refused the
   same way.
 

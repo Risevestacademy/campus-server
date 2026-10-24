@@ -1283,6 +1283,33 @@ describe('movement', () => {
   /** Long enough that anything the server was going to send has arrived. */
   const quiet = () => new Promise((resolve) => setTimeout(resolve, 150));
 
+  /** One step, answered, then the walking speed's wait before the next. */
+  const step = async (
+    conn: ReturnType<typeof connect>,
+    direction: string,
+    seq: number,
+  ) => {
+    move(conn, direction, seq);
+    const answer = await waitFor(
+      conn,
+      (m) => m.type === 'moveResult' && m.seq === seq,
+    );
+    await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
+    return answer;
+  };
+
+  /** Two steps right of the spawn: beside the library, at (2, 0). */
+  const toTheDoor = async (conn: ReturnType<typeof connect>) => {
+    await step(conn, 'right', 1);
+    await step(conn, 'right', 2);
+  };
+
+  /** Three steps right: the last is the one into the library. */
+  const walkToLibrary = async (conn: ReturnType<typeof connect>) => {
+    await toTheDoor(conn);
+    return step(conn, 'right', 3);
+  };
+
   it('shows an arrival the map and everybody on it, themselves included', async () => {
     const ada = person();
     const grace = person();
@@ -2862,19 +2889,6 @@ describe('movement', () => {
      * allowance back. Any shorter and a long walk runs out of steps, sooner
      * the faster the machine answers.
      */
-    const step = async (
-      conn: ReturnType<typeof connect>,
-      direction: string,
-      seq: number,
-    ) => {
-      move(conn, direction, seq);
-      const answer = await waitFor(
-        conn,
-        (m) => m.type === 'moveResult' && m.seq === seq,
-      );
-      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
-      return answer;
-    };
     const crossingsOf = (userId: string) =>
       presence.crossings
         .filter((entry) => entry.userId === userId)
@@ -3281,19 +3295,6 @@ describe('movement', () => {
   });
 
   describe('where everybody is', () => {
-    const step = async (
-      conn: ReturnType<typeof connect>,
-      direction: string,
-      seq: number,
-    ) => {
-      move(conn, direction, seq);
-      const answer = await waitFor(
-        conn,
-        (m) => m.type === 'moveResult' && m.seq === seq,
-      );
-      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
-      return answer;
-    };
     const spaceChanges = (conn: { messages: Record<string, unknown>[] }) =>
       conn.messages
         .filter((m) => m.type === 'spaceChanged')
@@ -3353,27 +3354,6 @@ describe('movement', () => {
    * step into another space is asked about.
    */
   describe('the doors', () => {
-    const step = async (
-      conn: ReturnType<typeof connect>,
-      direction: string,
-      seq: number,
-    ) => {
-      move(conn, direction, seq);
-      const answer = await waitFor(
-        conn,
-        (m) => m.type === 'moveResult' && m.seq === seq,
-      );
-      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
-      return answer;
-    };
-
-    /** Three steps right: the last is the one into the library. */
-    const walkToLibrary = async (conn: ReturnType<typeof connect>) => {
-      await step(conn, 'right', 1);
-      await step(conn, 'right', 2);
-      return step(conn, 'right', 3);
-    };
-
     it('lets anybody into a normal space', async () => {
       const conn = await arrive(person());
 
@@ -3705,26 +3685,6 @@ describe('movement', () => {
    * excepted, and the lock ends when the last person leaves.
    */
   describe('locks', () => {
-    const step = async (
-      conn: ReturnType<typeof connect>,
-      direction: string,
-      seq: number,
-    ) => {
-      move(conn, direction, seq);
-      const answer = await waitFor(
-        conn,
-        (m) => m.type === 'moveResult' && m.seq === seq,
-      );
-      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
-      return answer;
-    };
-
-    const walkToLibrary = async (conn: ReturnType<typeof connect>) => {
-      await step(conn, 'right', 1);
-      await step(conn, 'right', 2);
-      return step(conn, 'right', 3);
-    };
-
     const setLock = (conn: { ws: WebSocket }, locked: boolean) =>
       conn.ws.send(JSON.stringify({ type: 'setLock', locked }));
 
@@ -3973,30 +3933,6 @@ describe('movement', () => {
    * spawn, at (2, 0).
    */
   describe('asking to enter', () => {
-    const step = async (
-      conn: ReturnType<typeof connect>,
-      direction: string,
-      seq: number,
-    ) => {
-      move(conn, direction, seq);
-      const answer = await waitFor(
-        conn,
-        (m) => m.type === 'moveResult' && m.seq === seq,
-      );
-      await new Promise((resolve) => setTimeout(resolve, env.WORLD_STEP_MS));
-      return answer;
-    };
-
-    const toTheDoor = async (conn: ReturnType<typeof connect>) => {
-      await step(conn, 'right', 1);
-      await step(conn, 'right', 2);
-    };
-
-    const intoLibrary = async (conn: ReturnType<typeof connect>) => {
-      await toTheDoor(conn);
-      return step(conn, 'right', 3);
-    };
-
     const send = (conn: { ws: WebSocket }, message: Record<string, unknown>) =>
       conn.ws.send(JSON.stringify(message));
 
@@ -4018,7 +3954,7 @@ describe('movement', () => {
     /** Somebody standing in the library who has locked it. */
     async function lockedInside(userId = person()) {
       const conn = await arrive(userId);
-      await intoLibrary(conn);
+      await walkToLibrary(conn);
       send(conn, { type: 'setLock', locked: true });
       await waitFor(conn, (m) => m.type === 'lockChanged');
       return conn;
@@ -4064,6 +4000,69 @@ describe('movement', () => {
         outcome: 'moved',
       });
       await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('drops a yes once the space opens, so locking it again means asking again', async () => {
+      const ada = person();
+      const inside = await lockedInside();
+      const outside = await askingAtTheDoor(ada);
+      answer(inside, ada, true);
+      await ended(outside);
+      const locks = (locked: boolean) =>
+        outside.messages.filter(
+          (m) => m.type === 'lockChanged' && m.locked === locked,
+        ).length;
+
+      send(inside, { type: 'setLock', locked: false });
+      await expect.poll(() => locks(false)).toBe(1);
+      send(inside, { type: 'setLock', locked: true });
+      // Its first `lockChanged` to lock: the first lock was in its snapshot.
+      await expect.poll(() => locks(true)).toBe(1);
+
+      await expect(step(outside, 'right', 3)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('ends a replaced tab’s request at the swap, and leaves the new tab’s alone when the old one closes late', async () => {
+      const ada = person();
+      const inside = await lockedInside();
+      const old = await askingAtTheDoor(ada);
+      await waitFor(inside, (m) => m.type === 'entryRequested');
+      // Reads nothing, so its close lands late, as a sleeping tab's does.
+      old.ws.pause();
+
+      const fresh = await arrive(ada);
+      await expect(ended(inside)).resolves.toMatchObject({
+        userId: ada,
+        outcome: 'withdrawn',
+      });
+      ask(fresh);
+      await waitFor(fresh, (m) => m.type === 'entryRequested');
+      await waitFor(inside, () => requested(inside).length === 2);
+      old.ws.resume();
+      await old.settled;
+      await quiet();
+
+      answer(inside, ada, true);
+
+      await expect(
+        waitFor(
+          fresh,
+          (m) => m.type === 'entryRequestEnded' && m.outcome === 'admitted',
+        ),
+      ).resolves.toMatchObject({ answeredBy: expect.any(String) });
+      expect(
+        fresh.messages.filter((m) => m.type === 'entryRequestEnded'),
+      ).toHaveLength(1);
+      expect(
+        old.messages.filter((m) => m.type === 'entryRequestEnded'),
+      ).toEqual([expect.objectContaining({ outcome: 'withdrawn' })]);
+      await expect(step(fresh, 'right', 3)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await Promise.all([leave(inside), leave(fresh)]);
     });
 
     it('lets a yes lapse when they walk away from the door first', async () => {
@@ -4119,7 +4118,7 @@ describe('movement', () => {
       const ada = person();
       const first = await lockedInside();
       const second = await arrive(admin);
-      await intoLibrary(second);
+      await walkToLibrary(second);
       const outside = await askingAtTheDoor(ada);
       await waitFor(second, (m) => m.type === 'entryRequested');
 
@@ -4145,7 +4144,7 @@ describe('movement', () => {
       const staff = await arrive(admin);
       expect(requested(staff)).toEqual([]);
 
-      await intoLibrary(staff);
+      await walkToLibrary(staff);
 
       await expect(
         waitFor(staff, (m) => m.type === 'entryRequested'),
@@ -4236,13 +4235,23 @@ describe('movement', () => {
       await Promise.all([leave(inside), leave(outside)]);
     });
 
+    it('refuses asking into a space the map does not draw', async () => {
+      const conn = await arrive(person());
+      await toTheDoor(conn);
+
+      send(conn, { type: 'requestEntry', spaceKey: 'nowhere' });
+
+      await expect(refusal(conn)).resolves.toBe('no such space');
+      await leave(conn);
+    });
+
     it('refuses asking into a space that is open anyway', async () => {
       const conn = await arrive(person());
       await toTheDoor(conn);
 
       ask(conn);
 
-      await expect(refusal(conn)).resolves.toBe('this space takes no requests');
+      await expect(refusal(conn)).resolves.toBe('you may walk in');
       await leave(conn);
     });
 
@@ -4266,7 +4275,7 @@ describe('movement', () => {
         designateLibrary(listEntry({ toUserId: ada }));
         await world.gateway.spacesChanged();
         const listed = await arrive(ada);
-        await intoLibrary(listed);
+        await walkToLibrary(listed);
 
         const visitor = await askingAtTheDoor(grace);
         answer(listed, grace, true);
@@ -4290,7 +4299,7 @@ describe('movement', () => {
         designateLibrary(listEntry({ toUserId: ada }));
         await world.gateway.spacesChanged();
         const listed = await arrive(ada);
-        await intoLibrary(listed);
+        await walkToLibrary(listed);
         const outside = await askingAtTheDoor();
 
         await step(listed, 'down', 4);
@@ -4308,7 +4317,7 @@ describe('movement', () => {
         designateLibrary(listEntry({ toUserId: ada }));
         await world.gateway.spacesChanged();
         const listed = await arrive(ada);
-        await intoLibrary(listed);
+        await walkToLibrary(listed);
         const outside = await askingAtTheDoor(grace);
 
         designateLibrary(
