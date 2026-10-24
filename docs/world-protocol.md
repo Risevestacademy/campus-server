@@ -307,7 +307,8 @@ space you stand in; you join it with a LiveKit client.
   another space: leave the call you are in and join this one, with
   `call.url` and `call.token`. `null` means there is no call where you
   stand. World also takes you out of the old call itself, so a client that
-  stays is removed. A new `call` can also come without a step, when the
+  stays is removed, and revokes the old call's token, so it cannot rejoin
+  with it. A new `call` can also come without a step, when the
   space's call changes (its row appears, or its hearing or radii change).
   World restarting leaves you in your call; the `call` you get after
   reconnecting replaces it.
@@ -324,6 +325,35 @@ space you stand in; you join it with a LiveKit client.
   changes each time they join. Match it to `nearby` and to avatars by the
   part before the colon.
 - Nobody hears across a space's edge: everybody in a call is in that space.
+
+### Broadcast
+
+Admins can speak to everybody in the cohort's campus at once, wherever they
+stand.
+
+- **`broadcast`** arrives after the `snapshot`: `{ "type": "broadcast",
+"call": { "url": "…", "room": "…", "token": "…", "canSpeak": false } }`.
+  `call.room` is the cohort's broadcast room: join it with `call.url` and
+  `call.token`, beside your space's call, and stay in it as you walk. It
+  does not change with spaces. A new `broadcast` comes when you are made an admin or
+  stop being one (within a heartbeat): leave the room and join with the new
+  token. `null` means there is none to join; if world could not make a
+  token, it tries again and sends a new `broadcast` within a heartbeat.
+- **Join straight away.** A token that may speak is only good for joining
+  within a minute; one to listen, ten. Once you are in, LiveKit keeps you
+  connected. Somebody who stops being an admin is taken out of the room,
+  their old tokens revoked so they cannot rejoin with one, and is handed a
+  token to listen.
+- **Listening:** subscribe to every audio track in the broadcast room. Play
+  it over everything else, with your space's call carrying on quieter
+  underneath, and give no way to mute it.
+- **Speaking:** `call.canSpeak` is true for admins only. They may
+  publish their microphone in this room and nothing else: no camera and no
+  screen. Several admins may speak at once.
+- **When a broadcast is on** is LiveKit's to say: it starts when an audio
+  track is published in the broadcast room and ends when it is
+  unpublished. Show who is speaking from the participant's identity, as for
+  a space's call.
 
 ## Chat
 
@@ -434,6 +464,71 @@ own locks.
   `lockChanged` then has `userId: null`. A world restart ends every lock.
 - **A step refused while it is locked** looks the same as any other
   `refused`. Use the locked list to tell the person why.
+
+## Asking to enter
+
+Somebody refused at a locked space, or at a designated space whose list
+does not name them, can ask to come in. Each cohort's requests are its own.
+
+- **Asking.** From a tile beside the space (one step from its floor), send
+  `{ "type": "requestEntry", "spaceKey": "…" }`. You and each person inside
+  who may answer get `{ "type": "entryRequested", "requestId": "…",
+"userId": "…", "spaceKey": "…" }`. One request at a time.
+- **`requestId`** names this request, not the person: asking again, even
+  for the same space straight after withdrawing, gets a new one. Answers and
+  withdrawals carry it, so one sent late, meant for a request that has
+  ended, is refused rather than reaching the newer one. Key your list of
+  requests by it.
+- **Who answers.** In a locked space, anybody inside, somebody let in with
+  a yes included. In a designated space, only people its list names, and
+  admins; a visitor let in cannot let in others. Somebody who steps in
+  while a request is open, and may answer it, gets its `entryRequested`
+  then. Answer with `{ "type": "answerEntryRequest", "requestId": "…",
+"admit": true }`, or `false`, only while standing in that space. The first
+  answer stands.
+- **How it ends.** Every `entryRequested` you get is followed by one
+  `{ "type": "entryRequestEnded", "requestId": "…", "userId": "…", "spaceKey": "…",
+"outcome": "…", "answeredBy": "…" }`, to the asker and to everybody who
+  was sent the request. `answeredBy` is set for `admitted` and `declined`
+  only. The outcomes:
+
+  | outcome         | What happened                                                                  |
+  | --------------- | ------------------------------------------------------------------------------ |
+  | `admitted`      | A yes                                                                          |
+  | `declined`      | A no                                                                           |
+  | `withdrawn`     | The asker sent `{ "type": "withdrawEntryRequest", "requestId": "…" }`, or left |
+  | `walked_away`   | The asker stepped off the tiles beside the space                               |
+  | `nobody_inside` | Nobody inside can answer any more                                              |
+  | `not_needed`    | They may walk in without asking: unlocked, or now on the list                  |
+  | `cancelled`     | The space no longer takes requests                                             |
+
+  Nothing ends a request on a timer: it stays open until one of these.
+
+  Two closes end requests without an `entryRequestEnded`, so treat the
+  close as the end of every request that socket was sent:
+
+  - a world restart, for every socket;
+  - opening the same cohort in another tab, for the old tab once it is
+    `replaced`. If it asked, it is sent its request's end, `withdrawn`,
+    first; any yes it held is dropped, and the new tab asks again. If it
+    was inside and could answer, the new tab is sent the open requests
+    instead.
+
+- **A yes** lets the asker's next step into the space through. Walking away
+  from beside it first lets the yes lapse, and they ask again; so does the
+  space opening (unlocked, or the list naming them) before they step in,
+  so a lock that comes back needs a new yes. Once inside they stay until
+  they step out, like anybody else.
+- **A no** means the same person may not ask the same space again for 30
+  seconds.
+- **Refusals** come as an `error` with code `NOT_ALLOWED`, and its message
+  says why: a space the map does not draw, one you are inside already, one
+  you may walk into anyway (open, the corridors, or a yes in hand), one
+  that takes no requests (not set up, or retired), not beside the space,
+  nobody inside who can answer, a request already open, or too soon after
+  a no. An answer to a request that has ended, or that you may not answer,
+  and a withdrawal of a request that is not your open one, are refused the
+  same way, by `requestId`.
 
 ## Errors and closing
 

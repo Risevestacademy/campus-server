@@ -18,6 +18,7 @@ NestJS backend for the campus application.
 - [Maps](#maps)
 - [Feedback](#feedback)
 - [Calls](#calls)
+- [Dashboard](#dashboard)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
 - [Integration guide](#integration-guide)
@@ -198,6 +199,17 @@ records the calls from LiveKit's webhooks: when each run of a space's room
 opens and closes, who joins and leaves, and whether a camera came on. The
 webhook route, how events that arrive late or twice are handled, and the
 tables are in [src/modules/calls/README.md](src/modules/calls/README.md).
+
+## Dashboard
+
+`GET /v1/dashboard` gives admins the dashboard's figures: live members, in
+total and by cohort role, and invites still waiting for an answer, across
+the campus or for one cohort with `cohortId`. Who is online now is world's
+to answer, at `GET /admin/online` (see
+[world's README](../world/README.md#the-online-count)). The two differ for a
+cohort that does not exist (404 here, `0` in world) and for suspended
+accounts (members here, never online in world); the route's OpenAPI
+description says so too.
 
 ## Logging
 

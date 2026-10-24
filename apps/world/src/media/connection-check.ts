@@ -1,15 +1,14 @@
 import { mintConnectionCheckToken } from '@campus/media';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import type { AccountLookup } from '../infra/accounts.js';
-import { allowedOrigins, mediaCredentials, type Env } from '../infra/env.js';
-import { CORRELATION_ID_HEADER } from '../infra/logger.js';
 import {
-  checkAccount,
-  readCaller,
-  type CallerHeaders,
-  type Refusal,
-} from '../socket/authenticate.js';
+  answerPreflight,
+  errorBody,
+  grantOrigin,
+  signIn,
+} from '../http/routes.js';
+import type { AccountLookup } from '../infra/accounts.js';
+import { mediaCredentials, type Env } from '../infra/env.js';
 import { CheckBudget } from './check-budget.js';
 
 export const CONNECTION_CHECK_PATH = '/media/connection-check';
@@ -28,18 +27,6 @@ export function registerConnectionCheck(
   const credentials = mediaCredentials(env);
   const budget = new CheckBudget(env.WORLD_CONNECTION_CHECKS_PER_MINUTE, now());
 
-  function allowOrigin(request: FastifyRequest, reply: FastifyReply): boolean {
-    void reply.header('vary', 'Origin');
-    const origin = request.headers.origin;
-    if (origin === undefined || !allowedOrigins(env).includes(origin)) {
-      return false;
-    }
-    void reply
-      .header('access-control-allow-origin', origin)
-      .header('access-control-allow-credentials', 'true');
-    return true;
-  }
-
   // Its own scope, so the JSON parser below is this route's alone.
   void app.register(async (scope) => {
     // The body is never read, but a client may still mark an empty one as JSON.
@@ -56,58 +43,41 @@ export function registerConnectionCheck(
       },
     );
 
-    // A bearer token makes the request non-simple, so the browser asks first.
-    scope.options(CONNECTION_CHECK_PATH, async (request, reply) => {
-      if (allowOrigin(request, reply)) {
-        void reply
-          .header('access-control-allow-methods', 'POST')
-          .header(
-            'access-control-allow-headers',
-            `authorization, content-type, ${CORRELATION_ID_HEADER}`,
-          )
-          .header('access-control-max-age', '600');
-      }
-      return reply.status(204).send();
-    });
-
-    scope.post(CONNECTION_CHECK_PATH, { onRequest: grantOrigin }, handle);
+    answerPreflight(scope, env, CONNECTION_CHECK_PATH, 'POST', [
+      'content-type',
+    ]);
+    scope.post(
+      CONNECTION_CHECK_PATH,
+      { onRequest: grantOrigin(env, ['retry-after']) },
+      handle,
+    );
   });
 
-  // Before the body is parsed, so a 400 from the parser is readable too.
-  async function grantOrigin(request: FastifyRequest, reply: FastifyReply) {
-    if (allowOrigin(request, reply)) {
-      void reply.header(
-        'access-control-expose-headers',
-        `${CORRELATION_ID_HEADER}, retry-after`,
-      );
-    }
-  }
-
   async function handle(request: FastifyRequest, reply: FastifyReply) {
-    const caller = await readCaller(env, request.headers as CallerHeaders);
+    const caller = await signIn(
+      env,
+      accounts,
+      request,
+      reply,
+      'connection check',
+      ({ userId }) => {
+        const retryAfter = budget.take(userId, now());
+        if (retryAfter === 0) return undefined;
+        return reply
+          .status(429)
+          .header('retry-after', String(retryAfter))
+          .send(
+            errorBody(
+              'RATE_LIMITED',
+              'Too many connection checks. Wait a minute and try again.',
+            ),
+          );
+      },
+    );
     if (!caller.ok) {
-      return refuse(request, reply, caller.refusal);
+      return caller.reply;
     }
     const { userId } = caller.claims;
-
-    // Before the account lookups, so a flood costs no queries.
-    const retryAfter = budget.take(userId, now());
-    if (retryAfter > 0) {
-      return reply
-        .status(429)
-        .header('retry-after', String(retryAfter))
-        .send(
-          errorBody(
-            'RATE_LIMITED',
-            'Too many connection checks. Wait a minute and try again.',
-          ),
-        );
-    }
-
-    const checked = await checkAccount(env, accounts, caller.claims);
-    if (!checked.ok) {
-      return refuse(request, reply, checked.refusal);
-    }
 
     // After sign-in, so only members learn how this deployment is set up.
     if (!credentials) {
@@ -130,30 +100,4 @@ export function registerConnectionCheck(
       expiresAt: minted.expiresAt.toISOString(),
     });
   }
-}
-
-/**
- * The status campus-api answers the same session with: 401 for anything about
- * the token or account, 403 for a page world does not serve.
- */
-function refuse(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  refusal: Refusal,
-): FastifyReply {
-  request.log.info({ refusal }, 'connection check refused');
-  if (refusal === 'origin_not_allowed') {
-    return reply
-      .status(403)
-      .send(errorBody('FORBIDDEN', 'This origin may not call world.', refusal));
-  }
-  return reply
-    .status(401)
-    .send(errorBody('UNAUTHORIZED', 'Authentication required', refusal));
-}
-
-function errorBody(code: string, message: string, reason?: Refusal) {
-  return {
-    error: { code, message, ...(reason ? { details: { reason } } : {}) },
-  };
 }
