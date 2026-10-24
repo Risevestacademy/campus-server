@@ -1,4 +1,5 @@
 import { SPACE_ACCESS } from '@campus/space-access';
+import { randomUUID } from 'node:crypto';
 
 import type { WorldSpace } from '../infra/accounts.js';
 import {
@@ -19,6 +20,8 @@ export const ASK_AGAIN_AFTER_MS = 30_000;
  * sent to, so ending it reaches exactly those.
  */
 export interface EntryRequest<T> extends Seat {
+  /** This request, not the person: asking again gets a new one. */
+  id: string;
   spaceKey: string;
   asker: T;
   told: Set<T>;
@@ -94,6 +97,7 @@ export class EntryRequests<T> {
       return 'too_soon';
     }
     this.open.set(key, {
+      id: randomUUID(),
       userId: seat.userId,
       cohortId: seat.cohortId,
       spaceKey,
@@ -105,6 +109,14 @@ export class EntryRequests<T> {
 
   openFor(seat: Seat): EntryRequest<T> | undefined {
     return this.open.get(seatKey(seat));
+  }
+
+  /** The open request with this id: undefined once it has ended. */
+  find(id: string): EntryRequest<T> | undefined {
+    for (const request of this.open.values()) {
+      if (request.id === id) return request;
+    }
+    return undefined;
   }
 
   close(seat: Seat): EntryRequest<T> | undefined {

@@ -3940,8 +3940,40 @@ describe('movement', () => {
     const ask = (conn: { ws: WebSocket }) =>
       send(conn, { type: 'requestEntry', spaceKey: 'library' });
 
-    const answer = (conn: { ws: WebSocket }, userId: string, admit: boolean) =>
-      send(conn, { type: 'answerEntryRequest', userId, admit });
+    /** The latest request from `userId` that `conn` was sent. */
+    const requestIdOf = (
+      conn: { messages: Record<string, unknown>[] },
+      userId?: string,
+    ) => {
+      const sent = conn.messages.filter(
+        (m) =>
+          m.type === 'entryRequested' &&
+          (userId === undefined || m.userId === userId),
+      );
+      const latest = sent.at(-1);
+      if (!latest) throw new Error('no request was sent there');
+      return latest.requestId as string;
+    };
+
+    /** Answers the latest request from `userId` that `source` was sent. */
+    const answer = (
+      conn: ReturnType<typeof connect>,
+      userId: string,
+      admit: boolean,
+      source: { messages: Record<string, unknown>[] } = conn,
+    ) =>
+      send(conn, {
+        type: 'answerEntryRequest',
+        requestId: requestIdOf(source, userId),
+        admit,
+      });
+
+    /** Withdraws the asker's own latest request. */
+    const withdraw = (conn: ReturnType<typeof connect>) =>
+      send(conn, {
+        type: 'withdrawEntryRequest',
+        requestId: requestIdOf(conn),
+      });
 
     const requested = (conn: { messages: Record<string, unknown>[] }) =>
       conn.messages.filter((m) => m.type === 'entryRequested');
@@ -3976,20 +4008,24 @@ describe('movement', () => {
       const inside = await lockedInside(ada);
       const outside = await askingAtTheDoor(grace);
 
+      const sent = await waitFor(inside, (m) => m.type === 'entryRequested');
       const request = {
         type: 'entryRequested',
+        requestId: expect.any(String),
         userId: grace,
         spaceKey: 'library',
       };
-      await expect(
-        waitFor(inside, (m) => m.type === 'entryRequested'),
-      ).resolves.toEqual(request);
-      expect(requested(outside)).toEqual([request]);
+      expect(sent).toEqual(request);
+      // One id for the request, the same to the asker as to those inside.
+      expect(requested(outside)).toEqual([
+        { ...request, requestId: sent.requestId },
+      ]);
 
       answer(inside, grace, true);
 
       const admitted = {
         type: 'entryRequestEnded',
+        requestId: sent.requestId,
         userId: grace,
         spaceKey: 'library',
         outcome: 'admitted',
@@ -4000,6 +4036,46 @@ describe('movement', () => {
       await expect(step(outside, 'right', 3)).resolves.toMatchObject({
         outcome: 'moved',
       });
+      await Promise.all([leave(inside), leave(outside)]);
+    });
+
+    it('refuses a late answer to a withdrawn request, leaving the new one open', async () => {
+      const ada = person();
+      const inside = await lockedInside();
+      const outside = await askingAtTheDoor(ada);
+      await waitFor(inside, (m) => m.type === 'entryRequested');
+      const first = requestIdOf(inside, ada);
+
+      withdraw(outside);
+      await waitFor(inside, (m) => m.type === 'entryRequestEnded');
+      ask(outside);
+      await waitFor(inside, () => requested(inside).length === 2);
+      const second = requestIdOf(inside, ada);
+      expect(second).not.toBe(first);
+
+      send(inside, {
+        type: 'answerEntryRequest',
+        requestId: first,
+        admit: true,
+      });
+      await expect(refusal(inside)).resolves.toBe(
+        'no request here for you to answer',
+      );
+      send(outside, { type: 'withdrawEntryRequest', requestId: first });
+      await expect(refusal(outside)).resolves.toBe(
+        'no open request of yours to withdraw',
+      );
+      await expect(step(outside, 'right', 3)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+
+      answer(inside, ada, false);
+      await expect(
+        waitFor(
+          outside,
+          (m) => m.type === 'entryRequestEnded' && m.requestId === second,
+        ),
+      ).resolves.toMatchObject({ outcome: 'declined' });
       await Promise.all([leave(inside), leave(outside)]);
     });
 
@@ -4193,8 +4269,7 @@ describe('movement', () => {
     it.each([
       [
         'withdraws it',
-        (conn: ReturnType<typeof connect>) =>
-          send(conn, { type: 'withdrawEntryRequest' }),
+        (conn: ReturnType<typeof connect>) => withdraw(conn),
         'withdrawn',
       ],
       [
@@ -4335,7 +4410,7 @@ describe('movement', () => {
         expect(requested(visitor)).toEqual([
           expect.objectContaining({ userId: grace }),
         ]);
-        answer(visitor, linus, true);
+        answer(visitor, linus, true, listed);
         await expect(refusal(visitor)).resolves.toBe(
           'no request here for you to answer',
         );

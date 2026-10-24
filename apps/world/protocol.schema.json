@@ -308,13 +308,18 @@
         "type": {
           "type": "string",
           "const": "withdrawEntryRequest"
+        },
+        "requestId": {
+          "type": "string",
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
         }
       },
       "required": [
-        "type"
+        "type",
+        "requestId"
       ],
       "additionalProperties": false,
-      "description": "Withdraw your open request, answered by its `entryRequestEnded`. Nothing happens when you have none open. Counts as activity."
+      "description": "Withdraw your open request, answered by its `entryRequestEnded`. A `requestId` that is not your open request, as one that has ended, gets a NOT_ALLOWED error. Counts as activity."
     },
     "AnswerEntryRequestMessage": {
       "type": "object",
@@ -323,9 +328,9 @@
           "type": "string",
           "const": "answerEntryRequest"
         },
-        "userId": {
+        "requestId": {
           "type": "string",
-          "description": "Who asked."
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
         },
         "admit": {
           "type": "boolean"
@@ -333,11 +338,11 @@
       },
       "required": [
         "type",
-        "userId",
+        "requestId",
         "admit"
       ],
       "additionalProperties": false,
-      "description": "Answer a request to enter the space you are standing in. Anybody inside a locked space may; in a designated space, only somebody its list names, or an admin. The first answer stands: one that comes later, or from somebody who may not answer, gets a NOT_ALLOWED error. Counts as activity."
+      "description": "Answer a request to enter the space you are standing in. Anybody inside a locked space may; in a designated space, only somebody its list names, or an admin. The first answer stands: one that comes later, names a request that has ended, or comes from somebody who may not answer, gets a NOT_ALLOWED error. Counts as activity."
     },
     "ClientMessage": {
       "oneOf": [
@@ -736,6 +741,10 @@
           "type": "string",
           "const": "entryRequested"
         },
+        "requestId": {
+          "type": "string",
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
+        },
         "userId": {
           "type": "string",
           "description": "Who is asking."
@@ -746,11 +755,12 @@
       },
       "required": [
         "type",
+        "requestId",
         "userId",
         "spaceKey"
       ],
       "additionalProperties": false,
-      "description": "Somebody asks to enter a space. Sent to the asker, and to each person inside who may answer, as they become able to: on the request, or on stepping in later. Every one is followed by an `entryRequestEnded` for the same asker. Only answerable while you stand in that space."
+      "description": "Somebody asks to enter a space. Sent to the asker, and to each person inside who may answer, as they become able to: on the request, or on stepping in later. Every one is followed by an `entryRequestEnded` with the same `requestId`. Only answerable while you stand in that space."
     },
     "EntryRequestEndedMessage": {
       "type": "object",
@@ -758,6 +768,10 @@
         "type": {
           "type": "string",
           "const": "entryRequestEnded"
+        },
+        "requestId": {
+          "type": "string",
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
         },
         "userId": {
           "type": "string",
@@ -779,6 +793,7 @@
       },
       "required": [
         "type",
+        "requestId",
         "userId",
         "spaceKey",
         "outcome",

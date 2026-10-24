@@ -131,6 +131,14 @@ export const MoveOutcome = z
       'speed; nothing happens, not even the turn.',
   });
 
+const requestId = z
+  .string()
+  .describe(
+    'This request, not the person asking: asking again gets a new one. ' +
+      'Answer and withdraw with it, so a late answer never reaches a newer ' +
+      'request.',
+  );
+
 export const EntryRequestOutcome = z
   .enum([
     'admitted',
@@ -249,16 +257,17 @@ export const ClientMessage = z
           'After a no, the same space can be asked again 30 seconds later. ' +
           'Counts as activity.',
       }),
-    z.object({ type: z.literal('withdrawEntryRequest') }).meta({
+    z.object({ type: z.literal('withdrawEntryRequest'), requestId }).meta({
       id: 'WithdrawEntryRequestMessage',
       description:
         'Withdraw your open request, answered by its `entryRequestEnded`. ' +
-        'Nothing happens when you have none open. Counts as activity.',
+        'A `requestId` that is not your open request, as one that has ' +
+        'ended, gets a NOT_ALLOWED error. Counts as activity.',
     }),
     z
       .object({
         type: z.literal('answerEntryRequest'),
-        userId: z.string().describe('Who asked.'),
+        requestId,
         admit: z.boolean(),
       })
       .meta({
@@ -267,8 +276,9 @@ export const ClientMessage = z
           'Answer a request to enter the space you are standing in. Anybody ' +
           'inside a locked space may; in a designated space, only somebody ' +
           'its list names, or an admin. The first answer stands: one that ' +
-          'comes later, or from somebody who may not answer, gets a ' +
-          'NOT_ALLOWED error. Counts as activity.',
+          'comes later, names a request that has ended, or comes from ' +
+          'somebody who may not answer, gets a NOT_ALLOWED error. Counts as ' +
+          'activity.',
       }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
@@ -450,6 +460,7 @@ export const ServerMessage = z
     z
       .object({
         type: z.literal('entryRequested'),
+        requestId,
         userId: z.string().describe('Who is asking.'),
         spaceKey: z.string(),
       })
@@ -459,12 +470,13 @@ export const ServerMessage = z
           'Somebody asks to enter a space. Sent to the asker, and to each ' +
           'person inside who may answer, as they become able to: on the ' +
           'request, or on stepping in later. Every one is followed by an ' +
-          '`entryRequestEnded` for the same asker. Only answerable while you ' +
-          'stand in that space.',
+          '`entryRequestEnded` with the same `requestId`. Only answerable ' +
+          'while you stand in that space.',
       }),
     z
       .object({
         type: z.literal('entryRequestEnded'),
+        requestId,
         userId: z.string().describe('Who asked.'),
         spaceKey: z.string(),
         outcome: EntryRequestOutcome,

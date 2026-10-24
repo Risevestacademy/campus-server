@@ -67,6 +67,22 @@ describe('EntryRequests', () => {
     ).toBe('asked');
   });
 
+  it('gives every request its own id, found only while it is open', () => {
+    const requests = new EntryRequests<string>();
+    requests.ask(ada, 'library', 0, 'tab');
+    const first = requests.openFor(ada)?.id as string;
+
+    expect(requests.find(first)).toMatchObject({ ...ada, id: first });
+    requests.close(ada);
+    expect(requests.find(first)).toBeUndefined();
+
+    requests.ask(ada, 'library', 0, 'tab');
+    const second = requests.openFor(ada)?.id as string;
+    expect(second).not.toBe(first);
+    expect(requests.find(first)).toBeUndefined();
+    expect(requests.find(second)).toMatchObject({ id: second });
+  });
+
   it('lets them ask again at once after a withdrawal', () => {
     const requests = new EntryRequests<string>();
     requests.ask(ada, 'library', 0, 'tab');

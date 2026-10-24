@@ -435,21 +435,26 @@ export function registerGateway(
     }
     send(connection.socket, {
       type: 'entryRequested',
+      requestId: (requests.openFor(connection) as EntryRequest<Connection>).id,
       userId: connection.userId,
       spaceKey,
     });
     reviewRequests(connection.cohortId, spaceKey);
   }
 
+  /** By the request's id, not the asker's: a late answer never reaches a newer request. */
   function answerEntryRequest(
     connection: Connection,
-    userId: string,
+    requestId: string,
     admit: boolean,
   ): void {
-    const seat: Seat = { userId, cohortId: connection.cohortId };
     const now = new Date();
-    const request = requests.openFor(seat);
-    if (!request || !mayAnswer(connection, request.spaceKey, now)) {
+    const request = requests.find(requestId);
+    if (
+      !request ||
+      request.cohortId !== connection.cohortId ||
+      !mayAnswer(connection, request.spaceKey, now)
+    ) {
       send(connection.socket, {
         type: 'error',
         code: ServerErrorCode.NotAllowed,
@@ -457,9 +462,24 @@ export function registerGateway(
       });
       return;
     }
-    if (admit) requests.admit(seat);
-    else requests.decline(seat, now.getTime());
+    if (admit) requests.admit(request);
+    else requests.decline(request, now.getTime());
     announceEnded(request, admit ? 'admitted' : 'declined', connection.userId);
+  }
+
+  function withdrawEntryRequest(
+    connection: Connection,
+    requestId: string,
+  ): void {
+    if (requests.openFor(connection)?.id !== requestId) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message: 'no open request of yours to withdraw',
+      });
+      return;
+    }
+    endRequest(connection, 'withdrawn');
   }
 
   function endRequest(seat: Seat, outcome: EntryRequestOutcome): void {
@@ -475,6 +495,7 @@ export function registerGateway(
   ): void {
     const frame = encode({
       type: 'entryRequestEnded',
+      requestId: request.id,
       userId: request.userId,
       spaceKey: request.spaceKey,
       outcome,
@@ -512,6 +533,7 @@ export function registerGateway(
       }
       const frame = encode({
         type: 'entryRequested',
+        requestId: request.id,
         userId: request.userId,
         spaceKey: request.spaceKey,
       });
@@ -1760,13 +1782,13 @@ export function registerGateway(
           return;
         case 'withdrawEntryRequest':
           noteActivity(connection);
-          endRequest(connection, 'withdrawn');
+          withdrawEntryRequest(connection, result.message.requestId);
           return;
         case 'answerEntryRequest':
           noteActivity(connection);
           answerEntryRequest(
             connection,
-            result.message.userId,
+            result.message.requestId,
             result.message.admit,
           );
           return;
