@@ -30,8 +30,8 @@ export class MemberFiguresDto {
   @ApiProperty({
     example: 38,
     description:
-      'People with a live membership. Across the campus, somebody in two ' +
-      'cohorts counts once.',
+      'People with a live membership, suspended accounts included, as on ' +
+      'the roster. Across the campus, somebody in two cohorts counts once.',
   })
   total!: number;
 

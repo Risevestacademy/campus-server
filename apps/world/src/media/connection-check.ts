@@ -1,15 +1,14 @@
 import { mintConnectionCheckToken } from '@campus/media';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
+import {
+  answerPreflight,
+  errorBody,
+  grantOrigin,
+  signIn,
+} from '../http/routes.js';
 import type { AccountLookup } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
-import { allowOrigin, errorBody, refuse } from '../infra/http.js';
-import { CORRELATION_ID_HEADER } from '../infra/logger.js';
-import {
-  checkAccount,
-  readCaller,
-  type CallerHeaders,
-} from '../socket/authenticate.js';
 import { CheckBudget } from './check-budget.js';
 
 export const CONNECTION_CHECK_PATH = '/media/connection-check';
@@ -44,58 +43,42 @@ export function registerConnectionCheck(
       },
     );
 
-    // A bearer token makes the request non-simple, so the browser asks first.
-    scope.options(CONNECTION_CHECK_PATH, async (request, reply) => {
-      if (allowOrigin(env, request, reply)) {
-        void reply
-          .header('access-control-allow-methods', 'POST')
-          .header(
-            'access-control-allow-headers',
-            `authorization, content-type, ${CORRELATION_ID_HEADER}`,
-          )
-          .header('access-control-max-age', '600');
-      }
-      return reply.status(204).send();
-    });
-
-    scope.post(CONNECTION_CHECK_PATH, { onRequest: grantOrigin }, handle);
+    answerPreflight(scope, env, CONNECTION_CHECK_PATH, 'POST', [
+      'content-type',
+    ]);
+    scope.post(
+      CONNECTION_CHECK_PATH,
+      { onRequest: grantOrigin(env, ['retry-after']) },
+      handle,
+    );
   });
 
-  // Before the body is parsed, so a 400 from the parser is readable too.
-  async function grantOrigin(request: FastifyRequest, reply: FastifyReply) {
-    if (allowOrigin(env, request, reply)) {
-      void reply.header(
-        'access-control-expose-headers',
-        `${CORRELATION_ID_HEADER}, retry-after`,
-      );
-    }
-  }
-
   async function handle(request: FastifyRequest, reply: FastifyReply) {
-    const caller = await readCaller(env, request.headers as CallerHeaders);
+    const caller = await signIn(
+      env,
+      accounts,
+      request,
+      reply,
+      'connection check',
+      // Before the account lookups, so a flood costs no queries.
+      ({ userId }) => {
+        const retryAfter = budget.take(userId, now());
+        if (retryAfter === 0) return undefined;
+        return reply
+          .status(429)
+          .header('retry-after', String(retryAfter))
+          .send(
+            errorBody(
+              'RATE_LIMITED',
+              'Too many connection checks. Wait a minute and try again.',
+            ),
+          );
+      },
+    );
     if (!caller.ok) {
-      return refuse(request, reply, caller.refusal, 'connection check');
+      return caller.reply;
     }
     const { userId } = caller.claims;
-
-    // Before the account lookups, so a flood costs no queries.
-    const retryAfter = budget.take(userId, now());
-    if (retryAfter > 0) {
-      return reply
-        .status(429)
-        .header('retry-after', String(retryAfter))
-        .send(
-          errorBody(
-            'RATE_LIMITED',
-            'Too many connection checks. Wait a minute and try again.',
-          ),
-        );
-    }
-
-    const checked = await checkAccount(env, accounts, caller.claims);
-    if (!checked.ok) {
-      return refuse(request, reply, checked.refusal, 'connection check');
-    }
 
     // After sign-in, so only members learn how this deployment is set up.
     if (!credentials) {

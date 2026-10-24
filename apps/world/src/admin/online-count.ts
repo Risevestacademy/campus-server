@@ -1,16 +1,15 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
+import {
+  answerPreflight,
+  errorBody,
+  grantOrigin,
+  signIn,
+} from '../http/routes.js';
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
-import { allowOrigin, errorBody, refuse } from '../infra/http.js';
-import { CORRELATION_ID_HEADER } from '../infra/logger.js';
 import type { PresenceStore } from '../infra/presence.js';
-import {
-  checkAccount,
-  readCaller,
-  type CallerHeaders,
-} from '../socket/authenticate.js';
 
 export const ONLINE_COUNT_PATH = '/admin/online';
 
@@ -27,37 +26,15 @@ export function registerOnlineCount(
   accounts: AccountLookup,
   presence: PresenceStore,
 ): void {
-  app.options(ONLINE_COUNT_PATH, async (request, reply) => {
-    if (allowOrigin(env, request, reply)) {
-      void reply
-        .header('access-control-allow-methods', 'GET')
-        .header(
-          'access-control-allow-headers',
-          `authorization, ${CORRELATION_ID_HEADER}`,
-        )
-        .header('access-control-max-age', '600');
-    }
-    return reply.status(204).send();
-  });
-
-  app.get(ONLINE_COUNT_PATH, { onRequest: grantOrigin }, handle);
-
-  async function grantOrigin(request: FastifyRequest, reply: FastifyReply) {
-    if (allowOrigin(env, request, reply)) {
-      void reply.header('access-control-expose-headers', CORRELATION_ID_HEADER);
-    }
-  }
+  answerPreflight(app, env, ONLINE_COUNT_PATH, 'GET');
+  app.get(ONLINE_COUNT_PATH, { onRequest: grantOrigin(env) }, handle);
 
   async function handle(request: FastifyRequest, reply: FastifyReply) {
-    const caller = await readCaller(env, request.headers as CallerHeaders);
+    const caller = await signIn(env, accounts, request, reply, 'online count');
     if (!caller.ok) {
-      return refuse(request, reply, caller.refusal, 'online count');
+      return caller.reply;
     }
-    const checked = await checkAccount(env, accounts, caller.claims);
-    if (!checked.ok) {
-      return refuse(request, reply, checked.refusal, 'online count');
-    }
-    if (!checked.account.admin) {
+    if (!caller.account.admin) {
       return reply
         .status(403)
         .send(errorBody('FORBIDDEN', 'Only admins may see who is online.'));

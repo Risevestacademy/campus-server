@@ -31,8 +31,8 @@ const NOW = new Date('2026-10-23T12:00:00Z');
 
 let c1: string;
 let c2: string;
-let c1se: string;
-let c2se: string;
+let track1: string;
+let track2: string;
 let admin: string;
 
 const person = async (email: string) => {
@@ -52,7 +52,7 @@ const join = (
     role,
     ...(role === CohortRole.Student
       ? {
-          cohortTrackId: cohortId === c1 ? c1se : c2se,
+          cohortTrackId: cohortId === c1 ? track1 : track2,
           status: StudentStatus.Active,
         }
       : {}),
@@ -102,7 +102,7 @@ beforeEach(async () => {
       { cohortId: cohort2.id, trackId: se.id },
     ])
     .returning();
-  [c1, c2, c1se, c2se] = [cohort1.id, cohort2.id, l1.id, l2.id];
+  [c1, c2, track1, track2] = [cohort1.id, cohort2.id, l1.id, l2.id];
   admin = await person('admin@campus.local');
 });
 

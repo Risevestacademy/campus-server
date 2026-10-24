@@ -551,6 +551,17 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
       new Set(),
     );
   });
+
+  it('counts nobody whose entry is gone, whatever the index says', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    await store.enter(presenceOf(user, { cohortId: cohort }));
+
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
+
+    await expect(store.onlineUserIds(cohort)).resolves.toEqual(new Set());
+    expect(await store.onlineUserIds()).not.toContain(user);
+  });
 });
 
 describe('createPresenceStore', () => {

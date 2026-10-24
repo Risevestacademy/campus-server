@@ -19,8 +19,13 @@ export function ApiDashboardFigures(): MethodDecorator {
         'waiting for an answer: across the campus, or in one cohort with ' +
         '`cohortId`. A live membership has not ended, is an active student ' +
         'or another role, and has not run out (a guest’s visit).\n\n' +
+        'A suspended account still counts as a member, as it does on the ' +
+        'roster, though world never lets it in: so members can include ' +
+        'people who can never show as online.\n\n' +
         'Who is online now is not here: world answers that, at ' +
-        '`GET /admin/online` with the same `cohortId`.',
+        '`GET /admin/online`, taking `cohortId` too. For a cohort that does ' +
+        'not exist this route answers 404, while world, which does not ' +
+        'know which cohorts exist, answers `{ "online": 0 }`.',
     }),
     ApiOkResponse({ type: DashboardFiguresDto }),
     ApiBadRequestResponse({

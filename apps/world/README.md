@@ -120,11 +120,12 @@ database.
 ```
 src/
   app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
-  admin/                GET /admin/online, the online count for admins
   index.ts              boot and graceful shutdown; starts telemetry before the app loads
   quiet-routes.ts       routes neither logged nor traced, with no imports, for index.ts
+  admin/                GET /admin/online, the online count for admins
   infra/                env, logger, the database reads (accounts, memberships, spaces),
                         Redis (positions, presence), the published map
+    http.ts             what world's HTTP routes share: CORS, signing in, error bodies
     metrics.ts          the socket metrics: counters, gauges and running totals
     traced.ts           spans for the work that waits: traced(), annotate(), failing a span
     fastify-otel.ts     @fastify/otel's options, keeping query values off its span
@@ -230,15 +231,19 @@ for this one.
 - **What:** `?cohortId=<uuid>` counts one cohort; without it, the whole
   campus, where somebody in two cohorts' campuses counts once. Read from
   presence, so it covers every world instance.
+- **Beside campus-api's figures** (`GET /v1/dashboard`): world does not know
+  which cohorts exist, so a cohort that does not counts `0` here where
+  campus-api answers 404. And campus-api counts suspended accounts as
+  members, while world never lets them in, so they are never online.
 - **What comes back** (`200`, `Cache-Control: no-store`): `{ "online": 12 }`.
 - **Errors**, in the same shape as the connection check's:
 
-  | Status | `code`                 | When                                                                                     |
-  | ------ | ---------------------- | ---------------------------------------------------------------------------------------- |
-  | 400    | `INVALID_ARGUMENT`     | `cohortId` is not a UUID                                                                 |
-  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal, as for the connection check |
-  | 403    | `FORBIDDEN`            | Signed in but not an admin, or the page's origin is not in `CORS_ORIGINS`                |
-  | 503    | `PRESENCE_UNAVAILABLE` | Redis cannot be read. Try again shortly                                                  |
+  | Status | `code`                 | When                                                                                                           |
+  | ------ | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+  | 400    | `INVALID_ARGUMENT`     | `cohortId` is not a UUID                                                                                       |
+  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal, as for the connection check                       |
+  | 403    | `FORBIDDEN`            | Signed in but not an admin, the page's origin is not in `CORS_ORIGINS`, or a cookie came with no origin at all |
+  | 503    | `PRESENCE_UNAVAILABLE` | Redis cannot be read. Try again shortly                                                                        |
 
 ## Tests
 

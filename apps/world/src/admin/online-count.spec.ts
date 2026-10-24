@@ -1,61 +1,27 @@
-import { SessionScope, signSessionToken } from '@campus/session';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildWorld, type World } from '../app.js';
-import type { Account } from '../infra/accounts.js';
-import { loadEnv } from '../infra/env.js';
+import {
+  ORIGIN,
+  routeAccounts,
+  routeEnv,
+  sessionToken,
+} from '../http/routes.testing.js';
 import { MemoryPresenceStore, type Presence } from '../infra/presence.js';
 import { ONLINE_COUNT_PATH } from './online-count.js';
 
-const SECRET = 'a-world-session-secret-of-at-least-32-chars';
-const ORIGIN = 'http://localhost:3002';
 const COHORT = randomUUID();
 const OTHER_COHORT = randomUUID();
 
-const env = loadEnv({
-  AUTH_SESSION_SECRET: SECRET,
-  DEPLOYMENT_ENVIRONMENT: 'development',
-  DATABASE_URL: 'postgres://unused',
-  CORS_ORIGINS: ORIGIN,
-  FF_LOG_LEVEL: 'fatal',
-} as NodeJS.ProcessEnv);
-
-const admins = new Set(['root']);
-const accounts = {
-  find: async (id: string): Promise<Account | null> => ({
-    id,
-    suspended: id === 'banned',
-    sessionEpoch: 0,
-    admin: admins.has(id),
-    systemRole: admins.has(id) ? 'admin' : 'user',
-    displayName: null,
-    spriteKey: null,
-  }),
-  liveSessions: async () => new Set<string>(),
-  liveMembership: async () => false,
-  liveMemberships: async () => new Set<string>(),
-  memberships: async () => new Map(),
-  spacesOn: async () => new Map(),
-  onProfileChanged: async () => undefined,
-  onSpacesChanged: async () => undefined,
-  close: async () => undefined,
-};
+const env = routeEnv();
+const accounts = routeAccounts();
 
 async function bearer(userId = 'root'): Promise<string> {
-  const { token } = await signSessionToken(
-    {
-      epoch: 0,
-      userId,
-      email: `${userId}@campus.local`,
-      scope: SessionScope.FullAccess,
-    },
-    { secret: SECRET, ttlMinutes: 15 },
-  );
-  return `Bearer ${token}`;
+  return `Bearer ${await sessionToken(userId)}`;
 }
 
-function present(userId: string, cohortId = COHORT): Presence {
+function entryFor(userId: string, cohortId = COHORT): Presence {
   return {
     userId,
     connectionId: randomUUID(),
@@ -81,6 +47,8 @@ describe('GET /admin/online', () => {
 
   beforeEach(() => {
     presence = new MemoryPresenceStore();
+    accounts.clear();
+    accounts.admins.add('root');
   });
 
   afterEach(async () => {
@@ -90,9 +58,9 @@ describe('GET /admin/online', () => {
   });
 
   it('counts everybody online across the campus, each person once', async () => {
-    await presence.enter(present('ada'));
-    await presence.enter(present('ada', OTHER_COHORT));
-    await presence.enter(present('grace', OTHER_COHORT));
+    await presence.enter(entryFor('ada'));
+    await presence.enter(entryFor('ada', OTHER_COHORT));
+    await presence.enter(entryFor('grace', OTHER_COHORT));
 
     const response = await ask({ authorization: await bearer() });
 
@@ -102,8 +70,8 @@ describe('GET /admin/online', () => {
   });
 
   it('counts one cohort when asked', async () => {
-    await presence.enter(present('ada'));
-    await presence.enter(present('grace', OTHER_COHORT));
+    await presence.enter(entryFor('ada'));
+    await presence.enter(entryFor('grace', OTHER_COHORT));
 
     const response = await ask(
       { authorization: await bearer() },
@@ -161,18 +129,15 @@ describe('GET /admin/online', () => {
       });
     });
 
-    it('a suspended account, with 401', async () => {
-      admins.add('banned');
-      try {
-        const response = await ask({ authorization: await bearer('banned') });
+    it('a suspended admin, with 401', async () => {
+      accounts.suspended.add('root');
 
-        expect(response.statusCode).toBe(401);
-        expect(response.json()).toMatchObject({
-          error: { details: { reason: 'account_suspended' } },
-        });
-      } finally {
-        admins.delete('banned');
-      }
+      const response = await ask({ authorization: await bearer() });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({
+        error: { details: { reason: 'account_suspended' } },
+      });
     });
 
     it('a page world does not serve, with 403 and no CORS grant', async () => {
@@ -190,7 +155,7 @@ describe('GET /admin/online', () => {
     it('lets the web app read the answer, with its credentials', async () => {
       const response = await ask({
         origin: ORIGIN,
-        cookie: `campus_session=${(await bearer()).slice('Bearer '.length)}`,
+        cookie: `campus_session=${await sessionToken('root')}`,
       });
 
       expect(response.statusCode).toBe(200);

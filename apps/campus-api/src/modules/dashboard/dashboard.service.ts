@@ -3,8 +3,8 @@ import { and, count, countDistinct, eq, gt } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
-import { CohortNotFoundException } from '../cohorts/cohorts.exceptions.js';
-import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
+import { assertCohortExists } from '../cohorts/assert-cohort-exists.js';
+import { CohortRole, cohortMembers } from '../cohorts/schema.js';
 import { InviteStatus, invites } from '../invites/schema.js';
 import type {
   DashboardFiguresDto,
@@ -21,16 +21,7 @@ export class DashboardService {
     now: Date = new Date(),
   ): Promise<DashboardFiguresDto> {
     if (cohortId !== undefined) {
-      const [cohort] = await this.db
-        .select({ id: cohorts.id })
-        .from(cohorts)
-        .where(eq(cohorts.id, cohortId))
-        .limit(1);
-      if (!cohort) {
-        throw new CohortNotFoundException(`Cohort ${cohortId} not found`, {
-          cohortId,
-        });
-      }
+      await assertCohortExists(this.db, cohortId);
     }
 
     const live = and(
