@@ -123,9 +123,11 @@ src/
   index.ts              boot and graceful shutdown; starts telemetry before the app loads
   quiet-routes.ts       routes neither logged nor traced, with no imports, for index.ts
   admin/                GET /admin/online, the online count for admins
+  http/
+    routes.ts           what world's HTTP routes share: CORS and preflight, signing in, error bodies
+    routes.testing.ts   the route specs' shared env, accounts and session; left out of the build
   infra/                env, logger, the database reads (accounts, memberships, spaces),
                         Redis (positions, presence), the published map
-    http.ts             what world's HTTP routes share: CORS, signing in, error bodies
     metrics.ts          the socket metrics: counters, gauges and running totals
     traced.ts           spans for the work that waits: traced(), annotate(), failing a span
     fastify-otel.ts     @fastify/otel's options, keeping query values off its span

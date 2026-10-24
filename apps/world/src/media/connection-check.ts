@@ -60,7 +60,6 @@ export function registerConnectionCheck(
       request,
       reply,
       'connection check',
-      // Before the account lookups, so a flood costs no queries.
       ({ userId }) => {
         const retryAfter = budget.take(userId, now());
         if (retryAfter === 0) return undefined;
