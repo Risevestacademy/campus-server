@@ -413,6 +413,71 @@ own locks.
 - **A step refused while it is locked** looks the same as any other
   `refused`. Use the locked list to tell the person why.
 
+## Asking to enter
+
+Somebody refused at a locked space, or at a designated space whose list
+does not name them, can ask to come in. Each cohort's requests are its own.
+
+- **Asking.** From a tile beside the space (one step from its floor), send
+  `{ "type": "requestEntry", "spaceKey": "…" }`. You and each person inside
+  who may answer get `{ "type": "entryRequested", "requestId": "…",
+"userId": "…", "spaceKey": "…" }`. One request at a time.
+- **`requestId`** names this request, not the person: asking again, even
+  for the same space straight after withdrawing, gets a new one. Answers and
+  withdrawals carry it, so one sent late, meant for a request that has
+  ended, is refused rather than reaching the newer one. Key your list of
+  requests by it.
+- **Who answers.** In a locked space, anybody inside, somebody let in with
+  a yes included. In a designated space, only people its list names, and
+  admins; a visitor let in cannot let in others. Somebody who steps in
+  while a request is open, and may answer it, gets its `entryRequested`
+  then. Answer with `{ "type": "answerEntryRequest", "requestId": "…",
+"admit": true }`, or `false`, only while standing in that space. The first
+  answer stands.
+- **How it ends.** Every `entryRequested` you get is followed by one
+  `{ "type": "entryRequestEnded", "requestId": "…", "userId": "…", "spaceKey": "…",
+"outcome": "…", "answeredBy": "…" }`, to the asker and to everybody who
+  was sent the request. `answeredBy` is set for `admitted` and `declined`
+  only. The outcomes:
+
+  | outcome         | What happened                                                                  |
+  | --------------- | ------------------------------------------------------------------------------ |
+  | `admitted`      | A yes                                                                          |
+  | `declined`      | A no                                                                           |
+  | `withdrawn`     | The asker sent `{ "type": "withdrawEntryRequest", "requestId": "…" }`, or left |
+  | `walked_away`   | The asker stepped off the tiles beside the space                               |
+  | `nobody_inside` | Nobody inside can answer any more                                              |
+  | `not_needed`    | They may walk in without asking: unlocked, or now on the list                  |
+  | `cancelled`     | The space no longer takes requests                                             |
+
+  Nothing ends a request on a timer: it stays open until one of these.
+
+  Two closes end requests without an `entryRequestEnded`, so treat the
+  close as the end of every request that socket was sent:
+
+  - a world restart, for every socket;
+  - opening the same cohort in another tab, for the old tab once it is
+    `replaced`. If it asked, it is sent its request's end, `withdrawn`,
+    first; any yes it held is dropped, and the new tab asks again. If it
+    was inside and could answer, the new tab is sent the open requests
+    instead.
+
+- **A yes** lets the asker's next step into the space through. Walking away
+  from beside it first lets the yes lapse, and they ask again; so does the
+  space opening (unlocked, or the list naming them) before they step in,
+  so a lock that comes back needs a new yes. Once inside they stay until
+  they step out, like anybody else.
+- **A no** means the same person may not ask the same space again for 30
+  seconds.
+- **Refusals** come as an `error` with code `NOT_ALLOWED`, and its message
+  says why: a space the map does not draw, one you are inside already, one
+  you may walk into anyway (open, the corridors, or a yes in hand), one
+  that takes no requests (not set up, or retired), not beside the space,
+  nobody inside who can answer, a request already open, or too soon after
+  a no. An answer to a request that has ended, or that you may not answer,
+  and a withdrawal of a request that is not your open one, are refused the
+  same way, by `requestId`.
+
 ## Errors and closing
 
 An `error` with code `BAD_MESSAGE` means the frame was not valid JSON or not a

@@ -175,7 +175,20 @@
         "refused",
         "too_fast"
       ],
-      "description": "moved: one tile in the direction asked. blocked: the tile is not walkable; they turn to face it without moving. refused: the tile is floor, but in a space they may not enter (designated and not on its list, or locked); they turn to face it without moving. too_fast: over walking speed; nothing happens, not even the turn."
+      "description": "moved: one tile in the direction asked. blocked: the tile is not walkable; they turn to face it without moving. refused: the tile is floor, but in a space they may not enter (designated and not on its list, or locked); they turn to face it without moving, and may ask with `requestEntry`. too_fast: over walking speed; nothing happens, not even the turn."
+    },
+    "EntryRequestOutcome": {
+      "type": "string",
+      "enum": [
+        "admitted",
+        "declined",
+        "withdrawn",
+        "walked_away",
+        "nobody_inside",
+        "not_needed",
+        "cancelled"
+      ],
+      "description": "admitted: a yes. Their next step into the space is let through; walking away from beside it first lets the yes lapse. declined: a no. withdrawn: the asker withdrew it, or disconnected. walked_away: the asker left the tiles beside the space. nobody_inside: nobody inside can answer any more. not_needed: they may walk in without asking now, as the space was unlocked or its list names them. cancelled: the space no longer takes requests."
     },
     "PingMessage": {
       "type": "object",
@@ -271,6 +284,66 @@
       "additionalProperties": false,
       "description": "Lock or unlock the space you are standing in, if `lockableSpaces` names it. Anybody inside may, guests included. Answered, if it changes anything, by the `lockChanged` everybody in your cohort gets, you included; in a space that cannot be locked, by a NOT_ALLOWED error. Counts as activity."
     },
+    "RequestEntryMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "requestEntry"
+        },
+        "spaceKey": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "spaceKey"
+      ],
+      "additionalProperties": false,
+      "description": "Ask to enter a space you are refused: a locked one, or a designated one whose list does not name you. Only from a tile beside it, only while somebody inside can answer, and one request at a time. Answered by `entryRequested`, to you and to whoever inside can answer; otherwise by a NOT_ALLOWED error saying why. After a no, the same space can be asked again 30 seconds later. Counts as activity."
+    },
+    "WithdrawEntryRequestMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "withdrawEntryRequest"
+        },
+        "requestId": {
+          "type": "string",
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
+        }
+      },
+      "required": [
+        "type",
+        "requestId"
+      ],
+      "additionalProperties": false,
+      "description": "Withdraw your open request, answered by its `entryRequestEnded`. A `requestId` that is not your open request, as one that has ended, gets a NOT_ALLOWED error. Counts as activity."
+    },
+    "AnswerEntryRequestMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "answerEntryRequest"
+        },
+        "requestId": {
+          "type": "string",
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
+        },
+        "admit": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "admit"
+      ],
+      "additionalProperties": false,
+      "description": "Answer a request to enter the space you are standing in. Anybody inside a locked space may; in a designated space, only somebody its list names, or an admin. The first answer stands: one that comes later, names a request that has ended, or comes from somebody who may not answer, gets a NOT_ALLOWED error. Counts as activity."
+    },
     "ClientMessage": {
       "oneOf": [
         {
@@ -287,6 +360,15 @@
         },
         {
           "$ref": "#/definitions/SetLockMessage"
+        },
+        {
+          "$ref": "#/definitions/RequestEntryMessage"
+        },
+        {
+          "$ref": "#/definitions/WithdrawEntryRequestMessage"
+        },
+        {
+          "$ref": "#/definitions/AnswerEntryRequestMessage"
         }
       ],
       "description": "Every frame a client may send."
@@ -652,6 +734,74 @@
       "additionalProperties": false,
       "description": "Which spaces can be locked changed, because an admin changed a space: replaces the list from `snapshot`."
     },
+    "EntryRequestedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "entryRequested"
+        },
+        "requestId": {
+          "type": "string",
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Who is asking."
+        },
+        "spaceKey": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "userId",
+        "spaceKey"
+      ],
+      "additionalProperties": false,
+      "description": "Somebody asks to enter a space. Sent to the asker, and to each person inside who may answer, as they become able to: on the request, or on stepping in later. Every one is followed by an `entryRequestEnded` with the same `requestId`. Only answerable while you stand in that space."
+    },
+    "EntryRequestEndedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "entryRequestEnded"
+        },
+        "requestId": {
+          "type": "string",
+          "description": "This request, not the person asking: asking again gets a new one. Answer and withdraw with it, so a late answer never reaches a newer request."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Who asked."
+        },
+        "spaceKey": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/EntryRequestOutcome"
+        },
+        "answeredBy": {
+          "description": "Who said yes or no. Null for every other outcome.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "userId",
+        "spaceKey",
+        "outcome",
+        "answeredBy"
+      ],
+      "additionalProperties": false,
+      "description": "A request to enter is over. Sent to the asker and to everybody who was sent its `entryRequested`."
+    },
     "ReplacedMessage": {
       "type": "object",
       "properties": {
@@ -779,6 +929,12 @@
         },
         {
           "$ref": "#/definitions/LockableSpacesMessage"
+        },
+        {
+          "$ref": "#/definitions/EntryRequestedMessage"
+        },
+        {
+          "$ref": "#/definitions/EntryRequestEndedMessage"
         },
         {
           "$ref": "#/definitions/ReplacedMessage"
