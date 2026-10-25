@@ -320,7 +320,9 @@ export const ClientMessage = z
         description:
           'A line of chat to whoever can hear you: everybody in a whole-room ' +
           'space, or the people within its subscribe radius in a proximity ' +
-          `space, as for its call. Up to ${MAX_SAY_LENGTH} characters, trimmed. ` +
+          'space, measured when you send it, without the hysteresis `nearby` ' +
+          'keeps, so the two need not match at the edge. Up to ' +
+          `${MAX_SAY_LENGTH} characters, trimmed. ` +
           'Answered by the `said` you and they get; five lines at once, then ' +
           'one a second, after which a NOT_ALLOWED error. Never stored. ' +
           'Counts as activity.',

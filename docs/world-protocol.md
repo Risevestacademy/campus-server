@@ -363,8 +363,10 @@ Text goes where voice goes: a line reaches whoever can hear you.
   500 characters; anything else is a `BAD_MESSAGE` error.
 - **Who gets it:** in a whole-room space, everybody in that space; in a
   proximity space (the corridors included), the people within its
-  subscribe radius when you send it, the same radius `nearby` uses. Never
-  anybody in another space or cohort. Chat works whether or not calls are
+  subscribe radius when you send it. That is the radius exactly, without
+  the hysteresis `nearby` keeps for people already listed, so at the edge
+  somebody `nearby` names may not get a line: do not expect the two to
+  match. Never anybody in another space or cohort. Chat works whether or not calls are
   set up.
 - **What arrives**, to them and to you: `{ "type": "said", "id": "…",
 "userId": "…", "spaceKey": "…", "text": "…", "at": "…" }`. Show your own
