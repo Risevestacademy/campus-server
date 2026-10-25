@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   // Workspace packages ship built output, so importing one by name means
@@ -35,15 +35,11 @@ export default defineConfig({
   test: {
     globals: true,
     root: './',
-    include: ['**/*.spec.ts'],
     // class-transformer's @Type() (used in infra/config/env.ts) needs the
     // reflect-metadata polyfill loaded before any decorated class is
     // evaluated. main.ts guarantees this via its first import; tests need
     // the same guarantee when they import a decorated class directly.
     setupFiles: ['reflect-metadata'],
-    // Applies the migrations to the real PostgreSQL that a few tests need,
-    // when one is named; does nothing otherwise.
-    globalSetup: ['./vitest.global-setup.ts'],
     // PGlite suites boot a full Postgres engine in WASM and apply the
     // committed migrations in beforeAll. Running in parallel that takes
     // longer than the 10s default, and a hook that times out reports as the
@@ -55,5 +51,28 @@ export default defineConfig({
     env: {
       APP_PUBLIC_URL: 'http://localhost:3000',
     },
+    // The real-PostgreSQL files share one database, and some of them change
+    // rows the others read, so they run one at a time.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['**/*.spec.ts'],
+          exclude: [...configDefaults.exclude, '**/*.pg.spec.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'postgres',
+          include: ['**/*.pg.spec.ts'],
+          fileParallelism: false,
+          // Applies the migrations to the real PostgreSQL these tests need,
+          // when one is named; does nothing otherwise.
+          globalSetup: ['./vitest.global-setup.ts'],
+        },
+      },
+    ],
   },
 });
