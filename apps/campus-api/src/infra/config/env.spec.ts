@@ -159,6 +159,59 @@ describe('loadEnv Google sign-in validation', () => {
     expect(env.FF_GOOGLE_AUTH_ENABLED).toBe(true);
     expect(env.GOOGLE_CLIENT_ID).toBe(CREDENTIALS.GOOGLE_CLIENT_ID);
   });
+
+  describe('calendar', () => {
+    const KEY = Buffer.alloc(32, 7).toString('base64');
+
+    it('is off unless switched on', () => {
+      expect(testEnv({}).FF_GOOGLE_CALENDAR_ENABLED).toBe(false);
+    });
+
+    it('needs Google sign-in', () => {
+      expect(() =>
+        testEnv({
+          FF_GOOGLE_CALENDAR_ENABLED: 'true',
+          GOOGLE_CALENDAR_TOKEN_KEY: KEY,
+          GOOGLE_CALENDAR_CALLBACK_URL:
+            'http://localhost:3000/v1/calendar/connect/callback',
+        }),
+      ).toThrow(/FF_GOOGLE_CALENDAR_ENABLED needs FF_GOOGLE_AUTH_ENABLED/);
+    });
+
+    const CALENDAR = {
+      FF_GOOGLE_AUTH_ENABLED: 'true',
+      ...CREDENTIALS,
+      FF_GOOGLE_CALENDAR_ENABLED: 'true',
+      GOOGLE_CALENDAR_TOKEN_KEY: KEY,
+      GOOGLE_CALENDAR_CALLBACK_URL:
+        'http://localhost:3000/v1/calendar/connect/callback',
+    };
+
+    it.each([
+      ['missing', undefined],
+      ['too short', Buffer.alloc(16).toString('base64')],
+      ['not base64', 'x'.repeat(44)],
+    ])('refuses a token key that is %s', (_, key) => {
+      expect(() =>
+        testEnv({ ...CALENDAR, GOOGLE_CALENDAR_TOKEN_KEY: key }),
+      ).toThrow(/GOOGLE_CALENDAR_TOKEN_KEY/);
+    });
+
+    it.each([undefined, 'not-a-url'])(
+      'refuses a callback URL that is %s',
+      (url) => {
+        expect(() =>
+          testEnv({ ...CALENDAR, GOOGLE_CALENDAR_CALLBACK_URL: url }),
+        ).toThrow(/GOOGLE_CALENDAR_CALLBACK_URL/);
+      },
+    );
+
+    it('accepts a complete configuration', () => {
+      const env = testEnv(CALENDAR);
+
+      expect(env.FF_GOOGLE_CALENDAR_ENABLED).toBe(true);
+    });
+  });
 });
 
 describe('loadEnv AUTH_COOKIE_DOMAIN', () => {

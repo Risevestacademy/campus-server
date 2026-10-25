@@ -53,6 +53,11 @@ export function loadEnv(source: Record<string, unknown> = process.env): Env {
     throw new Error(`Invalid environment variables: ${message}`);
   }
   assertCookieDomainCovers(env);
+  if (env.FF_GOOGLE_CALENDAR_ENABLED && !env.FF_GOOGLE_AUTH_ENABLED) {
+    throw new Error(
+      'Invalid environment variables: FF_GOOGLE_CALENDAR_ENABLED needs FF_GOOGLE_AUTH_ENABLED',
+    );
+  }
   return env;
 }
 
@@ -177,6 +182,42 @@ export class Env {
   @IsOptional()
   @IsString()
   GOOGLE_MOBILE_CLIENT_IDS?: string;
+
+  /**
+   * Lets a signed-in member connect their Google Calendar, read-only. Sign-in
+   * itself never asks for it. calendar.events.readonly is a sensitive scope:
+   * until Google has verified the app, only its test users can grant it.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_GOOGLE_CALENDAR_ENABLED: boolean = false;
+
+  /**
+   * Encrypts the Google refresh tokens at rest: 32 bytes in base64. Changing
+   * it makes every stored token unreadable, so each member reconnects.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_CALENDAR_ENABLED)
+  @Matches(/^[A-Za-z0-9+/]{43}=$/, {
+    message:
+      'GOOGLE_CALENDAR_TOKEN_KEY must be 32 bytes in base64 (openssl rand -base64 32)',
+  })
+  GOOGLE_CALENDAR_TOKEN_KEY?: string;
+
+  /**
+   * Where Google returns a member who connected their calendar: this API's
+   * /v1/calendar/connect/callback, registered on the same Google client.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_CALENDAR_ENABLED)
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
+  GOOGLE_CALENDAR_CALLBACK_URL?: string;
 
   /**
    * Must point at this API, not at the web app, and must match a redirect URI
