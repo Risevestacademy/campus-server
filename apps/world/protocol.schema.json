@@ -372,6 +372,26 @@
       "additionalProperties": false,
       "description": "Answer a request to enter the space you are standing in. Anybody inside a locked space may; in a designated space, only somebody its list names, or an admin. The first answer stands: one that comes later, names a request that has ended, or comes from somebody who may not answer, gets a NOT_ALLOWED error. Counts as activity."
     },
+    "SayMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "say"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": false,
+      "description": "A line of chat to whoever can hear you: everybody in a whole-room space, or the people within its subscribe radius in a proximity space, measured when you send it, without the hysteresis `nearby` keeps, so the two need not match at the edge. Up to 500 characters, trimmed. Answered by the `said` you and they get; five lines at once, then one a second, after which a NOT_ALLOWED error. Never stored. Counts as activity."
+    },
     "ClientMessage": {
       "oneOf": [
         {
@@ -397,6 +417,9 @@
         },
         {
           "$ref": "#/definitions/AnswerEntryRequestMessage"
+        },
+        {
+          "$ref": "#/definitions/SayMessage"
         }
       ],
       "description": "Every frame a client may send."
@@ -855,6 +878,44 @@
       "additionalProperties": false,
       "description": "A request to enter is over. Sent to the asker and to everybody who was sent its `entryRequested`."
     },
+    "SaidMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "said"
+        },
+        "id": {
+          "type": "string",
+          "description": "Unique to this line."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Who said it."
+        },
+        "spaceKey": {
+          "type": "string",
+          "description": "The space they said it in, so a meeting’s chat can be kept apart."
+        },
+        "text": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string",
+          "description": "When world relayed it, as an ISO timestamp."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "userId",
+        "spaceKey",
+        "text",
+        "at"
+      ],
+      "additionalProperties": false,
+      "description": "A line of chat from somebody who could be heard where you stand when they said it, or your own. World keeps none of it: a line reaches whoever is in earshot at that moment and nobody later."
+    },
     "ReplacedMessage": {
       "type": "object",
       "properties": {
@@ -991,6 +1052,9 @@
         },
         {
           "$ref": "#/definitions/EntryRequestEndedMessage"
+        },
+        {
+          "$ref": "#/definitions/SaidMessage"
         },
         {
           "$ref": "#/definitions/ReplacedMessage"

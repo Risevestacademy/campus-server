@@ -17,11 +17,12 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import type {
-  Account,
-  AccountLookup,
-  Appearance,
-  WorldSpace,
+import {
+  DEFAULT_SUBSCRIBE_RADIUS,
+  type Account,
+  type AccountLookup,
+  type Appearance,
+  type WorldSpace,
 } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
@@ -59,6 +60,7 @@ import {
   type UpgradeDecision,
 } from './authenticate.js';
 import { Connections, type CallSpec, type Connection } from './connections.js';
+import { SayBudget, inEarshot, type Hearing } from './earshot.js';
 import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
 import { FrameBudget } from './frame-budget.js';
 import { deliver } from './outbound.js';
@@ -767,6 +769,57 @@ export function registerGateway(
       type: 'call',
       call: { ...call, url: token.url, token: token.token },
     });
+  }
+
+  /**
+   * Relays a line of chat to whoever can hear the speaker, and back to the
+   * speaker. A space with no row yet is heard by distance, at the default
+   * radius. Never stored, and never logged: what people say is theirs.
+   */
+  function say(connection: Connection, text: string, budget: SayBudget): void {
+    if (!budget.admit(Date.now())) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message: 'saying too much too fast',
+      });
+      return;
+    }
+    const speaker = players.get(connection);
+    if (!speaker) return;
+    const space = doors.get(connection.spaceKey);
+    const hearing: Hearing =
+      space && space.audioMode !== 'proximity'
+        ? { kind: 'room' }
+        : {
+            kind: 'proximity',
+            radius: space?.subscribeRadius ?? DEFAULT_SUBSCRIBE_RADIUS,
+          };
+    const others = connections.all().flatMap((other) => {
+      if (other.cohortId !== connection.cohortId || other === connection) {
+        return [];
+      }
+      const player = players.get(other);
+      return player
+        ? [{ connection: other, ...player, spaceKey: other.spaceKey }]
+        : [];
+    });
+    const frame = encode({
+      type: 'said',
+      id: randomUUID(),
+      userId: connection.userId,
+      spaceKey: connection.spaceKey,
+      text,
+      at: new Date().toISOString(),
+    });
+    sendFrame(connection.socket, frame);
+    for (const listener of inEarshot(
+      { ...speaker, spaceKey: connection.spaceKey },
+      others,
+      hearing,
+    )) {
+      sendFrame(listener.connection.socket, frame);
+    }
   }
 
   /**
@@ -1835,6 +1888,7 @@ export function registerGateway(
       env.WORLD_MAX_MESSAGES_PER_SECOND,
       Date.now(),
     );
+    const sayBudget = new SayBudget(Date.now());
 
     ws.on('message', (raw: Buffer) => {
       // A socket we have dropped can still deliver frames while its close
@@ -1903,6 +1957,10 @@ export function registerGateway(
             result.message.requestId,
             result.message.admit,
           );
+          return;
+        case 'say':
+          noteActivity(connection);
+          say(connection, result.message.text, sayBudget);
           return;
         case 'move': {
           noteActivity(connection);

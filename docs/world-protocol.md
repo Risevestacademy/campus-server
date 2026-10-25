@@ -355,6 +355,30 @@ stand.
   unpublished. Show who is speaking from the participant's identity, as for
   a space's call.
 
+## Chat
+
+Text goes where voice goes: a line reaches whoever can hear you.
+
+- **Send** `{ "type": "say", "text": "…" }`. It is trimmed, and must be 1 to
+  500 characters; anything else is a `BAD_MESSAGE` error.
+- **Who gets it:** in a whole-room space, everybody in that space; in a
+  proximity space (the corridors included), the people within its
+  subscribe radius when you send it. That is the radius exactly, without
+  the hysteresis `nearby` keeps for people already listed, so at the edge
+  somebody `nearby` names may not get a line: do not expect the two to
+  match. Never anybody in another space or cohort. Chat works whether or not calls are
+  set up.
+- **What arrives**, to them and to you: `{ "type": "said", "id": "…",
+"userId": "…", "spaceKey": "…", "text": "…", "at": "…" }`. Show your own
+  line when its `said` comes back. `spaceKey` lets a client keep a
+  meeting's chat apart from the corridor's.
+- **Nothing is kept.** A line reaches whoever is in earshot at that moment;
+  somebody who arrives later, or reconnects, does not see it. Clear a
+  meeting's lines when you leave its space, if you like: world will not
+  send them again.
+- **Limit:** five lines at once, then one a second. Past that, an `error`
+  with code `NOT_ALLOWED` and the line is dropped; the socket stays open.
+
 ## One connection per cohort
 
 **An account has one connection in each cohort's campus.** Somebody who

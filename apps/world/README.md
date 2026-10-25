@@ -86,6 +86,9 @@ server decides every position.
   who stops being an admin is taken out at the next heartbeat, their tokens
   revoked, and handed one to listen. See
   [the protocol doc](../../docs/world-protocol.md#broadcast).
+- **Chat:** `say` reaches whoever can hear the speaker, by the space's
+  hearing, and is never stored. See
+  [the protocol doc](../../docs/world-protocol.md#chat).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
 - **Who is online, for admins:** a count for the admin dashboard, across the

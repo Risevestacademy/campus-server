@@ -8,6 +8,7 @@ import type {
   Player as MovementPlayer,
 } from '../movement/players.js';
 import { Status } from '../status/availability.js';
+import { MAX_SAY_LENGTH } from './earshot.js';
 
 /*
  * The wire contract, both directions, as zod schemas. Client frames are
@@ -309,6 +310,23 @@ export const ClientMessage = z
           'somebody who may not answer, gets a NOT_ALLOWED error. Counts as ' +
           'activity.',
       }),
+    z
+      .object({
+        type: z.literal('say'),
+        text: z.string().trim().min(1).max(MAX_SAY_LENGTH),
+      })
+      .meta({
+        id: 'SayMessage',
+        description:
+          'A line of chat to whoever can hear you: everybody in a whole-room ' +
+          'space, or the people within its subscribe radius in a proximity ' +
+          'space, measured when you send it, without the hysteresis `nearby` ' +
+          'keeps, so the two need not match at the edge. Up to ' +
+          `${MAX_SAY_LENGTH} characters, trimmed. ` +
+          'Answered by the `said` you and they get; five lines at once, then ' +
+          'one a second, after which a NOT_ALLOWED error. Never stored. ' +
+          'Counts as activity.',
+      }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
 
@@ -529,6 +547,26 @@ export const ServerMessage = z
         description:
           'A request to enter is over. Sent to the asker and to everybody ' +
           'who was sent its `entryRequested`.',
+      }),
+    z
+      .object({
+        type: z.literal('said'),
+        id: z.string().describe('Unique to this line.'),
+        userId: z.string().describe('Who said it.'),
+        spaceKey: z
+          .string()
+          .describe(
+            'The space they said it in, so a meeting’s chat can be kept apart.',
+          ),
+        text: z.string(),
+        at: z.string().describe('When world relayed it, as an ISO timestamp.'),
+      })
+      .meta({
+        id: 'SaidMessage',
+        description:
+          'A line of chat from somebody who could be heard where you stand ' +
+          'when they said it, or your own. World keeps none of it: a line ' +
+          'reaches whoever is in earshot at that moment and nobody later.',
       }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',
