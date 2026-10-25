@@ -28,7 +28,8 @@ function framesOf(stack: string | undefined): string {
 }
 
 /**
- * The error as it may leave for PostHog. A failed query's message carries
+ * The error as it may leave the process, for PostHog, a log line or a span.
+ * A failed query's message carries
  * the values it was given: drizzle appends them as `params:`, and Postgres
  * quotes the one it rejected (`invalid input syntax for type uuid: "…"`).
  * Those keep only the statement and the SQLSTATE; everything else, and the

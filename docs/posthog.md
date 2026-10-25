@@ -30,7 +30,8 @@ No IP address is sent.
 The exception itself goes with its type, message and stack. A failed
 query's message can carry the values it was given (drizzle appends them as
 `params:`, and Postgres quotes the value it rejected), so those keep only the
-statement and the SQLSTATE, causes included. Any other message is sent as
+statement and the SQLSTATE, causes included. Log lines and world's spans get
+the same scrub, since they leave for Grafana. Any other message is sent as
 written: **an error's message must not carry personal data**. Put an id in
 it, not an email or a name.
 

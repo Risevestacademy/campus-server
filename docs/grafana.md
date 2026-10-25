@@ -14,7 +14,9 @@ setup is shared, in [`packages/telemetry`](../packages/telemetry).
   never the values, a failed query is recorded by its SQLSTATE rather than
   its message, and no span holds a client address.
 - **Logs:** every pino line, after the same redaction as the console, with the
-  `trace_id` of the request that wrote it.
+  `trace_id` of the request that wrote it. A logged error is scrubbed as it is
+  for PostHog: a failed query keeps its statement and SQLSTATE, never its
+  values. world's spans record an exception the same way.
 - **Runtime metrics:** event-loop lag, GC, heap and CPU, when
   `FF_OTEL_METRICS_ENABLED` is on.
 

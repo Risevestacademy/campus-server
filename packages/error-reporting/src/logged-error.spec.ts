@@ -1,3 +1,5 @@
+import { pino } from 'pino';
+import { Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ErrorReporter } from './error-reporter.js';
@@ -130,6 +132,32 @@ describe('reportingHooks', () => {
     expect(reporter.report).toHaveBeenCalledTimes(1);
     expect(alsoOnError).toHaveBeenCalledWith(ERROR, line);
     expect(method.apply).toHaveBeenCalledWith(bound, line);
+  });
+
+  it('writes an error logged on its own scrubbed, since pino copies its message', () => {
+    const reporter = fakeReporter();
+    const lines: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, done) {
+        lines.push(String(chunk));
+        done();
+      },
+    });
+    const log = pino({ hooks: reportingHooks(reporter) }, stream);
+    const rejected = Object.assign(
+      new Error('invalid input syntax for type uuid: "ada@example.com"'),
+      { name: 'PostgresError', code: '22P02', severity: 'ERROR' },
+    );
+
+    log.error(rejected);
+    log.warn(rejected);
+
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect((JSON.parse(line) as { msg: string }).msg).toBe('SQLSTATE 22P02');
+    }
+    expect(lines.join('')).not.toContain('ada@example.com');
+    expect(reporter.report).toHaveBeenCalledWith(rejected, expect.anything());
   });
 
   it('writes other lines without building the bindings', () => {

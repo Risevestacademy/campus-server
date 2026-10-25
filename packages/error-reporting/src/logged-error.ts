@@ -1,6 +1,7 @@
 import { trace } from '@opentelemetry/api';
 
 import type { ErrorReporter } from './error-reporter.js';
+import { scrubError } from './scrub.js';
 
 const PINO_ERROR = 50;
 const PINO_FATAL = 60;
@@ -103,6 +104,9 @@ export function reportLoggedError(
  * `alsoOnError` runs for the same lines, for anything else a service does
  * with them. The level is checked before the logger's bindings are built,
  * so other lines cost nothing.
+ *
+ * An error logged on its own is scrubbed before pino sees it, since pino
+ * copies its message into `msg`, where the `err` serializer never looks.
  */
 export function reportingHooks(
   reporter: ErrorReporter,
@@ -119,7 +123,11 @@ export function reportingHooks(
         reportLoggedError(reporter, level, args, this.bindings());
         alsoOnError?.(level, args);
       }
-      method.apply(this, args);
+      const [first, ...rest] = args;
+      method.apply(
+        this,
+        first instanceof Error ? [scrubError(first), ...rest] : args,
+      );
     },
   };
 }

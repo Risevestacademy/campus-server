@@ -1,10 +1,12 @@
-import { loggedError } from '@campus/error-reporting';
+import { loggedError, scrubError } from '@campus/error-reporting';
 import { SpanStatusCode, trace, type Attributes } from '@opentelemetry/api';
 
 const tracer = trace.getTracer('world');
 
+/** Scrubbed, as a log line is: spans leave for Grafana too. */
 function asError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
+  const error = scrubError(value);
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 /**

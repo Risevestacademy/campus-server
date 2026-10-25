@@ -262,6 +262,9 @@ importers:
       '@opentelemetry/api':
         specifier: ^1.9.1
         version: 1.9.1
+      pino:
+        specifier: ^10.3.1
+        version: 10.3.1
       posthog-node:
         specifier: ^5.51.7
         version: 5.51.7(rxjs@7.8.2)
@@ -272,9 +275,6 @@ importers:
       oxlint:
         specifier: 'catalog:'
         version: 1.81.0
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

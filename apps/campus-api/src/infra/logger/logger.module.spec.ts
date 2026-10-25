@@ -1,5 +1,11 @@
+import { Writable } from 'node:stream';
+
+import { pino } from 'pino';
+
+import type { Env } from '../config/config.module.js';
 import {
   isUnloggedRoute,
+  pinoHttpOptions,
   routeOnceFinished,
   serializeRequest,
 } from './logger.module.js';
@@ -63,5 +69,34 @@ describe('routeOnceFinished', () => {
     expect(routeOnceFinished({}, { writableEnded: true })).toEqual({
       route: undefined,
     });
+  });
+});
+
+describe('pinoHttpOptions', () => {
+  it('logs a failed query without the values it was given, however it is logged', () => {
+    const lines: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, done) {
+        lines.push(String(chunk));
+        done();
+      },
+    });
+    const options = pinoHttpOptions(
+      { FF_LOG_LEVEL: 'info', FF_LOG_PRETTY: false } as Env,
+      { report: vi.fn(), shutdown: vi.fn() },
+    );
+    const query = 'select "id" from "users" where "email" = $1';
+    const failed = Object.assign(
+      new Error(`Failed query: ${query}\nparams: ada@example.com`),
+      { query, params: ['ada@example.com'] },
+    );
+
+    const log = pino(options, stream);
+    log.error({ err: failed }, 'Unhandled exception');
+    log.error(failed);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain(`Failed query: ${query.replaceAll('"', '\\"')}`);
+    expect(lines.join('')).not.toContain('ada@example.com');
   });
 });
