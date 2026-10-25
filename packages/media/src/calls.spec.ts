@@ -8,6 +8,7 @@ import {
   broadcastRoomName,
   parseSpaceRoomName,
   participantIdentity,
+  microphoneMuter,
   participantRemover,
   spaceRoomName,
   userIdOfIdentity,
@@ -246,6 +247,84 @@ describe('participantRemover', () => {
     const api = await livekit(500);
 
     await expect(api.remove('r', 'user:abc')).rejects.toThrow();
+    await api.close();
+  });
+});
+
+describe('microphoneMuter', () => {
+  /** Stands in for LiveKit's server API: one participant, with these tracks. */
+  async function livekit(tracks: Record<string, unknown>[], found = true) {
+    const muted: Record<string, unknown>[] = [];
+    const server = createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk) => (body += chunk));
+      request.on('end', () => {
+        const json = JSON.parse(body) as Record<string, unknown>;
+        if (request.url?.endsWith('/GetParticipant')) {
+          if (!found) {
+            response.writeHead(404, { 'content-type': 'application/json' });
+            response.end('{"code":"not_found","msg":"gone"}');
+            return;
+          }
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ identity: json.identity, tracks }));
+          return;
+        }
+        muted.push(json);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ sid: json.trackSid, muted: true }));
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    const mute = microphoneMuter({
+      url: `ws://127.0.0.1:${port}`,
+      apiKey: 'devkey',
+      apiSecret: 'a-livekit-secret-of-at-least-32-chars',
+    });
+    return {
+      muted,
+      mute,
+      close: () => new Promise((resolve) => server.close(resolve)),
+    };
+  }
+
+  it('mutes the microphone that is on, and nothing else', async () => {
+    const api = await livekit([
+      { sid: 'TR_mic', source: 'MICROPHONE', type: 'AUDIO', muted: false },
+      { sid: 'TR_cam', source: 'CAMERA', type: 'VIDEO', muted: false },
+      { sid: 'TR_screen', source: 'SCREEN_SHARE', type: 'VIDEO', muted: false },
+    ]);
+
+    await expect(api.mute('space:room', 'user:abc')).resolves.toBe(true);
+
+    expect(api.muted).toEqual([
+      {
+        room: 'space:room',
+        identity: 'user:abc',
+        trackSid: 'TR_mic',
+        muted: true,
+      },
+    ]);
+    await api.close();
+  });
+
+  it('says so when there was no microphone on', async () => {
+    const api = await livekit([
+      { sid: 'TR_mic', source: 'MICROPHONE', type: 'AUDIO', muted: true },
+    ]);
+
+    await expect(api.mute('r', 'user:abc')).resolves.toBe(false);
+    expect(api.muted).toEqual([]);
+    await api.close();
+  });
+
+  it('says so when nobody by that identity is in the room', async () => {
+    const api = await livekit([], false);
+
+    await expect(api.mute('r', 'user:abc')).resolves.toBe(false);
     await api.close();
   });
 });

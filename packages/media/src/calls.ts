@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   RoomServiceClient,
+  TrackSource,
   TrackType,
   WebhookReceiver,
 } from 'livekit-server-sdk';
@@ -91,6 +92,43 @@ export function participantRemover(
       }
       throw err;
     }
+  };
+}
+
+/**
+ * Switches off a participant's microphone, as staff do in the moment: every
+ * microphone track they publish is muted. They can switch it back on, as
+ * nothing here takes the right to publish away. Resolves false when there
+ * was no microphone on, or nobody by that identity in the room.
+ */
+export function microphoneMuter(
+  credentials: MediaCredentials,
+): (room: string, identity: string) => Promise<boolean> {
+  assertMediaCredentials(credentials);
+  const client = new RoomServiceClient(
+    apiHost(credentials.url),
+    credentials.apiKey,
+    credentials.apiSecret,
+  );
+  return async (room, identity) => {
+    let participant;
+    try {
+      participant = await client.getParticipant(room, identity);
+    } catch (err) {
+      if ((err as { status?: number }).status === 404) {
+        return false;
+      }
+      throw err;
+    }
+    const on = participant.tracks.filter(
+      (track) => track.source === TrackSource.MICROPHONE && !track.muted,
+    );
+    await Promise.all(
+      on.map((track) =>
+        client.mutePublishedTrack(room, identity, track.sid, true),
+      ),
+    );
+    return on.length > 0;
   };
 }
 
