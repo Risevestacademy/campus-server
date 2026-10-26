@@ -61,6 +61,7 @@ const accounts = {
           status: null,
           accessExpiresAt: null,
           trackId: null,
+          mentorshipGroupId: null,
         },
       ]),
     ),

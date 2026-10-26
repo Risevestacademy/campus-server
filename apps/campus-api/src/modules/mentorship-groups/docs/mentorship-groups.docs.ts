@@ -344,7 +344,8 @@ export function ApiDeleteMentorshipGroup(): MethodDecorator {
     }),
     ApiConflictResponse({
       type: ApiErrorResponseDto,
-      description: 'A pending invite still names the group.',
+      description:
+        'A pending invite still names the group, or a live entry on a space’s list does.',
       content: {
         'application/json': {
           examples: {
@@ -359,6 +360,22 @@ export function ApiDeleteMentorshipGroup(): MethodDecorator {
                     cohortId: '11111111-1111-4111-8111-111111111111',
                     groupId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
                     inviteId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+                  },
+                },
+              },
+            },
+            listedOnASpace: {
+              summary: 'A space’s list references the group',
+              value: {
+                error: {
+                  code: 'CONFLICT',
+                  message:
+                    'Mentorship group cannot be deleted while a space’s list names it',
+                  details: {
+                    cohortId: '11111111-1111-4111-8111-111111111111',
+                    groupId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+                    spaceId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+                    membershipId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
                   },
                 },
               },

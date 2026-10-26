@@ -34,8 +34,9 @@ First match stands:
    which is no answer to this question — all say no.
 5. **A normal space** admits them unless it is locked. Guests included.
 6. **A designated space** admits them if a live entry on its list names them:
-   by person, by their track in this cohort, by their role in this cohort, or
-   by their system role.
+   by person, by their track in this cohort, by their role in this cohort, by
+   their system role, or by the mentorship group they hold in this cohort —
+   as a student or as its mentor.
 7. Anything else — an access setting this package does not know — says no.
 
 "Live", for a membership, means: not ended, a student explicitly `active`, a
@@ -66,10 +67,12 @@ Every standing against the three ways a space can stand to them:
 
 Beside it: a space with **no kind** admits admins only; a **retired** space
 admits nobody, admin included; on a designated space a **live entry** naming
-them — the person, their track, their cohort role or their system role —
-turns a ✘ into a ✔, and an expired, not-yet-started, wrong-track or
-somebody-else's entry does not. A classroom starts with students, professors
-and mentors on its list, which leaves its guests out.
+them — the person, their track, their cohort role, their system role or their
+mentorship group — turns a ✘ into a ✔, and an expired, not-yet-started,
+wrong-track, wrong-group or somebody-else's entry does not. A group entry
+admits its students and its mentor, and nobody outside the group. A classroom
+starts with students, professors and mentors on its list, which leaves its
+guests out.
 
 ## What the caller supplies
 

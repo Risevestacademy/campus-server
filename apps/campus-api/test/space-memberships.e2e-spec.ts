@@ -16,7 +16,13 @@ import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { AuditAction, auditLog } from './../src/modules/audit/schema.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
-import { cohortTracks, cohorts } from './../src/modules/cohorts/schema.js';
+import {
+  CohortRole,
+  cohortMembers,
+  cohortTracks,
+  cohorts,
+} from './../src/modules/cohorts/schema.js';
+import { mentorshipGroups } from './../src/modules/mentorship-groups/schema.js';
 import {
   AudioMode,
   SpaceAccess,
@@ -199,6 +205,26 @@ describe('space memberships (e2e)', () => {
     trackId = track.id;
   });
 
+  /**
+   * A pod in this cohort, made only where a test needs one: it holds the
+   * cohort from being deleted, and most tests here have no business with it.
+   */
+  const givenGroup = async (): Promise<string> => {
+    const [mentor] = await db
+      .insert(cohortMembers)
+      .values({ cohortId, userId: member.id, role: CohortRole.Mentor })
+      .returning();
+    const [group] = await db
+      .insert(mentorshipGroups)
+      .values({
+        cohortId,
+        mentorMemberId: mentor.id,
+        name: 'The Ravens',
+      })
+      .returning();
+    return group.id;
+  };
+
   it('refuses without a session, and refuses a member on every route', async () => {
     await request(app.getHttpServer())
       .post(`/v1/spaces/${spaceId}/memberships`)
@@ -261,6 +287,33 @@ describe('space memberships (e2e)', () => {
     });
   });
 
+  it('grants a mentorship group, and the answer names the group and its cohort', async () => {
+    const groupId = await givenGroup();
+    const res = await grant({ mentorshipGroupId: groupId }).expect(201);
+
+    expect(res.body).toMatchObject({
+      spaceId,
+      subject: {
+        type: 'mentorship_group',
+        mentorshipGroupId: groupId,
+        groupName: 'The Ravens',
+        cohortId,
+        cohortName: 'Cohort 1',
+      },
+      grantedBy: admin.id,
+      live: true,
+    });
+
+    const [row] = await db
+      .select()
+      .from(spaceMemberships)
+      .where(eq(spaceMemberships.id, res.body.id));
+    expect(row).toMatchObject({ mentorshipGroupId: groupId, userId: null });
+
+    const entries = await entriesFor(res.body.id);
+    expect(entries[0].details).toMatchObject({ mentorshipGroupId: groupId });
+  });
+
   it('refuses a grant naming both subjects, or neither, as a field error', async () => {
     const both = await grant({ userId: member.id, cohortTrackId }).expect(400);
     expect(both.body).toMatchObject({
@@ -282,6 +335,10 @@ describe('space memberships (e2e)', () => {
     await grant({
       cohortTrackId: '99999999-9999-4999-8999-999999999999',
     }).expect(404);
+    const noGroup = await grant({
+      mentorshipGroupId: '99999999-9999-4999-8999-999999999999',
+    }).expect(404);
+    expect(noGroup.body.error.message).toMatch(/No mentorship group/);
     // A retired space hands out nothing new.
     await grant({ userId: member.id }, adminCookie, retiredSpaceId).expect(409);
     // An end date that has passed would close before the grant opens.
@@ -315,6 +372,9 @@ describe('space memberships (e2e)', () => {
     await expect(fieldOf(grant({ systemRole: 'root' }))).resolves.toEqual([
       'systemRole',
     ]);
+    await expect(
+      fieldOf(grant({ mentorshipGroupId: 'nope' })),
+    ).resolves.toEqual(['mentorshipGroupId']);
     // Forms a Date cannot read, and a timestamp with no zone to read it in.
     for (const validTo of [
       'garbage',
@@ -364,16 +424,25 @@ describe('space memberships (e2e)', () => {
   });
 
   it('lists the space’s grants with who holds them now', async () => {
+    const groupId = await givenGroup();
     await grant({ userId: member.id }).expect(201);
     await grant({ cohortTrackId }).expect(201);
+    await grant({ mentorshipGroupId: groupId }).expect(201);
 
     const res = await list().expect(200);
 
-    expect(res.body).toHaveLength(2);
+    expect(res.body).toHaveLength(3);
     expect(res.body.map((entry) => entry.subject.type)).toEqual([
       'user',
       'cohort_track',
+      'mentorship_group',
     ]);
+    expect(res.body[2].subject).toMatchObject({
+      mentorshipGroupId: groupId,
+      groupName: 'The Ravens',
+      cohortId,
+      cohortName: 'Cohort 1',
+    });
     expect(res.body.every((entry) => entry.live)).toBe(true);
   });
 

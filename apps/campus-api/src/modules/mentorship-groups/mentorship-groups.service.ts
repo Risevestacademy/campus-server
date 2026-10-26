@@ -23,6 +23,7 @@ import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortMemberNotFoundException } from '../cohorts/cohorts.exceptions.js';
 import { CohortRole, StudentStatus, cohortMembers } from '../cohorts/schema.js';
 import { InviteStatus, invites } from '../invites/schema.js';
+import { spaceMemberships } from '../maps/schema.js';
 import { users } from '../users/schema.js';
 import type { ChangeMentorDto } from './dto/change-mentor.dto.js';
 import type { CreateMentorshipGroupDto } from './dto/create-mentorship-group.dto.js';
@@ -334,6 +335,41 @@ export class MentorshipGroupsService {
           );
         }
 
+        // What a space's list says about this group. A live entry keeps the
+        // group: deleting it would take that access away without anyone
+        // ending it. Ended entries go, as a detached track's do — kept for
+        // good they would hold the group, and the audit log, which has each
+        // one's granting and ending, is their record.
+        const listed = await tx
+          .select({
+            id: spaceMemberships.id,
+            spaceId: spaceMemberships.spaceId,
+            validTo: spaceMemberships.validTo,
+          })
+          .from(spaceMemberships)
+          .where(eq(spaceMemberships.mentorshipGroupId, groupId));
+        const now = new Date();
+        const standing = listed.filter(
+          (row) =>
+            row.validTo === null || row.validTo.getTime() > now.getTime(),
+        );
+        if (standing.length > 0) {
+          throw new MentorshipGroupConflictException(
+            'Mentorship group cannot be deleted while a space’s list names it',
+            {
+              cohortId,
+              groupId,
+              spaceId: standing[0].spaceId,
+              membershipId: standing[0].id,
+            },
+          );
+        }
+        if (listed.length > 0) {
+          await tx
+            .delete(spaceMemberships)
+            .where(eq(spaceMemberships.mentorshipGroupId, groupId));
+        }
+
         // Settled invites keep their row and every other column; only the
         // pointer to the group goes, so the history stays readable. Setting
         // updated_at to itself stops $onUpdate rewriting a settled row.
@@ -373,11 +409,11 @@ export class MentorshipGroupsService {
         });
       });
     } catch (err) {
-      // A pending invite inserted between the check and the delete is the
-      // only thing the FKs can still refuse.
+      // A pending invite or a live list entry inserted between the check and
+      // the delete is the only thing the FKs can still refuse.
       if (isForeignKeyViolation(err)) {
         throw new MentorshipGroupConflictException(
-          'Mentorship group cannot be deleted while a pending invite names it',
+          'Mentorship group cannot be deleted while a pending invite or a space’s list names it',
           { cohortId, groupId },
         );
       }

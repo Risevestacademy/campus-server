@@ -102,6 +102,8 @@ const accounts = {
   },
   /** Cohort roles other than student: `userId:cohortId` to the role. */
   roles: new Map<string, string>(),
+  /** Mentorship groups: `userId:cohortId` to the group it holds. */
+  groups: new Map<string, string>(),
   failMemberships: false,
   /** Each seat's membership row, as the doors read it. */
   memberships: async (seats: readonly Seat[]) => {
@@ -118,6 +120,7 @@ const accounts = {
             status: 'active',
             accessExpiresAt: accounts.visitEnds.get(key) ?? null,
             trackId: null,
+            mentorshipGroupId: accounts.groups.get(key) ?? null,
           },
         ];
       }),
@@ -341,6 +344,7 @@ function listEntry(subject: Partial<SpaceGrantFacts>): SpaceGrantFacts {
     toTrackId: null,
     toCohortRole: null,
     toSystemRole: null,
+    toGroupId: null,
     validFrom: new Date(0),
     validTo: null,
     ...subject,
@@ -440,6 +444,7 @@ beforeEach(async () => {
   accounts.admins.clear();
   accounts.looks.clear();
   accounts.roles.clear();
+  accounts.groups.clear();
   accounts.failSpaces = false;
   accounts.failMemberships = false;
   openLibrary();
@@ -3389,6 +3394,32 @@ describe('movement', () => {
 
       const first = await arrive(ada);
       const second = await arrive(grace);
+      const third = await arrive(person());
+
+      await expect(walkToLibrary(first)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(second)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(third)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(first), leave(second), leave(third)]);
+    });
+
+    it('lets in a student and a mentor of the group the list names', async () => {
+      const GROUP = 'group-1';
+      const student = person();
+      const mentor = person();
+      accounts.roles.set(`${mentor}:${COHORT}`, 'mentor');
+      accounts.groups.set(`${student}:${COHORT}`, GROUP);
+      accounts.groups.set(`${mentor}:${COHORT}`, GROUP);
+      designateLibrary(listEntry({ toGroupId: GROUP }));
+      await world.gateway.spacesChanged();
+
+      const first = await arrive(student);
+      const second = await arrive(mentor);
       const third = await arrive(person());
 
       await expect(walkToLibrary(first)).resolves.toMatchObject({

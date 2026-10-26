@@ -213,11 +213,12 @@ interface AuditEntryShapes {
   [AuditAction.SpaceMembershipGranted]: {
     subject: AuditSubjectType.SpaceMembership;
     details: {
-      /** Who the grant is to: exactly one of these four is set. */
+      /** Who the grant is to: exactly one of these five is set. */
       userId: string | null;
       cohortTrackId: string | null;
       cohortRole: CohortRole | null;
       systemRole: SystemRole | null;
+      mentorshipGroupId: string | null;
       /** The span it runs for, as given — `validTo` null means no end. */
       validFrom: Date;
       validTo: Date | null;

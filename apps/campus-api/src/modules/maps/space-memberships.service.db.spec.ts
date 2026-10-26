@@ -8,7 +8,13 @@ import { beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
-import { CohortRole, cohortTracks, cohorts } from '../cohorts/schema.js';
+import {
+  CohortRole,
+  cohortMembers,
+  cohortTracks,
+  cohorts,
+} from '../cohorts/schema.js';
+import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { SpaceMembershipSubjectType } from './dto/space-membership.dto.js';
@@ -73,6 +79,8 @@ let otherId: string;
 let spaceId: string;
 let retiredSpaceId: string;
 let cohortTrackId: string;
+let cohortId: string;
+let groupId: string;
 
 beforeAll(async () => {
   await migrate(db, { migrationsFolder: MIGRATIONS });
@@ -81,7 +89,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.mocked(writeAuditEntry).mockClear();
   await db.execute(
-    sql`truncate audit_log, space_memberships, spaces, maps, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate audit_log, space_memberships, mentorship_groups, mentorship_group_students, spaces, maps, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
   );
 
   const [map] = await db
@@ -138,6 +146,22 @@ beforeEach(async () => {
     .values({ cohortId: cohort.id, trackId: track.id })
     .returning();
   cohortTrackId = run.id;
+  cohortId = cohort.id;
+
+  // A pod in that cohort, with its mentor: the fifth subject a list may name.
+  const [mentor] = await db
+    .insert(cohortMembers)
+    .values({ cohortId, userId: other.id, role: CohortRole.Mentor })
+    .returning();
+  const [group] = await db
+    .insert(mentorshipGroups)
+    .values({
+      cohortId,
+      mentorMemberId: mentor.id,
+      name: 'The Ravens',
+    })
+    .returning();
+  groupId = group.id;
 });
 
 /** One membership row for a person, straight into the table. */
@@ -239,6 +263,62 @@ describe('granting access to a space', () => {
     expect(row).toMatchObject({ cohortTrackId, userId: null });
   });
 
+  it('grants a mentorship group, and the answer names the group and its cohort', async () => {
+    const answer = await service.grant(
+      spaceId,
+      { mentorshipGroupId: groupId },
+      actor,
+      GRANT_AT,
+    );
+
+    expect(answer.subject).toEqual({
+      type: SpaceMembershipSubjectType.MentorshipGroup,
+      mentorshipGroupId: groupId,
+      groupName: 'The Ravens',
+      cohortId,
+      cohortName: 'Cohort 1',
+    });
+    const [row] = await rows();
+    expect(row).toMatchObject({
+      mentorshipGroupId: groupId,
+      userId: null,
+      cohortTrackId: null,
+      cohortRole: null,
+      systemRole: null,
+    });
+
+    const [entry] = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.subjectId, answer.id));
+    expect(entry.details).toMatchObject({ mentorshipGroupId: groupId });
+  });
+
+  it('refuses a second live grant to the same group', async () => {
+    await service.grant(
+      spaceId,
+      { mentorshipGroupId: groupId },
+      actor,
+      GRANT_AT,
+    );
+
+    await expect(
+      service.grant(spaceId, { mentorshipGroupId: groupId }, actor, LATER),
+    ).rejects.toBeInstanceOf(SpaceMembershipAlreadyLiveException);
+  });
+
+  it('refuses a group named beside another subject', async () => {
+    await expect(
+      service.grant(
+        spaceId,
+        { mentorshipGroupId: groupId, userId: memberId },
+        actor,
+        GRANT_AT,
+      ),
+    ).rejects.toBeInstanceOf(SpaceMembershipInvalidArgumentException);
+    expect(await rows()).toHaveLength(0);
+  });
+
   it('carries an end date: live while the window is open, over once it passes', async () => {
     const answer = await service.grant(
       spaceId,
@@ -266,6 +346,14 @@ describe('granting access to a space', () => {
       service.grant(
         spaceId,
         { cohortTrackId: '99999999-9999-4999-8999-999999999999' },
+        actor,
+        GRANT_AT,
+      ),
+    ).rejects.toBeInstanceOf(SpaceMembershipSubjectNotFoundException);
+    await expect(
+      service.grant(
+        spaceId,
+        { mentorshipGroupId: '99999999-9999-4999-8999-999999999999' },
         actor,
         GRANT_AT,
       ),
@@ -667,6 +755,26 @@ describe('listing a space’s grants', () => {
       trackName: 'Frontend',
       cohortName: 'Cohort 1',
     });
+  });
+
+  it('lists a mentorship group entry with its name and cohort', async () => {
+    await service.grant(
+      spaceId,
+      { mentorshipGroupId: groupId },
+      actor,
+      GRANT_AT,
+    );
+
+    const [listed] = await service.list(spaceId, GRANT_AT);
+
+    expect(listed.subject).toEqual({
+      type: SpaceMembershipSubjectType.MentorshipGroup,
+      mentorshipGroupId: groupId,
+      groupName: 'The Ravens',
+      cohortId,
+      cohortName: 'Cohort 1',
+    });
+    expect(listed.live).toBe(true);
   });
 
   it('lists a space with none as empty', async () => {

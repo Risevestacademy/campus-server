@@ -126,7 +126,7 @@ describe('mentorship group admin routes (e2e)', () => {
 
   beforeEach(async () => {
     await db.execute(
-      sql`truncate mentorship_group_students, mentorship_groups, invites, audit_log, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+      sql`truncate space_memberships, spaces, maps, mentorship_group_students, mentorship_groups, invites, audit_log, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
     );
     const [admin] = await db
       .insert(users)
@@ -727,6 +727,66 @@ describe('mentorship group admin routes (e2e)', () => {
           .expect(200),
       ).toBeDefined();
       expect(await deleteEntries()).toHaveLength(0);
+    });
+
+    it('refuses to delete while a space’s list names the group, and deletes once that entry ends', async () => {
+      const w = await world();
+      const group = (await createGroup(w.cohort.id, w.mentor1.id).expect(201))
+        .body;
+
+      const [map] = await db
+        .insert(schema.maps)
+        .values({ key: 'campus', name: 'Campus', isEntry: true })
+        .returning();
+      const [room] = await db
+        .insert(schema.spaces)
+        .values({
+          mapId: map.id,
+          key: 'pod-room',
+          name: 'Pod Room',
+          kind: schema.SpaceKind.MeetingRoom,
+          audioMode: schema.AudioMode.Proximity,
+          access: schema.SpaceAccess.Designated,
+        })
+        .returning();
+      const [entry] = await db
+        .insert(schema.spaceMemberships)
+        .values({
+          spaceId: room.id,
+          mentorshipGroupId: group.id,
+          grantedBy: adminId,
+          validFrom: new Date(Date.now() - 3_600_000),
+        })
+        .returning();
+
+      const res = await deleteGroup(w.cohort.id, group.id).expect(409);
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        message:
+          'Mentorship group cannot be deleted while a space’s list names it',
+        details: {
+          cohortId: w.cohort.id,
+          groupId: group.id,
+          spaceId: room.id,
+          membershipId: entry.id,
+        },
+      });
+
+      // Ended, the entry holds nothing: the delete clears it with the group,
+      // as a detached track's ended grants go, and the audit log is its
+      // record.
+      await db
+        .update(schema.spaceMemberships)
+        .set({ validTo: new Date(Date.now() - 1_000) })
+        .where(eq(schema.spaceMemberships.id, entry.id));
+
+      await deleteGroup(w.cohort.id, group.id).expect(204);
+
+      const left = await db
+        .select()
+        .from(schema.spaceMemberships)
+        .where(eq(schema.spaceMemberships.id, entry.id));
+      expect(left).toHaveLength(0);
     });
 
     it('puts an accepted group invite’s student into the group', async () => {

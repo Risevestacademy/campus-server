@@ -160,10 +160,22 @@ export const LIVE_MEMBERSHIPS_QUERY = `select user_id, cohort_id from cohort_mem
  * A seat's membership row as it stands, many seats at once. No liveness here:
  * the door decides that with `isLiveMembership`, at the moment of the step.
  * $1 user ids and $2 cohort ids, paired by position.
+ *
+ * The group comes from wherever the membership holds one: a student's from
+ * `mentorship_group_students`, a mentor's from `mentorship_groups`. The two
+ * uniques behind those tables — one group per student per cohort, one per
+ * mentor — and a row being either student-role or mentor-role are what keep
+ * this one row per seat.
  */
-export const MEMBERSHIP_ROWS_QUERY = `select user_id, cohort_id, role, left_at, status, access_expires_at, cohort_track_id
-  from cohort_members
-  where (user_id, cohort_id) in (
+export const MEMBERSHIP_ROWS_QUERY = `select members.user_id, members.cohort_id, members.role, members.left_at,
+    members.status, members.access_expires_at, members.cohort_track_id,
+    coalesce(student_group.mentorship_group_id, mentored_group.id) as mentorship_group_id
+  from cohort_members as members
+  left join mentorship_group_students as student_group
+    on student_group.cohort_member_id = members.id
+  left join mentorship_groups as mentored_group
+    on mentored_group.mentor_member_id = members.id
+  where (members.user_id, members.cohort_id) in (
     select seat.user_id, seat.cohort_id
     from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
   )`;
@@ -193,7 +205,7 @@ export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.kind, spaces.a
  * The entries on those spaces' lists that have not ended. One ended stays
  * ended, so leaving it out loses nothing. $1 space ids, $2 now.
  */
-export const SPACE_LISTS_QUERY = `select space_id, user_id, cohort_track_id, cohort_role, system_role, valid_from, valid_to
+export const SPACE_LISTS_QUERY = `select space_id, user_id, cohort_track_id, cohort_role, system_role, mentorship_group_id, valid_from, valid_to
   from space_memberships
   where space_id = any($1::uuid[])
     and (valid_to is null or valid_to > $2)`;
@@ -339,6 +351,7 @@ export function createAccountLookup(env: Env): AccountLookup {
           status: string | null;
           access_expires_at: Date | null;
           cohort_track_id: string | null;
+          mentorship_group_id: string | null;
         }[]
       >(MEMBERSHIP_ROWS_QUERY, [
         named.map((seat) => seat.userId),
@@ -354,6 +367,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             status: row.status,
             accessExpiresAt: row.access_expires_at,
             trackId: row.cohort_track_id,
+            mentorshipGroupId: row.mentorship_group_id,
           },
         ]),
       );
@@ -383,6 +397,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             cohort_track_id: string | null;
             cohort_role: string | null;
             system_role: string | null;
+            mentorship_group_id: string | null;
             valid_from: Date;
             valid_to: Date | null;
           }[]
@@ -393,6 +408,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             toTrackId: entry.cohort_track_id,
             toCohortRole: entry.cohort_role,
             toSystemRole: entry.system_role,
+            toGroupId: entry.mentorship_group_id,
             validFrom: entry.valid_from,
             validTo: entry.valid_to,
           });
