@@ -227,18 +227,24 @@ describe('updating a space', () => {
     expect(await entries()).toHaveLength(0);
   });
 
-  it('leaves updatedAt alone when every value is the same', async () => {
+  it('leaves updatedAt alone and takes no lock when every value is the same', async () => {
     const row = await given({ name: 'Library', capacity: 25 });
     await new Promise((resolve) => setTimeout(resolve, 5));
+    const transaction = vi.spyOn(db, 'transaction');
 
-    const same = await service.update(
-      row.id,
-      { name: 'Library', capacity: 25 },
-      actor,
-    );
+    try {
+      const same = await service.update(
+        row.id,
+        { name: 'Library', capacity: 25 },
+        actor,
+      );
 
-    expect(same.updatedAt.getTime()).toBe(row.updatedAt.getTime());
-    expect(await entries()).toHaveLength(0);
+      expect(transaction).not.toHaveBeenCalled();
+      expect(same.updatedAt.getTime()).toBe(row.updatedAt.getTime());
+      expect(await entries()).toHaveLength(0);
+    } finally {
+      transaction.mockRestore();
+    }
   });
 
   it('records only the field that changed in a mixed update', async () => {
@@ -257,6 +263,38 @@ describe('updating a space', () => {
     const [entry] = await entries();
     expect(entry.details).toEqual({
       changes: { capacity: { from: null, to: 25 } },
+    });
+  });
+
+  it('records the audit change from the locked row', async () => {
+    const row = await given({ name: 'Library' });
+    const actualTransaction = db.transaction.bind(db);
+    const transaction = vi.spyOn(db, 'transaction');
+    transaction.mockImplementationOnce((callback) => {
+      return (async () => {
+        await db
+          .update(spaces)
+          .set({ name: 'Hall' })
+          .where(eq(spaces.id, row.id));
+        return actualTransaction(callback);
+      })();
+    });
+
+    try {
+      const updated = await service.update(
+        row.id,
+        { name: 'Reading Room' },
+        actor,
+      );
+      expect(updated.name).toBe('Reading Room');
+    } finally {
+      transaction.mockRestore();
+    }
+
+    const recorded = await entries();
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].details).toEqual({
+      changes: { name: { from: 'Hall', to: 'Reading Room' } },
     });
   });
 
@@ -309,6 +347,32 @@ describe('updating a space', () => {
     expect(after!.name).toBe('Library');
     expect(after!.updatedAt.getTime()).toBe(row.updatedAt.getTime());
     expect(await entries()).toHaveLength(0);
+  });
+
+  it('answers not found if the update returns no row', async () => {
+    const row = await given({ name: 'Library' });
+    await db.execute(
+      sql`create function test_skip_space_update() returns trigger language plpgsql as $$ begin return null; end; $$`,
+    );
+    await db.execute(
+      sql`create trigger test_skip_space_update before update on spaces for each row execute function test_skip_space_update()`,
+    );
+
+    try {
+      await expect(
+        service.update(row.id, { name: 'Reading Room' }, actor),
+      ).rejects.toBeInstanceOf(SpaceNotFoundException);
+
+      const [after] = await db
+        .select()
+        .from(spaces)
+        .where(eq(spaces.id, row.id));
+      expect(after!.name).toBe('Library');
+      expect(await entries()).toHaveLength(0);
+    } finally {
+      await db.execute(sql`drop trigger test_skip_space_update on spaces`);
+      await db.execute(sql`drop function test_skip_space_update()`);
+    }
   });
 
   it('refuses no such space', async () => {

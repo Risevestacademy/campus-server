@@ -23,6 +23,7 @@ import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import {
   MAX_SPACE_CAPACITY,
   MIN_AUDIO_DISTANCE,
+  MIN_SPACE_CAPACITY,
 } from './../src/modules/maps/dto/space.dto.js';
 import {
   AudioMode,
@@ -411,10 +412,9 @@ describe('space admin routes (e2e)', () => {
 
       expect(res.body.error).toMatchObject({
         code: 'INVALID_ARGUMENT',
-        message: 'Capacity must be at least 1',
+        message: 'Request validation failed',
         details: {
-          spaceId,
-          fields: { capacity: 'Capacity must be at least 1' },
+          fields: { capacity: 'capacity must not be less than 1' },
         },
       });
       expect(await entryFor(spaceId)).toHaveLength(0);
@@ -580,6 +580,17 @@ describe('space admin routes (e2e)', () => {
     expect(one.patch.responses).toHaveProperty('403');
     expect(one.patch.responses).toHaveProperty('404');
     expect(one.patch.responses).toHaveProperty('409');
+
+    const update = document.components?.schemas?.UpdateSpaceDto as
+      | {
+          properties?: Record<string, { minimum?: number; maximum?: number }>;
+        }
+      | undefined;
+    expect(update?.properties?.capacity).toMatchObject({
+      minimum: MIN_SPACE_CAPACITY,
+      maximum: MAX_SPACE_CAPACITY,
+    });
+
     // The body is a class, so it is both validated and described.
     expect(JSON.stringify(one.patch)).toContain('UpdateSpaceDto');
     expect(JSON.stringify(many.get)).toContain('SpaceResponseDto');

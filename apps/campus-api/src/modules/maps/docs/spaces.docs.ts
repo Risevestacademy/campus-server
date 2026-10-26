@@ -10,7 +10,11 @@ import {
 import { ApiAdminOnly } from '../../../shared/dto/admin-route.docs.js';
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
 import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
-import { MAX_SPACE_CAPACITY, SpaceResponseDto } from '../dto/space.dto.js';
+import {
+  MAX_SPACE_CAPACITY,
+  MIN_SPACE_CAPACITY,
+  SpaceResponseDto,
+} from '../dto/space.dto.js';
 
 const NO_SPACE = 'No space with that id.';
 
@@ -74,7 +78,7 @@ export function ApiUpdateSpace(): MethodDecorator {
       description:
         'A malformed field, a null where one is not allowed, an immutable ' +
         'field (`key`, `mapId`, `isMapDefault`), a default space that is ' +
-        'not normal, a capacity below 1 or above ' +
+        `not normal, a capacity below ${MIN_SPACE_CAPACITY} or above ` +
         `${MAX_SPACE_CAPACITY}, a negative audio radius, or a ` +
         'hysteresis factor that is not positive.',
       content: {
@@ -110,10 +114,11 @@ export function ApiUpdateSpace(): MethodDecorator {
               value: {
                 error: {
                   code: 'INVALID_ARGUMENT',
-                  message: 'Capacity must be at least 1',
+                  message: 'Request validation failed',
                   details: {
-                    spaceId: '55555555-5555-4555-8555-555555555555',
-                    fields: { capacity: 'Capacity must be at least 1' },
+                    fields: {
+                      capacity: `capacity must not be less than ${MIN_SPACE_CAPACITY}`,
+                    },
                   },
                 },
               },

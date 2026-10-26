@@ -40,6 +40,8 @@ function IsNotEditable(options?: ValidationOptions): PropertyDecorator {
 
 export const MAX_SPACE_CAPACITY = 2_147_483_647;
 
+export const MIN_SPACE_CAPACITY = 1;
+
 export const MIN_AUDIO_DISTANCE = 0;
 
 const trim = ({ value }: { value: unknown }) =>
@@ -119,14 +121,15 @@ export class UpdateSpaceDto {
     type: Number,
     example: 25,
     nullable: true,
-    minimum: 1,
+    minimum: MIN_SPACE_CAPACITY,
     maximum: MAX_SPACE_CAPACITY,
     description:
-      `Null means no limit. At least 1 and at most ${MAX_SPACE_CAPACITY} ` +
-      'when set.',
+      `Null means no limit. At least ${MIN_SPACE_CAPACITY} and at most ` +
+      `${MAX_SPACE_CAPACITY} when set.`,
   })
   @IsOptional()
   @IsInt()
+  @Min(MIN_SPACE_CAPACITY)
   @Max(MAX_SPACE_CAPACITY)
   capacity?: number | null;
 

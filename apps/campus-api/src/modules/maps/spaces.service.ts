@@ -104,61 +104,71 @@ export class SpacesService {
     audit: AuditContext,
   ): Promise<Space> {
     try {
+      const [existing] = await this.db
+        .select()
+        .from(spaces)
+        .where(eq(spaces.id, id))
+        .limit(1);
+      if (!existing) {
+        throw new SpaceNotFoundException(`Space ${id} not found`, {
+          spaceId: id,
+        });
+      }
+
+      const updates: Partial<Space> = {
+        ...(dto.name !== undefined ? { name: dto.name } : {}),
+        ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
+        ...(dto.access !== undefined ? { access: dto.access } : {}),
+        ...(dto.audioMode !== undefined ? { audioMode: dto.audioMode } : {}),
+        ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
+        ...(dto.audibleRadius !== undefined
+          ? {
+              audibleRadius:
+                dto.audibleRadius === null
+                  ? null
+                  : dto.audibleRadius.toFixed(2),
+            }
+          : {}),
+        ...(dto.subscribeRadius !== undefined
+          ? {
+              subscribeRadius:
+                dto.subscribeRadius === null
+                  ? null
+                  : dto.subscribeRadius.toFixed(2),
+            }
+          : {}),
+        ...(dto.hysteresisFactor !== undefined
+          ? { hysteresisFactor: dto.hysteresisFactor.toFixed(2) }
+          : {}),
+      };
+      const next: Space = { ...existing, ...updates };
+      const changes = changedFields(existing, next, SPACE_AUDITED_FIELDS);
+      if (Object.keys(changes).length === 0) {
+        return existing;
+      }
+
       return await this.db.transaction(async (tx) => {
-        const [existing] = await tx
+        // The first read only lets a no-op skip the lock. Recompute here
+        // because the row may have changed since that read.
+        const [locked] = await tx
           .select()
           .from(spaces)
           .where(eq(spaces.id, id))
           .for('update');
-        if (!existing) {
+        if (!locked) {
           throw new SpaceNotFoundException(`Space ${id} not found`, {
             spaceId: id,
           });
         }
 
-        if (
-          dto.name === undefined &&
-          dto.kind === undefined &&
-          dto.access === undefined &&
-          dto.audioMode === undefined &&
-          dto.capacity === undefined &&
-          dto.audibleRadius === undefined &&
-          dto.subscribeRadius === undefined &&
-          dto.hysteresisFactor === undefined
-        ) {
-          return existing;
-        }
-
-        const updates: Partial<Space> = {
-          ...(dto.name !== undefined ? { name: dto.name } : {}),
-          ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
-          ...(dto.access !== undefined ? { access: dto.access } : {}),
-          ...(dto.audioMode !== undefined ? { audioMode: dto.audioMode } : {}),
-          ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
-          ...(dto.audibleRadius !== undefined
-            ? {
-                audibleRadius:
-                  dto.audibleRadius === null
-                    ? null
-                    : dto.audibleRadius.toFixed(2),
-              }
-            : {}),
-          ...(dto.subscribeRadius !== undefined
-            ? {
-                subscribeRadius:
-                  dto.subscribeRadius === null
-                    ? null
-                    : dto.subscribeRadius.toFixed(2),
-              }
-            : {}),
-          ...(dto.hysteresisFactor !== undefined
-            ? { hysteresisFactor: dto.hysteresisFactor.toFixed(2) }
-            : {}),
-        };
-        const next: Space = { ...existing, ...updates };
-        const changes = changedFields(existing, next, SPACE_AUDITED_FIELDS);
-        if (Object.keys(changes).length === 0) {
-          return existing;
+        const lockedNext: Space = { ...locked, ...updates };
+        const lockedChanges = changedFields(
+          locked,
+          lockedNext,
+          SPACE_AUDITED_FIELDS,
+        );
+        if (Object.keys(lockedChanges).length === 0) {
+          return locked;
         }
 
         const [row] = await tx
@@ -167,12 +177,19 @@ export class SpacesService {
           .where(eq(spaces.id, id))
           .returning();
 
+        // The row is locked, so this should never fire.
+        if (!row) {
+          throw new SpaceNotFoundException(`Space ${id} not found`, {
+            spaceId: id,
+          });
+        }
+
         await writeAuditEntry(tx, {
           ...audit,
           spaceId: id,
           action: AuditAction.SpaceUpdated,
           subject: { type: AuditSubjectType.Space, id },
-          details: { changes },
+          details: { changes: lockedChanges },
         });
         // A space's door or its audio room changed, so world reads its
         // spaces again once this commits.
