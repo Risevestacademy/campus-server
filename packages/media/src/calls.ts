@@ -62,6 +62,20 @@ function apiHost(url: string): string {
   return url.replace(/^ws(s?):\/\//, 'http$1://');
 }
 
+function roomService(credentials: MediaCredentials): RoomServiceClient {
+  assertMediaCredentials(credentials);
+  return new RoomServiceClient(
+    apiHost(credentials.url),
+    credentials.apiKey,
+    credentials.apiSecret,
+  );
+}
+
+/** LiveKit's answer for a room or participant already gone. */
+function isGone(err: unknown): boolean {
+  return (err as { status?: number }).status === 404;
+}
+
 /**
  * Takes participants out of rooms, with one client for the key pair, and
  * revokes the tokens that identity was issued, so a removed participant
@@ -73,12 +87,7 @@ export function participantRemover(
   credentials: MediaCredentials,
   now: () => number = Date.now,
 ): (room: string, identity: string) => Promise<void> {
-  assertMediaCredentials(credentials);
-  const client = new RoomServiceClient(
-    apiHost(credentials.url),
-    credentials.apiKey,
-    credentials.apiSecret,
-  );
+  const client = roomService(credentials);
   return async (room, identity) => {
     try {
       await client.removeParticipant(room, identity, {
@@ -87,9 +96,7 @@ export function participantRemover(
         revokeTokenTs: BigInt(Math.floor(now() / 1000) + 1),
       });
     } catch (err) {
-      if ((err as { status?: number }).status === 404) {
-        return;
-      }
+      if (isGone(err)) return;
       throw err;
     }
   };
@@ -104,20 +111,13 @@ export function participantRemover(
 export function microphoneMuter(
   credentials: MediaCredentials,
 ): (room: string, identity: string) => Promise<boolean> {
-  assertMediaCredentials(credentials);
-  const client = new RoomServiceClient(
-    apiHost(credentials.url),
-    credentials.apiKey,
-    credentials.apiSecret,
-  );
+  const client = roomService(credentials);
   return async (room, identity) => {
     let participant;
     try {
       participant = await client.getParticipant(room, identity);
     } catch (err) {
-      if ((err as { status?: number }).status === 404) {
-        return false;
-      }
+      if (isGone(err)) return false;
       throw err;
     }
     const on = participant.tracks.filter(

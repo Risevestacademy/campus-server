@@ -481,17 +481,22 @@ Staff can act in the moment on somebody misbehaving in a space.
 - **Remove.** Send `{ "type": "removeFromSpace", "userId": "…" }`. World
   moves them to the nearest tile outside the space they stand in, which
   takes them out of its call, and keeps them out of that space for 90
-  seconds. Meanwhile they may ask to enter, as at a locked space, and a yes
-  lets them back in early. Nobody can be removed from the corridors.
+  seconds, a new tab or a reconnect included. Meanwhile they may ask to
+  enter, as at a locked space, and a yes lets them back in early. Nobody
+  can be removed from the corridors, or from a space that takes no
+  requests (not set up, or retired), where they could not ask back in.
 - **What comes back**, to the staff member and to the person it was done
   to: `{ "type": "staffAction", "action": "muted" | "removed", "userId":
 "…", "by": "…", "spaceKey": "…", "until": "…" | null, "player": {…} | null }`.
   For `removed`, `until` is when they may walk back in and `player` is
   where they now stand: snap them there, as their own moves do not report
   it. The cohort sees the move as a `moved` and a `spaceChanged`.
-- **Refusals** come as an `error` with code `NOT_ALLOWED`: you may not act
-  on them, they are in no call (mute), they are in no space (remove), or
-  the media server could not be reached (mute; try again).
+- **Refusals** come as an `error` with code `NOT_ALLOWED`, and nothing is
+  done: they are not here (gone, or reconnecting), you may not act on them,
+  they are in no call or their microphone is not on (mute), the media
+  server could not be reached (mute; try again), they are in no space,
+  they cannot be removed from this space, or there is nowhere outside to
+  move them (remove).
 
 ## Asking to enter
 

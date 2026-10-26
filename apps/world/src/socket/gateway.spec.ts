@@ -4616,6 +4616,124 @@ describe('movement', () => {
       await Promise.all([leave(staff), leave(conn), leave(second)]);
     });
 
+    it('keeps them out from a new tab, and after a reconnect', async () => {
+      const { ada, staff, conn } = await adminAndAda();
+      remove(staff, ada);
+      await staffAction(conn);
+
+      const tab = await arrive(ada);
+      await conn.settled;
+      await expect(step(tab, 'right', 4)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await leave(tab);
+
+      const back = await arrive(ada);
+      await expect(step(back, 'right', 5)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(staff), leave(back)]);
+    });
+
+    it('says they are not here once they have gone', async () => {
+      const { ada, staff, conn } = await adminAndAda();
+      await leave(conn);
+      // Once world has let them go: their own close can land first.
+      await waitFor(staff, (m) => m.type === 'left' && m.userId === ada);
+
+      remove(staff, ada);
+
+      await expect(refusal(staff)).resolves.toBe('they are not here');
+      await leave(staff);
+    });
+
+    it('refuses to remove from a space that takes no requests, where they could not ask back in', async () => {
+      accounts.spaces.delete('library');
+      await world.gateway.spacesChanged();
+      const { ada, staff, conn } = await adminAndAda();
+
+      remove(staff, ada);
+
+      await expect(refusal(staff)).resolves.toBe(
+        'they cannot be removed from this space',
+      );
+      await expect(step(conn, 'left', 4)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(step(conn, 'right', 5)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await Promise.all([leave(staff), leave(conn)]);
+    });
+
+    it('refuses, and keeps nobody out, when no floor outside can be reached', async () => {
+      // The library walled off from the rest of the map.
+      const sealed = new Uint8Array(5 * 5);
+      for (const tile of [
+        { x: 2, y: 0 },
+        { x: 2, y: 1 },
+        { x: 3, y: 2 },
+        { x: 4, y: 2 },
+      ]) {
+        sealed[tileIndex({ width: 5 }, tile)] = 1;
+      }
+      const own = await buildWorld(
+        env,
+        accounts,
+        store,
+        new MemoryPresenceStore(),
+        { ...map, grid: { ...map.grid, walls: sealed } },
+      );
+      await own.app.listen({ port: 0, host: '127.0.0.1' });
+      const { port } = own.app.server.address() as AddressInfo;
+      const ownUrl = `ws://127.0.0.1:${port}/socket`;
+      try {
+        const admin = person();
+        const ada = person();
+        accounts.admins.add(admin);
+        store.positions.set(positionKey({ userId: admin }), {
+          x: 3,
+          y: 0,
+          facing: 'down',
+        });
+        store.positions.set(positionKey({ userId: ada }), {
+          x: 4,
+          y: 1,
+          facing: 'down',
+        });
+        const open = async (userId: string) => {
+          const conn = connect(
+            {
+              origin: ORIGIN,
+              cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
+            },
+            COHORT,
+            ownUrl,
+          );
+          await waitFor(conn, (m) => m.type === 'snapshot');
+          return conn;
+        };
+        const staff = await open(admin);
+        const conn = await open(ada);
+
+        remove(staff, ada);
+
+        await expect(refusal(staff)).resolves.toBe(
+          'nowhere outside to move them',
+        );
+        await quiet();
+        expect(conn.messages.some((m) => m.type === 'staffAction')).toBe(false);
+        // Not flagged as removed: they still walk about inside.
+        await expect(step(conn, 'up', 4)).resolves.toMatchObject({
+          outcome: 'moved',
+        });
+        await Promise.all([leave(staff), leave(conn)]);
+      } finally {
+        await own.gateway.stop();
+        await own.app.close();
+      }
+    });
+
     it('refuses to remove somebody in the corridors', async () => {
       const admin = person();
       accounts.admins.add(admin);

@@ -90,9 +90,9 @@ describe('nearestOutside', () => {
     ).toEqual({ x: 4, y: 0 });
   });
 
-  it('falls back to the spawn when nowhere outside will do', () => {
+  it('finds nothing when nowhere outside will do', () => {
     expect(
       nearestOutside(grid, spaces, { x: 2, y: 0 }, 'library', () => false),
-    ).toEqual(grid.spawn);
+    ).toBeUndefined();
   });
 });

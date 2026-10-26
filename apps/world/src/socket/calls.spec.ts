@@ -28,7 +28,7 @@ const removed: { room: string; identity: string; revokeTokenTs?: string }[] =
 /** Microphones LiveKit was asked to mute, as world asked. */
 const mutes: { room: string; identity: string; trackSid: string }[] = [];
 /** Set to have LiveKit's API fail to find out who is in a call. */
-const lookups = { failing: false };
+const lookups = { failing: false, micOff: false };
 /** How many removals to refuse next, as a LiveKit that is down would. */
 const refusals = { left: 0, seen: 0 };
 let livekit: Server;
@@ -134,7 +134,7 @@ beforeAll(async () => {
                 sid: 'TR_mic',
                 source: 'MICROPHONE',
                 type: 'AUDIO',
-                muted: false,
+                muted: lookups.micOff,
               },
             ],
           }),
@@ -198,6 +198,7 @@ beforeEach(async () => {
   removed.length = 0;
   mutes.length = 0;
   lookups.failing = false;
+  lookups.micOff = false;
   refusals.left = 0;
   refusals.seen = 0;
   admins.clear();
@@ -624,6 +625,22 @@ describe('staff muting somebody', () => {
     await expect(
       waitFor(admin, (m) => m.type === 'error'),
     ).resolves.toMatchObject({ message: 'they are in no call' });
+    await leave(admin, ada);
+  });
+
+  it('says so, and tells them nothing, when their microphone is off already', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'call');
+    lookups.micOff = true;
+
+    mute(admin, ada.userId);
+
+    await expect(
+      waitFor(admin, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({ message: 'their microphone is not on' });
+    expect(mutes).toEqual([]);
+    expect(ada.messages.some((m) => m.type === 'staffAction')).toBe(false);
     await leave(admin, ada);
   });
 

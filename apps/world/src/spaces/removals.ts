@@ -44,7 +44,7 @@ export class SpaceRemovals {
 
 /**
  * The nearest floor outside `leaving`, by steps from `start`, in a space
- * they may stand in; the spawn when there is none.
+ * they may stand in; undefined when none can be reached.
  */
 export function nearestOutside(
   grid: Grid,
@@ -52,7 +52,7 @@ export function nearestOutside(
   start: Tile,
   leaving: string,
   mayStandIn: (spaceKey: string) => boolean,
-): Tile {
+): Tile | undefined {
   const queue: Tile[] = [{ x: start.x, y: start.y }];
   const seen = new Set([`${start.x},${start.y}`]);
   for (let i = 0; i < queue.length; i += 1) {
@@ -67,7 +67,7 @@ export function nearestOutside(
       queue.push(next);
     }
   }
-  return grid.spawn;
+  return undefined;
 }
 
 function key(seat: Seat, spaceKey: string): string {

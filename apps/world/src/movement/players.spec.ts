@@ -22,6 +22,34 @@ function players() {
 }
 
 describe('Players', () => {
+  it('places somebody on a tile without a step, facing as they were', () => {
+    const all = players();
+    all.join(at(), 0);
+
+    expect(all.place(at(), { x: 3, y: 2 })).toEqual({
+      userId: 'ada',
+      x: 3,
+      y: 2,
+      facing: 'down',
+    });
+    expect(all.get(at())).toMatchObject({ x: 3, y: 2 });
+  });
+
+  it('places nobody off the map, on a wall, or who is not standing anywhere', () => {
+    const walls = new Uint8Array(5 * 4);
+    walls[1] = 1;
+    const all = new Players(
+      { width: 5, height: 4, spawn: { x: 0, y: 0 }, walls },
+      STEP_MS,
+    );
+    all.join(at(), 0);
+
+    expect(all.place(at(), { x: 5, y: 0 })).toBeUndefined();
+    expect(all.place(at(), { x: 1, y: 0 })).toBeUndefined();
+    expect(all.place(at({ userId: 'grace' }), { x: 2, y: 2 })).toBeUndefined();
+    expect(all.get(at())).toMatchObject({ x: 0, y: 0 });
+  });
+
   it('places an arrival on the spawn tile, facing down', () => {
     expect(players().join(at(), 0)).toEqual({
       userId: 'ada',

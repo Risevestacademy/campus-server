@@ -357,7 +357,8 @@ export const ClientMessage = z
           'Staff only, the same staff as for `mute`: move somebody out of ' +
           'the space they stand in, to the nearest tile outside it, and keep ' +
           'them out for 90 seconds; they may ask to enter meanwhile. Not ' +
-          'from the corridors. Answered by `staffAction`, to you and to ' +
+          'from the corridors, nor from a space that takes no requests. ' +
+          'Answered by `staffAction`, to you and to ' +
           'them; otherwise by a NOT_ALLOWED error saying why. Counts as ' +
           'activity.',
       }),
