@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { AccessToken } from 'livekit-server-sdk';
+import { AccessToken, TrackSource } from 'livekit-server-sdk';
 
 /**
  * Where a media server lives and the key pair that signs for it. Server side
@@ -24,6 +24,8 @@ export interface RoomGrant {
   name?: string;
   /** False to listen and watch without sending. Subscribing is always allowed. */
   canPublish: boolean;
+  /** Publish the microphone only: no camera and no screen. */
+  audioOnly?: boolean;
   ttlSeconds?: number;
 }
 
@@ -112,6 +114,7 @@ export async function mintRoomToken(
     canPublish: grant.canPublish,
     canSubscribe: true,
     canPublishData: false,
+    ...(grant.audioOnly ? { canPublishSources: [TrackSource.MICROPHONE] } : {}),
   });
 
   const jwt = await token.toJwt();

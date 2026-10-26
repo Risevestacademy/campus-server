@@ -76,17 +76,32 @@ server decides every position.
 - **A call per space:** on arrival and on every step into another space,
   a `call` message with a LiveKit token for that cohort's room in the space
   (`LIVEKIT_*`; unset, no calls). World takes people out of a call they
-  left. In a proximity space, `nearby` names who is within the subscribe
+  left and revokes its token; a removal LiveKit does not confirm is tried
+  again at every heartbeat. In a proximity space, `nearby` names who is within the subscribe
   radius (5 tiles to hear and 6 to subscribe where the space sets none),
   each tick it changes. See [the protocol doc](../../docs/world-protocol.md#calls).
+- **The admin broadcast:** everybody also gets a token for their cohort's
+  broadcast room, to listen beside their space's call; admins' tokens may
+  publish the microphone there, and last a minute, enough to join. Somebody
+  who stops being an admin is taken out at the next heartbeat, their tokens
+  revoked, and handed one to listen. See
+  [the protocol doc](../../docs/world-protocol.md#broadcast).
+- **Chat:** `say` reaches whoever can hear the speaker, by the space's
+  hearing, and is never stored. See
+  [the protocol doc](../../docs/world-protocol.md#chat).
 - **The pre-join connection check:** a short-lived LiveKit token for testing
   devices and network before a call. See [below](#the-connection-check).
 - **Who is online, for admins:** a count for the admin dashboard, across the
   campus or in one cohort. See [below](#the-online-count).
+- **Locks and asking to enter:** anybody inside a normal whole-room space
+  may lock it; somebody refused at a locked or designated space may ask
+  from beside it, and somebody inside answers. Both are held in this
+  process, per cohort. See
+  [the protocol doc](../../docs/world-protocol.md#locks).
 
-Not yet: more than one map, asking to enter a space, portals,
-an admin's broadcast, or live positions shared across instances (a player
-who moves to another instance starts from their last saved position).
+Not yet: more than one map, portals, or live positions shared across
+instances (a player who moves to another instance starts from their last
+saved position).
 
 ## Running it
 
@@ -135,6 +150,7 @@ src/
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   status/               available, busy or away, and going away while idle — no sockets here
+  spaces/               locks, and requests to enter — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages; for now also
                         the doors (spaces read, mayEnter on a step), calls and nearby lists
