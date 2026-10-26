@@ -5,8 +5,7 @@ const tracer = trace.getTracer('world');
 
 /** Scrubbed, as a log line is: spans leave for Grafana too. */
 function asError(value: unknown): Error {
-  const error = scrubError(value);
-  return error instanceof Error ? error : new Error(String(error));
+  return value instanceof Error ? scrubError(value) : new Error(String(value));
 }
 
 /**

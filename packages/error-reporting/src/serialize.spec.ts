@@ -1,8 +1,8 @@
 import { pino } from 'pino';
-import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { serializeError } from './serialize.js';
+import { captureLines } from './testing.js';
 
 /** Shaped like postgres.js's PostgresError, whose `detail` can quote a row. */
 function postgresError() {
@@ -29,13 +29,7 @@ function drizzleError() {
 }
 
 function logger() {
-  const lines: string[] = [];
-  const stream = new Writable({
-    write(chunk, _encoding, done) {
-      lines.push(String(chunk));
-      done();
-    },
-  });
+  const { stream, lines } = captureLines();
   return { log: pino({ serializers: { err: serializeError } }, stream), lines };
 }
 
@@ -72,8 +66,16 @@ describe('serializeError', () => {
     expect(line.err.stack).toContain('    at ');
   });
 
+  it("scrubs pino's serialized error, as pino-http hands it over", () => {
+    const serialized = pino.stdSerializers.err(drizzleError());
+
+    expect(JSON.stringify(serializeError(serialized))).not.toContain(
+      'ada@example.com',
+    );
+  });
+
   it('passes what is not an error through', () => {
-    const notAnError = 'not an error' as unknown as Error;
-    expect(serializeError(notAnError)).toBe('not an error');
+    expect(serializeError('not an error')).toBe('not an error');
+    expect(serializeError(null)).toBeNull();
   });
 });

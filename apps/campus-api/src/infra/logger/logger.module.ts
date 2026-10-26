@@ -8,6 +8,7 @@ import {
 } from '@campus/error-reporting';
 import { matchesPath, pathOf } from '@campus/telemetry/paths';
 import { LoggerModule } from 'nestjs-pino';
+import type { Options } from 'pino-http';
 
 import {
   CORRELATION_ID_HEADER,
@@ -58,7 +59,7 @@ export function isUnloggedRoute(url: string | undefined): boolean {
 }
 
 /** The request logger's options, the `pinoHttp` nestjs-pino is given. */
-export function pinoHttpOptions(config: Env, reporter: ErrorReporter) {
+export function pinoHttpOptions(config: Env, reporter: ErrorReporter): Options {
   return {
     level: config.FF_LOG_LEVEL,
     hooks: reportingHooks(reporter),

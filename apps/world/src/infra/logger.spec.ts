@@ -1,5 +1,5 @@
+import { captureLines } from '@campus/error-reporting/testing';
 import Fastify from 'fastify';
-import { Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Env } from './env.js';
@@ -57,13 +57,7 @@ describe('silenceRoutes', () => {
 
 describe('loggerOptions', () => {
   it('logs a failed query without the value Postgres rejected, however it is logged', async () => {
-    const lines: string[] = [];
-    const stream = new Writable({
-      write(chunk, _encoding, done) {
-        lines.push(String(chunk));
-        done();
-      },
-    });
+    const { stream, lines } = captureLines();
     const options = loggerOptions(
       { FF_LOG_LEVEL: 'info', FF_LOG_PRETTY: false } as Env,
       { report: vi.fn(), shutdown: vi.fn() },

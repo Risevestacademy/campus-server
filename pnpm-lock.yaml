@@ -113,6 +113,9 @@ importers:
       pino:
         specifier: ^10.3.1
         version: 10.3.1
+      pino-http:
+        specifier: ^11.0.0
+        version: 11.0.0
       postgres:
         specifier: 'catalog:'
         version: 3.4.9

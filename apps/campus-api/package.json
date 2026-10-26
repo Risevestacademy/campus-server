@@ -47,6 +47,7 @@
     "google-auth-library": "^11.1.0",
     "nestjs-pino": "^5.1.0",
     "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
     "postgres": "catalog:",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.31.0",

@@ -1,20 +1,13 @@
-import { Writable } from 'node:stream';
-
 import pino from 'pino';
 import { describe, expect, it } from 'vitest';
 
 import { LOG_REDACT_PATHS } from './redact.js';
+import { captureLines } from './testing.js';
 
 function logged(write: (logger: pino.Logger) => void): string {
-  let output = '';
-  const sink = new Writable({
-    write(chunk, _encoding, done) {
-      output += chunk.toString();
-      done();
-    },
-  });
-  write(pino({ redact: { paths: [...LOG_REDACT_PATHS] } }, sink));
-  return output;
+  const { stream, lines } = captureLines();
+  write(pino({ redact: { paths: [...LOG_REDACT_PATHS] } }, stream));
+  return lines.join('');
 }
 
 describe('LOG_REDACT_PATHS', () => {
