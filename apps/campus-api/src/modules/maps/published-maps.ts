@@ -20,13 +20,6 @@ import {
 /** Injection token for the fetch the published maps are read with. */
 export const MAPS_FETCH = Symbol('MAPS_FETCH');
 
-/** Long enough for a slow answer, short enough that a hung one fails the sync. */
-const FETCH_TIMEOUT_MS = 10_000;
-
-/** fetch, giving up: a request that hangs must not hang an admin's request. */
-export const fetchWithTimeout: typeof fetch = (input, init) =>
-  fetch(input, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-
 type TiledMap = Parameters<typeof readMapLayout>[0];
 
 /** One map as it is published now: which, at what version, and what is on it. */

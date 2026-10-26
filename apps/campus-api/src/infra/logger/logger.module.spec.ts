@@ -1,5 +1,12 @@
+import { captureLines } from '@campus/error-reporting/testing';
+import { Test } from '@nestjs/testing';
+import { Logger, LoggerModule } from 'nestjs-pino';
+import { pinoHttp } from 'pino-http';
+
+import type { Env } from '../config/config.module.js';
 import {
   isUnloggedRoute,
+  pinoHttpOptions,
   routeOnceFinished,
   serializeRequest,
 } from './logger.module.js';
@@ -63,5 +70,64 @@ describe('routeOnceFinished', () => {
     expect(routeOnceFinished({}, { writableEnded: true })).toEqual({
       route: undefined,
     });
+  });
+});
+
+describe('pinoHttpOptions', () => {
+  const options = () =>
+    pinoHttpOptions({ FF_LOG_LEVEL: 'info', FF_LOG_PRETTY: false } as Env, {
+      report: vi.fn(),
+      shutdown: vi.fn(),
+    });
+  const query = 'insert into "users" ("email") values ($1)';
+  const rejected = Object.assign(
+    new Error('duplicate key value violates unique constraint "users_email"'),
+    {
+      name: 'PostgresError',
+      code: '23505',
+      severity: 'ERROR',
+      detail: 'Key (email)=(ada@example.com) already exists.',
+    },
+  );
+  const failed = Object.assign(
+    new Error(`Failed query: ${query}\nparams: ada@example.com`, {
+      cause: rejected,
+    }),
+    { query, params: ['ada@example.com'] },
+  );
+
+  // pino-http wraps the `err` serializer around its own.
+  it('logs a failed query without the values it was given, through pino-http', () => {
+    const { stream, lines } = captureLines();
+
+    const { logger } = pinoHttp(options(), stream);
+    logger.error({ err: failed }, 'Unhandled exception');
+    logger.error(failed);
+    logger.warn({ err: rejected }, 'retrying');
+
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('SQLSTATE 23505');
+    expect(lines.join('')).not.toContain('ada@example.com');
+  });
+
+  // nestjs-pino hands an error logged on its own to pino as `{ err }`.
+  it("logs a failed query without its values through nestjs-pino's Logger", async () => {
+    const { stream, lines } = captureLines();
+    const moduleRef = await Test.createTestingModule({
+      imports: [LoggerModule.forRoot({ pinoHttp: [options(), stream] })],
+    }).compile();
+    const logger = moduleRef.get(Logger);
+
+    logger.error(failed);
+    logger.error(
+      { err: failed },
+      'Unhandled exception',
+      'GlobalExceptionFilter',
+    );
+    await moduleRef.close();
+
+    expect(lines).toHaveLength(2);
+    expect(lines.join('')).toContain('SQLSTATE 23505');
+    expect(lines.join('')).not.toContain('ada@example.com');
   });
 });

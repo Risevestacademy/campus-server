@@ -1,6 +1,7 @@
 import {
   LOG_REDACT_PATHS,
   reportingHooks,
+  serializeError,
   type ErrorReporter,
 } from '@campus/error-reporting';
 import { matchesPath, pathOf } from '@campus/telemetry/paths';
@@ -54,6 +55,7 @@ export function loggerOptions(
       censor: '[REDACTED]',
     },
     serializers: {
+      err: serializeError,
       req: serializeRequest,
       res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
     },

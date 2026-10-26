@@ -125,6 +125,18 @@ change to either reaches both apps:
   A token is accepted when it is addressed to one of the clients named here
   or to the web client, and refused otherwise. Unset, only the web client's
   tokens are accepted.
+- Google Calendar stays off unless `FF_GOOGLE_CALENDAR_ENABLED=true`, which
+  needs Google sign-in on, `GOOGLE_CALENDAR_TOKEN_KEY` (32 bytes in base64:
+  `openssl rand -base64 32`, the key the refresh tokens are sealed with;
+  changing it makes every member reconnect) and `GOOGLE_CALENDAR_CALLBACK_URL`
+  (this API's `/v1/calendar/connect/callback`, through campus-web's proxy like
+  `GOOGLE_CALLBACK_URL`, registered on the same Google client). The scope,
+  `calendar.events.readonly`, has to be added to the Google consent screen.
+  It is a sensitive scope: until Google has verified the app, only the
+  consent screen's test users can connect, and while the app's publishing
+  status is Testing their refresh tokens lapse after 7 days. Sign-in never
+  asks for it. See the calendar module's
+  [README](../apps/campus-api/src/modules/calendar/README.md).
 - `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
   shared under, so world on its own subdomain receives it — for example
   `campus.example`. Only `campus_session` gets it; the refresh and state
@@ -197,7 +209,8 @@ The proxy has to carry the auth flow through, not just JSON. It must:
   `Set-Cookie` the same way, or logout leaves them behind). `campus_session`
   is `Path=/` and needs nothing.
 - **Pass `Location` through on redirects.** `GET /v1/auth/google` answers 302
-  to `accounts.google.com`, and the callback answers 302 to `APP_PUBLIC_URL`.
+  to `accounts.google.com`, and the callback answers 302 to `APP_PUBLIC_URL`;
+  `GET /v1/calendar/connect` and its callback do the same.
   Without `Location` the browser has nowhere to go. Allowing those two
   destinations keeps the existing guard against open redirects.
 - **Forward `X-Forwarded-For`** as it arrived from Railway's edge. Otherwise

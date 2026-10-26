@@ -1,9 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Global, Module } from '@nestjs/common';
-import { LOG_REDACT_PATHS, reportingHooks } from '@campus/error-reporting';
+import {
+  LOG_REDACT_PATHS,
+  reportingHooks,
+  serializeError,
+} from '@campus/error-reporting';
 import { matchesPath, pathOf } from '@campus/telemetry/paths';
 import { LoggerModule } from 'nestjs-pino';
+import type { Options } from 'pino-http';
 
 import {
   CORRELATION_ID_HEADER,
@@ -53,6 +58,48 @@ export function isUnloggedRoute(url: string | undefined): boolean {
   return matchesPath(url, QUIET_ROUTES);
 }
 
+/** The request logger's options, the `pinoHttp` nestjs-pino is given. */
+export function pinoHttpOptions(config: Env, reporter: ErrorReporter): Options {
+  return {
+    level: config.FF_LOG_LEVEL,
+    hooks: reportingHooks(reporter),
+    genReqId: (req: IncomingMessage, res: ServerResponse) => {
+      // The one place the id is decided. What is returned here is
+      // what the logs, the response header and any audit entry carry.
+      const id = resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
+      res.setHeader(CORRELATION_ID_HEADER, id);
+      return id;
+    },
+    transport: config.FF_LOG_PRETTY
+      ? {
+          target: 'pino-pretty',
+          options: {
+            singleLine: true,
+            colorize: true,
+            translateTime: 'SYS:HH:MM:ss',
+            ignore: 'pid,hostname',
+          },
+        }
+      : undefined,
+    customProps: (req: IncomingMessage, res: ServerResponse) =>
+      routeOnceFinished(req, res),
+    autoLogging: {
+      ignore: (req: IncomingMessage) => isUnloggedRoute(req.url),
+    },
+    redact: {
+      paths: [...LOG_REDACT_PATHS],
+      censor: '[REDACTED]',
+    },
+    serializers: {
+      err: serializeError,
+      req: serializeRequest,
+      res: (res: { statusCode: number }) => ({
+        statusCode: res.statusCode,
+      }),
+    },
+  };
+}
+
 @Global()
 @Module({
   imports: [
@@ -60,42 +107,7 @@ export function isUnloggedRoute(url: string | undefined): boolean {
       imports: [ErrorReportingModule],
       inject: [CONFIG, ERROR_REPORTER],
       useFactory: (config: Env, reporter: ErrorReporter) => ({
-        pinoHttp: {
-          level: config.FF_LOG_LEVEL,
-          hooks: reportingHooks(reporter),
-          genReqId: (req: IncomingMessage, res: ServerResponse) => {
-            // The one place the id is decided. What is returned here is
-            // what the logs, the response header and any audit entry carry.
-            const id = resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
-            res.setHeader(CORRELATION_ID_HEADER, id);
-            return id;
-          },
-          transport: config.FF_LOG_PRETTY
-            ? {
-                target: 'pino-pretty',
-                options: {
-                  singleLine: true,
-                  colorize: true,
-                  translateTime: 'SYS:HH:MM:ss',
-                  ignore: 'pid,hostname',
-                },
-              }
-            : undefined,
-          customProps: (req, res) => routeOnceFinished(req, res),
-          autoLogging: {
-            ignore: (req: IncomingMessage) => isUnloggedRoute(req.url),
-          },
-          redact: {
-            paths: [...LOG_REDACT_PATHS],
-            censor: '[REDACTED]',
-          },
-          serializers: {
-            req: serializeRequest,
-            res: (res) => ({
-              statusCode: res.statusCode,
-            }),
-          },
-        },
+        pinoHttp: pinoHttpOptions(config, reporter),
       }),
     }),
   ],
