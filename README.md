@@ -127,6 +127,9 @@ Each app documents itself in its own README:
 
 - **campus-api** — setup, environment variables, feature flags, logging,
   OpenTelemetry tracing/metrics, database migrations, and integration docs.
+  Each module with more to say has its own README beside its code, linked
+  from there: the audit log, maps, feedback, calls, mentorship groups and
+  the Google Calendar integration.
 - **world** — the realtime service: running it, its layout, and the protocol
   schema.
 

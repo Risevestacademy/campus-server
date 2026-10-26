@@ -14,6 +14,8 @@ import {
   ValidationException,
 } from '../../shared/exceptions/index.js';
 import { DomainExceptionFilter } from '../../shared/filters/index.js';
+import { logRedirectedFailure } from '../../shared/filters/redirected-failure.js';
+import { appUrl } from '../../shared/http/app-url.js';
 import {
   AccountSuspendedError,
   GoogleAuthNotConfiguredError,
@@ -64,28 +66,21 @@ export class SignInRedirectFilter implements ExceptionFilter {
     const res = ctx.getResponse<Response>();
     const code = signInErrorCode(exception);
 
-    // The global filters never see this exception, so it is logged here,
-    // and every server_error is: the user is told something went wrong on our
-    // side, so there has to be a record of what. A 5xx is an error; anything
-    // else that lands here — a 4xx this route does not expect, such as an
-    // access grant ending mid-sign-in — is a warning. Not the URL: it carries
-    // Google's code.
+    // Every server_error is logged: the user is told something went wrong on
+    // our side, so there has to be a record of what.
     if (code === 'server_error') {
-      const req = ctx.getRequest<Request & { id?: string }>();
-      const fault =
-        resolveExceptionStatus(exception) >= HttpStatus.INTERNAL_SERVER_ERROR;
-      this.logger[fault ? 'error' : 'warn'](
-        { err: exception, method: req.method, correlationId: req.id },
-        fault ? 'Unhandled exception' : 'Unexpected sign-in failure',
+      logRedirectedFailure(
+        this.logger,
+        exception,
+        ctx.getRequest<Request & { id?: string }>(),
+        'Unexpected sign-in failure',
       );
     }
 
     // Already cleared on the handler's own path, but a query that fails
     // validation never reaches the handler, and the state is single-use.
     res.clearCookie(STATE_COOKIE, { path: STATE_COOKIE_PATH });
-    res.redirect(
-      `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${SIGN_IN_PATH}?error=${code}`,
-    );
+    res.redirect(appUrl(this.config, `${SIGN_IN_PATH}?error=${code}`));
   }
 }
 
