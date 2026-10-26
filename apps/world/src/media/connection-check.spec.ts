@@ -1,65 +1,24 @@
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope } from '@campus/session';
 import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildWorld, type World } from '../app.js';
-import type { Account } from '../infra/accounts.js';
-import { loadEnv } from '../infra/env.js';
+import {
+  ORIGIN,
+  routeAccounts,
+  routeEnv,
+  sessionToken,
+} from '../http/routes.testing.js';
 import { CONNECTION_CHECK_PATH } from './connection-check.js';
 
-const SECRET = 'a-world-session-secret-of-at-least-32-chars';
-const ORIGIN = 'http://localhost:3002';
 const MEDIA = {
   LIVEKIT_URL: 'ws://localhost:7880',
   LIVEKIT_API_KEY: 'devkey',
   LIVEKIT_API_SECRET: 'local-dev-secret-not-for-production-use',
 };
 
-function envWith(extra: Record<string, string> = {}) {
-  return loadEnv({
-    AUTH_SESSION_SECRET: SECRET,
-    DEPLOYMENT_ENVIRONMENT: 'development',
-    DATABASE_URL: 'postgres://unused',
-    CORS_ORIGINS: ORIGIN,
-    FF_LOG_LEVEL: 'fatal',
-    ...extra,
-  } as NodeJS.ProcessEnv);
-}
-
-const suspended = new Set<string>();
-const accounts = {
-  find: async (id: string): Promise<Account | null> =>
-    id === 'gone'
-      ? null
-      : {
-          id,
-          suspended: suspended.has(id),
-          sessionEpoch: 0,
-          admin: false,
-          systemRole: 'user',
-          displayName: null,
-          spriteKey: null,
-        },
-  liveSessions: async () => new Set<string>(),
-  liveMembership: async () => false,
-  liveMemberships: async () => new Set<string>(),
-  memberships: async () => new Map(),
-  spacesOn: async () => new Map(),
-  onProfileChanged: async () => undefined,
-  onSpacesChanged: async () => undefined,
-  close: async () => undefined,
-};
-
-async function sessionToken(
-  userId = 'ada',
-  scope: SessionScope = SessionScope.FullAccess,
-): Promise<string> {
-  const { token } = await signSessionToken(
-    { epoch: 0, userId, email: `${userId}@campus.local`, scope },
-    { secret: SECRET, ttlMinutes: 15 },
-  );
-  return token;
-}
+const accounts = routeAccounts();
+accounts.gone.add('gone');
 
 /** The payload of a LiveKit token, once its signature has been checked. */
 function livekitClaims(jwt: string, secret: string) {
@@ -79,21 +38,21 @@ function livekitClaims(jwt: string, secret: string) {
 describe('POST /media/connection-check', () => {
   let world: World | undefined;
 
-  async function start(env = envWith(MEDIA)) {
+  async function start(env = routeEnv(MEDIA)) {
     world = await buildWorld(env, accounts);
     return world.app;
   }
 
   async function ask(
     headers: Record<string, string>,
-    env?: ReturnType<typeof envWith>,
+    env?: ReturnType<typeof routeEnv>,
   ) {
     const app = world?.app ?? (await start(env));
     return app.inject({ method: 'POST', url: CONNECTION_CHECK_PATH, headers });
   }
 
   afterEach(async () => {
-    suspended.clear();
+    accounts.suspended.clear();
     await world?.gateway.stop();
     await world?.app.close();
     world = undefined;
@@ -181,7 +140,7 @@ describe('POST /media/connection-check', () => {
     });
 
     it('a suspended account, with 401', async () => {
-      suspended.add('ada');
+      accounts.suspended.add('ada');
 
       const response = await ask({
         authorization: `Bearer ${await sessionToken()}`,
@@ -217,7 +176,7 @@ describe('POST /media/connection-check', () => {
     it('tells a member that audio and video are not set up here', async () => {
       const response = await ask(
         { authorization: `Bearer ${await sessionToken()}` },
-        envWith(),
+        routeEnv(),
       );
 
       expect(response.statusCode).toBe(503);
@@ -230,7 +189,7 @@ describe('POST /media/connection-check', () => {
     });
 
     it('tells somebody not signed in nothing about it', async () => {
-      const response = await ask({ origin: ORIGIN }, envWith());
+      const response = await ask({ origin: ORIGIN }, routeEnv());
 
       expect(response.statusCode).toBe(401);
     });
@@ -238,7 +197,7 @@ describe('POST /media/connection-check', () => {
 
   describe('rate limit', () => {
     const limited = () =>
-      envWith({ ...MEDIA, WORLD_CONNECTION_CHECKS_PER_MINUTE: '2' });
+      routeEnv({ ...MEDIA, WORLD_CONNECTION_CHECKS_PER_MINUTE: '2' });
 
     it('refuses an account past its budget, saying when to come back', async () => {
       await start(limited());

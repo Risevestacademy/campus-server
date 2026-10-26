@@ -5,6 +5,7 @@ import {
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 
+import { registerOnlineCount } from './admin/online-count.js';
 import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
@@ -115,6 +116,7 @@ export async function buildWorld(
       app.log.error({ err }, 'could not listen for space changes'),
     );
   registerConnectionCheck(app, env, accounts);
+  registerOnlineCount(app, env, accounts, present);
 
   app.get('/health', async () => ({
     status: 'ok',

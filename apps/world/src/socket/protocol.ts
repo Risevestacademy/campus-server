@@ -8,6 +8,7 @@ import type {
   Player as MovementPlayer,
 } from '../movement/players.js';
 import { Status } from '../status/availability.js';
+import { MAX_SAY_LENGTH } from './earshot.js';
 
 /*
  * The wire contract, both directions, as zod schemas. Client frames are
@@ -118,6 +119,35 @@ export const Call = z
       'identity starts with their user id and a colon.',
   });
 
+export const BroadcastCall = z
+  .object({
+    url: z.string().describe('The media server to connect to.'),
+    room: z.string(),
+    token: z
+      .string()
+      .describe(
+        'Lets you join this room only: within a minute if you may speak, ' +
+          'ten if you only listen. Join with it straight away.',
+      ),
+    canSpeak: z
+      .boolean()
+      .describe(
+        'You are an admin: you may publish your microphone here, and ' +
+          'nothing else. Everybody else only listens.',
+      ),
+  })
+  .meta({
+    id: 'BroadcastCall',
+    description:
+      'Your cohort’s broadcast room, where admins speak to everybody in ' +
+      'the campus. Join it beside the call for your space and stay in it ' +
+      'wherever you walk. Subscribe to every audio track in it and play ' +
+      'it over everything else, with the call for your space carrying on ' +
+      'quieter underneath; it cannot be muted. Several admins may speak at ' +
+      'once. A broadcast starts and stops as a track is published and ' +
+      'unpublished in this room.',
+  });
+
 export const MoveOutcome = z
   .enum(['moved', 'blocked', 'refused', 'too_fast'])
   .meta({
@@ -126,8 +156,39 @@ export const MoveOutcome = z
       'moved: one tile in the direction asked. blocked: the tile is not ' +
       'walkable; they turn to face it without moving. refused: the tile is ' +
       'floor, but in a space they may not enter (designated and not on its ' +
-      'list, or locked); they turn to face it without moving. too_fast: over walking ' +
+      'list, or locked); they turn to face it without moving, and may ask with ' +
+      '`requestEntry`. too_fast: over walking ' +
       'speed; nothing happens, not even the turn.',
+  });
+
+const requestId = z
+  .string()
+  .describe(
+    'This request, not the person asking: asking again gets a new one. ' +
+      'Answer and withdraw with it, so a late answer never reaches a newer ' +
+      'request.',
+  );
+
+export const EntryRequestOutcome = z
+  .enum([
+    'admitted',
+    'declined',
+    'withdrawn',
+    'walked_away',
+    'nobody_inside',
+    'not_needed',
+    'cancelled',
+  ])
+  .meta({
+    id: 'EntryRequestOutcome',
+    description:
+      'admitted: a yes. Their next step into the space is let through; ' +
+      'walking away from beside it first lets the yes lapse. declined: a ' +
+      'no. withdrawn: the asker withdrew it, or disconnected. walked_away: ' +
+      'the asker left the tiles beside the space. nobody_inside: nobody ' +
+      'inside can answer any more. not_needed: they may walk in without ' +
+      'asking now, as the space was unlocked or its list names them. ' +
+      'cancelled: the space no longer takes requests.',
   });
 
 /**
@@ -210,10 +271,68 @@ export const ClientMessage = z
           'gets, you included; in a space that cannot be locked, by a ' +
           'NOT_ALLOWED error. Counts as activity.',
       }),
+    z
+      .object({
+        type: z.literal('requestEntry'),
+        spaceKey: z.string(),
+      })
+      .meta({
+        id: 'RequestEntryMessage',
+        description:
+          'Ask to enter a space you are refused: a locked one, or a ' +
+          'designated one whose list does not name you. Only from a tile ' +
+          'beside it, only while somebody inside can answer, and one request ' +
+          'at a time. Answered by `entryRequested`, to you and to whoever ' +
+          'inside can answer; otherwise by a NOT_ALLOWED error saying why. ' +
+          'After a no, the same space can be asked again 30 seconds later. ' +
+          'Counts as activity.',
+      }),
+    z.object({ type: z.literal('withdrawEntryRequest'), requestId }).meta({
+      id: 'WithdrawEntryRequestMessage',
+      description:
+        'Withdraw your open request, answered by its `entryRequestEnded`. ' +
+        'A `requestId` that is not your open request, as one that has ' +
+        'ended, gets a NOT_ALLOWED error. Counts as activity.',
+    }),
+    z
+      .object({
+        type: z.literal('answerEntryRequest'),
+        requestId,
+        admit: z.boolean(),
+      })
+      .meta({
+        id: 'AnswerEntryRequestMessage',
+        description:
+          'Answer a request to enter the space you are standing in. Anybody ' +
+          'inside a locked space may; in a designated space, only somebody ' +
+          'its list names, or an admin. The first answer stands: one that ' +
+          'comes later, names a request that has ended, or comes from ' +
+          'somebody who may not answer, gets a NOT_ALLOWED error. Counts as ' +
+          'activity.',
+      }),
+    z
+      .object({
+        type: z.literal('say'),
+        text: z.string().trim().min(1).max(MAX_SAY_LENGTH),
+      })
+      .meta({
+        id: 'SayMessage',
+        description:
+          'A line of chat to whoever can hear you: everybody in a whole-room ' +
+          'space, or the people within its subscribe radius in a proximity ' +
+          'space, measured when you send it, without the hysteresis `nearby` ' +
+          'keeps, so the two need not match at the edge. Up to ' +
+          `${MAX_SAY_LENGTH} characters, trimmed. ` +
+          'Answered by the `said` you and they get; five lines at once, then ' +
+          'one a second, after which a NOT_ALLOWED error. Never stored. ' +
+          'Counts as activity.',
+      }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
 
 export type ClientMessage = z.infer<typeof ClientMessage>;
+
+export type EntryRequestOutcome = z.infer<typeof EntryRequestOutcome>;
 
 export const ServerMessage = z
   .discriminatedUnion('type', [
@@ -346,6 +465,16 @@ export const ServerMessage = z
         'the call you are in and join this one. Null where there is no ' +
         'call to join.',
     }),
+    z
+      .object({ type: z.literal('broadcast'), call: BroadcastCall.nullable() })
+      .meta({
+        id: 'BroadcastMessage',
+        description:
+          'Sent on arrival, and again when you are made or stop being an ' +
+          'admin: leave the broadcast room you are in and join this one. ' +
+          'Null where there is none to join; when a token could not be ' +
+          'made, another comes within a heartbeat.',
+      }),
     z.object({ type: z.literal('nearby'), userIds: z.array(z.string()) }).meta({
       id: 'NearbyMessage',
       description:
@@ -384,6 +513,60 @@ export const ServerMessage = z
         description:
           'Which spaces can be locked changed, because an admin changed a ' +
           'space: replaces the list from `snapshot`.',
+      }),
+    z
+      .object({
+        type: z.literal('entryRequested'),
+        requestId,
+        userId: z.string().describe('Who is asking.'),
+        spaceKey: z.string(),
+      })
+      .meta({
+        id: 'EntryRequestedMessage',
+        description:
+          'Somebody asks to enter a space. Sent to the asker, and to each ' +
+          'person inside who may answer, as they become able to: on the ' +
+          'request, or on stepping in later. Every one is followed by an ' +
+          '`entryRequestEnded` with the same `requestId`. Only answerable ' +
+          'while you stand in that space.',
+      }),
+    z
+      .object({
+        type: z.literal('entryRequestEnded'),
+        requestId,
+        userId: z.string().describe('Who asked.'),
+        spaceKey: z.string(),
+        outcome: EntryRequestOutcome,
+        answeredBy: z
+          .string()
+          .nullable()
+          .describe('Who said yes or no. Null for every other outcome.'),
+      })
+      .meta({
+        id: 'EntryRequestEndedMessage',
+        description:
+          'A request to enter is over. Sent to the asker and to everybody ' +
+          'who was sent its `entryRequested`.',
+      }),
+    z
+      .object({
+        type: z.literal('said'),
+        id: z.string().describe('Unique to this line.'),
+        userId: z.string().describe('Who said it.'),
+        spaceKey: z
+          .string()
+          .describe(
+            'The space they said it in, so a meeting’s chat can be kept apart.',
+          ),
+        text: z.string(),
+        at: z.string().describe('When world relayed it, as an ISO timestamp.'),
+      })
+      .meta({
+        id: 'SaidMessage',
+        description:
+          'A line of chat from somebody who could be heard where you stand ' +
+          'when they said it, or your own. World keeps none of it: a line ' +
+          'reaches whoever is in earshot at that moment and nobody later.',
       }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',

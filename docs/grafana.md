@@ -36,8 +36,9 @@ on something, not for every message:
 | `world.sweep.sessions` | The heartbeat's check that every followed login is still live.                                                                     |
 | `world.spaces.read`    | One read of the spaces' doors, whatever asked for it.                                                                              |
 
-Redis commands are traced only inside one of these, so the timers' own reads
-and writes stay out. A span is marked failed when an `error` line with an
+Redis commands are traced only inside a span: one of these, or an HTTP
+route's, such as the admin online count's reads of presence. So the timers'
+own reads and writes stay out. A span is marked failed when an `error` line with an
 error is logged inside it, so a database that stops answering shows on the
 sweeps although they carry on.
 

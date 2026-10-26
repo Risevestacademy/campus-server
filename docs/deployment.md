@@ -236,7 +236,8 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   the **internal** URL.
 - It holds state that is cheap to lose but should not vanish on every
   restart: each player's last position between visits, who is online where
-  (presence), and the messages between world instances.
+  (presence, which the admin dashboard's online count also reads), and the
+  messages between world instances.
 - **Persistence on.** A restart that empties Redis sends everyone back to
   the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
 - **Eviction `noeviction` (Redis's default).** Any other policy would drop
@@ -250,7 +251,9 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
   for more. Redis going down never keeps anybody out: a position that cannot
   be read means starting at the spawn, one that cannot be written is lost,
   and somebody whose presence cannot be written, or whose change of space
-  cannot, is put right by the next renewal once Redis returns.
+  cannot, is put right by the next renewal once Redis returns. Only the
+  admin's online count (`GET /admin/online`) stops: it answers `503
+PRESENCE_UNAVAILABLE` until Redis is back.
 
 ## world
 
@@ -352,7 +355,10 @@ only world knows who is actually standing in which space: campus-api could
 check that someone _may_ enter a space, not that they did. world also sees
 the exit, so it can remove the participant through LiveKit's server API at
 once instead of waiting for the token to run out, and it owns the lifecycle
-of a space's room. So the key pair world mints with belongs to world.
+of a space's room. Every removal, from a space's call or the broadcast
+room, also revokes that identity's tokens, so nobody rejoins with one, and
+one LiveKit does not confirm is tried again at every heartbeat until it is.
+So the key pair world mints with belongs to world.
 
 **campus-api records the calls**, from LiveKit's webhooks: when a space's
 call opens and closes, who joins and leaves it, and whether their camera
@@ -366,7 +372,8 @@ must be at least 32 characters, and it refuses anything shorter. world reads
 `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` for the pre-join
 connection check (`POST /media/connection-check`, see
 [world's README](../apps/world/README.md#the-connection-check)) and for each
-space's call, where it also takes somebody out of a call they left. All
+space's call and the broadcast room, where it also takes somebody out of a
+room they left, or one an admin no longer speaks in. All
 three or none: world refuses to boot with only some set. With none, it
 boots, the check answers `503 MEDIA_NOT_CONFIGURED`, and nobody is handed a
 call.

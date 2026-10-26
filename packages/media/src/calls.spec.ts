@@ -1,10 +1,14 @@
 import { TrackType } from 'livekit-server-sdk';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 
 import {
   InvalidWebhookError,
+  broadcastRoomName,
   parseSpaceRoomName,
   participantIdentity,
+  participantRemover,
   spaceRoomName,
   userIdOfIdentity,
   verifyCallWebhook,
@@ -38,6 +42,19 @@ describe('space room names', () => {
 
   it('refuses to name a room from anything but ids', () => {
     expect(() => spaceRoomName({ cohortId: 'c1', spaceId: SPACE })).toThrow();
+  });
+});
+
+describe('broadcast room names', () => {
+  it('names one per cohort, which no space’s call can be mistaken for', () => {
+    const name = broadcastRoomName(COHORT);
+
+    expect(name).toBe(`broadcast:${COHORT}`);
+    expect(parseSpaceRoomName(name)).toBeNull();
+  });
+
+  it('refuses to name a room from anything but a cohort id', () => {
+    expect(() => broadcastRoomName('c1')).toThrow();
   });
 });
 
@@ -166,5 +183,69 @@ describe('verifying a webhook', () => {
     await expect(
       verifyCallWebhook(KEYS, genuine.body, undefined),
     ).rejects.toBeInstanceOf(InvalidWebhookError);
+  });
+});
+
+describe('participantRemover', () => {
+  /** Stands in for LiveKit's server API, answering each RemoveParticipant with `status`. */
+  async function livekit(status = 200) {
+    const bodies: Record<string, unknown>[] = [];
+    const server = createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk) => (body += chunk));
+      request.on('end', () => {
+        bodies.push(JSON.parse(body) as Record<string, unknown>);
+        response.writeHead(status, { 'content-type': 'application/json' });
+        response.end(
+          status === 200 ? '{}' : '{"code":"internal","msg":"down"}',
+        );
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    const remove = participantRemover(
+      {
+        url: `ws://127.0.0.1:${port}`,
+        apiKey: 'devkey',
+        apiSecret: 'a-livekit-secret-of-at-least-32-chars',
+      },
+      () => 1_700_000_000_500,
+    );
+    return {
+      bodies,
+      remove,
+      close: () => new Promise((resolve) => server.close(resolve)),
+    };
+  }
+
+  it('revokes the identity’s tokens as it removes them, this second’s included', async () => {
+    const api = await livekit();
+
+    await api.remove('broadcast:room', 'user:abc');
+
+    expect(api.bodies).toEqual([
+      {
+        room: 'broadcast:room',
+        identity: 'user:abc',
+        revokeTokenTs: '1700000001',
+      },
+    ]);
+    await api.close();
+  });
+
+  it('treats somebody already gone as removed', async () => {
+    const api = await livekit(404);
+
+    await expect(api.remove('r', 'user:abc')).resolves.toBeUndefined();
+    await api.close();
+  });
+
+  it('fails when LiveKit cannot remove them, so the caller can try again', async () => {
+    const api = await livekit(500);
+
+    await expect(api.remove('r', 'user:abc')).rejects.toThrow();
+    await api.close();
   });
 });

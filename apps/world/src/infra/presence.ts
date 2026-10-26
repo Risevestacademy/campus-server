@@ -91,6 +91,8 @@ export interface PresenceStore {
    */
   setStatus(presence: Presence): Promise<void>;
   online(cohortId: string): Promise<PresenceEntry[]>;
+  /** Who is online in one cohort, or in any: a person in two cohorts is one id. */
+  onlineUserIds(cohortId?: string): Promise<Set<string>>;
   /** Hears about every displacement, including of connections held elsewhere. */
   onDisplaced(listener: (displaced: Displacement) => void): void;
   close(): Promise<void>;
@@ -181,6 +183,17 @@ export class MemoryPresenceStore implements PresenceStore {
     return [...this.entries.values()]
       .filter((presence) => presence.cohortId === cohortId)
       .map((presence) => ({ ...presence, instanceId: this.instanceId }));
+  }
+
+  async onlineUserIds(cohortId?: string): Promise<Set<string>> {
+    return new Set(
+      [...this.entries.values()]
+        .filter(
+          (presence) =>
+            cohortId === undefined || presence.cohortId === cohortId,
+        )
+        .map((presence) => presence.userId),
+    );
   }
 
   onDisplaced(): void {
@@ -404,6 +417,54 @@ export class RedisPresenceStore implements PresenceStore {
       entries.push({ userId: userIds[i] as string, ...parsed.data });
     }
     return entries;
+  }
+
+  async onlineUserIds(cohortId?: string): Promise<Set<string>> {
+    const cohortIds =
+      cohortId === undefined ? await this.cohortIds() : [cohortId];
+    const indexes = this.redis.pipeline();
+    for (const id of cohortIds) {
+      indexes.zrangebyscore(cohortPresenceKey(id), `(${Date.now()}`, '+inf');
+    }
+    const seats: Seat[] = [];
+    for (const [i, [err, ids]] of ((await indexes.exec()) ?? []).entries()) {
+      if (err) throw err;
+      for (const userId of ids as string[]) {
+        seats.push({ userId, cohortId: cohortIds[i] as string });
+      }
+    }
+    if (seats.length === 0) {
+      return new Set();
+    }
+    // The index is scored on each instance's clock, the entry lapses on
+    // Redis's: as online() does, count only members whose entry is there.
+    const entries = this.redis.pipeline();
+    for (const seat of seats) entries.exists(presenceKey(seat));
+    const userIds = new Set<string>();
+    for (const [i, [err, found]] of ((await entries.exec()) ?? []).entries()) {
+      if (err) throw err;
+      if (found === 1) userIds.add((seats[i] as Seat).userId);
+    }
+    return userIds;
+  }
+
+  /** Every cohort with an index of who is in it. Scanned, as only an admin's count asks. */
+  private async cohortIds(): Promise<string[]> {
+    const prefix = cohortPresenceKey('');
+    const ids = new Set<string>();
+    let cursor = '0';
+    do {
+      const [next, found] = await this.redis.scan(
+        cursor,
+        'MATCH',
+        `${prefix}*`,
+        'COUNT',
+        1000,
+      );
+      cursor = next;
+      for (const key of found) ids.add(key.slice(prefix.length));
+    } while (cursor !== '0');
+    return [...ids];
   }
 
   onDisplaced(listener: (displaced: Displacement) => void): void {
