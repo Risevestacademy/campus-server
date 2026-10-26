@@ -12,6 +12,7 @@ import { ErrorReportingModule } from './infra/error-reporting/error-reporting.mo
 import { AppLoggerModule } from './infra/logger/logger.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { CalendarModule } from './modules/calendar/calendar.module.js';
 import { CallsModule } from './modules/calls/calls.module.js';
 import { CohortAdminModule } from './modules/cohorts/cohort-admin.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
@@ -42,6 +43,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     MapsModule,
     FeedbackModule,
     CallsModule,
+    CalendarModule,
     DashboardModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],

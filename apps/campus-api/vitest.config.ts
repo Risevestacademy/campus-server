@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url';
 
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
+
+const MAP_SYNC_PG_SPEC = 'src/modules/maps/map-sync.service.pg.spec.ts';
 
 export default defineConfig({
   // Workspace packages ship built output, so importing one by name means
@@ -14,6 +16,12 @@ export default defineConfig({
       ),
       '@campus/telemetry/paths': fileURLToPath(
         new URL('../../packages/telemetry/src/paths.ts', import.meta.url),
+      ),
+      '@campus/error-reporting/testing': fileURLToPath(
+        new URL(
+          '../../packages/error-reporting/src/testing.ts',
+          import.meta.url,
+        ),
       ),
       '@campus/error-reporting': fileURLToPath(
         new URL('../../packages/error-reporting/src/index.ts', import.meta.url),
@@ -35,15 +43,11 @@ export default defineConfig({
   test: {
     globals: true,
     root: './',
-    include: ['**/*.spec.ts'],
     // class-transformer's @Type() (used in infra/config/env.ts) needs the
     // reflect-metadata polyfill loaded before any decorated class is
     // evaluated. main.ts guarantees this via its first import; tests need
     // the same guarantee when they import a decorated class directly.
     setupFiles: ['reflect-metadata'],
-    // Applies the migrations to the real PostgreSQL that a few tests need,
-    // when one is named; does nothing otherwise.
-    globalSetup: ['./vitest.global-setup.ts'],
     // PGlite suites boot a full Postgres engine in WASM and apply the
     // committed migrations in beforeAll. Running in parallel that takes
     // longer than the 10s default, and a hook that times out reports as the
@@ -55,5 +59,29 @@ export default defineConfig({
     env: {
       APP_PUBLIC_URL: 'http://localhost:3000',
     },
+    // The real-PostgreSQL files share one database, and keep to their own
+    // rows so they can run side by side. The map sync's test cannot: it
+    // retires every map, so it runs on its own once the rest have finished.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['**/*.spec.ts'],
+          exclude: [...configDefaults.exclude, MAP_SYNC_PG_SPEC],
+          // Applies the migrations to the real PostgreSQL a few tests need,
+          // when one is named; does nothing otherwise.
+          globalSetup: ['./vitest.global-setup.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'map-sync-pg',
+          include: [MAP_SYNC_PG_SPEC],
+          sequence: { groupOrder: 1 },
+        },
+      },
+    ],
   },
 });

@@ -1,7 +1,9 @@
+import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ErrorReporter } from './error-reporter.js';
 import { reportLoggedError, reportingHooks } from './logged-error.js';
+import { captureLines } from './testing.js';
 
 const ERROR = 50;
 const WARN = 40;
@@ -130,6 +132,27 @@ describe('reportingHooks', () => {
     expect(reporter.report).toHaveBeenCalledTimes(1);
     expect(alsoOnError).toHaveBeenCalledWith(ERROR, line);
     expect(method.apply).toHaveBeenCalledWith(bound, line);
+  });
+
+  it("writes a line with no message of its own scrubbed, since pino uses the error's", () => {
+    const reporter = fakeReporter();
+    const { stream, lines } = captureLines();
+    const log = pino({ hooks: reportingHooks(reporter) }, stream);
+    const rejected = Object.assign(
+      new Error('invalid input syntax for type uuid: "ada@example.com"'),
+      { name: 'PostgresError', code: '22P02', severity: 'ERROR' },
+    );
+
+    log.error(rejected);
+    log.warn(rejected);
+    log.error({ err: rejected });
+
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect((JSON.parse(line) as { msg: string }).msg).toBe('SQLSTATE 22P02');
+    }
+    expect(lines.join('')).not.toContain('ada@example.com');
+    expect(reporter.report).toHaveBeenCalledWith(rejected, expect.anything());
   });
 
   it('writes other lines without building the bindings', () => {

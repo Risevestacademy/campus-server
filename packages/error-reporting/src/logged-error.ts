@@ -1,6 +1,7 @@
 import { trace } from '@opentelemetry/api';
 
 import type { ErrorReporter } from './error-reporter.js';
+import { scrubError } from './scrub.js';
 
 const PINO_ERROR = 50;
 const PINO_FATAL = 60;
@@ -99,10 +100,28 @@ export function reportLoggedError(
 }
 
 /**
+ * The line with its error scrubbed, whether logged on its own or as `err`.
+ * pino writes a line with no message of its own under the error's message,
+ * which no serializer sees, so the error is scrubbed before pino has it.
+ */
+function scrubbedLine(args: unknown[]): unknown[] {
+  const [first, ...rest] = args;
+  if (first instanceof Error) {
+    return [scrubError(first), ...rest];
+  }
+  if (isObject(first) && first.err instanceof Error) {
+    const err = scrubError(first.err);
+    return err === first.err ? args : [{ ...first, err }, ...rest];
+  }
+  return args;
+}
+
+/**
  * pino `hooks` that report error lines, for campus-api and world alike.
  * `alsoOnError` runs for the same lines, for anything else a service does
  * with them. The level is checked before the logger's bindings are built,
- * so other lines cost nothing.
+ * so other lines cost nothing. Every line is written with its error
+ * scrubbed.
  */
 export function reportingHooks(
   reporter: ErrorReporter,
@@ -119,7 +138,7 @@ export function reportingHooks(
         reportLoggedError(reporter, level, args, this.bindings());
         alsoOnError?.(level, args);
       }
-      method.apply(this, args);
+      method.apply(this, scrubbedLine(args));
     },
   };
 }
