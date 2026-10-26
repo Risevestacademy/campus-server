@@ -28,12 +28,15 @@ function framesOf(stack: string | undefined): string {
 }
 
 /**
- * The error as it may leave for PostHog. A failed query's message carries
- * the values it was given: drizzle appends them as `params:`, and Postgres
- * quotes the one it rejected (`invalid input syntax for type uuid: "…"`).
- * Those keep only the statement and the SQLSTATE; everything else, and the
- * stack's frames, pass as they are. Causes are scrubbed the same way.
+ * The error as it may leave the process, for PostHog, a log line or a span.
+ * A failed query's message carries the values it was given: drizzle appends
+ * them as `params:`, and Postgres quotes the one it rejected (`invalid input
+ * syntax for type uuid: "…"`). Those keep only the statement and the
+ * SQLSTATE; everything else, and the stack's frames, pass as they are.
+ * Causes are scrubbed the same way.
  */
+export function scrubError(error: Error, depth?: number): Error;
+export function scrubError(error: unknown, depth?: number): unknown;
 export function scrubError(error: unknown, depth = 0): unknown {
   if (!(error instanceof Error) || depth > MAX_CAUSE_DEPTH) {
     return error;

@@ -64,6 +64,31 @@ describe('traced', () => {
     expect(span.events.map((e) => e.name)).toContain('exception');
   });
 
+  it('records a failed query without the values it was given', async () => {
+    const rejected = Object.assign(
+      new Error('invalid input syntax for type uuid: "ada@example.com"'),
+      { name: 'PostgresError', code: '22P02', severity: 'ERROR' },
+    );
+
+    await traced('world.sweep.accounts', async () => {
+      failActiveSpan(50, [{ err: rejected }, 'could not']);
+    });
+    await expect(
+      traced('world.spaces.read', async () => {
+        throw rejected;
+      }),
+    ).rejects.toBe(rejected);
+
+    const spans = exporter.getFinishedSpans();
+    expect(spans).toHaveLength(2);
+    for (const span of spans) {
+      expect(span.events[0].attributes?.['exception.message']).toBe(
+        'SQLSTATE 22P02',
+      );
+      expect(JSON.stringify(span.events)).not.toContain('ada@example.com');
+    }
+  });
+
   it('starts a trace of its own when asked, whatever is running', async () => {
     await traced('outer', () =>
       traced('world.socket.open', async () => undefined, { root: true }),
