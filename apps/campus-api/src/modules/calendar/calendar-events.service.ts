@@ -28,6 +28,8 @@ const EVENTS_URL =
   'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 const PAGE_SIZE = 250;
 export const MAX_PAGES = 4;
+/** One read, however many requests it takes: the refresh and every page. */
+export const READ_BUDGET_MS = 20_000;
 
 const DAY_MS = 86_400_000;
 export const DEFAULT_SPAN_DAYS = 7;
@@ -71,7 +73,8 @@ export class CalendarEventsService {
       return NOT_CONNECTED;
     }
     try {
-      return { connected: true, ...(await this.read(grant, from, to)) };
+      const signal = AbortSignal.timeout(READ_BUDGET_MS);
+      return { connected: true, ...(await this.read(grant, from, to, signal)) };
     } catch (err) {
       if (!(err instanceof GrantWithdrawnError)) {
         throw err;
@@ -88,10 +91,12 @@ export class CalendarEventsService {
     grant: CalendarGrant,
     from: Date,
     to: Date,
+    signal: AbortSignal,
   ): Promise<{ events: CalendarEventDto[]; truncated: boolean }> {
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.list(await this.tokens.get(grant), from, to);
+        const token = await this.tokens.get(grant, signal);
+        return await this.list(token, from, to, signal);
       } catch (err) {
         if (!(err instanceof AccessTokenRejected)) {
           throw err;
@@ -112,6 +117,7 @@ export class CalendarEventsService {
     token: string,
     from: Date,
     to: Date,
+    signal: AbortSignal,
   ): Promise<{ events: CalendarEventDto[]; truncated: boolean }> {
     const events: CalendarEventDto[] = [];
     let pageToken: string | undefined;
@@ -126,7 +132,7 @@ export class CalendarEventsService {
         fields: GOOGLE_EVENT_FIELDS,
         ...(pageToken ? { pageToken } : {}),
       }).toString();
-      const body = await this.get(url, token);
+      const body = await this.get(url, token, signal);
       events.push(...(body.items ?? []).flatMap(toCalendarEvent));
       pageToken = body.nextPageToken;
       if (!pageToken) {
@@ -136,11 +142,16 @@ export class CalendarEventsService {
     return { events, truncated: pageToken !== undefined };
   }
 
-  private async get(url: URL, token: string): Promise<GoogleEventList> {
+  private async get(
+    url: URL,
+    token: string,
+    signal: AbortSignal,
+  ): Promise<GoogleEventList> {
     let res: Response;
     try {
       res = await this.fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
+        signal,
       });
     } catch (err) {
       this.logger.error({ err }, 'google calendar unreachable');

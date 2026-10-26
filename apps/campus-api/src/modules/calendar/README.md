@@ -109,9 +109,11 @@ more answers with the first 1,000 and `truncated: true`.
 
 ## Talking to Google
 
-Every request to Google, OAuth and Calendar alike, goes through
-`fetchWithTimeout`: one attempt, ten seconds in all, no retries.
-`google-auth-library` retries on its own, so the calendar does not use it.
+Every request the calendar makes to Google, OAuth and Calendar API alike,
+goes through `fetchWithTimeout`: one attempt, ten seconds in all, no
+retries. `google-auth-library` retries on its own, so the calendar does not
+use it. A read of events, which can take a token refresh and four pages, is
+held to 20 seconds in all: one deadline every request in it shares.
 
 ## Storage
 
@@ -130,8 +132,11 @@ waiting for that member.
 
 A grant is revoked at Google first and its row deleted only once Google
 confirms. `revoke_requested_at` marks a grant on its way out. From then on
-it is never used, and a revocation Google does not confirm is tried again at
-the next sweep.
+it is never used. A revocation Google does not confirm, or one whose token
+does not open, counts in `revoke_attempts` and waits in `revoke_retry_at`:
+ten minutes after the first failure, twice as long after each one after
+that, at most a day. Each sweep takes the 100 that are due, those never
+tried first, so grants Google keeps refusing do not hold up newer ones.
 
 - **The member:** `DELETE /v1/calendar`. It takes campus off their Google
   account's connections, and works while the calendar is switched off.
@@ -140,8 +145,8 @@ the next sweep.
   a guest's visit ran out), then revokes every grant marked. It runs at most
   every ten minutes, on the back of calendar requests: a timer would keep
   the API awake, and it sleeps when idle.
-- **Without the key:** the tokens cannot be opened, so marked grants wait
-  until `GOOGLE_CALENDAR_TOKEN_KEY` is set again. One sealed under a key
-  that has since changed can never be revoked from here; it is deleted, and
-  logged as an error.
+- **Without the right key:** a token that cannot be opened is still live at
+  Google, so its grant stays marked, logged as an error at each try, until
+  `GOOGLE_CALENDAR_TOKEN_KEY` is right again. With no key set at all, marked
+  grants are not tried.
 - **The account:** deleting it deletes the grant.

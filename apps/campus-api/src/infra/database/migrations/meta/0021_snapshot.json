@@ -1,5 +1,5 @@
 {
-  "id": "4c8adf58-a44f-408a-89c5-29d6436bbfe4",
+  "id": "fdbee22d-f6af-4c4c-beb6-77d57756de28",
   "prevId": "8c5dc62c-afd5-42a7-8b0b-19eda9424639",
   "version": "7",
   "dialect": "postgresql",
@@ -182,6 +182,19 @@
         },
         "revoke_requested_at": {
           "name": "revoke_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoke_attempts": {
+          "name": "revoke_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "revoke_retry_at": {
+          "name": "revoke_retry_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false

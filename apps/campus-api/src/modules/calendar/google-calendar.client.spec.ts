@@ -196,6 +196,17 @@ describe('refresh', () => {
     });
   });
 
+  it('stops at the caller’s deadline', async () => {
+    fetch.mockImplementation(() =>
+      answer(200, { access_token: 'google-access', expires_in: 3599 }),
+    );
+    const deadline = new AbortController().signal;
+
+    await client().refresh('google-refresh', deadline);
+
+    expect((fetch.mock.calls[0][1] as RequestInit).signal).toBe(deadline);
+  });
+
   it('says so when Google has withdrawn the grant', async () => {
     fetch.mockImplementation(() => answer(400, { error: 'invalid_grant' }));
 

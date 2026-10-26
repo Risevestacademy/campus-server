@@ -16,6 +16,7 @@ const grants = {
   requestLapsedRevocations: vi.fn(),
   pendingRevocations: vi.fn(),
   removeRevoked: vi.fn(),
+  revocationFailed: vi.fn(),
 };
 const google = { revoke: vi.fn() };
 const tokens = { evict: vi.fn(), clear: vi.fn() };
@@ -62,7 +63,7 @@ describe('disconnect', () => {
 
     expect(tokens.evict).toHaveBeenCalledWith('user-1');
     expect(grants.requestRevocation).toHaveBeenCalledWith('user-1', NOW);
-    expect(grants.pendingRevocations).toHaveBeenCalledWith('user-1');
+    expect(grants.pendingRevocations).toHaveBeenCalledWith(NOW, 'user-1');
     expect(google.revoke).toHaveBeenCalledWith('user-1-refresh');
     expect(order).toEqual(['marked', 'revoked', 'removed']);
   });
@@ -75,6 +76,10 @@ describe('disconnect', () => {
 
     expect(grants.requestRevocation).toHaveBeenCalled();
     expect(grants.removeRevoked).not.toHaveBeenCalled();
+    expect(grants.revocationFailed).toHaveBeenCalledWith(
+      pending('user-1'),
+      NOW,
+    );
   });
 });
 
@@ -89,6 +94,7 @@ describe('sweep', () => {
     await revocations().sweep(NOW);
 
     expect(grants.requestLapsedRevocations).toHaveBeenCalledWith(NOW);
+    expect(grants.pendingRevocations).toHaveBeenCalledWith(NOW);
     expect(tokens.clear).toHaveBeenCalled();
     expect(google.revoke).toHaveBeenCalledWith('left-refresh');
     expect(google.revoke).toHaveBeenCalledWith('retried-refresh');
@@ -109,16 +115,23 @@ describe('sweep', () => {
 
     expect(grants.removeRevoked).toHaveBeenCalledTimes(1);
     expect(grants.removeRevoked).toHaveBeenCalledWith(confirmed);
+    expect(grants.revocationFailed).toHaveBeenCalledTimes(1);
+    expect(grants.revocationFailed).toHaveBeenCalledWith(
+      pending('refused'),
+      NOW,
+    );
   });
 
-  it('drops a grant that no longer opens, since it can never be revoked', async () => {
+  // Still live at Google: a wrong key must not drop every pending grant.
+  it('keeps a grant that does not open, marked, to try again', async () => {
     const unreadable = pending('rotated', null);
     grants.pendingRevocations.mockResolvedValue([unreadable]);
 
     await revocations().sweep(NOW);
 
     expect(google.revoke).not.toHaveBeenCalled();
-    expect(grants.removeRevoked).toHaveBeenCalledWith(unreadable);
+    expect(grants.removeRevoked).not.toHaveBeenCalled();
+    expect(grants.revocationFailed).toHaveBeenCalledWith(unreadable, NOW);
     expect(logger.error).toHaveBeenCalled();
   });
 

@@ -14,8 +14,8 @@ const PARALLEL_REVOCATIONS = 5;
 /**
  * Takes grants back: a member disconnecting, and the grants of people whose
  * access has ended. Revoked at Google first; the row goes only once Google
- * confirms, and a revocation it does not confirm is tried again at the next
- * sweep.
+ * confirms. One it does not confirm, or whose token does not open, is tried
+ * again at a later sweep, waiting longer after each failure.
  */
 @Injectable()
 export class CalendarRevocationService {
@@ -34,7 +34,10 @@ export class CalendarRevocationService {
   async disconnect(userId: string, now: Date = new Date()): Promise<void> {
     this.tokens.evict(userId);
     await this.grants.requestRevocation(userId, now);
-    await this.revokeAll(await this.grants.pendingRevocations(userId));
+    await this.revokeAll(
+      await this.grants.pendingRevocations(now, userId),
+      now,
+    );
   }
 
   async sweep(now: Date = new Date()): Promise<void> {
@@ -42,7 +45,7 @@ export class CalendarRevocationService {
     if ((await this.grants.requestLapsedRevocations(now)) > 0) {
       this.tokens.clear();
     }
-    await this.revokeAll(await this.grants.pendingRevocations());
+    await this.revokeAll(await this.grants.pendingRevocations(now), now);
   }
 
   /**
@@ -59,28 +62,34 @@ export class CalendarRevocationService {
     );
   }
 
-  private async revokeAll(pending: PendingRevocation[]): Promise<void> {
+  private async revokeAll(
+    pending: PendingRevocation[],
+    now: Date,
+  ): Promise<void> {
     for (let i = 0; i < pending.length; i += PARALLEL_REVOCATIONS) {
       await Promise.all(
         pending
           .slice(i, i + PARALLEL_REVOCATIONS)
-          .map((grant) => this.revoke(grant)),
+          .map((grant) => this.revoke(grant, now)),
       );
     }
   }
 
-  private async revoke(pending: PendingRevocation): Promise<void> {
-    if (!pending.refreshToken) {
-      // Sealed under another key: it can never be revoked from here.
-      this.logger.error(
-        { userId: pending.userId },
-        'calendar grant dropped unrevoked: it does not open',
-      );
+  private async revoke(pending: PendingRevocation, now: Date): Promise<void> {
+    if (
+      pending.refreshToken &&
+      (await this.google.revoke(pending.refreshToken))
+    ) {
       await this.grants.removeRevoked(pending);
       return;
     }
-    if (await this.google.revoke(pending.refreshToken)) {
-      await this.grants.removeRevoked(pending);
+    const attempts = await this.grants.revocationFailed(pending, now);
+    if (!pending.refreshToken) {
+      // Still live at Google: kept, marked, until the right key is back.
+      this.logger.error(
+        { userId: pending.userId, attempts },
+        'calendar grant to revoke does not open: check GOOGLE_CALENDAR_TOKEN_KEY',
+      );
     }
   }
 }

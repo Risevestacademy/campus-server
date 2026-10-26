@@ -41,6 +41,17 @@ describe('timedFetch', () => {
     expect(received).toBe(1);
   });
 
+  it('stops sooner when the caller’s own deadline passes first', async () => {
+    const started = Date.now();
+
+    await expect(
+      timedFetch(5_000)(url, { signal: AbortSignal.timeout(200) }),
+    ).rejects.toThrow();
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(received).toBe(1);
+  });
+
   it('gives Google ten seconds in all', () => {
     expect(FETCH_TIMEOUT_MS).toBe(10_000);
     expect(fetchWithTimeout).toBeTypeOf('function');

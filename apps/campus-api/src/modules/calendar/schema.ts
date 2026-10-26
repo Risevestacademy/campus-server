@@ -1,4 +1,11 @@
-import { index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 import { users } from '../users/schema.js';
 
@@ -19,6 +26,9 @@ export const googleCalendarGrants = pgTable(
     revokeRequestedAt: timestamp('revoke_requested_at', {
       withTimezone: true,
     }),
+    /** Revocations Google has not confirmed, and when to try again. */
+    revokeAttempts: integer('revoke_attempts').notNull().default(0),
+    revokeRetryAt: timestamp('revoke_retry_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

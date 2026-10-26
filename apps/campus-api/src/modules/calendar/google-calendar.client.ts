@@ -86,14 +86,21 @@ export class GoogleCalendarClient {
     return this.redeem(serverAuthCode);
   }
 
-  async refresh(refreshToken: string): Promise<CalendarAccessToken> {
+  async refresh(
+    refreshToken: string,
+    signal?: AbortSignal,
+  ): Promise<CalendarAccessToken> {
     const { clientId, clientSecret } = requireCalendar(this.config);
-    const answer = await this.post(TOKEN_URL, {
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
+    const answer = await this.post(
+      TOKEN_URL,
+      {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+      signal,
+    );
     if (answer?.body.error === 'invalid_grant') {
       throw new GrantWithdrawnError();
     }
@@ -171,6 +178,7 @@ export class GoogleCalendarClient {
   private async post(
     url: string,
     form: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<GoogleAnswer | null> {
     let res: Response;
     try {
@@ -178,6 +186,7 @@ export class GoogleCalendarClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(form),
+        signal,
       });
     } catch (err) {
       this.logger.warn({ err }, 'google oauth unreachable');

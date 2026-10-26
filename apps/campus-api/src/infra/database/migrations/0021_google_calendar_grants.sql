@@ -2,6 +2,8 @@ CREATE TABLE "google_calendar_grants" (
 	"user_id" uuid PRIMARY KEY NOT NULL,
 	"sealed_refresh_token" text NOT NULL,
 	"revoke_requested_at" timestamp with time zone,
+	"revoke_attempts" integer DEFAULT 0 NOT NULL,
+	"revoke_retry_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );

@@ -15,13 +15,13 @@ export class AccessTokenCache {
 
   constructor(private readonly google: GoogleCalendarClient) {}
 
-  async get(grant: CalendarGrant): Promise<string> {
+  async get(grant: CalendarGrant, signal?: AbortSignal): Promise<string> {
     const now = Date.now();
     const cached = this.tokens.get(grant.userId);
     if (cached && cached.expiresAt - EXPIRY_MARGIN_MS > now) {
       return cached.token;
     }
-    const fresh = await this.google.refresh(grant.refreshToken);
+    const fresh = await this.google.refresh(grant.refreshToken, signal);
     for (const [userId, entry] of this.tokens) {
       if (entry.expiresAt <= now) {
         this.tokens.delete(userId);

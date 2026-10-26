@@ -7,7 +7,10 @@ import type {
   CalendarGrantsService,
 } from './calendar-grants.service.js';
 import type { CalendarRevocationService } from './calendar-revocation.service.js';
-import { CalendarEventsService } from './calendar-events.service.js';
+import {
+  CalendarEventsService,
+  READ_BUDGET_MS,
+} from './calendar-events.service.js';
 import {
   CalendarNotConfiguredError,
   CalendarUnavailableError,
@@ -180,6 +183,48 @@ it('says so when it stops before the end of a long window', async () => {
   expect(fetch).toHaveBeenCalledTimes(4);
   expect(events).toHaveLength(4);
   expect(truncated).toBe(true);
+});
+
+it('holds the whole read to one deadline: the refresh and every page', async () => {
+  fetch
+    .mockResolvedValueOnce(
+      answer(200, { items: [standup], nextPageToken: 'page-2' }),
+    )
+    .mockResolvedValueOnce(answer(200, { items: [] }));
+
+  await calendar().events('user-1', {});
+
+  const [, refreshSignal] = google.refresh.mock.calls[0] as [
+    string,
+    AbortSignal,
+  ];
+  const signals = fetch.mock.calls.map(
+    ([, init]) => (init as RequestInit).signal,
+  );
+  expect(refreshSignal).toBeInstanceOf(AbortSignal);
+  expect(signals).toEqual([refreshSignal, refreshSignal]);
+});
+
+it('reports Google unavailable once the deadline has passed', async () => {
+  fetch.mockImplementation((_url: URL, init: RequestInit) =>
+    init.signal?.aborted
+      ? Promise.reject(new DOMException('aborted', 'TimeoutError'))
+      : Promise.resolve(
+          answer(200, { items: [standup], nextPageToken: 'more' }),
+        ),
+  );
+  const timeout = vi
+    .spyOn(AbortSignal, 'timeout')
+    .mockReturnValueOnce(AbortSignal.abort());
+
+  try {
+    await expect(calendar().events('user-1', {})).rejects.toThrow(
+      CalendarUnavailableError,
+    );
+    expect(timeout).toHaveBeenCalledWith(READ_BUDGET_MS);
+  } finally {
+    timeout.mockRestore();
+  }
 });
 
 it('reuses an access token until it is about to run out', async () => {

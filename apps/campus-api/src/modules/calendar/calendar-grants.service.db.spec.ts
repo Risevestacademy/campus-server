@@ -151,7 +151,7 @@ describe('CalendarGrantsService', () => {
       await grants.requestRevocation(ada, NOW);
 
       await expect(grants.find(ada)).resolves.toBeNull();
-      await expect(grants.pendingRevocations()).resolves.toEqual([
+      await expect(grants.pendingRevocations(NOW)).resolves.toEqual([
         expect.objectContaining({ userId: ada, refreshToken: 'token' }),
       ]);
     });
@@ -159,7 +159,7 @@ describe('CalendarGrantsService', () => {
     it('keeps the row until the revocation is confirmed', async () => {
       await grants.save(ada, 'token');
       await grants.requestRevocation(ada, NOW);
-      const [pending] = await grants.pendingRevocations(ada);
+      const [pending] = await grants.pendingRevocations(NOW, ada);
 
       expect(await db.select().from(googleCalendarGrants)).toHaveLength(1);
       await grants.removeRevoked(pending);
@@ -170,12 +170,12 @@ describe('CalendarGrantsService', () => {
     it('takes back a pending revocation when the member reconnects', async () => {
       await grants.save(ada, 'old');
       await grants.requestRevocation(ada, NOW);
-      const [pending] = await grants.pendingRevocations(ada);
+      const [pending] = await grants.pendingRevocations(NOW, ada);
 
       await grants.save(ada, 'new');
       await grants.removeRevoked(pending);
 
-      await expect(grants.pendingRevocations()).resolves.toEqual([]);
+      await expect(grants.pendingRevocations(NOW)).resolves.toEqual([]);
       await expect(grants.find(ada)).resolves.toMatchObject({
         refreshToken: 'new',
       });
@@ -189,10 +189,10 @@ describe('CalendarGrantsService', () => {
       await grants.requestRevocation(ada, NOW);
 
       expect(
-        (await grants.pendingRevocations()).map((p) => p.refreshToken),
+        (await grants.pendingRevocations(NOW)).map((p) => p.refreshToken),
       ).toEqual(['bo-token', 'ada-token']);
       expect(
-        (await grants.pendingRevocations(ada)).map((p) => p.refreshToken),
+        (await grants.pendingRevocations(NOW, ada)).map((p) => p.refreshToken),
       ).toEqual(['ada-token']);
     });
 
@@ -202,7 +202,7 @@ describe('CalendarGrantsService', () => {
 
       await off.requestRevocation(ada, NOW);
 
-      await expect(off.pendingRevocations()).resolves.toEqual([
+      await expect(off.pendingRevocations(NOW)).resolves.toEqual([
         expect.objectContaining({ refreshToken: 'token' }),
       ]);
     });
@@ -216,8 +216,64 @@ describe('CalendarGrantsService', () => {
 
       await keyless.requestRevocation(ada, NOW);
 
-      await expect(keyless.pendingRevocations()).resolves.toEqual([]);
-      await expect(grants.pendingRevocations()).resolves.toHaveLength(1);
+      await expect(keyless.pendingRevocations(NOW)).resolves.toEqual([]);
+      await expect(grants.pendingRevocations(NOW)).resolves.toHaveLength(1);
+    });
+
+    it('waits longer after each failure, ten minutes first, at most a day', async () => {
+      await grants.save(ada, 'token');
+      await grants.requestRevocation(ada, NOW);
+      const [pending] = await grants.pendingRevocations(NOW);
+      const retryAt = async () =>
+        (await db.select().from(googleCalendarGrants))[0].revokeRetryAt;
+      const MINUTE = 60_000;
+
+      await expect(grants.revocationFailed(pending, NOW)).resolves.toBe(1);
+      expect(await retryAt()).toEqual(new Date(NOW.getTime() + 10 * MINUTE));
+      await expect(grants.pendingRevocations(NOW)).resolves.toEqual([]);
+      await expect(
+        grants.pendingRevocations(new Date(NOW.getTime() + 10 * MINUTE)),
+      ).resolves.toHaveLength(1);
+
+      await expect(grants.revocationFailed(pending, NOW)).resolves.toBe(2);
+      expect(await retryAt()).toEqual(new Date(NOW.getTime() + 20 * MINUTE));
+
+      for (let i = 0; i < 10; i++) {
+        await grants.revocationFailed(pending, NOW);
+      }
+      expect(await retryAt()).toEqual(new Date(NOW.getTime() + DAY));
+    });
+
+    it('does not let grants Google keeps refusing hold up newer ones', async () => {
+      const refused = await person('refused@campus.local');
+      await grants.save(refused, 'refused-token');
+      await grants.requestRevocation(refused, new Date(NOW.getTime() - DAY));
+      const [stuck] = await grants.pendingRevocations(NOW);
+      await grants.revocationFailed(stuck, NOW);
+      await grants.save(ada, 'ada-token');
+      await grants.requestRevocation(ada, NOW);
+
+      expect(
+        (await grants.pendingRevocations(NOW, undefined, 1)).map(
+          (p) => p.refreshToken,
+        ),
+      ).toEqual(['ada-token']);
+    });
+
+    it('starts afresh when the member reconnects', async () => {
+      await grants.save(ada, 'old');
+      await grants.requestRevocation(ada, NOW);
+      const [pending] = await grants.pendingRevocations(NOW);
+      await grants.revocationFailed(pending, NOW);
+
+      await grants.save(ada, 'new');
+
+      const [row] = await db.select().from(googleCalendarGrants);
+      expect(row).toMatchObject({
+        revokeRequestedAt: null,
+        revokeAttempts: 0,
+        revokeRetryAt: null,
+      });
     });
 
     it('hands out a grant sealed with another key with no token', async () => {
@@ -227,7 +283,7 @@ describe('CalendarGrantsService', () => {
       await expect(
         service({
           GOOGLE_CALENDAR_TOKEN_KEY: randomBytes(32).toString('base64'),
-        }).pendingRevocations(),
+        }).pendingRevocations(NOW),
       ).resolves.toEqual([
         expect.objectContaining({ userId: ada, refreshToken: null }),
       ]);
@@ -246,7 +302,7 @@ describe('requestLapsedRevocations', () => {
   }
 
   const pendingTokens = async () =>
-    (await grants.pendingRevocations()).map((p) => p.refreshToken).sort();
+    (await grants.pendingRevocations(NOW)).map((p) => p.refreshToken).sort();
 
   it('leaves the grants of members and admins alone', async () => {
     const mentor = await connected('mentor@campus.local');

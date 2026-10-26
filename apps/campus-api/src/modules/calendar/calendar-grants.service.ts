@@ -6,6 +6,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lte,
   notExists,
   notInArray,
   or,
@@ -42,6 +43,9 @@ export interface PendingRevocation {
 
 const ADMIN_ROLES = Object.values(SystemRole).filter(hasAdminPowers);
 
+const FIRST_RETRY_MS = 10 * 60 * 1000;
+const LAST_RETRY_MS = 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class CalendarGrantsService {
   constructor(
@@ -67,6 +71,8 @@ export class CalendarGrantsService {
         set: {
           sealedRefreshToken,
           revokeRequestedAt: null,
+          revokeAttempts: 0,
+          revokeRetryAt: null,
           updatedAt: new Date(),
         },
       });
@@ -155,10 +161,12 @@ export class CalendarGrantsService {
   }
 
   /**
-   * Oldest first. Empty while the key is not configured: the tokens cannot
-   * be opened, so they wait, still marked, until it is.
+   * The marked grants due a try, those never tried first. Empty while the
+   * key is not configured: the tokens cannot be opened, so they wait, still
+   * marked, until it is.
    */
   async pendingRevocations(
+    now: Date,
     userId?: string,
     limit = 100,
   ): Promise<PendingRevocation[]> {
@@ -175,15 +183,48 @@ export class CalendarGrantsService {
       .where(
         and(
           isNotNull(googleCalendarGrants.revokeRequestedAt),
+          or(
+            isNull(googleCalendarGrants.revokeRetryAt),
+            lte(googleCalendarGrants.revokeRetryAt, now),
+          ),
           userId ? eq(googleCalendarGrants.userId, userId) : undefined,
         ),
       )
-      .orderBy(asc(googleCalendarGrants.revokeRequestedAt))
+      .orderBy(
+        sql`${googleCalendarGrants.revokeRetryAt} asc nulls first`,
+        asc(googleCalendarGrants.revokeRequestedAt),
+      )
       .limit(limit);
     return rows.map((row) => ({
       ...row,
       refreshToken: this.open(key, row.sealed, row.userId),
     }));
+  }
+
+  /**
+   * Not revoked this time: tried again ten minutes later, then twice as long
+   * after each failure, at most a day.
+   */
+  async revocationFailed(
+    pending: PendingRevocation,
+    now: Date,
+  ): Promise<number> {
+    const attempts = googleCalendarGrants.revokeAttempts;
+    const [row] = await this.db
+      .update(googleCalendarGrants)
+      .set({
+        revokeAttempts: sql`${attempts} + 1`,
+        revokeRetryAt: sql`${now.toISOString()}::timestamptz + least(${FIRST_RETRY_MS} * power(2, ${attempts}), ${LAST_RETRY_MS}) * interval '1 millisecond'`,
+      })
+      .where(
+        and(
+          eq(googleCalendarGrants.userId, pending.userId),
+          eq(googleCalendarGrants.sealedRefreshToken, pending.sealed),
+          isNotNull(googleCalendarGrants.revokeRequestedAt),
+        ),
+      )
+      .returning({ attempts });
+    return row?.attempts ?? 0;
   }
 
   /** Only while still the grant marked: a reconnect since has replaced it. */
