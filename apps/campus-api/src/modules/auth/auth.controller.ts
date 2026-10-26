@@ -25,6 +25,7 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { ApiErrorResponseDto } from '../../shared/dto/index.js';
+import { appUrl } from '../../shared/http/app-url.js';
 import { CohortMembersService } from '../cohorts/cohort-members.service.js';
 import { InvitesService } from '../invites/invites.service.js';
 import { UsersService } from '../users/users.service.js';
@@ -156,9 +157,7 @@ export class AuthController {
     // a cookie, not a JSON body the user would be left staring at. The token
     // never reaches the page itself, and never reaches browser history.
     setSessionCookies(res, cookieSite(this.config), session);
-    res.redirect(
-      `${this.config.APP_PUBLIC_URL.replace(/\/+$/, '')}${redirectPath}`,
-    );
+    res.redirect(appUrl(this.config, redirectPath));
   }
 
   @Post('google/token')

@@ -135,7 +135,8 @@ change to either reaches both apps:
   It is a sensitive scope: until Google has verified the app, only the
   consent screen's test users can connect, and while the app's publishing
   status is Testing their refresh tokens lapse after 7 days. Sign-in never
-  asks for it. See [google-calendar.md](./google-calendar.md).
+  asks for it. See the calendar module's
+  [README](../apps/campus-api/src/modules/calendar/README.md).
 - `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
   shared under, so world on its own subdomain receives it — for example
   `campus.example`. Only `campus_session` gets it; the refresh and state

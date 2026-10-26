@@ -4,7 +4,6 @@ import { Test } from '@nestjs/testing';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { OAuth2Client } from 'google-auth-library';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
@@ -15,7 +14,7 @@ import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
-import { CALENDAR_FETCH } from './../src/modules/calendar/google-calendar.service.js';
+import { CALENDAR_FETCH } from './../src/modules/calendar/google-calendar.client.js';
 import { googleCalendarGrants } from './../src/modules/calendar/schema.js';
 import {
   CohortRole,
@@ -48,26 +47,70 @@ const IDENTITY = {
   avatarUrl: null,
 };
 
-/** Sign-in stands in whole; the calendar's own client is real up to Google. */
+/** Sign-in stands in whole; the calendar is real up to Google's endpoints. */
 const signInGoogle = { verifyIdToken: vi.fn() };
 const fetch = vi.fn();
-const getToken = vi.spyOn(OAuth2Client.prototype, 'getToken');
-const verifyIdToken = vi.spyOn(OAuth2Client.prototype, 'verifyIdToken');
-const getAccessToken = vi.spyOn(OAuth2Client.prototype, 'getAccessToken');
-const revokeToken = vi.spyOn(OAuth2Client.prototype, 'revokeToken');
+
+let tokenAnswer: Record<string, unknown>;
+let revokeStatus: number;
+const revoked: string[] = [];
+
+function idToken(sub: string): string {
+  const part = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString('base64url');
+  return [
+    part({ alg: 'RS256' }),
+    part({
+      iss: 'https://accounts.google.com',
+      aud: 'e2e-client-id.apps.googleusercontent.com',
+      sub,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+    'signature',
+  ].join('.');
+}
 
 function googleRedeems(sub: string, tokens: Record<string, unknown> = {}) {
-  getToken.mockResolvedValue({
-    tokens: {
-      id_token: 'calendar-id-token',
-      refresh_token: 'google-refresh',
-      access_token: 'google-access',
-      scope: `openid ${CALENDAR}`,
-      ...tokens,
-    },
-  } as never);
-  verifyIdToken.mockResolvedValue({ getPayload: () => ({ sub }) } as never);
+  tokenAnswer = {
+    id_token: idToken(sub),
+    refresh_token: 'google-refresh',
+    access_token: 'google-access',
+    scope: `openid ${CALENDAR}`,
+    ...tokens,
+  };
 }
+
+/** Google, by endpoint. */
+function google(url: string | URL, init?: RequestInit): Promise<Response> {
+  const json = (status: number, body: object) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status }));
+  const form = new URLSearchParams(String(init?.body ?? ''));
+  const href = String(url);
+  if (href === 'https://oauth2.googleapis.com/revoke') {
+    revoked.push(form.get('token') ?? '');
+    return json(revokeStatus, {});
+  }
+  if (href === 'https://oauth2.googleapis.com/token') {
+    return form.get('grant_type') === 'refresh_token'
+      ? json(200, { access_token: 'google-access', expires_in: 3599 })
+      : json(200, tokenAnswer);
+  }
+  return json(200, { items: [standup] });
+}
+
+const codeRedeemed = () =>
+  new URLSearchParams(
+    String((tokenRequests()[0]?.[1] as RequestInit | undefined)?.body),
+  ).get('code');
+
+const tokenRequests = () =>
+  fetch.mock.calls.filter(
+    ([url, init]) =>
+      String(url) === 'https://oauth2.googleapis.com/token' &&
+      new URLSearchParams(String((init as RequestInit).body)).get(
+        'grant_type',
+      ) === 'authorization_code',
+  );
 
 const standup = {
   id: 'standup_20261027',
@@ -124,11 +167,9 @@ describe('Google Calendar (e2e)', () => {
     vi.clearAllMocks();
     signInGoogle.verifyIdToken.mockResolvedValue(IDENTITY);
     googleRedeems(IDENTITY.subject);
-    getAccessToken.mockResolvedValue({ token: 'google-access' } as never);
-    revokeToken.mockResolvedValue({} as never);
-    fetch.mockImplementation(() =>
-      Promise.resolve(new Response(JSON.stringify({ items: [standup] }))),
-    );
+    revokeStatus = 200;
+    revoked.length = 0;
+    fetch.mockImplementation(google);
 
     const [cohort] = await db
       .insert(cohorts)
@@ -178,6 +219,7 @@ describe('Google Calendar (e2e)', () => {
       expect(google.searchParams.get('access_type')).toBe('offline');
       expect(google.searchParams.get('login_hint')).toBe(IDENTITY.email);
       expect(google.searchParams.get('redirect_uri')).toBe(CALLBACK);
+      expect(google.searchParams.has('include_granted_scopes')).toBe(false);
     });
 
     it('keeps the grant, and reads the calendar with it', async () => {
@@ -193,7 +235,7 @@ describe('Google Calendar (e2e)', () => {
       expect(done.headers.location).toBe(
         'http://localhost:3000/campus?calendar=connected',
       );
-      expect(getToken).toHaveBeenCalledWith('google-code');
+      expect(codeRedeemed()).toBe('google-code');
       const [grant] = await grants();
       expect(grant.userId).toBe(adaId);
       expect(grant.sealedRefreshToken).not.toContain('google-refresh');
@@ -204,9 +246,12 @@ describe('Google Calendar (e2e)', () => {
         .expect(200);
       expect(body).toEqual({
         connected: true,
+        truncated: false,
         events: [expect.objectContaining({ id: 'standup_20261027' })],
       });
-      const [, init] = fetch.mock.calls[0] as [URL, RequestInit];
+      const [, init] = fetch.mock.calls.find(([url]) =>
+        String(url).startsWith('https://www.googleapis.com/calendar/'),
+      ) as [URL, RequestInit];
       expect(init.headers).toEqual({ Authorization: 'Bearer google-access' });
     });
 
@@ -233,7 +278,7 @@ describe('Google Calendar (e2e)', () => {
         .expect(302);
 
       expect(outcome(done)).toBe('invalid_state');
-      expect(getToken).not.toHaveBeenCalled();
+      expect(tokenRequests()).toHaveLength(0);
       expect(await grants()).toHaveLength(0);
     });
 
@@ -249,7 +294,7 @@ describe('Google Calendar (e2e)', () => {
         .expect(302);
 
       expect(outcome(done)).toBe('wrong_account');
-      expect(revokeToken).toHaveBeenCalledWith('google-refresh');
+      expect(revoked).toEqual(['google-refresh']);
       expect(await grants()).toHaveLength(0);
     });
 
@@ -287,7 +332,7 @@ describe('Google Calendar (e2e)', () => {
         .send({ serverAuthCode: 'server-code' })
         .expect(204);
 
-      expect(getToken).toHaveBeenCalledWith('server-code');
+      expect(codeRedeemed()).toBe('server-code');
       expect(await grants()).toHaveLength(1);
     });
 
@@ -323,7 +368,7 @@ describe('Google Calendar (e2e)', () => {
         .set(bearer(await signIn()))
         .expect(200);
 
-      expect(body).toEqual({ connected: false, events: [] });
+      expect(body).toEqual({ connected: false, events: [], truncated: false });
       expect(fetch).not.toHaveBeenCalled();
     });
 
@@ -337,13 +382,28 @@ describe('Google Calendar (e2e)', () => {
       expect(body.error.code).toBe('INVALID_ARGUMENT');
     });
 
-    it('forgets and revokes the grant on disconnect', async () => {
+    it('revokes the grant on disconnect, then forgets it', async () => {
       const token = await connected();
 
       await http().delete('/v1/calendar').set(bearer(token)).expect(204);
 
+      expect(revoked).toEqual(['google-refresh']);
       expect(await grants()).toHaveLength(0);
-      expect(revokeToken).toHaveBeenCalledWith('google-refresh');
+    });
+
+    it('keeps a grant Google would not revoke, unused, to try again', async () => {
+      const token = await connected();
+      revokeStatus = 503;
+
+      await http().delete('/v1/calendar').set(bearer(token)).expect(204);
+
+      const [grant] = await grants();
+      expect(grant.revokeRequestedAt).toBeInstanceOf(Date);
+      const { body } = await http()
+        .get('/v1/calendar/events')
+        .set(bearer(token))
+        .expect(200);
+      expect(body.connected).toBe(false);
     });
 
     it('is for signed-in members only', async () => {

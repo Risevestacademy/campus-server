@@ -19,10 +19,11 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
-import {
-  CalendarConnectRedirectFilter,
-  calendarReturnUrl,
-} from './calendar-connect-redirect.filter.js';
+import { CalendarConnectService } from './calendar-connect.service.js';
+import { CalendarConnectRedirectFilter } from './calendar-connect-redirect.filter.js';
+import { CalendarEventsService } from './calendar-events.service.js';
+import { calendarReturnUrl } from './calendar-return.js';
+import { CalendarRevocationService } from './calendar-revocation.service.js';
 import {
   ApiCalendarEvents,
   ApiConnectCalendar,
@@ -38,7 +39,6 @@ import {
   CalendarEventsQueryDto,
   type CalendarEventsDto,
 } from './dto/calendar-events.dto.js';
-import { GoogleCalendarService } from './google-calendar.service.js';
 
 @ApiTags('calendar')
 @ApiBearerAuth()
@@ -46,7 +46,9 @@ import { GoogleCalendarService } from './google-calendar.service.js';
 @Controller('calendar')
 export class CalendarController {
   constructor(
-    private readonly calendar: GoogleCalendarService,
+    private readonly connections: CalendarConnectService,
+    private readonly calendar: CalendarEventsService,
+    private readonly revocations: CalendarRevocationService,
     @Inject(CONFIG) private readonly config: Env,
   ) {}
 
@@ -54,7 +56,7 @@ export class CalendarController {
   @UseFilters(CalendarConnectRedirectFilter)
   @ApiConnectCalendar()
   connect(@CurrentUser() user: AuthenticatedUser, @Res() res: Response): void {
-    res.redirect(this.calendar.connectUrl(user));
+    res.redirect(this.connections.connectUrl(user));
   }
 
   @Get('connect/callback')
@@ -65,7 +67,7 @@ export class CalendarController {
     @Query() query: CalendarCallbackQueryDto,
     @Res() res: Response,
   ): Promise<void> {
-    await this.calendar.completeConnect(user.id, query);
+    await this.connections.completeConnect(user.id, query);
     res.redirect(calendarReturnUrl(this.config, 'connected'));
   }
 
@@ -76,7 +78,7 @@ export class CalendarController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CalendarAppConnectDto,
   ): Promise<void> {
-    return this.calendar.connectWithAppCode(user.id, dto.serverAuthCode);
+    return this.connections.connectWithAppCode(user.id, dto.serverAuthCode);
   }
 
   @Get('events')
@@ -92,6 +94,6 @@ export class CalendarController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiDisconnectCalendar()
   disconnect(@CurrentUser() user: AuthenticatedUser): Promise<void> {
-    return this.calendar.disconnect(user.id);
+    return this.revocations.disconnect(user.id);
   }
 }

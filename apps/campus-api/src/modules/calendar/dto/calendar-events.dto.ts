@@ -33,6 +33,9 @@ export class CalendarEventsQueryDto {
   to?: string;
 }
 
+export const EVENT_STATUSES = ['confirmed', 'tentative'] as const;
+export type EventStatus = (typeof EVENT_STATUSES)[number];
+
 export const EVENT_RESPONSES = [
   'accepted',
   'tentative',
@@ -71,8 +74,8 @@ export class CalendarEventDto {
   @ApiProperty({ example: false })
   allDay!: boolean;
 
-  @ApiProperty({ enum: ['confirmed', 'tentative'], example: 'confirmed' })
-  status!: 'confirmed' | 'tentative';
+  @ApiProperty({ enum: EVENT_STATUSES, example: 'confirmed' })
+  status!: EventStatus;
 
   @ApiProperty({
     enum: EVENT_RESPONSES,
@@ -120,4 +123,12 @@ export class CalendarEventsDto {
       'as one entry per occurrence. Cancelled events are left out.',
   })
   events!: CalendarEventDto[];
+
+  @ApiProperty({
+    example: false,
+    description:
+      'True when the window held more than the 1,000 events campus reads: ' +
+      '`events` are the first 1,000. Ask for a shorter window.',
+  })
+  truncated!: boolean;
 }

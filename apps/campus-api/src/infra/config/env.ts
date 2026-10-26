@@ -53,12 +53,21 @@ export function loadEnv(source: Record<string, unknown> = process.env): Env {
     throw new Error(`Invalid environment variables: ${message}`);
   }
   assertCookieDomainCovers(env);
+  assertCalendarHasSignIn(env);
+  return env;
+}
+
+/**
+ * Connecting a calendar needs a full-access session, and checks the Google
+ * account against the one the member signs in with: neither exists without
+ * Google sign-in.
+ */
+function assertCalendarHasSignIn(env: Env): void {
   if (env.FF_GOOGLE_CALENDAR_ENABLED && !env.FF_GOOGLE_AUTH_ENABLED) {
     throw new Error(
       'Invalid environment variables: FF_GOOGLE_CALENDAR_ENABLED needs FF_GOOGLE_AUTH_ENABLED',
     );
   }
-  return env;
 }
 
 /**

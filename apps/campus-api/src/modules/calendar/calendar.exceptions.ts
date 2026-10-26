@@ -17,17 +17,7 @@ export class CalendarUnavailableError extends DomainException {
   }
 }
 
-export type CalendarConnectFailure =
-  | 'invalid_state'
-  | 'expired_state'
-  | 'denied'
-  | 'missing_code'
-  | 'exchange_failed'
-  | 'wrong_account'
-  | 'not_granted'
-  | 'no_refresh_token';
-
-const MESSAGES: Record<CalendarConnectFailure, string> = {
+const CONNECT_FAILURES = {
   invalid_state: 'The connection request could not be verified. Start again.',
   expired_state: 'The connection request expired. Start again.',
   denied: 'Calendar access was cancelled at Google.',
@@ -38,12 +28,18 @@ const MESSAGES: Record<CalendarConnectFailure, string> = {
   not_granted: 'Calendar access was not granted.',
   no_refresh_token:
     'Google did not hand over lasting access. Ask for offline access with a refresh token.',
-};
+} as const;
+
+export type CalendarConnectFailure = keyof typeof CONNECT_FAILURES;
+
+export const CALENDAR_CONNECT_FAILURES = Object.keys(
+  CONNECT_FAILURES,
+) as CalendarConnectFailure[];
 
 export class CalendarConnectFailedError extends DomainException {
   readonly code = ExceptionCode.InvalidArgument;
 
   constructor(readonly reason: CalendarConnectFailure) {
-    super(MESSAGES[reason], { reason });
+    super(CONNECT_FAILURES[reason], { reason });
   }
 }

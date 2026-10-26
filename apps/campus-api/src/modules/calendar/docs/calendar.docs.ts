@@ -11,6 +11,7 @@ import {
 } from '@nestjs/swagger';
 
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
+import { CALENDAR_CONNECT_OUTCOMES } from '../calendar-return.js';
 import { CalendarEventsDto } from '../dto/calendar-events.dto.js';
 
 const NOT_CONFIGURED = ApiNotFoundResponse({
@@ -23,10 +24,12 @@ const NO_SESSION = ApiUnauthorizedResponse({
   description: 'No full-access session.',
 });
 
-const OUTCOMES =
-  'connected, invalid_state, expired_state, denied, missing_code, ' +
-  'exchange_failed, wrong_account, not_granted, no_refresh_token, ' +
-  'unauthorized, not_available, invalid_request, rate_limited, server_error';
+const GOOGLE_DOWN = ApiServiceUnavailableResponse({
+  type: ApiErrorResponseDto,
+  description: 'Google did not answer in time. Worth trying again shortly.',
+});
+
+const OUTCOMES = CALENDAR_CONNECT_OUTCOMES.join(', ');
 
 export function ApiConnectCalendar(): MethodDecorator {
   return applyDecorators(
@@ -82,6 +85,7 @@ export function ApiConnectCalendarFromApp(): MethodDecorator {
     }),
     NO_SESSION,
     NOT_CONFIGURED,
+    GOOGLE_DOWN,
   );
 }
 
@@ -103,10 +107,7 @@ export function ApiCalendarEvents(): MethodDecorator {
     }),
     NO_SESSION,
     NOT_CONFIGURED,
-    ApiServiceUnavailableResponse({
-      type: ApiErrorResponseDto,
-      description: 'Google did not answer. Worth trying again shortly.',
-    }),
+    GOOGLE_DOWN,
   );
 }
 
@@ -115,9 +116,11 @@ export function ApiDisconnectCalendar(): MethodDecorator {
     ApiOperation({
       summary: 'Disconnect my Google Calendar',
       description:
-        'Forgets the calendar access campus holds and revokes it at Google, ' +
-        'which also takes campus off the member’s Google account ' +
-        'connections. Works while the calendar is switched off.',
+        'Stops using the calendar access campus holds and revokes it at ' +
+        'Google, which also takes campus off the member’s Google account ' +
+        'connections. If Google does not confirm the revocation, campus keeps ' +
+        'trying, unused, until it does. Works while the calendar is switched ' +
+        'off.',
     }),
     ApiNoContentResponse({ description: 'Forgotten, or there was none.' }),
     NO_SESSION,

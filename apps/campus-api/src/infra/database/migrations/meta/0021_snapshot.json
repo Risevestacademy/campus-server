@@ -1,5 +1,5 @@
 {
-  "id": "7b0946e5-452f-49e0-858e-57fbbbec14e9",
+  "id": "4c8adf58-a44f-408a-89c5-29d6436bbfe4",
   "prevId": "8c5dc62c-afd5-42a7-8b0b-19eda9424639",
   "version": "7",
   "dialect": "postgresql",
@@ -180,6 +180,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "revoke_requested_at": {
+          "name": "revoke_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -195,7 +201,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "google_calendar_grants_revoke_requested_idx": {
+          "name": "google_calendar_grants_revoke_requested_idx",
+          "columns": [
+            {
+              "expression": "revoke_requested_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "google_calendar_grants_user_id_users_id_fk": {
           "name": "google_calendar_grants_user_id_users_id_fk",

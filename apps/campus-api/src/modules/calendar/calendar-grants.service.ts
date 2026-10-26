@@ -1,5 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, inArray, notExists, notInArray, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  notExists,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -22,12 +33,17 @@ export interface CalendarGrant {
   sealed: string;
 }
 
+/** A grant waiting to be revoked. No token when it can no longer be opened. */
+export interface PendingRevocation {
+  userId: string;
+  sealed: string;
+  refreshToken: string | null;
+}
+
 const ADMIN_ROLES = Object.values(SystemRole).filter(hasAdminPowers);
 
 @Injectable()
 export class CalendarGrantsService {
-  private key?: Buffer;
-
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
     @Inject(CONFIG) private readonly config: Env,
@@ -36,36 +52,47 @@ export class CalendarGrantsService {
     this.logger.setContext(CalendarGrantsService.name);
   }
 
-  private get tokenKey(): Buffer {
-    return (this.key ??= requireCalendar(this.config).tokenKey);
-  }
-
+  /**
+   * Also takes back a revocation still waiting for this member: revoking the
+   * old token now would end the grant this one belongs to.
+   */
   async save(userId: string, refreshToken: string): Promise<void> {
-    const sealedRefreshToken = sealToken(this.tokenKey, refreshToken, userId);
+    const { tokenKey } = requireCalendar(this.config);
+    const sealedRefreshToken = sealToken(tokenKey, refreshToken, userId);
     await this.db
       .insert(googleCalendarGrants)
       .values({ userId, sealedRefreshToken })
       .onConflictDoUpdate({
         target: googleCalendarGrants.userId,
-        set: { sealedRefreshToken, updatedAt: new Date() },
+        set: {
+          sealedRefreshToken,
+          revokeRequestedAt: null,
+          updatedAt: new Date(),
+        },
       });
   }
 
   async find(userId: string): Promise<CalendarGrant | null> {
+    const { tokenKey } = requireCalendar(this.config);
     const [row] = await this.db
       .select({ sealed: googleCalendarGrants.sealedRefreshToken })
       .from(googleCalendarGrants)
-      .where(eq(googleCalendarGrants.userId, userId));
+      .where(
+        and(
+          eq(googleCalendarGrants.userId, userId),
+          isNull(googleCalendarGrants.revokeRequestedAt),
+        ),
+      );
     if (!row) {
       return null;
     }
     // Unreadable is kept, not deleted: a wrong key on one deployment would
     // otherwise wipe every member's grant. A reconnect overwrites it.
-    const refreshToken = this.open(this.tokenKey, row.sealed, userId);
+    const refreshToken = this.open(tokenKey, row.sealed, userId);
     return refreshToken ? { userId, refreshToken, sealed: row.sealed } : null;
   }
 
-  /** Only the grant that was read: one saved since by a reconnect stays. */
+  /** Google has withdrawn it: nothing to revoke. Only the grant that was read. */
   async forget(grant: CalendarGrant): Promise<void> {
     await this.db
       .delete(googleCalendarGrants)
@@ -77,28 +104,24 @@ export class CalendarGrantsService {
       );
   }
 
-  /**
-   * Deletes the member's grant and hands back its refresh token, to revoke.
-   * Works while the calendar is switched off; the token comes back only if
-   * the key is still configured.
-   */
-  async remove(userId: string): Promise<string | null> {
-    const removed = await this.db
-      .delete(googleCalendarGrants)
-      .where(eq(googleCalendarGrants.userId, userId))
-      .returning({
-        userId: googleCalendarGrants.userId,
-        sealed: googleCalendarGrants.sealedRefreshToken,
-      });
-    return this.openAll(removed)[0] ?? null;
+  async requestRevocation(userId: string, now: Date): Promise<void> {
+    await this.db
+      .update(googleCalendarGrants)
+      .set({ revokeRequestedAt: now })
+      .where(
+        and(
+          eq(googleCalendarGrants.userId, userId),
+          isNull(googleCalendarGrants.revokeRequestedAt),
+        ),
+      );
   }
 
   /**
-   * Deletes the grants of everybody who can no longer use them: suspended
-   * accounts, and anybody who is neither an admin nor holds a live
-   * membership. Hands back their refresh tokens, to revoke.
+   * Marks for revocation the grants of everybody who can no longer use them:
+   * suspended accounts, and anybody who is neither an admin nor holds a live
+   * membership.
    */
-  async removeLapsed(now: Date): Promise<string[]> {
+  async requestLapsedRevocations(now: Date): Promise<number> {
     const live = this.db
       .select({ one: sql`1` })
       .from(cohortMembers)
@@ -112,30 +135,68 @@ export class CalendarGrantsService {
           and(notInArray(users.systemRole, ADMIN_ROLES), notExists(live)),
         ),
       );
-    const removed = await this.db
-      .delete(googleCalendarGrants)
-      .where(inArray(googleCalendarGrants.userId, lapsed))
-      .returning({
-        userId: googleCalendarGrants.userId,
-        sealed: googleCalendarGrants.sealedRefreshToken,
-      });
-    if (removed.length > 0) {
+    const marked = await this.db
+      .update(googleCalendarGrants)
+      .set({ revokeRequestedAt: now })
+      .where(
+        and(
+          inArray(googleCalendarGrants.userId, lapsed),
+          isNull(googleCalendarGrants.revokeRequestedAt),
+        ),
+      )
+      .returning({ userId: googleCalendarGrants.userId });
+    if (marked.length > 0) {
       this.logger.info(
-        { count: removed.length },
-        'calendar grants removed: access ended',
+        { count: marked.length },
+        'calendar grants to revoke: access ended',
       );
     }
-    return this.openAll(removed);
+    return marked.length;
   }
 
-  private openAll(rows: { userId: string; sealed: string }[]): string[] {
+  /**
+   * Oldest first. Empty while the key is not configured: the tokens cannot
+   * be opened, so they wait, still marked, until it is.
+   */
+  async pendingRevocations(
+    userId?: string,
+    limit = 100,
+  ): Promise<PendingRevocation[]> {
     const key = calendarTokenKey(this.config);
     if (!key) {
       return [];
     }
-    return rows.flatMap(
-      ({ userId, sealed }) => this.open(key, sealed, userId) ?? [],
-    );
+    const rows = await this.db
+      .select({
+        userId: googleCalendarGrants.userId,
+        sealed: googleCalendarGrants.sealedRefreshToken,
+      })
+      .from(googleCalendarGrants)
+      .where(
+        and(
+          isNotNull(googleCalendarGrants.revokeRequestedAt),
+          userId ? eq(googleCalendarGrants.userId, userId) : undefined,
+        ),
+      )
+      .orderBy(asc(googleCalendarGrants.revokeRequestedAt))
+      .limit(limit);
+    return rows.map((row) => ({
+      ...row,
+      refreshToken: this.open(key, row.sealed, row.userId),
+    }));
+  }
+
+  /** Only while still the grant marked: a reconnect since has replaced it. */
+  async removeRevoked(pending: PendingRevocation): Promise<void> {
+    await this.db
+      .delete(googleCalendarGrants)
+      .where(
+        and(
+          eq(googleCalendarGrants.userId, pending.userId),
+          eq(googleCalendarGrants.sealedRefreshToken, pending.sealed),
+          isNotNull(googleCalendarGrants.revokeRequestedAt),
+        ),
+      );
   }
 
   private open(key: Buffer, sealed: string, userId: string): string | null {

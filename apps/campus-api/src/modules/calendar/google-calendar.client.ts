@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { OAuth2Client, type OAuth2ClientOptions } from 'google-auth-library';
 import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -9,7 +8,16 @@ import {
 } from './calendar.exceptions.js';
 import { GOOGLE_CALENDAR_SCOPE, requireCalendar } from './calendar.settings.js';
 
-const GOOGLE_TIMEOUT_MS = 5_000;
+/**
+ * The fetch every request to Google goes through: fetchWithTimeout in the
+ * module, so each one is a single attempt with one deadline.
+ */
+export const CALENDAR_FETCH = Symbol('CALENDAR_FETCH');
+
+const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+const ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 
 export interface RedeemedCalendarCode {
   subject: string;
@@ -26,143 +34,183 @@ export interface CalendarAccessToken {
 /** Google has withdrawn the grant: revoked, expired, or the password changed. */
 export class GrantWithdrawnError extends Error {}
 
-/**
- * Google's OAuth endpoints, for the calendar alone: sign-in has its own
- * client in GoogleOAuthService.
- */
+interface TokenResponse {
+  access_token?: string;
+  refresh_token?: string;
+  id_token?: string;
+  scope?: string;
+  expires_in?: number;
+  error?: string;
+}
+
+interface GoogleAnswer {
+  status: number;
+  body: TokenResponse;
+}
+
+/** Google's OAuth endpoints, for the calendar alone. */
 @Injectable()
 export class GoogleCalendarClient {
-  private cached?: {
-    clientId: string;
-    options: OAuth2ClientOptions;
-    web: OAuth2Client;
-    app: OAuth2Client;
-  };
-  private readonly bare = new OAuth2Client({
-    transporterOptions: { timeout: GOOGLE_TIMEOUT_MS },
-  });
-
   constructor(
     @Inject(CONFIG) private readonly config: Env,
+    @Inject(CALENDAR_FETCH) private readonly fetch: typeof globalThis.fetch,
     private readonly logger: PinoLogger,
   ) {
     this.logger.setContext(GoogleCalendarClient.name);
   }
 
-  private get google() {
-    if (!this.cached) {
-      const settings = requireCalendar(this.config);
-      const options: OAuth2ClientOptions = {
-        clientId: settings.clientId,
-        clientSecret: settings.clientSecret,
-        transporterOptions: { timeout: GOOGLE_TIMEOUT_MS },
-      };
-      this.cached = {
-        clientId: settings.clientId,
-        options,
-        web: new OAuth2Client({
-          ...options,
-          redirectUri: settings.callbackUrl,
-        }),
-        // A native app's server auth code was issued with no redirect URI,
-        // and has to be redeemed without one.
-        app: new OAuth2Client(options),
-      };
-    }
-    return this.cached;
-  }
-
+  /** Asks for the calendar alone, never folding in what sign-in was granted. */
   authorizationUrl(state: string, loginHint: string): string {
-    return this.google.web.generateAuthUrl({
-      scope: ['openid', GOOGLE_CALENDAR_SCOPE],
+    const { clientId, callbackUrl } = requireCalendar(this.config);
+    const url = new URL(AUTH_URL);
+    url.search = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: callbackUrl,
+      response_type: 'code',
+      scope: `openid ${GOOGLE_CALENDAR_SCOPE}`,
       access_type: 'offline',
-      include_granted_scopes: true,
       // Google hands over a refresh token only from its consent screen.
       prompt: 'consent',
       login_hint: loginHint,
       state,
+    }).toString();
+    return url.toString();
+  }
+
+  redeemWebCode(code: string): Promise<RedeemedCalendarCode> {
+    return this.redeem(code, requireCalendar(this.config).callbackUrl);
+  }
+
+  /** A native app's server auth code was issued with no redirect URI. */
+  redeemAppCode(serverAuthCode: string): Promise<RedeemedCalendarCode> {
+    return this.redeem(serverAuthCode);
+  }
+
+  async refresh(refreshToken: string): Promise<CalendarAccessToken> {
+    const { clientId, clientSecret } = requireCalendar(this.config);
+    const answer = await this.post(TOKEN_URL, {
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
     });
-  }
-
-  async redeem(
-    code: string,
-    from: 'web' | 'app',
-  ): Promise<RedeemedCalendarCode> {
-    const { web, app, clientId } = this.google;
-    let tokens;
-    try {
-      ({ tokens } = await (from === 'web' ? web : app).getToken(code));
-    } catch (err) {
-      this.logger.warn({ err, from }, 'calendar code exchange failed');
-      throw new CalendarConnectFailedError('exchange_failed');
+    if (answer?.body.error === 'invalid_grant') {
+      throw new GrantWithdrawnError();
     }
-
-    const refreshToken = tokens.refresh_token ?? undefined;
-    const accessToken = tokens.access_token ?? undefined;
-    let subject: string | undefined;
-    try {
-      if (tokens.id_token) {
-        const ticket = await web.verifyIdToken({
-          idToken: tokens.id_token,
-          audience: clientId,
-        });
-        subject = ticket.getPayload()?.sub;
-      }
-    } catch (err) {
-      this.logger.warn({ err }, 'calendar id_token did not verify');
-    }
-    if (!subject) {
-      // Whose calendar this is cannot be told, so it is not kept.
-      await this.revoke(refreshToken ?? accessToken);
-      throw new CalendarConnectFailedError('exchange_failed');
-    }
-
-    return {
-      subject,
-      scopes: tokens.scope?.split(' ') ?? [],
-      refreshToken,
-      accessToken,
-    };
-  }
-
-  async accessToken(refreshToken: string): Promise<CalendarAccessToken> {
-    const client = new OAuth2Client(this.google.options);
-    client.setCredentials({ refresh_token: refreshToken });
-    let token: string | null | undefined;
-    try {
-      ({ token } = await client.getAccessToken());
-    } catch (err) {
-      if (oauthError(err) === 'invalid_grant') {
-        throw new GrantWithdrawnError();
-      }
-      this.logger.error({ err }, 'google calendar token refresh failed');
+    const { access_token, expires_in } = answer?.body ?? {};
+    if (answer?.status !== 200 || !access_token || !expires_in) {
+      this.logger.error(
+        { status: answer?.status, error: answer?.body.error },
+        'google calendar token refresh failed',
+      );
       throw new CalendarUnavailableError();
     }
-    if (!token) {
-      throw new CalendarUnavailableError();
-    }
-    return { token, expiresAt: client.credentials.expiry_date ?? Date.now() };
+    return { token: access_token, expiresAt: Date.now() + expires_in * 1000 };
   }
 
   /**
    * Ends the whole grant at Google, every token issued under it, and takes
-   * campus off the account's connections. Works while the calendar is
-   * switched off: revoking needs nothing but the token.
+   * campus off the account's connections. True once Google confirms, or
+   * says there was nothing left to revoke. Needs nothing but the token, so
+   * it works while the calendar is switched off.
    */
-  async revoke(token: string | undefined): Promise<void> {
+  async revoke(token: string | undefined): Promise<boolean> {
     if (!token) {
-      return;
+      return true;
     }
+    const answer = await this.post(REVOKE_URL, { token });
+    if (answer?.status === 200 || answer?.body.error === 'invalid_token') {
+      return true;
+    }
+    this.logger.warn(
+      { status: answer?.status, error: answer?.body.error },
+      'google did not take the revocation',
+    );
+    return false;
+  }
+
+  private async redeem(
+    code: string,
+    redirectUri?: string,
+  ): Promise<RedeemedCalendarCode> {
+    const { clientId, clientSecret } = requireCalendar(this.config);
+    const answer = await this.post(TOKEN_URL, {
+      grant_type: 'authorization_code',
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      ...(redirectUri ? { redirect_uri: redirectUri } : {}),
+    });
+    if (!answer || answer.status >= 500) {
+      throw new CalendarUnavailableError();
+    }
+    if (answer.status !== 200) {
+      this.logger.warn(
+        { status: answer.status, error: answer.body.error },
+        'calendar code exchange refused',
+      );
+      throw new CalendarConnectFailedError('exchange_failed');
+    }
+
+    const tokens = answer.body;
+    const subject = subjectOf(tokens.id_token, clientId);
+    if (!subject) {
+      // Whose calendar this is cannot be told, so it is not kept.
+      await this.revoke(tokens.refresh_token ?? tokens.access_token);
+      throw new CalendarConnectFailedError('exchange_failed');
+    }
+    return {
+      subject,
+      scopes: tokens.scope?.split(' ') ?? [],
+      refreshToken: tokens.refresh_token,
+      accessToken: tokens.access_token,
+    };
+  }
+
+  /** Null when Google could not be reached or did not answer in time. */
+  private async post(
+    url: string,
+    form: Record<string, string>,
+  ): Promise<GoogleAnswer | null> {
+    let res: Response;
     try {
-      await this.bare.revokeToken(token);
+      res = await this.fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(form),
+      });
     } catch (err) {
-      this.logger.warn({ err }, 'google did not take the revocation');
+      this.logger.warn({ err }, 'google oauth unreachable');
+      return null;
     }
+    const body = (await res.json().catch(() => ({}))) as TokenResponse;
+    return { status: res.status, body: body ?? {} };
   }
 }
 
-function oauthError(err: unknown): string | undefined {
-  const data = (err as { response?: { data?: { error?: unknown } } })?.response
-    ?.data;
-  return typeof data?.error === 'string' ? data.error : undefined;
+/**
+ * The account an id_token names. Its signature is not checked: it came
+ * straight from Google's token endpoint over TLS, in answer to this client's
+ * secret, which OpenID Connect accepts in place of the signature (Core
+ * 3.1.3.7). Issuer, audience and expiry are still checked.
+ */
+function subjectOf(
+  idToken: string | undefined,
+  clientId: string,
+): string | null {
+  try {
+    const payload = JSON.parse(
+      Buffer.from(idToken?.split('.')[1] ?? '', 'base64url').toString('utf8'),
+    ) as { iss?: unknown; aud?: unknown; exp?: unknown; sub?: unknown };
+    const fresh =
+      typeof payload.exp === 'number' && payload.exp * 1000 > Date.now();
+    return ISSUERS.includes(payload.iss as string) &&
+      payload.aud === clientId &&
+      fresh &&
+      typeof payload.sub === 'string'
+      ? payload.sub
+      : null;
+  } catch {
+    return null;
+  }
 }

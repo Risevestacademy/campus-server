@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url';
 
 import { configDefaults, defineConfig } from 'vitest/config';
 
+const MAP_SYNC_PG_SPEC = 'src/modules/maps/map-sync.service.pg.spec.ts';
+
 export default defineConfig({
   // Workspace packages ship built output, so importing one by name means
   // tests only run after a build. Pointing at the source keeps a test run
@@ -51,26 +53,27 @@ export default defineConfig({
     env: {
       APP_PUBLIC_URL: 'http://localhost:3000',
     },
-    // The real-PostgreSQL files share one database, and some of them change
-    // rows the others read, so they run one at a time.
+    // The real-PostgreSQL files share one database, and keep to their own
+    // rows so they can run side by side. The map sync's test cannot: it
+    // retires every map, so it runs on its own once the rest have finished.
     projects: [
       {
         extends: true,
         test: {
           name: 'unit',
           include: ['**/*.spec.ts'],
-          exclude: [...configDefaults.exclude, '**/*.pg.spec.ts'],
+          exclude: [...configDefaults.exclude, MAP_SYNC_PG_SPEC],
+          // Applies the migrations to the real PostgreSQL a few tests need,
+          // when one is named; does nothing otherwise.
+          globalSetup: ['./vitest.global-setup.ts'],
         },
       },
       {
         extends: true,
         test: {
-          name: 'postgres',
-          include: ['**/*.pg.spec.ts'],
-          fileParallelism: false,
-          // Applies the migrations to the real PostgreSQL these tests need,
-          // when one is named; does nothing otherwise.
-          globalSetup: ['./vitest.global-setup.ts'],
+          name: 'map-sync-pg',
+          include: [MAP_SYNC_PG_SPEC],
+          sequence: { groupOrder: 1 },
         },
       },
     ],

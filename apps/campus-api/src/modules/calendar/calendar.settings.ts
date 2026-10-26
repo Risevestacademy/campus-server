@@ -13,13 +13,14 @@ export interface CalendarSettings {
 }
 
 export function requireCalendar(env: Env): CalendarSettings {
+  const tokenKey = calendarTokenKey(env);
   if (
     !env.FF_GOOGLE_CALENDAR_ENABLED ||
     !env.GOOGLE_CLIENT_ID ||
     !env.GOOGLE_CLIENT_SECRET ||
     !env.GOOGLE_CALENDAR_CALLBACK_URL ||
     !env.AUTH_STATE_SECRET ||
-    !env.GOOGLE_CALENDAR_TOKEN_KEY
+    !tokenKey
   ) {
     throw new CalendarNotConfiguredError();
   }
@@ -28,11 +29,11 @@ export function requireCalendar(env: Env): CalendarSettings {
     clientSecret: env.GOOGLE_CLIENT_SECRET,
     callbackUrl: env.GOOGLE_CALENDAR_CALLBACK_URL,
     stateSecret: env.AUTH_STATE_SECRET,
-    tokenKey: Buffer.from(env.GOOGLE_CALENDAR_TOKEN_KEY, 'base64'),
+    tokenKey,
   };
 }
 
-/** The key alone, for removing a grant while the calendar is switched off. */
+/** The key alone, for revoking grants while the calendar is switched off. */
 export function calendarTokenKey(env: Env): Buffer | null {
   return env.GOOGLE_CALENDAR_TOKEN_KEY
     ? Buffer.from(env.GOOGLE_CALENDAR_TOKEN_KEY, 'base64')

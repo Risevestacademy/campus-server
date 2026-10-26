@@ -1,4 +1,3 @@
-import { OAuth2Client } from 'google-auth-library';
 import type { PinoLogger } from 'nestjs-pino';
 
 import type { Env } from '../../infra/config/config.module.js';
@@ -13,52 +12,85 @@ import {
 } from './google-calendar.client.js';
 
 const CALENDAR = 'https://www.googleapis.com/auth/calendar.events.readonly';
+const CALLBACK = 'http://localhost/v1/calendar/connect/callback';
 const CONFIG = {
   FF_GOOGLE_AUTH_ENABLED: true,
   FF_GOOGLE_CALENDAR_ENABLED: true,
   GOOGLE_CLIENT_ID: 'web-client',
   GOOGLE_CLIENT_SECRET: 'web-secret',
-  GOOGLE_CALENDAR_CALLBACK_URL: 'http://localhost/v1/calendar/connect/callback',
+  GOOGLE_CALENDAR_CALLBACK_URL: CALLBACK,
   AUTH_STATE_SECRET: 'a-state-secret-of-at-least-32-characters',
   GOOGLE_CALENDAR_TOKEN_KEY: Buffer.alloc(32).toString('base64'),
 } as Env;
 
+const fetch = vi.fn();
 const logger = { warn: vi.fn(), error: vi.fn(), setContext: vi.fn() };
 const client = (config: Env = CONFIG) =>
-  new GoogleCalendarClient(config, logger as unknown as PinoLogger);
+  new GoogleCalendarClient(config, fetch, logger as unknown as PinoLogger);
 
-const getToken = vi.spyOn(OAuth2Client.prototype, 'getToken');
-const verifyIdToken = vi.spyOn(OAuth2Client.prototype, 'verifyIdToken');
-const getAccessToken = vi.spyOn(OAuth2Client.prototype, 'getAccessToken');
-const revokeToken = vi.spyOn(OAuth2Client.prototype, 'revokeToken');
-
-function googleRedeems(tokens: Record<string, unknown>): void {
-  getToken.mockImplementation(() => Promise.resolve({ tokens } as never));
+function idToken(claims: Record<string, unknown> = {}): string {
+  const part = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString('base64url');
+  return [
+    part({ alg: 'RS256' }),
+    part({
+      iss: 'https://accounts.google.com',
+      aud: 'web-client',
+      sub: 'google-sub-1',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      ...claims,
+    }),
+    'signature',
+  ].join('.');
 }
+
+const answer = (status: number, body: object) =>
+  Promise.resolve(new Response(JSON.stringify(body), { status }));
+
+function googleRedeems(tokens: Record<string, unknown> = {}): void {
+  fetch.mockImplementation((url: string) =>
+    url.endsWith('/revoke')
+      ? answer(200, {})
+      : answer(200, {
+          id_token: idToken(),
+          refresh_token: 'google-refresh',
+          access_token: 'google-access',
+          scope: `openid ${CALENDAR}`,
+          ...tokens,
+        }),
+  );
+}
+
+const form = (call: number) =>
+  Object.fromEntries(
+    new URLSearchParams(
+      String((fetch.mock.calls[call] as [string, RequestInit])[1].body),
+    ),
+  );
 
 beforeEach(() => {
   vi.resetAllMocks();
-  verifyIdToken.mockResolvedValue({
-    getPayload: () => ({ sub: 'google-sub-1' }),
-  } as never);
-  revokeToken.mockResolvedValue({} as never);
 });
 
 describe('authorizationUrl', () => {
-  it('asks for read-only calendar access, offline, behind the consent screen', () => {
-    const params = new URL(
+  it('asks for the calendar alone, read-only, offline, behind the consent screen', () => {
+    const url = new URL(
       client().authorizationUrl('the-state', 'ada@campus.local'),
-    ).searchParams;
-
-    expect(params.get('scope')).toBe(`openid ${CALENDAR}`);
-    expect(params.get('access_type')).toBe('offline');
-    expect(params.get('prompt')).toBe('consent');
-    expect(params.get('include_granted_scopes')).toBe('true');
-    expect(params.get('login_hint')).toBe('ada@campus.local');
-    expect(params.get('state')).toBe('the-state');
-    expect(params.get('redirect_uri')).toBe(
-      'http://localhost/v1/calendar/connect/callback',
     );
+
+    expect(url.origin + url.pathname).toBe(
+      'https://accounts.google.com/o/oauth2/v2/auth',
+    );
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      client_id: 'web-client',
+      redirect_uri: CALLBACK,
+      response_type: 'code',
+      scope: `openid ${CALENDAR}`,
+      access_type: 'offline',
+      prompt: 'consent',
+      login_hint: 'ada@campus.local',
+      state: 'the-state',
+    });
   });
 
   it('is not there while the calendar is switched off', () => {
@@ -71,134 +103,153 @@ describe('authorizationUrl', () => {
   });
 });
 
-describe('redeem', () => {
+describe('redeeming a code', () => {
   it('names the Google account and what it granted', async () => {
-    googleRedeems({
-      id_token: 'id-token',
-      refresh_token: 'google-refresh',
-      access_token: 'google-access',
-      scope: `openid ${CALENDAR}`,
-    });
+    googleRedeems();
 
-    await expect(client().redeem('code', 'web')).resolves.toEqual({
+    await expect(client().redeemWebCode('code')).resolves.toEqual({
       subject: 'google-sub-1',
       scopes: ['openid', CALENDAR],
       refreshToken: 'google-refresh',
       accessToken: 'google-access',
     });
-    expect(verifyIdToken).toHaveBeenCalledWith({
-      idToken: 'id-token',
-      audience: 'web-client',
+    expect(fetch.mock.calls[0][0]).toBe('https://oauth2.googleapis.com/token');
+    expect(form(0)).toEqual({
+      grant_type: 'authorization_code',
+      code: 'code',
+      client_id: 'web-client',
+      client_secret: 'web-secret',
+      redirect_uri: CALLBACK,
     });
   });
 
-  it('redeems a native app’s code without the web redirect URI', async () => {
-    const used: OAuth2Client[] = [];
-    getToken.mockImplementation(function (this: OAuth2Client) {
-      used.push(this);
-      return Promise.resolve({
-        tokens: { id_token: 'id-token', scope: CALENDAR },
-      } as never);
-    });
+  it('redeems a native app’s code without a redirect URI', async () => {
+    googleRedeems();
 
-    await client().redeem('web-code', 'web');
-    await client().redeem('app-code', 'app');
+    await client().redeemAppCode('server-code');
 
-    expect((used[0] as unknown as { redirectUri?: string }).redirectUri).toBe(
-      'http://localhost/v1/calendar/connect/callback',
-    );
-    expect(
-      (used[1] as unknown as { redirectUri?: string }).redirectUri,
-    ).toBeUndefined();
+    expect(form(0)).not.toHaveProperty('redirect_uri');
+    expect(form(0).code).toBe('server-code');
   });
 
-  it('reports a code Google will not take', async () => {
-    getToken.mockRejectedValue(new Error('invalid_grant'));
+  it('reports a code Google refuses, and tries only once', async () => {
+    fetch.mockImplementation(() => answer(400, { error: 'invalid_grant' }));
 
-    await expect(client().redeem('code', 'web')).rejects.toMatchObject({
+    await expect(client().redeemWebCode('code')).rejects.toMatchObject({
       constructor: CalendarConnectFailedError,
       reason: 'exchange_failed',
     });
-    expect(revokeToken).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('revokes what it got when it cannot tell whose it is', async () => {
-    googleRedeems({ refresh_token: 'google-refresh', scope: CALENDAR });
+  it('reports Google unavailable when it fails or does not answer in time', async () => {
+    fetch.mockImplementationOnce(() => answer(503, {}));
+    await expect(client().redeemWebCode('code')).rejects.toThrow(
+      CalendarUnavailableError,
+    );
 
-    await expect(client().redeem('code', 'app')).rejects.toMatchObject({
-      reason: 'exchange_failed',
-    });
-    expect(revokeToken).toHaveBeenCalledWith('google-refresh');
+    fetch.mockImplementationOnce(() =>
+      Promise.reject(new DOMException('timed out', 'TimeoutError')),
+    );
+    await expect(client().redeemAppCode('code')).rejects.toThrow(
+      CalendarUnavailableError,
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it('revokes what it got when the id_token does not verify', async () => {
-    googleRedeems({
-      id_token: 'forged',
-      refresh_token: 'google-refresh',
-      scope: CALENDAR,
-    });
-    verifyIdToken.mockRejectedValue(new Error('Wrong recipient'));
+  it.each([
+    ['no id_token', { id_token: undefined }],
+    ['another audience', { id_token: idToken({ aud: 'other-app' }) }],
+    ['another issuer', { id_token: idToken({ iss: 'https://evil.example' }) }],
+    ['an expired one', { id_token: idToken({ exp: 1 }) }],
+    ['one naming nobody', { id_token: idToken({ sub: undefined }) }],
+  ])(
+    'revokes what it got when it cannot tell whose it is: %s',
+    async (_, tokens) => {
+      googleRedeems(tokens);
 
-    await expect(client().redeem('code', 'app')).rejects.toMatchObject({
-      reason: 'exchange_failed',
-    });
-    expect(revokeToken).toHaveBeenCalledWith('google-refresh');
-  });
+      await expect(client().redeemAppCode('code')).rejects.toMatchObject({
+        reason: 'exchange_failed',
+      });
+      expect(fetch.mock.calls[1][0]).toBe(
+        'https://oauth2.googleapis.com/revoke',
+      );
+      expect(form(1)).toEqual({ token: 'google-refresh' });
+    },
+  );
 });
 
-describe('accessToken', () => {
+describe('refresh', () => {
   it('trades the refresh token for an access token and its expiry', async () => {
-    getAccessToken.mockImplementation(function (this: OAuth2Client) {
-      this.credentials = { ...this.credentials, expiry_date: 1234 };
-      return Promise.resolve({ token: 'google-access' }) as never;
-    });
+    fetch.mockImplementation(() =>
+      answer(200, { access_token: 'google-access', expires_in: 3599 }),
+    );
+    const before = Date.now();
 
-    await expect(client().accessToken('google-refresh')).resolves.toEqual({
-      token: 'google-access',
-      expiresAt: 1234,
+    const { token, expiresAt } = await client().refresh('google-refresh');
+
+    expect(token).toBe('google-access');
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 3_599_000);
+    expect(form(0)).toMatchObject({
+      grant_type: 'refresh_token',
+      refresh_token: 'google-refresh',
     });
   });
 
   it('says so when Google has withdrawn the grant', async () => {
-    getAccessToken.mockRejectedValue(
-      Object.assign(new Error('invalid_grant'), {
-        response: { data: { error: 'invalid_grant' } },
-      }),
-    );
+    fetch.mockImplementation(() => answer(400, { error: 'invalid_grant' }));
 
-    await expect(client().accessToken('google-refresh')).rejects.toThrow(
+    await expect(client().refresh('google-refresh')).rejects.toThrow(
       GrantWithdrawnError,
     );
   });
 
-  it('reports Google unavailable for any other failure', async () => {
-    getAccessToken.mockRejectedValue(new Error('timeout of 5000ms exceeded'));
+  it('reports Google unavailable for anything else, after one try', async () => {
+    fetch.mockImplementation(() => answer(500, {}));
 
-    await expect(client().accessToken('google-refresh')).rejects.toThrow(
+    await expect(client().refresh('google-refresh')).rejects.toThrow(
       CalendarUnavailableError,
     );
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('revoke', () => {
-  it('works while the calendar is switched off', async () => {
-    await client({ ...CONFIG, FF_GOOGLE_CALENDAR_ENABLED: false }).revoke(
-      'google-refresh',
+  it('is confirmed when Google takes it', async () => {
+    fetch.mockImplementation(() => answer(200, {}));
+
+    await expect(client().revoke('google-refresh')).resolves.toBe(true);
+    expect(form(0)).toEqual({ token: 'google-refresh' });
+  });
+
+  it('is confirmed when there was nothing left to revoke', async () => {
+    fetch.mockImplementation(() => answer(400, { error: 'invalid_token' }));
+
+    await expect(client().revoke('google-refresh')).resolves.toBe(true);
+  });
+
+  it('is not confirmed when Google fails or does not answer', async () => {
+    fetch.mockImplementationOnce(() => answer(503, {}));
+    await expect(client().revoke('google-refresh')).resolves.toBe(false);
+
+    fetch.mockImplementationOnce(() =>
+      Promise.reject(new TypeError('fetch failed')),
     );
-
-    expect(revokeToken).toHaveBeenCalledWith('google-refresh');
+    await expect(client().revoke('google-refresh')).resolves.toBe(false);
   });
 
-  it('swallows a refusal: the grant is gone here either way', async () => {
-    revokeToken.mockRejectedValue(new Error('invalid_token'));
+  it('works while the calendar is switched off', async () => {
+    fetch.mockImplementation(() => answer(200, {}));
 
-    await expect(client().revoke('google-refresh')).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalled();
+    await expect(
+      client({ ...CONFIG, FF_GOOGLE_CALENDAR_ENABLED: false }).revoke(
+        'google-refresh',
+      ),
+    ).resolves.toBe(true);
   });
 
-  it('does nothing without a token', async () => {
-    await client().revoke(undefined);
-
-    expect(revokeToken).not.toHaveBeenCalled();
+  it('has nothing to do without a token', async () => {
+    await expect(client().revoke(undefined)).resolves.toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
