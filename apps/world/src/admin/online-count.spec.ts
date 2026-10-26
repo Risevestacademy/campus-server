@@ -37,7 +37,7 @@ describe('GET /admin/online', () => {
   let presence: MemoryPresenceStore;
 
   async function ask(headers: Record<string, string>, query = '') {
-    world ??= await buildWorld(env, accounts, undefined, presence);
+    world ??= await buildWorld({ env, accounts, presence });
     return world.app.inject({
       method: 'GET',
       url: `${ONLINE_COUNT_PATH}${query}`,

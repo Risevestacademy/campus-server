@@ -35,17 +35,29 @@ export interface World {
   reporter: ErrorReporter;
 }
 
-export async function buildWorld(
-  env: Env = loadEnv(),
-  // Injectable so tests can answer for the database without one.
-  accounts: AccountLookup = createAccountLookup(env),
-  // Also injectable; defaults to Redis when REDIS_URL is set, nothing if not.
-  positions?: PositionStore,
-  // Redis when REDIS_URL is set, memory if not.
-  presence?: PresenceStore,
-  // The published entry map when left out, which is a call to Sanity.
-  map?: WorldMap,
-  reporter: ErrorReporter = createErrorReporter({
+/** What a world is built from; every part defaults to the real thing. */
+export interface BuildWorldOptions {
+  /** The environment to read. Loaded from `process.env` when left out. */
+  env?: Env;
+  /** Answers for the database. Built from `env` when left out. */
+  accounts?: AccountLookup;
+  /** Also injectable; defaults to Redis when REDIS_URL is set, nothing if not. */
+  positions?: PositionStore;
+  /** Redis when REDIS_URL is set, memory if not. */
+  presence?: PresenceStore;
+  /** The published entry map when left out, which is a call to Sanity. */
+  map?: WorldMap;
+  /** Where errors are reported. Built from `env` when left out. */
+  reporter?: ErrorReporter;
+}
+
+export async function buildWorld({
+  env = loadEnv(),
+  accounts = createAccountLookup(env),
+  positions,
+  presence,
+  map,
+  reporter = createErrorReporter({
     enabled: env.FF_POSTHOG_ENABLED,
     token: env.POSTHOG_PROJECT_TOKEN,
     host: env.POSTHOG_HOST,
@@ -53,7 +65,7 @@ export async function buildWorld(
     environment: env.DEPLOYMENT_ENVIRONMENT,
     release: env.RAILWAY_GIT_COMMIT_SHA,
   }),
-): Promise<World> {
+}: BuildWorldOptions = {}): Promise<World> {
   const app = Fastify({
     logger: loggerOptions(env, reporter),
     genReqId: (req) => correlationId(req.headers as Record<string, unknown>),

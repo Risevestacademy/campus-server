@@ -172,14 +172,65 @@ export const MEMBERSHIP_ROWS_QUERY = `select user_id, cohort_id, role, left_at, 
 export const DEFAULT_AUDIBLE_RADIUS = 5;
 export const DEFAULT_SUBSCRIBE_RADIUS = 6;
 
+/** The two ways a space sounds, as `spaces.audio_mode` says. */
+export type SpaceAudioMode = 'proximity' | 'boundary';
+
 /** A space's door, and how people in it hear one another. */
 export interface WorldSpace extends SpaceFacts {
   id: string;
-  /** `proximity` or `boundary`, as `spaces.audio_mode` says. */
-  audioMode: string;
+  audioMode: SpaceAudioMode;
   audibleRadius: number;
   subscribeRadius: number;
   hysteresisFactor: number;
+}
+
+/** A `spaces` row as `SPACES_QUERY` reads it, before world decides what it means. */
+export interface SpaceRow {
+  id: string;
+  key: string;
+  kind: string | null;
+  access: string;
+  retired_at: Date | null;
+  audio_mode: string;
+  audible_radius: string | null;
+  subscribe_radius: string | null;
+  hysteresis_factor: string;
+}
+
+/**
+ * The one place a row's audio mode becomes a mode world knows. The column is
+ * an enum today, but world and the database do not deploy together, so a row
+ * may carry a value this build has never heard of. That is read as `boundary`
+ * — one room, not positional audio — so every check downstream compares two
+ * known modes instead of treating the unknown as "not proximity".
+ */
+function audioModeOf(value: string): SpaceAudioMode {
+  return value === 'proximity' ? 'proximity' : 'boundary';
+}
+
+/** A space row and the live entries on its list, as the gateway reads it. */
+export function toWorldSpace(
+  row: SpaceRow,
+  grants: readonly SpaceGrantFacts[],
+): WorldSpace {
+  return {
+    id: row.id,
+    kind: row.kind,
+    access: row.access,
+    retiredAt: row.retired_at,
+    locked: false,
+    grants,
+    audioMode: audioModeOf(row.audio_mode),
+    audibleRadius:
+      row.audible_radius === null
+        ? DEFAULT_AUDIBLE_RADIUS
+        : Number(row.audible_radius),
+    subscribeRadius:
+      row.subscribe_radius === null
+        ? DEFAULT_SUBSCRIBE_RADIUS
+        : Number(row.subscribe_radius),
+    hysteresisFactor: Number(row.hysteresis_factor),
+  };
 }
 
 /** Every space on one map, retired ones included. $1 the map's key. */
@@ -359,19 +410,7 @@ export function createAccountLookup(env: Env): AccountLookup {
       );
     },
     async spacesOn(mapKey, now): Promise<Map<string, WorldSpace>> {
-      const spaces = await sql.unsafe<
-        {
-          id: string;
-          key: string;
-          kind: string | null;
-          access: string;
-          retired_at: Date | null;
-          audio_mode: string;
-          audible_radius: string | null;
-          subscribe_radius: string | null;
-          hysteresis_factor: string;
-        }[]
-      >(SPACES_QUERY, [mapKey]);
+      const spaces = await sql.unsafe<SpaceRow[]>(SPACES_QUERY, [mapKey]);
       const lists = new Map<string, SpaceGrantFacts[]>(
         spaces.map((space) => [space.id, []]),
       );
@@ -401,24 +440,7 @@ export function createAccountLookup(env: Env): AccountLookup {
       return new Map(
         spaces.map((space) => [
           space.key,
-          {
-            id: space.id,
-            kind: space.kind,
-            access: space.access,
-            retiredAt: space.retired_at,
-            locked: false,
-            grants: lists.get(space.id) ?? [],
-            audioMode: space.audio_mode,
-            audibleRadius:
-              space.audible_radius === null
-                ? DEFAULT_AUDIBLE_RADIUS
-                : Number(space.audible_radius),
-            subscribeRadius:
-              space.subscribe_radius === null
-                ? DEFAULT_SUBSCRIBE_RADIUS
-                : Number(space.subscribe_radius),
-            hysteresisFactor: Number(space.hysteresis_factor),
-          },
+          toWorldSpace(space, lists.get(space.id) ?? []),
         ]),
       );
     },

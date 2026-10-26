@@ -33,7 +33,7 @@ const telemetry = env.FF_OTEL_ENABLED
 const { buildWorld } = await import('./app.js');
 let world: World;
 try {
-  world = await buildWorld(env);
+  world = await buildWorld({ env });
 } catch (err) {
   // No app yet, so no logger and no reporter: telemetry alone is flushed.
   console.error('failed to build world', err);
