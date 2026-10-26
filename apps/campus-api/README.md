@@ -18,6 +18,7 @@ NestJS backend for the campus application.
 - [Maps](#maps)
 - [Feedback](#feedback)
 - [Calls](#calls)
+- [Calendar](#calendar)
 - [Dashboard](#dashboard)
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
@@ -72,6 +73,9 @@ a clear error.
 | `GOOGLE_CLIENT_SECRET`            | _(unset)_                                              | Secret for that web client. Never ships to a mobile app                                                                                                                                                                                                                                                                                                                                                                                    |
 | `GOOGLE_MOBILE_CLIENT_IDS`        | _(unset)_                                              | Optional. Google client IDs of the native apps, comma-separated, from the same Google project as `GOOGLE_CLIENT_ID`. A native app signs in by posting an id_token to `POST /v1/auth/google/token`; a token is accepted when addressed to one of these or to the web client. Unset, only the web client's tokens are accepted                                                                                                               |
 | `GOOGLE_CALLBACK_URL`             | _(unset)_                                              | Where Google returns the user. Must point at **this API**, not the web app, and match a registered redirect URI exactly                                                                                                                                                                                                                                                                                                                    |
+| `FF_GOOGLE_CALENDAR_ENABLED`      | `false`                                                | Lets members connect their Google Calendar, read-only. When `true`, `GOOGLE_CALENDAR_TOKEN_KEY` and `GOOGLE_CALENDAR_CALLBACK_URL` are required, and so is Google sign-in: the app refuses to boot with this on and `FF_GOOGLE_AUTH_ENABLED` off. See [Calendar](#calendar)                                                                                                                                                                |
+| `GOOGLE_CALENDAR_TOKEN_KEY`       | _(unset)_                                              | 32 bytes in base64 (`openssl rand -base64 32`). Seals the members' Google refresh tokens at rest. Changing it makes every member reconnect                                                                                                                                                                                                                                                                                                 |
+| `GOOGLE_CALENDAR_CALLBACK_URL`    | _(unset)_                                              | Where Google returns a member who connected their calendar: this API's `/v1/calendar/connect/callback`, registered on the same Google client as `GOOGLE_CALLBACK_URL`                                                                                                                                                                                                                                                                      |
 | `AUTH_STATE_SECRET`               | _(unset)_                                              | Signs the OAuth `state` parameter; at least 32 characters. Rotating it only interrupts sign-ins already in flight                                                                                                                                                                                                                                                                                                                          |
 | `AUTH_SESSION_SECRET`             | _(unset)_                                              | Signs session tokens; at least 32 characters. Separate from the state secret — rotating this one signs everybody out                                                                                                                                                                                                                                                                                                                       |
 | `AUTH_SESSION_TTL_MINUTES`        | `15`                                                   | Lifetime of a full-access session                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -199,6 +203,15 @@ records the calls from LiveKit's webhooks: when each run of a space's room
 opens and closes, who joins and leaves, and whether a camera came on. The
 webhook route, how events that arrive late or twice are handled, and the
 tables are in [src/modules/calls/README.md](src/modules/calls/README.md).
+
+## Calendar
+
+A member can connect their own Google Calendar, read-only, from inside
+campus, and campus reads their events from Google when they ask. Sign-in
+never asks for it. Connecting from the web and from a native app, the
+outcomes the web app is sent back with, how the refresh tokens are stored
+and how they are revoked when a member disconnects or their access ends are
+in [src/modules/calendar/README.md](src/modules/calendar/README.md).
 
 ## Dashboard
 
@@ -382,6 +395,10 @@ $ CAMPUS_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/campus_
 
 The tests make their own rows and clear nothing, so the database fills up
 slowly; drop and recreate it whenever you like.
+
+The files run side by side, so each keeps to its own rows. The map sync's
+test cannot, since it retires every map: `vitest.config.ts` runs it on its
+own once the rest have finished.
 
 ## License
 
