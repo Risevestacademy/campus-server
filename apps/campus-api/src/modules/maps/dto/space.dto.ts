@@ -7,9 +7,11 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPositive,
   IsString,
   Max,
   MaxLength,
+  Min,
   ValidateBy,
   type ValidationOptions,
 } from 'class-validator';
@@ -35,6 +37,10 @@ function IsNotEditable(options?: ValidationOptions): PropertyDecorator {
     options,
   );
 }
+
+export const MAX_SPACE_CAPACITY = 2_147_483_647;
+
+export const MIN_AUDIO_DISTANCE = 0;
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.replaceAll('\u0000', '').trim() : value;
@@ -113,22 +119,29 @@ export class UpdateSpaceDto {
     type: Number,
     example: 25,
     nullable: true,
-    description: 'Null means no limit. At least 1 when set.',
+    minimum: 1,
+    maximum: MAX_SPACE_CAPACITY,
+    description:
+      `Null means no limit. At least 1 and at most ${MAX_SPACE_CAPACITY} ` +
+      'when set.',
   })
   @IsOptional()
   @IsInt()
+  @Max(MAX_SPACE_CAPACITY)
   capacity?: number | null;
 
   @ApiPropertyOptional({
     type: Number,
     example: 8.5,
     nullable: true,
+    minimum: MIN_AUDIO_DISTANCE,
     description:
-      'How far a voice carries, in tiles. Null leaves it unset. The ' +
-      'database stores two decimal places.',
+      'How far a voice carries, in tiles. Null leaves it unset. At least ' +
+      `${MIN_AUDIO_DISTANCE}. The database stores two decimal places.`,
   })
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false })
+  @Min(MIN_AUDIO_DISTANCE)
   @Max(9999.99)
   audibleRadius?: number | null;
 
@@ -136,12 +149,15 @@ export class UpdateSpaceDto {
     type: Number,
     example: 10,
     nullable: true,
+    minimum: MIN_AUDIO_DISTANCE,
     description:
       'The radius the media server subscribes people by, in tiles. Null ' +
-      'leaves it unset. The database stores two decimal places.',
+      `leaves it unset. At least ${MIN_AUDIO_DISTANCE}. The database stores ` +
+      'two decimal places.',
   })
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false })
+  @Min(MIN_AUDIO_DISTANCE)
   @Max(9999.99)
   subscribeRadius?: number | null;
 
@@ -150,10 +166,12 @@ export class UpdateSpaceDto {
     example: 1.2,
     description:
       'How much further than subscribeRadius somebody must go before they ' +
-      'are unsubscribed. The database stores two decimal places.',
+      'are unsubscribed. Must be greater than 0. The database stores two ' +
+      'decimal places.',
   })
   @IsOptionalNotNull()
   @IsNumber({ maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false })
+  @IsPositive()
   @Max(99.99)
   hysteresisFactor?: number;
 

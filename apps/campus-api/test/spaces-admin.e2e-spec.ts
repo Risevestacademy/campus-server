@@ -21,6 +21,10 @@ import {
 } from './../src/modules/audit/schema.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import {
+  MAX_SPACE_CAPACITY,
+  MIN_AUDIO_DISTANCE,
+} from './../src/modules/maps/dto/space.dto.js';
+import {
   AudioMode,
   SpaceAccess,
   SpaceKind,
@@ -413,6 +417,94 @@ describe('space admin routes (e2e)', () => {
           fields: { capacity: 'Capacity must be at least 1' },
         },
       });
+      expect(await entryFor(spaceId)).toHaveLength(0);
+    });
+
+    it('accepts the largest capacity and refuses one above it', async () => {
+      const max = await patch(spaceId, {
+        capacity: MAX_SPACE_CAPACITY,
+      }).expect(200);
+      expect(max.body.capacity).toBe(MAX_SPACE_CAPACITY);
+
+      const over = await patch(spaceId, {
+        capacity: MAX_SPACE_CAPACITY + 1,
+      }).expect(400);
+      expect(over.body.error).toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        details: { fields: { capacity: expect.any(String) } },
+      });
+    });
+
+    it.each([
+      ['audibleRadius', -1],
+      ['subscribeRadius', -1],
+    ])('refuses a negative %s', async (field, value) => {
+      const res = await patch(spaceId, { [field]: value }).expect(400);
+
+      expect(res.body.error).toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        details: { fields: { [field]: expect.any(String) } },
+      });
+      expect(await entryFor(spaceId)).toHaveLength(0);
+    });
+
+    it.each([0, -1])('refuses a hysteresis factor of %s', async (value) => {
+      const res = await patch(spaceId, {
+        hysteresisFactor: value,
+      }).expect(400);
+
+      expect(res.body.error).toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        details: { fields: { hysteresisFactor: expect.any(String) } },
+      });
+      expect(await entryFor(spaceId)).toHaveLength(0);
+    });
+
+    it.each([
+      ['audibleRadius', MIN_AUDIO_DISTANCE],
+      ['subscribeRadius', MIN_AUDIO_DISTANCE],
+      ['hysteresisFactor', 0.01],
+    ])('accepts the smallest valid %s', async (field, value) => {
+      const res = await patch(spaceId, { [field]: value }).expect(200);
+
+      expect(res.body[field]).toBe(Number(value).toFixed(2));
+    });
+
+    it('updates a retired space and records it', async () => {
+      const res = await patch(retiredId, {
+        name: 'Old Room Renamed',
+      }).expect(200);
+
+      expect(res.body).toMatchObject({
+        id: retiredId,
+        name: 'Old Room Renamed',
+      });
+      expect(res.body.retiredAt).not.toBeNull();
+
+      const entries = await entryFor(retiredId);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        subjectType: AuditSubjectType.Space,
+        subjectId: retiredId,
+        spaceId: retiredId,
+      });
+    });
+
+    it('returns 200 without moving updatedAt when a value is repeated', async () => {
+      const before = await db.query.spaces.findFirst({
+        where: eq(spaces.id, spaceId),
+      });
+      expect(before).toBeDefined();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      const res = await patch(spaceId, { name: before!.name }).expect(200);
+      const after = await db.query.spaces.findFirst({
+        where: eq(spaces.id, spaceId),
+      });
+      expect(after).toBeDefined();
+
+      expect(res.body.id).toBe(spaceId);
+      expect(after!.updatedAt.getTime()).toBe(before!.updatedAt.getTime());
       expect(await entryFor(spaceId)).toHaveLength(0);
     });
 

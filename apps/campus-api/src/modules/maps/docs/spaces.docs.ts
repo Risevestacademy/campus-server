@@ -10,7 +10,7 @@ import {
 import { ApiAdminOnly } from '../../../shared/dto/admin-route.docs.js';
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
 import { ApiPaginatedResponse } from '../../../shared/dto/index.js';
-import { SpaceResponseDto } from '../dto/space.dto.js';
+import { MAX_SPACE_CAPACITY, SpaceResponseDto } from '../dto/space.dto.js';
 
 const NO_SPACE = 'No space with that id.';
 
@@ -74,7 +74,9 @@ export function ApiUpdateSpace(): MethodDecorator {
       description:
         'A malformed field, a null where one is not allowed, an immutable ' +
         'field (`key`, `mapId`, `isMapDefault`), a default space that is ' +
-        'not normal, or a capacity below 1.',
+        'not normal, a capacity below 1 or above ' +
+        `${MAX_SPACE_CAPACITY}, a negative audio radius, or a ` +
+        'hysteresis factor that is not positive.',
       content: {
         'application/json': {
           examples: {

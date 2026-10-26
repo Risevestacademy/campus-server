@@ -3,7 +3,9 @@ import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
+import { vi } from 'vitest';
 
+import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import type { UpdateSpaceDto } from './dto/space.dto.js';
@@ -32,6 +34,14 @@ const MIGRATIONS = fileURLToPath(
   new URL('../../infra/database/migrations', import.meta.url),
 );
 
+// The audit entry is written in the same transaction as the row. The test
+// that breaks it says what happens when the log cannot be written: nothing
+// changes at all.
+vi.mock('../audit/audit-log.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../audit/audit-log.js')>();
+  return { ...actual, writeAuditEntry: vi.fn(actual.writeAuditEntry) };
+});
+
 const db = drizzle(new PGlite(), {
   schema: { users, maps, spaces, auditLog },
 });
@@ -51,6 +61,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   keySeq = 0;
+  vi.mocked(writeAuditEntry).mockClear();
   await db.execute(
     sql`truncate audit_log, space_memberships, spaces, maps, users cascade`,
   );
@@ -213,6 +224,90 @@ describe('updating a space', () => {
 
     expect(empty.id).toBe(row.id);
     expect(same.id).toBe(row.id);
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('leaves updatedAt alone when every value is the same', async () => {
+    const row = await given({ name: 'Library', capacity: 25 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const same = await service.update(
+      row.id,
+      { name: 'Library', capacity: 25 },
+      actor,
+    );
+
+    expect(same.updatedAt.getTime()).toBe(row.updatedAt.getTime());
+    expect(await entries()).toHaveLength(0);
+  });
+
+  it('records only the field that changed in a mixed update', async () => {
+    const row = await given({ name: 'Library', capacity: null });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const updated = await service.update(
+      row.id,
+      { name: 'Library', capacity: 25 },
+      actor,
+    );
+
+    expect(updated.updatedAt.getTime()).toBeGreaterThan(
+      row.updatedAt.getTime(),
+    );
+    const [entry] = await entries();
+    expect(entry.details).toEqual({
+      changes: { capacity: { from: null, to: 25 } },
+    });
+  });
+
+  it('records every changed field in one entry and omits unchanged ones', async () => {
+    const row = await given({
+      name: 'Library',
+      capacity: null,
+      access: SpaceAccess.Normal,
+      audioMode: AudioMode.Proximity,
+    });
+
+    const updated = await service.update(
+      row.id,
+      {
+        name: 'Reading Room',
+        capacity: 25,
+        access: SpaceAccess.Normal,
+        audioMode: AudioMode.Boundary,
+      },
+      actor,
+    );
+
+    expect(updated).toMatchObject({
+      name: 'Reading Room',
+      capacity: 25,
+      access: SpaceAccess.Normal,
+      audioMode: AudioMode.Boundary,
+    });
+    const [entry] = await entries();
+    expect(entry.details).toEqual({
+      changes: {
+        name: { from: 'Library', to: 'Reading Room' },
+        capacity: { from: null, to: 25 },
+        audioMode: { from: AudioMode.Proximity, to: AudioMode.Boundary },
+      },
+    });
+  });
+
+  it('rolls back the row when the audit entry cannot be written', async () => {
+    const row = await given({ name: 'Library' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    vi.mocked(writeAuditEntry).mockRejectedValueOnce(new Error('audit down'));
+
+    await expect(
+      service.update(row.id, { name: 'Reading Room' }, actor),
+    ).rejects.toThrow('audit down');
+
+    const [after] = await db.select().from(spaces).where(eq(spaces.id, row.id));
+    expect(after).toBeDefined();
+    expect(after!.name).toBe('Library');
+    expect(after!.updatedAt.getTime()).toBe(row.updatedAt.getTime());
     expect(await entries()).toHaveLength(0);
   });
 

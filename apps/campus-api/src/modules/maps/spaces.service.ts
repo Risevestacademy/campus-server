@@ -129,52 +129,54 @@ export class SpacesService {
           return existing;
         }
 
+        const updates: Partial<Space> = {
+          ...(dto.name !== undefined ? { name: dto.name } : {}),
+          ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
+          ...(dto.access !== undefined ? { access: dto.access } : {}),
+          ...(dto.audioMode !== undefined ? { audioMode: dto.audioMode } : {}),
+          ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
+          ...(dto.audibleRadius !== undefined
+            ? {
+                audibleRadius:
+                  dto.audibleRadius === null
+                    ? null
+                    : dto.audibleRadius.toFixed(2),
+              }
+            : {}),
+          ...(dto.subscribeRadius !== undefined
+            ? {
+                subscribeRadius:
+                  dto.subscribeRadius === null
+                    ? null
+                    : dto.subscribeRadius.toFixed(2),
+              }
+            : {}),
+          ...(dto.hysteresisFactor !== undefined
+            ? { hysteresisFactor: dto.hysteresisFactor.toFixed(2) }
+            : {}),
+        };
+        const next: Space = { ...existing, ...updates };
+        const changes = changedFields(existing, next, SPACE_AUDITED_FIELDS);
+        if (Object.keys(changes).length === 0) {
+          return existing;
+        }
+
         const [row] = await tx
           .update(spaces)
-          .set({
-            ...(dto.name !== undefined ? { name: dto.name } : {}),
-            ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
-            ...(dto.access !== undefined ? { access: dto.access } : {}),
-            ...(dto.audioMode !== undefined
-              ? { audioMode: dto.audioMode }
-              : {}),
-            ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
-            ...(dto.audibleRadius !== undefined
-              ? {
-                  audibleRadius:
-                    dto.audibleRadius === null
-                      ? null
-                      : dto.audibleRadius.toFixed(2),
-                }
-              : {}),
-            ...(dto.subscribeRadius !== undefined
-              ? {
-                  subscribeRadius:
-                    dto.subscribeRadius === null
-                      ? null
-                      : dto.subscribeRadius.toFixed(2),
-                }
-              : {}),
-            ...(dto.hysteresisFactor !== undefined
-              ? { hysteresisFactor: dto.hysteresisFactor.toFixed(2) }
-              : {}),
-          })
+          .set(updates)
           .where(eq(spaces.id, id))
           .returning();
 
-        const changes = changedFields(existing, row, SPACE_AUDITED_FIELDS);
-        if (Object.keys(changes).length > 0) {
-          await writeAuditEntry(tx, {
-            ...audit,
-            spaceId: id,
-            action: AuditAction.SpaceUpdated,
-            subject: { type: AuditSubjectType.Space, id },
-            details: { changes },
-          });
-          // A space's door or its audio room changed, so world reads its
-          // spaces again once this commits.
-          await tellWorld(tx);
-        }
+        await writeAuditEntry(tx, {
+          ...audit,
+          spaceId: id,
+          action: AuditAction.SpaceUpdated,
+          subject: { type: AuditSubjectType.Space, id },
+          details: { changes },
+        });
+        // A space's door or its audio room changed, so world reads its
+        // spaces again once this commits.
+        await tellWorld(tx);
         return row;
       });
     } catch (err) {
