@@ -216,7 +216,7 @@ track holds the link with `key share`, so the two never cross: tested in
 
 **A mentorship group deleted.** A group entry points at the `mentorship_groups`
 row, so deleting the group (`DELETE /v1/cohorts/{id}/mentorship-groups/{groupId}`)
-refuses while a live entry names it (409, naming the space): end it first, so
+refuses while a live entry names it (409, naming the spaces): end it first, so
 access is never taken away without anyone ending it. Ended entries go with the
 group, as a detached track's do, and the audit log is their record. The delete
 locks the group before it looks for entries, and a grant to a group holds it

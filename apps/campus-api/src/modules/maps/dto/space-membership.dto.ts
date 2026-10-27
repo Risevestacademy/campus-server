@@ -232,11 +232,10 @@ export class SpaceMembershipSubjectDto {
 
   @ApiPropertyOptional({
     type: String,
-    nullable: true,
     example: 'The Ravens',
     description: 'Present when the grant is to a mentorship group.',
   })
-  groupName?: string | null;
+  groupName?: string;
 }
 
 export class SpaceMembershipResponseDto {

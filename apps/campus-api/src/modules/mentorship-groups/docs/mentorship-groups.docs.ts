@@ -374,8 +374,7 @@ export function ApiDeleteMentorshipGroup(): MethodDecorator {
                   details: {
                     cohortId: '11111111-1111-4111-8111-111111111111',
                     groupId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-                    spaceId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-                    membershipId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+                    spaceIds: ['cccccccc-cccc-4ccc-8ccc-cccccccccccc'],
                   },
                 },
               },

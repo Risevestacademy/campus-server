@@ -1,6 +1,6 @@
 import { isLiveGrant, type SpaceGrantFacts } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import {
@@ -73,27 +73,30 @@ function hasEnded<T extends { validTo: Date | null }>(
   return row.validTo !== null && row.validTo.getTime() <= at.getTime();
 }
 
-/** What became of a track's grants when it was taken off its cohort. */
-export type TrackGrantRelease =
+/** What became of a subject's grants when the subject itself goes. */
+export type GrantRelease =
   | { released: true; clearedIds: string[] }
   | { released: false; standingSpaceIds: string[] };
 
 /**
- * The grants side of detaching a track from its cohort
- * (CohortsService.detachTrack), run in the detach's own transaction after it
- * has locked the cohort's link to the track.
+ * Release the entries `where` names, if none of them is standing at `now`:
+ * the half a track detach and a mentorship group delete share.
  *
- * A grant that has not ended keeps the track where it is: taking the track
- * off would take that access away without anyone ending it, so nothing is
- * deleted and the spaces it opens are named. Otherwise the ended grants go —
- * kept for good they would hold the link, and so the cohort, forever — and
- * the audit log, which has each one's granting and ending, is their record.
+ * The caller has locked the subject the entries point at, so no new entry
+ * can join them while this runs, and `now` is the caller's, so every entry is
+ * judged against one instant rather than the moment each check happened to
+ * run. An entry that has not ended keeps the subject: taking it away would
+ * take that access away without anyone ending it, so nothing is deleted and
+ * the spaces it opens are named. Otherwise the ended entries go — kept for
+ * good they would hold the subject, and so the cohort or the group, forever —
+ * and the audit log, which has each one's granting and ending, is their
+ * record.
  */
-export async function releaseTrackGrants(
+async function releaseGrants(
   tx: Tx,
-  cohortTrackId: string,
+  where: SQL,
   now: Date,
-): Promise<TrackGrantRelease> {
+): Promise<GrantRelease> {
   const held = await tx
     .select({
       id: spaceMemberships.id,
@@ -101,7 +104,7 @@ export async function releaseTrackGrants(
       validTo: spaceMemberships.validTo,
     })
     .from(spaceMemberships)
-    .where(eq(spaceMemberships.cohortTrackId, cohortTrackId));
+    .where(where);
 
   const standing = held.filter((row) => !hasEnded(row, now));
   if (standing.length > 0) {
@@ -113,9 +116,35 @@ export async function releaseTrackGrants(
 
   const cleared = await tx
     .delete(spaceMemberships)
-    .where(eq(spaceMemberships.cohortTrackId, cohortTrackId))
+    .where(where)
     .returning({ id: spaceMemberships.id });
   return { released: true, clearedIds: cleared.map((row) => row.id) };
+}
+
+/** The grants side of detaching a track from its cohort. */
+export function releaseTrackGrants(
+  tx: Tx,
+  cohortTrackId: string,
+  now: Date,
+): Promise<GrantRelease> {
+  return releaseGrants(
+    tx,
+    eq(spaceMemberships.cohortTrackId, cohortTrackId),
+    now,
+  );
+}
+
+/** The grants side of deleting a mentorship group. */
+export function releaseGroupGrants(
+  tx: Tx,
+  mentorshipGroupId: string,
+  now: Date,
+): Promise<GrantRelease> {
+  return releaseGrants(
+    tx,
+    eq(spaceMemberships.mentorshipGroupId, mentorshipGroupId),
+    now,
+  );
 }
 
 /** How a refusal names the subject that already holds a live grant. */
@@ -524,6 +553,18 @@ export class SpaceMembershipsService {
   }
 }
 
+/**
+ * A column a left join fills whenever the row names that subject. The
+ * foreign key says it cannot be null in that case, but the join's type does
+ * not, and a cast would quietly answer null as though it were a value.
+ */
+function required<T>(value: T | null, what: string): T {
+  if (value === null) {
+    throw new Error(`A space membership is missing ${what}`);
+  }
+  return value;
+}
+
 /** Which subject a listed row names, with what there is to say about it. */
 function subjectOf(row: {
   userId: string | null;
@@ -555,7 +596,7 @@ function subjectOf(row: {
       cohortTrackId: row.cohortTrackId,
       trackName: row.trackName,
       trackCode: row.trackCode,
-      cohortId: row.cohortId as string,
+      cohortId: required(row.cohortId, 'the cohort a track runs in'),
       cohortName: row.cohortName,
     };
   }
@@ -569,8 +610,14 @@ function subjectOf(row: {
     return {
       type: SpaceMembershipSubjectType.MentorshipGroup,
       mentorshipGroupId: row.mentorshipGroupId,
-      groupName: row.groupName,
-      cohortId: row.groupCohortId as string,
+      groupName: required(
+        row.groupName,
+        'the name of the mentorship group it names',
+      ),
+      cohortId: required(
+        row.groupCohortId,
+        'the cohort of the mentorship group it names',
+      ),
       cohortName: row.groupCohortName,
     };
   }
