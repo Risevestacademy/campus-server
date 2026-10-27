@@ -269,6 +269,104 @@ describe('InviteImportService', () => {
     });
 
     it.each([
+      ['date-only', '2030-06-01'],
+      ['with an offset', '2030-06-01T12:00:00+02:00'],
+      ['without an offset', '2030-06-01T12:00:00'],
+    ])(
+      'reads a %s visit end as the same instant JavaScript reads it',
+      async (_label, visitEnds) => {
+        const result = await upload(
+          `email,role,visit_ends\ndate-format@campus.local,guest,${visitEnds}\n`,
+        );
+
+        expect(result.rows[0].outcome).toBe('invited');
+        const [row] = await stored();
+        expect(row.guestAccessExpiresAt?.toISOString()).toBe(
+          new Date(visitEnds).toISOString(),
+        );
+      },
+    );
+
+    it('refuses an unreadable visit end but still invites the other rows', async () => {
+      const result = await upload(
+        [
+          'email,role,visit_ends',
+          'bad@campus.local,guest,2026-W43-2',
+          'good@campus.local,guest,2030-06-01T12:00:00Z',
+        ].join('\n'),
+      );
+
+      expect(result).toMatchObject({ total: 2, invited: 1, failed: 1 });
+      expect(result.rows[0]).toMatchObject({
+        line: 2,
+        email: 'bad@campus.local',
+        outcome: 'failed',
+        reason: 'guestAccessExpiresAt is not a valid date',
+      });
+      expect(result.rows[1]).toMatchObject({
+        line: 3,
+        email: 'good@campus.local',
+        outcome: 'invited',
+      });
+
+      const rows = await stored();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].email).toBe('good@campus.local');
+      expect(mailer.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports the same unreadable visit end as creation', async () => {
+      const unreadable = '2026-W43-2';
+      const thrown = await invitesService
+        .create(
+          {
+            email: 'created@campus.local',
+            cohortId,
+            cohortRole: CohortRole.Guest,
+            guestAccessExpiresAt: unreadable,
+          },
+          inviter,
+        )
+        .catch((err: unknown) => err);
+
+      expect(thrown).toBeInstanceOf(InviteInvalidArgumentException);
+      const error = thrown as InviteInvalidArgumentException;
+      expect(error.message).toBe('guestAccessExpiresAt is not a valid date');
+      expect(error.details).toEqual({ field: 'guestAccessExpiresAt' });
+
+      const result = await upload(
+        `email,role,visit_ends\nimported@campus.local,guest,${unreadable}\n`,
+      );
+
+      expect(result.rows[0]).toMatchObject({
+        outcome: 'failed',
+        reason: error.message,
+      });
+      expect(result.rows[0].reason).toBe(error.message);
+      expect(await stored()).toHaveLength(0);
+      expect(mailer.send).not.toHaveBeenCalled();
+    });
+
+    it('still reads 2026-02-31 as 3 March when that is in the future', async () => {
+      const now = vi
+        .spyOn(Date, 'now')
+        .mockReturnValue(new Date('2026-01-01T00:00:00.000Z').getTime());
+      try {
+        const result = await upload(
+          'email,role,visit_ends\nrollover@campus.local,guest,2026-02-31\n',
+        );
+
+        expect(result.rows[0].outcome).toBe('invited');
+        const [row] = await stored();
+        expect(row.guestAccessExpiresAt?.toISOString()).toBe(
+          '2026-03-03T00:00:00.000Z',
+        );
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it.each([
       ['no visit end', 'guest', '', 'visit_ends is required for a guest'],
       [
         'a visit end that is not a date',

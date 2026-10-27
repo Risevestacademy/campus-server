@@ -20,6 +20,7 @@ import { CohortMembersService } from '../cohorts/cohort-members.service.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { resolveExceptionStatus } from '../../shared/exceptions/index.js';
 import { InviteDecision } from './dto/invite-decision.dto.js';
 import { generateInviteToken, hashInviteToken } from './invite-token.js';
 import {
@@ -191,6 +192,34 @@ describe('InvitesService against real Postgres', () => {
     });
   });
 
+  it.each([
+    ['date-only', '2030-06-01'],
+    ['with an offset', '2030-06-01T12:00:00+02:00'],
+    ['without an offset', '2030-06-01T12:00:00'],
+  ])(
+    'reads a %s guest visit end as the same instant JavaScript reads it',
+    async (_label, guestAccessExpiresAt) => {
+      const res = await service.create(
+        {
+          email: 'date-format@campus.local',
+          cohortId: fixtures.cohortId,
+          cohortRole: CohortRole.Guest,
+          guestAccessExpiresAt,
+        },
+        inviter,
+      );
+
+      const expected = new Date(guestAccessExpiresAt).toISOString();
+      expect(res.guestAccessExpiresAt).toBe(expected);
+
+      const [row] = await db
+        .select()
+        .from(invites)
+        .where(eq(invites.id, res.id));
+      expect(row.guestAccessExpiresAt?.toISOString()).toBe(expected);
+    },
+  );
+
   /**
    * The link must not outlive the visit. Without the clamp an admin could
    * offer a window ending tomorrow while the invite stayed redeemable for
@@ -240,6 +269,70 @@ describe('InvitesService against real Postgres', () => {
         inviter,
       ),
     ).rejects.toThrow(/not a valid date/);
+  });
+
+  it('refuses an unreadable guest visit end with a 400 and writes nothing', async () => {
+    const thrown = await service
+      .create(
+        {
+          email: 'unreadable-guest@campus.local',
+          cohortId: fixtures.cohortId,
+          cohortRole: CohortRole.Guest,
+          guestAccessExpiresAt: '2026-W43-2',
+        },
+        inviter,
+      )
+      .catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(InviteInvalidArgumentException);
+    const error = thrown as InviteInvalidArgumentException;
+    expect(resolveExceptionStatus(error)).toBe(400);
+    expect(error.message).toBe('guestAccessExpiresAt is not a valid date');
+    expect(error.details).toEqual({ field: 'guestAccessExpiresAt' });
+    expect(await db.select().from(invites)).toHaveLength(0);
+    expect(await db.select().from(auditLog)).toHaveLength(0);
+  });
+
+  it('refuses an unreadable expiresAt with a 400 and writes nothing', async () => {
+    const thrown = await service
+      .create(
+        {
+          email: 'unreadable-expiry@campus.local',
+          systemRole: SystemRole.Admin,
+          expiresAt: '2026-W43-2',
+        },
+        inviter,
+      )
+      .catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(InviteInvalidArgumentException);
+    const error = thrown as InviteInvalidArgumentException;
+    expect(resolveExceptionStatus(error)).toBe(400);
+    expect(error.message).toBe('expiresAt is not a valid date');
+    expect(error.details).toEqual({ field: 'expiresAt' });
+    expect(await db.select().from(invites)).toHaveLength(0);
+    expect(await db.select().from(auditLog)).toHaveLength(0);
+  });
+
+  it('still reads 2026-02-31 as 3 March when that is in the future', async () => {
+    const now = vi
+      .spyOn(Date, 'now')
+      .mockReturnValue(new Date('2026-01-01T00:00:00.000Z').getTime());
+    try {
+      const res = await service.create(
+        {
+          email: 'rollover@campus.local',
+          cohortId: fixtures.cohortId,
+          cohortRole: CohortRole.Guest,
+          guestAccessExpiresAt: '2026-02-31',
+        },
+        inviter,
+      );
+
+      expect(res.guestAccessExpiresAt).toBe('2026-03-03T00:00:00.000Z');
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('refuses an end date already in the past', async () => {
