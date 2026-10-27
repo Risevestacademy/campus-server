@@ -6,6 +6,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
+import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import {
   CohortRole,
@@ -79,6 +80,39 @@ const inviter: AuthenticatedUser = {
   email: 'admin@campus.local',
   systemRole: SystemRole.Admin,
 };
+
+/**
+ * PGlite has one connection, so a true concurrent delete cannot be run.
+ * Instead, run the real reference checks first and only then remove the
+ * referenced row. The insert that follows sees the same state a race would.
+ */
+function deleteAfterReferenceChecks(afterCheck: () => Promise<void>) {
+  const target = service as unknown as {
+    assertReferencesExist(
+      dto: Parameters<InvitesService['create']>[0],
+      db?: unknown,
+    ): Promise<void>;
+  };
+  const real = target.assertReferencesExist.bind(target);
+  return vi
+    .spyOn(target, 'assertReferencesExist')
+    .mockImplementation(async (dto, db) => {
+      await real(dto, db);
+      await afterCheck();
+    });
+}
+
+/** The insert must still fail on the constraint the test intended. */
+async function expectIntendedConstraint(
+  values: typeof invites.$inferInsert,
+  constraint: string,
+): Promise<void> {
+  const err = await db
+    .insert(invites)
+    .values(values)
+    .catch((caught: unknown) => caught);
+  expect(isForeignKeyViolation(err, constraint)).toBe(true);
+}
 
 let fixtures: { cohortId: string; cohortTrackId: string };
 
@@ -343,6 +377,112 @@ describe('InvitesService against real Postgres', () => {
     expect(rows.map((row) => row.status).sort()).toEqual(
       [InviteStatus.Expired, InviteStatus.Pending].sort(),
     );
+  });
+
+  describe('a reference deleted after the check', () => {
+    it('answers a deleted cohort with the pre-check cohort 404', async () => {
+      const [empty] = await db
+        .insert(cohorts)
+        .values({
+          name: 'Empty cohort',
+          code: 'EMPTY',
+          status: CohortStatus.Active,
+        })
+        .returning();
+      const dto = {
+        email: 'cohort-race@campus.local',
+        cohortId: empty.id,
+        cohortRole: CohortRole.Professor,
+      };
+      const spy = deleteAfterReferenceChecks(async () => {
+        await db.delete(cohorts).where(eq(cohorts.id, empty.id));
+      });
+
+      const err = await service
+        .create(dto, inviter)
+        .catch((caught: unknown) => caught);
+      spy.mockRestore();
+
+      expect(err).toBeInstanceOf(InviteNotFoundException);
+      expect(err).toMatchObject({
+        code: 'NOT_FOUND',
+        message: `Cohort ${empty.id} not found`,
+        details: { cohortId: empty.id },
+      });
+      expect(await db.select().from(invites)).toHaveLength(0);
+      expect(await db.select().from(auditLog)).toHaveLength(0);
+
+      await expectIntendedConstraint(
+        {
+          email: 'cohort-race-direct@campus.local',
+          cohortId: empty.id,
+          cohortRole: CohortRole.Professor,
+          systemRole: SystemRole.User,
+          tokenHash: 'cohort-race-direct-hash',
+          invitedBy: inviter.id,
+          expiresAt: new Date(Date.now() + 86_400_000),
+        },
+        'invites_cohort_id_cohorts_id_fk',
+      );
+    });
+
+    it('answers a detached cohort track with the pre-check track 404', async () => {
+      const dto = {
+        email: 'track-race@campus.local',
+        cohortId: fixtures.cohortId,
+        cohortRole: CohortRole.Student,
+        cohortTrackId: fixtures.cohortTrackId,
+      };
+      const spy = deleteAfterReferenceChecks(async () => {
+        await db
+          .delete(cohortTracks)
+          .where(eq(cohortTracks.id, fixtures.cohortTrackId));
+      });
+
+      const err = await service
+        .create(dto, inviter)
+        .catch((caught: unknown) => caught);
+      spy.mockRestore();
+
+      expect(err).toBeInstanceOf(InviteNotFoundException);
+      expect(err).toMatchObject({
+        code: 'NOT_FOUND',
+        message: `Cohort track ${fixtures.cohortTrackId} not found`,
+        details: { cohortTrackId: fixtures.cohortTrackId },
+      });
+      expect(await db.select().from(invites)).toHaveLength(0);
+      expect(await db.select().from(auditLog)).toHaveLength(0);
+
+      await expectIntendedConstraint(
+        {
+          email: 'track-race-direct@campus.local',
+          cohortId: fixtures.cohortId,
+          cohortTrackId: fixtures.cohortTrackId,
+          cohortRole: CohortRole.Student,
+          systemRole: SystemRole.User,
+          tokenHash: 'track-race-direct-hash',
+          invitedBy: inviter.id,
+          expiresAt: new Date(Date.now() + 86_400_000),
+        },
+        'invites_cohort_track_fk',
+      );
+    });
+
+    it('leaves an unrelated FK violation as a raw error', async () => {
+      const err = await service
+        .create(
+          { email: 'other-fk@campus.local', systemRole: SystemRole.Admin },
+          { ...inviter, id: '00000000-0000-4000-8000-000000000000' },
+        )
+        .catch((caught: unknown) => caught);
+
+      expect(err).not.toBeInstanceOf(InviteNotFoundException);
+      expect(isForeignKeyViolation(err, 'invites_invited_by_users_id_fk')).toBe(
+        true,
+      );
+      expect(await db.select().from(invites)).toHaveLength(0);
+      expect(await db.select().from(auditLog)).toHaveLength(0);
+    });
   });
 
   it('treats expires_at as the source of truth on read', () => {
