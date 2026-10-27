@@ -311,6 +311,26 @@ export class InvitesService {
         if (kind === 'token-collision' && attempt === 0) {
           continue;
         }
+        // Each reference was found above, so these are ones deleted in
+        // between. Matched by name: a different FK must still surface.
+        if (
+          dto.cohortId &&
+          isForeignKeyViolation(err, 'invites_cohort_id_cohorts_id_fk')
+        ) {
+          throw new InviteNotFoundException(
+            `Cohort ${dto.cohortId} not found`,
+            { cohortId: dto.cohortId },
+          );
+        }
+        if (
+          dto.cohortTrackId &&
+          isForeignKeyViolation(err, 'invites_cohort_track_fk')
+        ) {
+          throw new InviteNotFoundException(
+            `Cohort track ${dto.cohortTrackId} not found`,
+            { cohortTrackId: dto.cohortTrackId },
+          );
+        }
         // The group was found above, so this is one deleted in between.
         if (
           dto.mentorshipGroupId &&
