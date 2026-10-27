@@ -96,3 +96,21 @@ export class SpaceMembershipNotStartedException extends DomainException {
 export class SpaceMembershipInvalidArgumentException extends DomainException {
   readonly code = ExceptionCode.InvalidArgument;
 }
+
+/**
+ * A space combination the database's own checks refuse: a default space that
+ * is not normal, or a capacity below 1. The row is the caller's to correct,
+ * so it is a 400 and not a server fault.
+ */
+export class SpaceInvalidArgumentException extends DomainException {
+  readonly code = ExceptionCode.InvalidArgument;
+}
+
+/**
+ * The campus already has the one of this kind a space is being made: a second
+ * town hall or notice board. The row itself is sound; it is the existing one
+ * that keeps the kind.
+ */
+export class SpaceConflictException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
