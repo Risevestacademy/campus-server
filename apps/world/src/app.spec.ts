@@ -29,7 +29,7 @@ const accounts = {
 
 describe('the HTTP surface', () => {
   it('reports health, including how many sockets it is holding', async () => {
-    const { app, gateway } = await buildWorld(env, accounts);
+    const { app, gateway } = await buildWorld({ env, accounts });
 
     const response = await app.inject({ method: 'GET', url: '/health' });
 
@@ -46,7 +46,7 @@ describe('the HTTP surface', () => {
   // document, kept in step by the test beside protocol.schema.ts, so the two
   // can be compared byte for byte.
   it('serves the protocol it speaks, as the committed schema', async () => {
-    const { app, gateway } = await buildWorld(env, accounts);
+    const { app, gateway } = await buildWorld({ env, accounts });
 
     const response = await app.inject({ method: 'GET', url: '/schema.json' });
 
@@ -67,7 +67,7 @@ describe('the HTTP surface', () => {
   });
 
   it('serves the protocol as AsyncAPI, addressed as the caller reached it', async () => {
-    const { app, gateway } = await buildWorld(env, accounts);
+    const { app, gateway } = await buildWorld({ env, accounts });
 
     const response = await app.inject({
       method: 'GET',
@@ -100,7 +100,7 @@ describe('the HTTP surface', () => {
   // The page is a frame: the viewer comes from a CDN and reads the document
   // from this same instance, so all there is to check here is where it points.
   it('serves a docs page that shows the document this instance serves', async () => {
-    const { app, gateway } = await buildWorld(env, accounts);
+    const { app, gateway } = await buildWorld({ env, accounts });
 
     const response = await app.inject({ method: 'GET', url: '/docs' });
 
@@ -115,7 +115,7 @@ describe('the HTTP surface', () => {
   });
 
   it('answers an unknown route in the shared error shape', async () => {
-    const { app, gateway } = await buildWorld(env, accounts);
+    const { app, gateway } = await buildWorld({ env, accounts });
 
     const response = await app.inject({ method: 'GET', url: '/nowhere' });
 
@@ -128,7 +128,7 @@ describe('the HTTP surface', () => {
   });
 
   it('echoes the correlation id it was given', async () => {
-    const { app, gateway } = await buildWorld(env, accounts);
+    const { app, gateway } = await buildWorld({ env, accounts });
 
     const response = await app.inject({
       method: 'GET',
@@ -150,19 +150,16 @@ describe('the HTTP surface', () => {
 describe('error reporting', () => {
   it('reports a 500 with its route and correlation id', async () => {
     const reporter = { report: vi.fn(), shutdown: vi.fn() };
-    const { app, gateway } = await buildWorld(
-      loadEnv({
+    const { app, gateway } = await buildWorld({
+      env: loadEnv({
         AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
         DEPLOYMENT_ENVIRONMENT: 'development',
         DATABASE_URL: 'postgres://unused',
         FF_LOG_LEVEL: 'error',
       } as NodeJS.ProcessEnv),
       accounts,
-      undefined,
-      undefined,
-      undefined,
       reporter,
-    );
+    });
     app.get('/broken/:id', async () => {
       throw new Error('boom');
     });
@@ -200,15 +197,15 @@ describe('with the position store failing', () => {
 
   it('still lets somebody in, at the spawn, and still shuts down', async () => {
     const secret = 'a-world-session-secret-of-at-least-32-chars';
-    const world = await buildWorld(
-      loadEnv({
+    const world = await buildWorld({
+      env: loadEnv({
         AUTH_SESSION_SECRET: secret,
         DEPLOYMENT_ENVIRONMENT: 'development',
         DATABASE_URL: 'postgres://unused',
         CORS_ORIGINS: 'https://campus.example.com',
         FF_LOG_LEVEL: 'fatal',
       } as NodeJS.ProcessEnv),
-      {
+      accounts: {
         ...accounts,
         find: async (id: string) => ({
           id,
@@ -220,8 +217,8 @@ describe('with the position store failing', () => {
           spriteKey: null,
         }),
       },
-      failing,
-    );
+      positions: failing,
+    });
     await world.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = world.app.server.address() as AddressInfo;
     const { token } = await signSessionToken(

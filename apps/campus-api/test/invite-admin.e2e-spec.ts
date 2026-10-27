@@ -23,6 +23,9 @@ import {
   cohortTracks,
   cohorts,
 } from './../src/modules/cohorts/schema.js';
+import type { CreateInviteDto } from './../src/modules/invites/dto/create-invite.dto.js';
+import { InviteMailer } from './../src/modules/invites/invite-mailer.js';
+import { InvitesService } from './../src/modules/invites/invites.service.js';
 import { tracks } from './../src/modules/tracks/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
@@ -109,6 +112,10 @@ describe('invite admin routes (e2e)', () => {
     await app.close();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(async () => {
     await db.execute(
       sql`truncate invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
@@ -151,6 +158,39 @@ describe('invite admin routes (e2e)', () => {
   const createInvite = (email: string) =>
     as(adminCookie).post('/v1/invites', inviteBody(email));
 
+  /**
+   * PGlite has one connection, so the race is forced: let the real reference
+   * checks pass, then delete the row before the service starts its insert.
+   */
+  const deleteAfterReferenceChecks = (afterCheck: () => Promise<void>) => {
+    const target = app.get(InvitesService) as unknown as {
+      assertReferencesExist(dto: CreateInviteDto, db?: unknown): Promise<void>;
+    };
+    const real = target.assertReferencesExist.bind(target);
+    return vi
+      .spyOn(target, 'assertReferencesExist')
+      .mockImplementation(async (dto, db) => {
+        await real(dto, db);
+        await afterCheck();
+      });
+  };
+
+  /** A race 404 must read like the pre-check 404, never like Postgres. */
+  const expectNoLeakedSchemaName = (body: unknown) => {
+    const text = JSON.stringify(body);
+    for (const name of [
+      'invites_cohort_id_cohorts_id_fk',
+      'invites_cohort_track_fk',
+      'invites',
+      'cohorts',
+      'cohort_tracks',
+      '23503',
+      'foreign key',
+    ]) {
+      expect(text).not.toContain(name);
+    }
+  };
+
   describe('access', () => {
     it.each([
       ['get', '/v1/invites'],
@@ -179,6 +219,71 @@ describe('invite admin routes (e2e)', () => {
       // happened to be rolled back.
       const listed = await as(adminCookie).get('/v1/invites');
       expect(listed.body.items[0].status).toBe('pending');
+    });
+  });
+
+  describe('create race with a reference deleted after the check', () => {
+    it('answers a deleted cohort with the same 404, and sends no email', async () => {
+      const [empty] = await db
+        .insert(cohorts)
+        .values({
+          name: 'Empty cohort',
+          code: 'EMPTY',
+          status: CohortStatus.Active,
+        })
+        .returning();
+      const send = vi.spyOn(app.get(InviteMailer), 'send');
+      const spy = deleteAfterReferenceChecks(async () => {
+        await db.delete(cohorts).where(sql`${cohorts.id} = ${empty.id}`);
+      });
+
+      const res = await as(adminCookie).post('/v1/invites', {
+        email: 'cohort-race@campus.local',
+        cohortId: empty.id,
+        cohortRole: CohortRole.Professor,
+      });
+      spy.mockRestore();
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({
+        error: {
+          code: 'NOT_FOUND',
+          message: `Cohort ${empty.id} not found`,
+          details: { cohortId: empty.id },
+        },
+      });
+      expectNoLeakedSchemaName(res.body);
+      expect(send).not.toHaveBeenCalled();
+      expect(await db.select().from(schema.invites)).toHaveLength(0);
+      expect(await db.select().from(schema.auditLog)).toHaveLength(0);
+    });
+
+    it('answers a detached cohort track with the same 404, and sends no email', async () => {
+      const send = vi.spyOn(app.get(InviteMailer), 'send');
+      const spy = deleteAfterReferenceChecks(async () => {
+        await db
+          .delete(cohortTracks)
+          .where(sql`${cohortTracks.id} = ${cohortTrackId}`);
+      });
+
+      const res = await as(adminCookie).post(
+        '/v1/invites',
+        inviteBody('track-race@campus.local'),
+      );
+      spy.mockRestore();
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({
+        error: {
+          code: 'NOT_FOUND',
+          message: `Cohort track ${cohortTrackId} not found`,
+          details: { cohortTrackId },
+        },
+      });
+      expectNoLeakedSchemaName(res.body);
+      expect(send).not.toHaveBeenCalled();
+      expect(await db.select().from(schema.invites)).toHaveLength(0);
+      expect(await db.select().from(schema.auditLog)).toHaveLength(0);
     });
   });
 

@@ -143,13 +143,12 @@ beforeAll(async () => {
     FF_LOG_LEVEL: 'fatal',
   } as NodeJS.ProcessEnv);
   stepMs = env.WORLD_STEP_MS;
-  world = await buildWorld(
+  world = await buildWorld({
     env,
     accounts,
-    undefined,
-    new MemoryPresenceStore(),
+    presence: new MemoryPresenceStore(),
     map,
-  );
+  });
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`;
@@ -271,18 +270,17 @@ const grantOf = (token: string) => claimsOf(token).video;
 
 /** A world of its own with a heartbeat every second, for changes the heartbeat picks up. */
 async function withHeartbeat(run: () => Promise<void>) {
-  const own = await buildWorld(
-    { ...env, WORLD_HEARTBEAT_SECONDS: 1 },
-    {
+  const own = await buildWorld({
+    env: { ...env, WORLD_HEARTBEAT_SECONDS: 1 },
+    accounts: {
       ...accounts,
       liveMemberships: async (
         seats: readonly { userId: string; cohortId: string }[],
       ) => new Set(seats.map(seatKey)),
     },
-    undefined,
-    new MemoryPresenceStore(),
+    presence: new MemoryPresenceStore(),
     map,
-  );
+  });
   await own.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = own.app.server.address() as AddressInfo;
   const saved = url;
@@ -595,13 +593,12 @@ describe('keeping calls current', () => {
   });
 
   it('leaves people in their calls when world shuts down', async () => {
-    const own = await buildWorld(
+    const own = await buildWorld({
       env,
       accounts,
-      undefined,
-      new MemoryPresenceStore(),
+      presence: new MemoryPresenceStore(),
       map,
-    );
+    });
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = own.app.server.address() as AddressInfo;
     const saved = url;
