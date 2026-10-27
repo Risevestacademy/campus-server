@@ -18,6 +18,13 @@ import {
   AuditSubjectType,
   auditLog,
 } from './../src/modules/audit/schema.js';
+import {
+  AudioMode,
+  SpaceAccess,
+  SpaceKind,
+  maps,
+  spaces,
+} from './../src/modules/maps/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
@@ -30,6 +37,7 @@ const MIGRATIONS = fileURLToPath(
   new URL('../src/infra/database/migrations', import.meta.url),
 );
 const SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
+const ORIGIN = 'http://localhost:3000';
 const db = drizzle(new PGlite(), { schema });
 
 const TRACK = '11111111-1111-4111-8111-111111111111';
@@ -103,7 +111,9 @@ describe('GET /v1/audit-log (e2e)', () => {
   });
 
   beforeEach(async () => {
-    await db.execute(sql`truncate audit_log, users cascade`);
+    await db.execute(
+      sql`truncate audit_log, space_memberships, spaces, maps, users cascade`,
+    );
     const [admin] = await db
       .insert(users)
       .values({ email: 'admin@campus.local', systemRole: SystemRole.Admin })
@@ -196,6 +206,44 @@ describe('GET /v1/audit-log (e2e)', () => {
     ]);
   });
 
+  it('filters by a space edit', async () => {
+    const [map] = await db
+      .insert(maps)
+      .values({ key: 'campus', name: 'Campus', isEntry: true })
+      .returning();
+    const [space] = await db
+      .insert(spaces)
+      .values({
+        mapId: map.id,
+        key: 'library',
+        name: 'Library',
+        kind: SpaceKind.Open,
+        audioMode: AudioMode.Proximity,
+        access: SpaceAccess.Normal,
+      })
+      .returning();
+
+    await request(app.getHttpServer())
+      .patch(`/v1/spaces/${space.id}`)
+      .set('Cookie', adminCookie)
+      .set('Origin', ORIGIN)
+      .send({ name: 'Reading Room' })
+      .expect(200);
+
+    const res = await list('?subjectType=space').expect(200);
+
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).toMatchObject({
+      actorUserId: adminId,
+      action: AuditAction.SpaceUpdated,
+      subjectType: AuditSubjectType.Space,
+      subjectId: space.id,
+      details: {
+        changes: { name: { from: 'Library', to: 'Reading Room' } },
+      },
+    });
+  });
+
   it('paginates', async () => {
     const res = await list('?page=2&perPage=2').expect(200);
 
@@ -206,7 +254,7 @@ describe('GET /v1/audit-log (e2e)', () => {
   it.each([
     ['action', '?action=track_renamed'],
     ['actorUserId', '?actorUserId=not-a-uuid'],
-    ['subjectType', '?subjectType=space'],
+    ['subjectType', '?subjectType=not-a-subject-type'],
     ['subjectId', '?subjectId=not-a-uuid'],
     ['from', '?from=yesterday'],
     ['from', '?from=2026-02-30'],

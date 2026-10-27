@@ -120,7 +120,7 @@ export class ListAuditLogQueryDto extends PaginationQueryDto {
 
 /**
  * One entry as an admin reads it. Named fields rather than the row:
- * `space_id` is reserved and nothing writes it yet.
+ * `space_id` is written for entries about a space, but not returned here yet.
  */
 export class AuditLogEntryDto {
   @ApiProperty({ format: 'uuid' })
