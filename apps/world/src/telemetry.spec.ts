@@ -123,20 +123,19 @@ beforeAll(async () => {
   );
   metrics.setGlobalMeterProvider(new MeterProvider({ readers: [reader] }));
 
-  world = await buildWorld(
-    loadEnv({
+  world = await buildWorld({
+    env: loadEnv({
       AUTH_SESSION_SECRET: SECRET,
       DEPLOYMENT_ENVIRONMENT: 'development',
       DATABASE_URL: 'postgres://unused',
       CORS_ORIGINS: ORIGIN,
       FF_LOG_LEVEL: 'fatal',
     } as NodeJS.ProcessEnv),
-    lookup,
+    accounts: lookup,
     positions,
-    undefined,
     map,
-    { report: vi.fn(), shutdown: vi.fn() },
-  );
+    reporter: { report: vi.fn(), shutdown: vi.fn() },
+  });
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket?cohortId=cohort-1`;
