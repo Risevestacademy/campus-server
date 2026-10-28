@@ -10,7 +10,7 @@ import {
   type Tile,
 } from '../movement/grid.js';
 import { spaceAt, type SpaceIndex } from '../movement/spaces.js';
-import { seatKey, type Seat } from '../seat.js';
+import { SeatMap, seatKey, type Seat } from '../seat.js';
 
 /** How long after a no before the same person may ask the same space again. */
 export const ASK_AGAIN_AFTER_MS = 30_000;
@@ -85,18 +85,17 @@ export function obstacle(facts: RequestFacts): Obstacle | null {
  * standing inside, and a restart takes everybody out.
  */
 export class EntryRequests<T> {
-  private readonly open = new Map<string, EntryRequest<T>>();
-  private readonly passes = new Map<string, Seat & { spaceKey: string }>();
+  private readonly open = new SeatMap<EntryRequest<T>>();
+  private readonly passes = new SeatMap<Seat & { spaceKey: string }>();
   private readonly declinedAt = new Map<string, number>();
 
   ask(seat: Seat, spaceKey: string, now: number, asker: T): AskResult {
-    const key = seatKey(seat);
-    if (this.open.has(key)) return 'already_asking';
+    if (this.open.has(seat)) return 'already_asking';
     const declined = this.declinedAt.get(declineKey(seat, spaceKey));
     if (declined !== undefined && now - declined < ASK_AGAIN_AFTER_MS) {
       return 'too_soon';
     }
-    this.open.set(key, {
+    this.open.set(seat, {
       id: randomUUID(),
       userId: seat.userId,
       cohortId: seat.cohortId,
@@ -108,7 +107,7 @@ export class EntryRequests<T> {
   }
 
   openFor(seat: Seat): EntryRequest<T> | undefined {
-    return this.open.get(seatKey(seat));
+    return this.open.get(seat);
   }
 
   /** The open request with this id: undefined once it has ended. */
@@ -120,16 +119,15 @@ export class EntryRequests<T> {
   }
 
   close(seat: Seat): EntryRequest<T> | undefined {
-    const key = seatKey(seat);
-    const request = this.open.get(key);
-    this.open.delete(key);
+    const request = this.open.get(seat);
+    this.open.delete(seat);
     return request;
   }
 
   admit(seat: Seat): EntryRequest<T> | undefined {
     const request = this.close(seat);
     if (request) {
-      this.passes.set(seatKey(seat), {
+      this.passes.set(seat, {
         userId: seat.userId,
         cohortId: seat.cohortId,
         spaceKey: request.spaceKey,
@@ -150,18 +148,16 @@ export class EntryRequests<T> {
 
   /** The space a yes lets them into on their next step, if any. */
   passFor(seat: Seat): string | undefined {
-    return this.passes.get(seatKey(seat))?.spaceKey;
+    return this.passes.get(seat)?.spaceKey;
   }
 
   dropPass(seat: Seat): void {
-    this.passes.delete(seatKey(seat));
+    this.passes.delete(seat);
   }
 
   /** Open requests, all of them or those to one cohort's copy of a space. */
   all(cohortId?: string, spaceKey?: string): EntryRequest<T>[] {
-    return [...this.open.values()].filter((request) =>
-      matches(request, cohortId, spaceKey),
-    );
+    return inSpace(this.open, cohortId, spaceKey);
   }
 
   /** Yeses not yet walked through, all of them or those into one cohort's copy of a space. */
@@ -169,20 +165,21 @@ export class EntryRequests<T> {
     cohortId?: string,
     spaceKey?: string,
   ): (Seat & { spaceKey: string })[] {
-    return [...this.passes.values()].filter((pass) =>
-      matches(pass, cohortId, spaceKey),
-    );
+    return inSpace(this.passes, cohortId, spaceKey);
   }
 }
 
-function matches(
-  entry: { cohortId: string; spaceKey: string },
+function inSpace<E extends { spaceKey: string }>(
+  entries: SeatMap<E>,
   cohortId?: string,
   spaceKey?: string,
-): boolean {
-  return (
-    (cohortId === undefined || entry.cohortId === cohortId) &&
-    (spaceKey === undefined || entry.spaceKey === spaceKey)
+): E[] {
+  const candidates =
+    cohortId === undefined
+      ? entries.values()
+      : entries.inCohort(cohortId).values();
+  return [...candidates].filter(
+    (entry) => spaceKey === undefined || entry.spaceKey === spaceKey,
   );
 }
 

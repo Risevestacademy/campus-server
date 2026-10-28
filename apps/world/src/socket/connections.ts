@@ -2,7 +2,7 @@ import type { CohortMembershipFacts } from '@campus/space-access';
 import type { WebSocket } from 'ws';
 
 import type { Appearance } from '../infra/accounts.js';
-import type { Seat } from '../seat.js';
+import { SeatMap, type Seat } from '../seat.js';
 import type { Availability } from '../status/availability.js';
 
 /** A space's call as a socket is told it, short of the token. */
@@ -84,21 +84,15 @@ export interface Connection {
  * first rather than joining it.
  */
 export class Connections {
-  /** Account, then cohort. */
-  private readonly byUser = new Map<string, Map<string, Connection>>();
+  private readonly held = new SeatMap<Connection>();
 
   /**
    * Takes the account's place in this connection's cohort and returns
    * whatever held it before. Its places in other cohorts are untouched.
    */
   add(connection: Connection): Connection | undefined {
-    let held = this.byUser.get(connection.userId);
-    if (!held) {
-      held = new Map();
-      this.byUser.set(connection.userId, held);
-    }
-    const displaced = held.get(connection.cohortId);
-    held.set(connection.cohortId, connection);
+    const displaced = this.held.get(connection);
+    this.held.set(connection, connection);
     return displaced === connection ? undefined : displaced;
   }
 
@@ -108,45 +102,35 @@ export class Connections {
    * would take the live socket out from under it.
    */
   remove(connection: Connection): void {
-    const held = this.byUser.get(connection.userId);
-    if (held?.get(connection.cohortId) !== connection) {
-      return;
-    }
-    held.delete(connection.cohortId);
-    if (held.size === 0) {
-      this.byUser.delete(connection.userId);
+    if (this.held.get(connection) === connection) {
+      this.held.delete(connection);
     }
   }
 
   has(connection: Connection): boolean {
-    return (
-      this.byUser.get(connection.userId)?.get(connection.cohortId) ===
-      connection
-    );
+    return this.held.get(connection) === connection;
   }
 
   /** The socket holding the account's place in one cohort. */
-  holderOf({ userId, cohortId }: Seat): Connection | undefined {
-    return this.byUser.get(userId)?.get(cohortId);
+  holderOf(seat: Seat): Connection | undefined {
+    return this.held.get(seat);
   }
 
   /** Every socket the account holds, one per cohort it is in. */
   forUser(userId: string): Connection[] {
-    return [...(this.byUser.get(userId)?.values() ?? [])];
+    return [...this.held.ofAccount(userId).values()];
   }
 
   all(): Connection[] {
-    return [...this.byUser.values()].flatMap((held) => [...held.values()]);
+    return [...this.held.values()];
   }
 
   get size(): number {
-    let count = 0;
-    for (const held of this.byUser.values()) count += held.size;
-    return count;
+    return this.held.size;
   }
 
   /** Accounts with at least one socket, however many cohorts they are in. */
   get users(): number {
-    return this.byUser.size;
+    return this.held.accounts;
   }
 }
