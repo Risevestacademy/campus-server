@@ -43,13 +43,15 @@ export const SPACE_ACCESS = {
 export type SpaceAccess = (typeof SPACE_ACCESS)[keyof typeof SPACE_ACCESS];
 
 /**
- * The `cohort_members.role` value whose liveness reads differently: a student
- * counts only while explicitly `active`. Every other role, guest included, is
- * matched by a list entry naming it as text, so nothing here needs to know
- * the rest.
+ * `cohort_members.role` values read by name. A student counts only while
+ * explicitly `active`; professors and mentors are the staff who moderate a
+ * designated space that lists them. A list entry matches any role as text,
+ * so this is not every role there is.
  */
 export const COHORT_ROLES = {
   Student: 'student',
+  Professor: 'professor',
+  Mentor: 'mentor',
   Guest: 'guest',
 } as const;
 

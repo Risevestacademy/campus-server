@@ -178,6 +178,15 @@ export class Players {
     return held ? { ...held.player } : undefined;
   }
 
+  /** Puts somebody on a tile without a step, facing as they were: staff moving them out of a space. */
+  place(seat: Seat, tile: Tile): Player | undefined {
+    const held = getIn(this.standing, seat);
+    if (!held || !walkable(this.grid, tile)) return undefined;
+    held.player.x = tile.x;
+    held.player.y = tile.y;
+    return { ...held.player };
+  }
+
   has(seat: Seat): boolean {
     return getIn(this.standing, seat) !== undefined;
   }

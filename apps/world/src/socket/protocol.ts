@@ -279,8 +279,9 @@ export const ClientMessage = z
       .meta({
         id: 'RequestEntryMessage',
         description:
-          'Ask to enter a space you are refused: a locked one, or a ' +
-          'designated one whose list does not name you. Only from a tile ' +
+          'Ask to enter a space you are refused: a locked one, a ' +
+          'designated one whose list does not name you, or one staff ' +
+          'removed you from in the last 90 seconds. Only from a tile ' +
           'beside it, only while somebody inside can answer, and one request ' +
           'at a time. Answered by `entryRequested`, to you and to whoever ' +
           'inside can answer; otherwise by a NOT_ALLOWED error saying why. ' +
@@ -326,6 +327,40 @@ export const ClientMessage = z
           'Answered by the `said` you and they get; five lines at once, then ' +
           'one a second, after which a NOT_ALLOWED error. Never stored. ' +
           'Counts as activity.',
+      }),
+    z
+      .object({
+        type: z.literal('mute'),
+        userId: z.string().describe('Whose microphone to switch off.'),
+      })
+      .meta({
+        id: 'MuteMessage',
+        description:
+          'Staff only: switch off somebody’s microphone in the call for ' +
+          'their space, once; they may switch it back on. An admin may mute ' +
+          'anybody in the cohort’s campus; a professor or mentor only ' +
+          'somebody in the designated space they stand in, whose list names ' +
+          'them. Never an admin, never yourself. Answered by `staffAction`, ' +
+          'to you and to them; otherwise by a NOT_ALLOWED error saying why. ' +
+          'Counts as activity.',
+      }),
+    z
+      .object({
+        type: z.literal('removeFromSpace'),
+        userId: z
+          .string()
+          .describe('Whom to remove from the space they stand in.'),
+      })
+      .meta({
+        id: 'RemoveFromSpaceMessage',
+        description:
+          'Staff only, the same staff as for `mute`: move somebody out of ' +
+          'the space they stand in, to the nearest tile outside it, and keep ' +
+          'them out for 90 seconds; they may ask to enter meanwhile. Not ' +
+          'from the corridors, nor from a space that takes no requests. ' +
+          'Answered by `staffAction`, to you and to ' +
+          'them; otherwise by a NOT_ALLOWED error saying why. Counts as ' +
+          'activity.',
       }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
@@ -567,6 +602,38 @@ export const ServerMessage = z
           'A line of chat from somebody who could be heard where you stand ' +
           'when they said it, or your own. World keeps none of it: a line ' +
           'reaches whoever is in earshot at that moment and nobody later.',
+      }),
+    z
+      .object({
+        type: z.literal('staffAction'),
+        action: z
+          .enum(['muted', 'removed'])
+          .describe(
+            'muted: their microphone was switched off; they may switch it ' +
+              'on again. removed: they were moved out of the space and are ' +
+              'kept out until `until`.',
+          ),
+        userId: z.string().describe('Whom it was done to.'),
+        by: z.string().describe('The staff member who did it.'),
+        spaceKey: z.string().describe('The space it was done in.'),
+        until: z
+          .string()
+          .nullable()
+          .describe(
+            'For removed: when they may walk back in, as an ISO timestamp. ' +
+              'Null for muted.',
+          ),
+        player: Player.nullable().describe(
+          'For removed: where they stand now, outside the space. Snap them ' +
+            'there. Null for muted.',
+        ),
+      })
+      .meta({
+        id: 'StaffActionMessage',
+        description:
+          'Staff muted somebody or removed them from a space. Sent to the ' +
+          'person it was done to and to the staff member who did it. Their ' +
+          'cohort sees a removal as a `moved` and a `spaceChanged`.',
       }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',

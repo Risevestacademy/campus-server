@@ -72,6 +72,8 @@ describe('the AsyncAPI document', () => {
       'WithdrawEntryRequestMessage',
       'AnswerEntryRequestMessage',
       'SayMessage',
+      'MuteMessage',
+      'RemoveFromSpaceMessage',
     ]);
     expect(namesIn(subscribe)).toEqual([
       'WelcomeMessage',
@@ -90,6 +92,7 @@ describe('the AsyncAPI document', () => {
       'EntryRequestedMessage',
       'EntryRequestEndedMessage',
       'SaidMessage',
+      'StaffActionMessage',
       'ReplacedMessage',
       'MovedMessage',
       'MoveResultMessage',
