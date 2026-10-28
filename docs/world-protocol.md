@@ -493,7 +493,7 @@ Staff can act in the moment on somebody misbehaving in a space.
   it. The cohort sees the move as a `moved` and a `spaceChanged`.
 - **Refusals** come as an `error` with code `NOT_ALLOWED`, and nothing is
   done: they are not here (gone, or reconnecting), you may not act on them,
-  they are in no call or their microphone is not on (mute), the media
+  they are in no call, not in it, or their microphone is not on (mute), the media
   server could not be reached (mute; try again), they are in no space,
   they cannot be removed from this space, or there is nowhere outside to
   move them (remove).

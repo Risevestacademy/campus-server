@@ -5,6 +5,7 @@ import {
   participantIdentity,
   participantRemover,
   spaceRoomName,
+  type MuteResult,
 } from '@campus/media';
 import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
 import {
@@ -959,15 +960,19 @@ export function registerGateway(
       staffRefusal(actor, 'they are in no call');
       return;
     }
-    let muted: boolean;
+    let result: MuteResult;
     try {
-      muted = await muteMicrophone(call.room, call.identity);
+      result = await muteMicrophone(call.room, call.identity);
     } catch (err) {
       app.log.warn({ err, userId }, 'could not mute somebody');
       staffRefusal(actor, 'could not mute them, try again');
       return;
     }
-    if (!muted) {
+    if (result === 'not_in_room') {
+      staffRefusal(actor, 'they are not in the call');
+      return;
+    }
+    if (result === 'not_on') {
       staffRefusal(actor, 'their microphone is not on');
       return;
     }

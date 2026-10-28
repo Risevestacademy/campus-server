@@ -28,7 +28,7 @@ const removed: { room: string; identity: string; revokeTokenTs?: string }[] =
 /** Microphones LiveKit was asked to mute, as world asked. */
 const mutes: { room: string; identity: string; trackSid: string }[] = [];
 /** Set to have LiveKit's API fail to find out who is in a call. */
-const lookups = { failing: false, micOff: false };
+const lookups = { failing: false, micOff: false, absent: false };
 /** How many removals to refuse next, as a LiveKit that is down would. */
 const refusals = { left: 0, seen: 0 };
 let livekit: Server;
@@ -124,6 +124,11 @@ beforeAll(async () => {
           response.end('{"code":"unavailable","msg":"down"}');
           return;
         }
+        if (lookups.absent) {
+          response.writeHead(404, { 'content-type': 'application/json' });
+          response.end('{"code":"not_found","msg":"no such participant"}');
+          return;
+        }
         const { identity } = JSON.parse(body) as { identity: string };
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(
@@ -198,6 +203,7 @@ beforeEach(async () => {
   mutes.length = 0;
   lookups.failing = false;
   lookups.micOff = false;
+  lookups.absent = false;
   refusals.left = 0;
   refusals.seen = 0;
   admins.clear();
@@ -637,6 +643,22 @@ describe('staff muting somebody', () => {
     await expect(
       waitFor(admin, (m) => m.type === 'error'),
     ).resolves.toMatchObject({ message: 'their microphone is not on' });
+    expect(mutes).toEqual([]);
+    expect(ada.messages.some((m) => m.type === 'staffAction')).toBe(false);
+    await leave(admin, ada);
+  });
+
+  it('says they are not in the call when they never joined it', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'call');
+    lookups.absent = true;
+
+    mute(admin, ada.userId);
+
+    await expect(
+      waitFor(admin, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({ message: 'they are not in the call' });
     expect(mutes).toEqual([]);
     expect(ada.messages.some((m) => m.type === 'staffAction')).toBe(false);
     await leave(admin, ada);

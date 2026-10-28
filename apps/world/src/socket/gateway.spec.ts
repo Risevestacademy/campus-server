@@ -4683,13 +4683,13 @@ describe('movement', () => {
       ]) {
         sealed[tileIndex({ width: 5 }, tile)] = 1;
       }
-      const own = await buildWorld(
+      const own = await buildWorld({
         env,
         accounts,
-        store,
-        new MemoryPresenceStore(),
-        { ...map, grid: { ...map.grid, walls: sealed } },
-      );
+        positions: store,
+        presence: new MemoryPresenceStore(),
+        map: { ...map, grid: { ...map.grid, walls: sealed } },
+      });
       await own.app.listen({ port: 0, host: '127.0.0.1' });
       const { port } = own.app.server.address() as AddressInfo;
       const ownUrl = `ws://127.0.0.1:${port}/socket`;

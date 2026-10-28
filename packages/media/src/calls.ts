@@ -102,22 +102,24 @@ export function participantRemover(
   };
 }
 
+/** What muting found: a microphone on and now off, none on, or nobody by that identity in the room. */
+export type MuteResult = 'muted' | 'not_on' | 'not_in_room';
+
 /**
  * Switches off a participant's microphone, as staff do in the moment: every
  * microphone track they publish is muted. They can switch it back on, as
- * nothing here takes the right to publish away. Resolves false when there
- * was no microphone on, or nobody by that identity in the room.
+ * nothing here takes the right to publish away.
  */
 export function microphoneMuter(
   credentials: MediaCredentials,
-): (room: string, identity: string) => Promise<boolean> {
+): (room: string, identity: string) => Promise<MuteResult> {
   const client = roomService(credentials);
   return async (room, identity) => {
     let participant;
     try {
       participant = await client.getParticipant(room, identity);
     } catch (err) {
-      if (isGone(err)) return false;
+      if (isGone(err)) return 'not_in_room';
       throw err;
     }
     const on = participant.tracks.filter(
@@ -128,7 +130,7 @@ export function microphoneMuter(
         client.mutePublishedTrack(room, identity, track.sid, true),
       ),
     );
-    return on.length > 0;
+    return on.length > 0 ? 'muted' : 'not_on';
   };
 }
 

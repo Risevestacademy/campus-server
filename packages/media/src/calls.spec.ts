@@ -298,7 +298,7 @@ describe('microphoneMuter', () => {
       { sid: 'TR_screen', source: 'SCREEN_SHARE', type: 'VIDEO', muted: false },
     ]);
 
-    await expect(api.mute('space:room', 'user:abc')).resolves.toBe(true);
+    await expect(api.mute('space:room', 'user:abc')).resolves.toBe('muted');
 
     expect(api.muted).toEqual([
       {
@@ -316,7 +316,7 @@ describe('microphoneMuter', () => {
       { sid: 'TR_mic', source: 'MICROPHONE', type: 'AUDIO', muted: true },
     ]);
 
-    await expect(api.mute('r', 'user:abc')).resolves.toBe(false);
+    await expect(api.mute('r', 'user:abc')).resolves.toBe('not_on');
     expect(api.muted).toEqual([]);
     await api.close();
   });
@@ -324,7 +324,7 @@ describe('microphoneMuter', () => {
   it('says so when nobody by that identity is in the room', async () => {
     const api = await livekit([], false);
 
-    await expect(api.mute('r', 'user:abc')).resolves.toBe(false);
+    await expect(api.mute('r', 'user:abc')).resolves.toBe('not_in_room');
     await api.close();
   });
 });
