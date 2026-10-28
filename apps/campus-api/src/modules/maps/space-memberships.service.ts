@@ -83,7 +83,9 @@ export type GrantRelease =
  * the half a track detach and a mentorship group delete share.
  *
  * The caller has locked the subject the entries point at, so no new entry
- * can join them while this runs, and `now` is the caller's, so every entry is
+ * can join them while this runs, and the read takes each entry `for update`,
+ * so an end that is already in flight is waited for and then read, not raced
+ * against. `now` is the caller's, taken before the read, so every entry is
  * judged against one instant rather than the moment each check happened to
  * run. An entry that has not ended keeps the subject: taking it away would
  * take that access away without anyone ending it, so nothing is deleted and
@@ -104,7 +106,8 @@ async function releaseGrants(
       validTo: spaceMemberships.validTo,
     })
     .from(spaceMemberships)
-    .where(where);
+    .where(where)
+    .for('update');
 
   const standing = held.filter((row) => !hasEnded(row, now));
   if (standing.length > 0) {

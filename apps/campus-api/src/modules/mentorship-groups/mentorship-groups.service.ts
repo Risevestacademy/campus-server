@@ -339,7 +339,9 @@ export class MentorshipGroupsService {
         // What a space's list says about this group: a live entry keeps the
         // group, and every ended one goes with it, as a detached track's do.
         // The group row is locked above, and a grant holds it with
-        // `key share`, so an entry cannot appear between this and the delete.
+        // `key share`, so no entry can appear between this and the delete;
+        // the read locks the entries it finds, so an end in flight is waited
+        // for, not raced.
         const grants = await releaseGroupGrants(tx, groupId, now);
         if (!grants.released) {
           throw new MentorshipGroupConflictException(
