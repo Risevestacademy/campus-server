@@ -313,6 +313,7 @@ const map: WorldMap = {
 function openLibrary(): void {
   accounts.spaces.clear();
   accounts.spaces.set('library', {
+    name: 'Library',
     kind: 'meeting_room',
     access: SPACE_ACCESS.Normal,
     retiredAt: null,
@@ -324,6 +325,7 @@ function openLibrary(): void {
 /** The library designated, with these entries on its list. */
 function designateLibrary(...grants: SpaceGrantFacts[]): void {
   accounts.spaces.set('library', {
+    name: 'Library',
     kind: 'classroom',
     access: SPACE_ACCESS.Designated,
     retiredAt: null,
@@ -3932,6 +3934,63 @@ describe('movement', () => {
         waitFor(inside, (m) => m.type === 'lockChanged' && m.locked === false),
       ).resolves.toMatchObject({ userId: null });
       await leave(inside);
+    });
+  });
+
+  describe('space names', () => {
+    const renameLibrary = (name: string) => {
+      const library = accounts.spaces.get('library');
+      if (!library) throw new Error('the library has no row');
+      accounts.spaces.set('library', { ...library, name } as SpaceFacts);
+    };
+
+    it('names every space in the snapshot, with the key where there is no row', async () => {
+      const conn = await arrive(person());
+
+      await expect(
+        waitFor(conn, (m) => m.type === 'snapshot'),
+      ).resolves.toMatchObject({
+        spaces: [
+          { spaceKey: DEFAULT_SPACE_KEY, name: DEFAULT_SPACE_KEY },
+          { spaceKey: 'library', name: 'Library' },
+        ],
+      });
+      await leave(conn);
+    });
+
+    it('tells everybody, in every cohort, when a space is renamed', async () => {
+      const here = await arrive(person());
+      const there = await arrive(person(), 'cohort-backend');
+
+      renameLibrary('Reading room');
+      await world.gateway.spacesChanged();
+
+      const renamed = {
+        type: 'spaces',
+        spaces: [
+          { spaceKey: DEFAULT_SPACE_KEY, name: DEFAULT_SPACE_KEY },
+          { spaceKey: 'library', name: 'Reading room' },
+        ],
+      };
+      await expect(waitFor(here, (m) => m.type === 'spaces')).resolves.toEqual(
+        renamed,
+      );
+      await expect(waitFor(there, (m) => m.type === 'spaces')).resolves.toEqual(
+        renamed,
+      );
+      await Promise.all([leave(here), leave(there)]);
+    });
+
+    it('says nothing when a reload changes no name', async () => {
+      const conn = await arrive(person());
+
+      designateLibrary();
+      await world.gateway.spacesChanged();
+      conn.ws.send(JSON.stringify({ type: 'ping' }));
+      await waitFor(conn, (m) => m.type === 'pong');
+
+      expect(conn.messages.filter((m) => m.type === 'spaces')).toEqual([]);
+      await leave(conn);
     });
   });
 

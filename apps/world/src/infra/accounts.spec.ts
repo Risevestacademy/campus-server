@@ -649,6 +649,17 @@ describe("world's space doors, against campus-api's schema", () => {
     ]);
   });
 
+  it("reads each space's name", async () => {
+    await db.query(
+      `update spaces set name = 'The Lounge' where key = 'lounge'`,
+    );
+    const rows = (
+      await db.query<{ key: string; name: string }>(SPACES_QUERY, ['doors'])
+    ).rows;
+
+    expect(rows.find((row) => row.key === 'lounge')?.name).toBe('The Lounge');
+  });
+
   it('leaves out an entry that has ended', async () => {
     const pod = (await spaces()).get('pod');
 
@@ -697,6 +708,7 @@ describe('reading a space row', () => {
   const row = {
     id: '11111111-1111-4111-8111-111111111111',
     key: 'library',
+    name: 'Library',
     kind: 'meeting_room',
     access: 'normal',
     retired_at: null,
