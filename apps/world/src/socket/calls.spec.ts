@@ -25,6 +25,10 @@ const LIBRARY = '66666666-6666-4666-8666-666666666666';
 /** Removals LiveKit confirmed, as world asked for them. */
 const removed: { room: string; identity: string; revokeTokenTs?: string }[] =
   [];
+/** Microphones LiveKit was asked to mute, as world asked. */
+const mutes: { room: string; identity: string; trackSid: string }[] = [];
+/** Set to have LiveKit's API fail to find out who is in a call. */
+const lookups = { failing: false, micOff: false, absent: false };
 /** How many removals to refuse next, as a LiveKit that is down would. */
 const refusals = { left: 0, seen: 0 };
 let livekit: Server;
@@ -115,6 +119,40 @@ beforeAll(async () => {
     let body = '';
     request.on('data', (chunk) => (body += chunk));
     request.on('end', () => {
+      if (request.url?.endsWith('/GetParticipant')) {
+        if (lookups.failing) {
+          response.writeHead(503, { 'content-type': 'application/json' });
+          response.end('{"code":"unavailable","msg":"down"}');
+          return;
+        }
+        if (lookups.absent) {
+          response.writeHead(404, { 'content-type': 'application/json' });
+          response.end('{"code":"not_found","msg":"no such participant"}');
+          return;
+        }
+        const { identity } = JSON.parse(body) as { identity: string };
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            identity,
+            tracks: [
+              {
+                sid: 'TR_mic',
+                source: 'MICROPHONE',
+                type: 'AUDIO',
+                muted: lookups.micOff,
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (request.url?.endsWith('/MutePublishedTrack')) {
+        mutes.push(JSON.parse(body) as (typeof mutes)[number]);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{"sid":"TR_mic","muted":true}');
+        return;
+      }
       if (request.url?.endsWith('/RemoveParticipant')) {
         if (refusals.left > 0) {
           refusals.left -= 1;
@@ -163,6 +201,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   removed.length = 0;
+  mutes.length = 0;
+  lookups.failing = false;
+  lookups.micOff = false;
+  lookups.absent = false;
   refusals.left = 0;
   refusals.seen = 0;
   admins.clear();
@@ -542,6 +584,138 @@ describe('the broadcast room', () => {
       expect(Number(removal?.revokeTokenTs)).toBeGreaterThan(speaking.nbf);
       await leave(admin);
     });
+  });
+});
+
+describe('staff muting somebody', () => {
+  const mute = (conn: Conn, userId: string) =>
+    conn.ws.send(JSON.stringify({ type: 'mute', userId }));
+
+  it('lets an admin switch off somebody’s microphone in their call, and tells them both', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    const { call } = await waitFor(ada, (m) => m.type === 'call');
+    const { room, token } = call as { room: string; token: string };
+
+    mute(admin, ada.userId);
+
+    const told = await waitFor(ada, (m) => m.type === 'staffAction');
+    expect(told).toEqual({
+      type: 'staffAction',
+      action: 'muted',
+      userId: ada.userId,
+      by: admin.userId,
+      spaceKey: DEFAULT_SPACE_KEY,
+      until: null,
+      player: null,
+    });
+    await expect(
+      waitFor(admin, (m) => m.type === 'staffAction'),
+    ).resolves.toEqual(told);
+    expect(mutes).toEqual([
+      { room, identity: claimsOf(token).sub, trackSid: 'TR_mic', muted: true },
+    ]);
+    await leave(admin, ada);
+  });
+
+  it('refuses to mute somebody in no call', async () => {
+    spaces.delete(DEFAULT_SPACE_KEY);
+    await world.gateway.spacesChanged();
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'call');
+
+    mute(admin, ada.userId);
+
+    await expect(
+      waitFor(admin, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({ message: 'they are in no call' });
+    await leave(admin, ada);
+  });
+
+  it('says so, and tells them nothing, when their microphone is off already', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'call');
+    lookups.micOff = true;
+
+    mute(admin, ada.userId);
+
+    await expect(
+      waitFor(admin, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({ message: 'their microphone is not on' });
+    expect(mutes).toEqual([]);
+    expect(ada.messages.some((m) => m.type === 'staffAction')).toBe(false);
+    await leave(admin, ada);
+  });
+
+  it('says they are not in the call when they never joined it', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'call');
+    lookups.absent = true;
+
+    mute(admin, ada.userId);
+
+    await expect(
+      waitFor(admin, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({ message: 'they are not in the call' });
+    expect(mutes).toEqual([]);
+    expect(ada.messages.some((m) => m.type === 'staffAction')).toBe(false);
+    await leave(admin, ada);
+  });
+
+  it('says to try again when the media server cannot be reached', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'call');
+    lookups.failing = true;
+
+    mute(admin, ada.userId);
+
+    await expect(
+      waitFor(admin, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({ message: 'could not mute them, try again' });
+    expect(ada.messages.some((m) => m.type === 'staffAction')).toBe(false);
+    await leave(admin, ada);
+  });
+
+  it('refuses anybody who is not staff, and mutes nothing', async () => {
+    const grace = await arrive();
+    const ada = await arrive();
+    await waitFor(ada, (m) => m.type === 'call');
+
+    mute(grace, ada.userId);
+
+    await expect(
+      waitFor(grace, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({
+      code: 'NOT_ALLOWED',
+      message: 'you may not mute them',
+    });
+    expect(mutes).toEqual([]);
+    await leave(grace, ada);
+  });
+});
+
+describe('staff removing somebody', () => {
+  it('takes them out of the space’s call and hands them the corridor’s', async () => {
+    const admin = await arrive({ admin: true });
+    const ada = await arrive();
+    for (const seq of [1, 2, 3]) await step(admin, 'right', seq);
+    for (const seq of [1, 2, 3]) await step(ada, 'right', seq);
+    await expect.poll(() => calls(ada)).toHaveLength(2);
+    const library = calls(ada)[1]?.room as string;
+
+    admin.ws.send(
+      JSON.stringify({ type: 'removeFromSpace', userId: ada.userId }),
+    );
+
+    await expect
+      .poll(() => calls(ada).at(-1)?.room)
+      .toEqual(expect.stringContaining(CORRIDOR));
+    await expect.poll(() => removedFor(ada)).toContain(library);
+    await leave(admin, ada);
   });
 });
 

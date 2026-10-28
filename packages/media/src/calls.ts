@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   RoomServiceClient,
+  TrackSource,
   TrackType,
   WebhookReceiver,
 } from 'livekit-server-sdk';
@@ -61,6 +62,20 @@ function apiHost(url: string): string {
   return url.replace(/^ws(s?):\/\//, 'http$1://');
 }
 
+function roomService(credentials: MediaCredentials): RoomServiceClient {
+  assertMediaCredentials(credentials);
+  return new RoomServiceClient(
+    apiHost(credentials.url),
+    credentials.apiKey,
+    credentials.apiSecret,
+  );
+}
+
+/** LiveKit's answer for a room or participant already gone. */
+function isGone(err: unknown): boolean {
+  return (err as { status?: number }).status === 404;
+}
+
 /**
  * Takes participants out of rooms, with one client for the key pair, and
  * revokes the tokens that identity was issued, so a removed participant
@@ -72,12 +87,7 @@ export function participantRemover(
   credentials: MediaCredentials,
   now: () => number = Date.now,
 ): (room: string, identity: string) => Promise<void> {
-  assertMediaCredentials(credentials);
-  const client = new RoomServiceClient(
-    apiHost(credentials.url),
-    credentials.apiKey,
-    credentials.apiSecret,
-  );
+  const client = roomService(credentials);
   return async (room, identity) => {
     try {
       await client.removeParticipant(room, identity, {
@@ -86,11 +96,41 @@ export function participantRemover(
         revokeTokenTs: BigInt(Math.floor(now() / 1000) + 1),
       });
     } catch (err) {
-      if ((err as { status?: number }).status === 404) {
-        return;
-      }
+      if (isGone(err)) return;
       throw err;
     }
+  };
+}
+
+/** What muting found: a microphone on and now off, none on, or nobody by that identity in the room. */
+export type MuteResult = 'muted' | 'not_on' | 'not_in_room';
+
+/**
+ * Switches off a participant's microphone, as staff do in the moment: every
+ * microphone track they publish is muted. They can switch it back on, as
+ * nothing here takes the right to publish away.
+ */
+export function microphoneMuter(
+  credentials: MediaCredentials,
+): (room: string, identity: string) => Promise<MuteResult> {
+  const client = roomService(credentials);
+  return async (room, identity) => {
+    let participant;
+    try {
+      participant = await client.getParticipant(room, identity);
+    } catch (err) {
+      if (isGone(err)) return 'not_in_room';
+      throw err;
+    }
+    const on = participant.tracks.filter(
+      (track) => track.source === TrackSource.MICROPHONE && !track.muted,
+    );
+    await Promise.all(
+      on.map((track) =>
+        client.mutePublishedTrack(room, identity, track.sid, true),
+      ),
+    );
+    return on.length > 0 ? 'muted' : 'not_on';
   };
 }
 
