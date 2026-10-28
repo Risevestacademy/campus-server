@@ -15,6 +15,7 @@ import {
   type InviteImportRowDto,
 } from './dto/invite-import.dto.js';
 import { parseInviteCsv, type InviteCsvRow } from './invite-csv.js';
+import { parseInviteDate } from './invite-date.js';
 import { InviteMailer } from './invite-mailer.js';
 import { InviteNotFoundException } from './invites.exceptions.js';
 import { InvitesService } from './invites.service.js';
@@ -173,23 +174,23 @@ export class InviteImportService {
     // The same rules create enforces, said here in the file's own words:
     // the admin is looking at a column called visit_ends, not at a field
     // called guestAccessExpiresAt.
+    let guestAccessExpiresAt: string | undefined;
     if (row.role === CohortRole.Guest) {
       if (row.visitEnds === null) {
         throw new RowRefused('visit_ends is required for a guest');
       }
-      // The form the single-invite route asks for, and no other: Date.parse
+      // The form the single-invite route asks for, and no other: a bare Date
       // alone would also take 12/31/2030, and read it by the server's locale.
-      const ends = isDateString(row.visitEnds)
-        ? Date.parse(row.visitEnds)
-        : Number.NaN;
-      if (Number.isNaN(ends)) {
+      if (!isDateString(row.visitEnds)) {
         throw new RowRefused(
           'visit_ends is not a date: use a form like 2026-11-30T17:00:00Z',
         );
       }
-      if (ends <= Date.now()) {
+      const ends = parseInviteDate(row.visitEnds, 'guestAccessExpiresAt');
+      if (ends.getTime() <= Date.now()) {
         throw new RowRefused('visit_ends must be in the future');
       }
+      guestAccessExpiresAt = ends.toISOString();
     } else if (row.visitEnds !== null) {
       throw new RowRefused('visit_ends is only for a guest');
     }
@@ -199,10 +200,7 @@ export class InviteImportService {
       cohortId,
       cohortRole: row.role,
       cohortTrackId,
-      guestAccessExpiresAt:
-        row.visitEnds === null
-          ? undefined
-          : new Date(row.visitEnds).toISOString(),
+      guestAccessExpiresAt,
     };
   }
 }
