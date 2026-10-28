@@ -93,6 +93,11 @@ server decides every position.
   devices and network before a call. See [below](#the-connection-check).
 - **Who is online, for admins:** a count for the admin dashboard, across the
   campus or in one cohort. See [below](#the-online-count).
+- **Staff muting and removing:** an admin, or a professor or mentor in a
+  designated space that lists them, may switch off somebody's microphone
+  once, or move them out of the space and keep them out for 90 seconds
+  (they may ask to enter). See
+  [the protocol doc](../../docs/world-protocol.md#staff-muting-and-removing).
 - **Locks and asking to enter:** anybody inside a normal whole-room space
   may lock it; somebody refused at a locked or designated space may ask
   from beside it, and somebody inside answers. Both are held in this
@@ -150,7 +155,7 @@ src/
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   status/               available, busy or away, and going away while idle — no sockets here
-  spaces/               locks, and requests to enter — no sockets here
+  spaces/               locks, requests to enter, and staff removals — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages; for now also
                         the doors (spaces read, mayEnter on a step), calls and nearby lists

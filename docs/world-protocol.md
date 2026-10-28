@@ -467,10 +467,42 @@ own locks.
 - **A step refused while it is locked** looks the same as any other
   `refused`. Use the locked list to tell the person why.
 
+## Staff: muting and removing
+
+Staff can act in the moment on somebody misbehaving in a space.
+
+- **Who is staff.** An admin, for anybody in the cohort's campus. A
+  professor or mentor, only inside a designated space whose list names
+  them, and only for somebody standing in it with them. Nobody can act on
+  an admin, or on themselves.
+- **Mute.** Send `{ "type": "mute", "userId": "…" }`. World switches off
+  their microphone in the call for their space, once: they may switch it
+  back on. Their camera and screen are left alone.
+- **Remove.** Send `{ "type": "removeFromSpace", "userId": "…" }`. World
+  moves them to the nearest tile outside the space they stand in, which
+  takes them out of its call, and keeps them out of that space for 90
+  seconds, a new tab or a reconnect included. Meanwhile they may ask to
+  enter, as at a locked space, and a yes lets them back in early. Nobody
+  can be removed from the corridors, or from a space that takes no
+  requests (not set up, or retired), where they could not ask back in.
+- **What comes back**, to the staff member and to the person it was done
+  to: `{ "type": "staffAction", "action": "muted" | "removed", "userId":
+"…", "by": "…", "spaceKey": "…", "until": "…" | null, "player": {…} | null }`.
+  For `removed`, `until` is when they may walk back in and `player` is
+  where they now stand: snap them there, as their own moves do not report
+  it. The cohort sees the move as a `moved` and a `spaceChanged`.
+- **Refusals** come as an `error` with code `NOT_ALLOWED`, and nothing is
+  done: they are not here (gone, or reconnecting), you may not act on them,
+  they are in no call, not in it, or their microphone is not on (mute), the media
+  server could not be reached (mute; try again), they are in no space,
+  they cannot be removed from this space, or there is nowhere outside to
+  move them (remove).
+
 ## Asking to enter
 
 Somebody refused at a locked space, or at a designated space whose list
-does not name them, can ask to come in. Each cohort's requests are its own.
+does not name them, or at one staff removed them from in the last 90
+seconds, can ask to come in. Each cohort's requests are its own.
 
 - **Asking.** From a tile beside the space (one step from its floor), send
   `{ "type": "requestEntry", "spaceKey": "…" }`. You and each person inside

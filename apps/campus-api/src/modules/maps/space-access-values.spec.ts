@@ -36,6 +36,8 @@ describe('the shared space-access package names what the database has', () => {
 
   it('has the cohort roles the entry rules name', () => {
     expect(CohortRole.Student).toBe(COHORT_ROLES.Student);
+    expect(CohortRole.Professor).toBe(COHORT_ROLES.Professor);
+    expect(CohortRole.Mentor).toBe(COHORT_ROLES.Mentor);
     expect(CohortRole.Guest).toBe(COHORT_ROLES.Guest);
   });
 

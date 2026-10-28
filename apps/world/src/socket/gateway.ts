@@ -1,12 +1,15 @@
 import {
   broadcastRoomName,
+  microphoneMuter,
   mintRoomToken,
   participantIdentity,
   participantRemover,
   spaceRoomName,
+  type MuteResult,
 } from '@campus/media';
 import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
 import {
+  COHORT_ROLES,
   SPACE_ACCESS,
   mayEnter,
   type CohortMembershipFacts,
@@ -43,6 +46,7 @@ import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
 import { SpaceLocks, lockableKeys } from '../spaces/locks.js';
+import { SpaceRemovals, nearestOutside } from '../spaces/removals.js';
 import {
   EntryRequests,
   besideSpace,
@@ -104,6 +108,12 @@ const NOT_YET_READ: SpaceFacts = {
   locked: false,
   grants: [],
 };
+
+/** The cohort roles that moderate a designated space whose list names them. */
+const STAFF_ROLES = new Set<string>([
+  COHORT_ROLES.Professor,
+  COHORT_ROLES.Mentor,
+]);
 
 /**
  * Closes a socket for one of the reasons in CLOSES, with the code that goes
@@ -174,6 +184,7 @@ export function registerGateway(
   let readDoorsAgain = false;
 
   const locks = new SpaceLocks();
+  const removals = new SpaceRemovals();
   /** Which spaces may be locked, from the doors last read, sorted. */
   let lockable: readonly string[] = [];
 
@@ -236,6 +247,9 @@ export function registerGateway(
   ): boolean {
     if (spaceKey === DEFAULT_SPACE_KEY) {
       return true;
+    }
+    if (removals.isRemoved(connection, spaceKey, now.getTime())) {
+      return false;
     }
     const space =
       doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ);
@@ -335,10 +349,15 @@ export function registerGateway(
     nobody_inside: 'nobody_inside',
   };
 
-  function spaceTakesRequests(cohortId: string, spaceKey: string): boolean {
+  /** Somebody staff removed from a normal space finds it locked to them alone, so they may ask. */
+  function spaceTakesRequests(
+    connection: Connection,
+    spaceKey: string,
+  ): boolean {
     return takesRequests(
       doors.get(spaceKey),
-      locks.isLocked(cohortId, spaceKey),
+      locks.isLocked(connection.cohortId, spaceKey) ||
+        removals.isRemoved(connection, spaceKey, Date.now()),
     );
   }
 
@@ -382,7 +401,7 @@ export function registerGateway(
     const player = players.get(connection);
     return {
       mayWalkIn: mayStepInto(connection, spaceKey, now),
-      takesRequests: spaceTakesRequests(connection.cohortId, spaceKey),
+      takesRequests: spaceTakesRequests(connection, spaceKey),
       beside:
         player !== undefined &&
         besideSpace(map.grid, map.spaces, player, spaceKey),
@@ -394,7 +413,7 @@ export function registerGateway(
   function hasPass(connection: Connection, spaceKey: string): boolean {
     return (
       requests.passFor(connection) === spaceKey &&
-      spaceTakesRequests(connection.cohortId, spaceKey)
+      spaceTakesRequests(connection, spaceKey)
     );
   }
 
@@ -654,6 +673,7 @@ export function registerGateway(
 
   const media = mediaCredentials(env);
   const removeFromCall = media ? participantRemover(media) : undefined;
+  const muteMicrophone = media ? microphoneMuter(media) : undefined;
   /** Cohorts whose `nearby` lists may be out of date though nobody moved. */
   const nearbyStale = new Set<string>();
 
@@ -889,6 +909,191 @@ export function registerGateway(
       type: 'broadcast',
       call: { url: token.url, room, token: token.token, canSpeak },
     });
+  }
+
+  /**
+   * Admins may act on anybody in their cohort's campus; a professor or
+   * mentor only on somebody in the designated space they stand in, whose
+   * list names them. Never on an admin, nor on themselves.
+   */
+  function mayModerate(
+    actor: Connection,
+    target: Connection,
+    now: Date,
+  ): boolean {
+    if (actor.userId === target.userId || hasAdminPowers(target.systemRole)) {
+      return false;
+    }
+    if (hasAdminPowers(actor.systemRole)) return true;
+    const space = doors.get(actor.spaceKey);
+    return (
+      STAFF_ROLES.has(actor.membership?.role ?? '') &&
+      actor.spaceKey === target.spaceKey &&
+      space?.access === SPACE_ACCESS.Designated &&
+      mayEnter(personOf(actor), { ...space, locked: false }, now)
+    );
+  }
+
+  function staffRefusal(connection: Connection, message: string): void {
+    send(connection.socket, {
+      type: 'error',
+      code: ServerErrorCode.NotAllowed,
+      message,
+    });
+  }
+
+  async function muteSomebody(
+    actor: Connection,
+    userId: string,
+  ): Promise<void> {
+    const target = connections.holderOf({ userId, cohortId: actor.cohortId });
+    if (!target) {
+      staffRefusal(actor, 'they are not here');
+      return;
+    }
+    if (!mayModerate(actor, target, new Date())) {
+      staffRefusal(actor, 'you may not mute them');
+      return;
+    }
+    const call = target.call;
+    if (!muteMicrophone || !call) {
+      staffRefusal(actor, 'they are in no call');
+      return;
+    }
+    let result: MuteResult;
+    try {
+      result = await muteMicrophone(call.room, call.identity);
+    } catch (err) {
+      app.log.warn({ err, userId }, 'could not mute somebody');
+      staffRefusal(actor, 'could not mute them, try again');
+      return;
+    }
+    if (result === 'not_in_room') {
+      staffRefusal(actor, 'they are not in the call');
+      return;
+    }
+    if (result === 'not_on') {
+      staffRefusal(actor, 'their microphone is not on');
+      return;
+    }
+    announceStaffAction('muted', actor, target, target.spaceKey, null, null);
+  }
+
+  function removeSomebody(actor: Connection, userId: string): void {
+    const now = Date.now();
+    const target = connections.holderOf({ userId, cohortId: actor.cohortId });
+    if (!target) {
+      staffRefusal(actor, 'they are not here');
+      return;
+    }
+    if (!mayModerate(actor, target, new Date(now))) {
+      staffRefusal(actor, 'you may not remove them');
+      return;
+    }
+    const spaceKey = target.spaceKey;
+    if (spaceKey === DEFAULT_SPACE_KEY) {
+      staffRefusal(actor, 'they are in no space');
+      return;
+    }
+    // Removed, they may ask to enter: only from a space that takes requests.
+    if (!takesRequests(doors.get(spaceKey), true)) {
+      staffRefusal(actor, 'they cannot be removed from this space');
+      return;
+    }
+    const standing = players.get(target);
+    const outside =
+      standing &&
+      nearestOutside(map.grid, map.spaces, standing, spaceKey, (into) =>
+        mayStepInto(target, into, new Date(now)),
+      );
+    const player = outside && players.place(target, outside);
+    if (!player) {
+      staffRefusal(actor, 'nowhere outside to move them');
+      return;
+    }
+    const until = removals.remove(target, spaceKey, now);
+    requests.dropPass(target);
+    noteMoved(target);
+    arrivedAt(target, player);
+    // An open request turns into "may walk in" once the 90 seconds are up;
+    // a millisecond after, as a timer can fire a little early.
+    setTimeout(
+      () => reviewRequests(target.cohortId, spaceKey),
+      until - Date.now() + 1,
+    ).unref();
+    announceStaffAction(
+      'removed',
+      actor,
+      target,
+      spaceKey,
+      new Date(until).toISOString(),
+      player,
+    );
+  }
+
+  /** Turned or moved: the next tick sends it, and the next save keeps it. */
+  function noteMoved(connection: Connection): void {
+    // The two fields copied out, not the connection: these maps outlive the
+    // socket, and holding it would keep it in memory.
+    const seat: Seat = {
+      userId: connection.userId,
+      cohortId: connection.cohortId,
+    };
+    const key = seatKey(seat);
+    pendingMoves.set(key, seat);
+    unsaved.set(key, seat);
+  }
+
+  /** On a new tile: maybe in another space, maybe away from a door. */
+  function arrivedAt(connection: Connection, tile: Tile): void {
+    recordSpaceCrossing(connection, tile);
+    leaveTheDoor(connection, tile);
+  }
+
+  /** To the staff member and to the person it was done to. */
+  function announceStaffAction(
+    action: 'muted' | 'removed',
+    actor: Connection,
+    target: Connection,
+    spaceKey: string,
+    until: string | null,
+    player: Player | null,
+  ): void {
+    recordStaffAction(action, actor, target, spaceKey);
+    const frame = encode({
+      type: 'staffAction',
+      action,
+      userId: target.userId,
+      by: actor.userId,
+      spaceKey,
+      until,
+      player,
+    });
+    for (const connection of new Set([actor, target])) {
+      if (connections.has(connection)) sendFrame(connection.socket, frame);
+    }
+  }
+
+  /**
+   * Belongs in the audit log, which campus-api writes. world cannot ask
+   * campus-api to yet, so until it can, the action is only logged.
+   */
+  function recordStaffAction(
+    action: 'muted' | 'removed',
+    actor: Connection,
+    target: Connection,
+    spaceKey: string,
+  ): void {
+    app.log.info(
+      {
+        action,
+        actorId: actor.userId,
+        targetId: target.userId,
+        cohortId: target.cohortId,
+        spaceKey,
+      },
+      'staff action',
+    );
   }
 
   /** After the spaces are read: a new call for anybody whose space's call is not the one they hold. */
@@ -1962,6 +2167,14 @@ export function registerGateway(
           noteActivity(connection);
           say(connection, result.message.text, sayBudget);
           return;
+        case 'mute':
+          noteActivity(connection);
+          void muteSomebody(connection, result.message.userId);
+          return;
+        case 'removeFromSpace':
+          noteActivity(connection);
+          removeSomebody(connection, result.message.userId);
+          return;
         case 'move': {
           noteActivity(connection);
           const { direction, seq } = result.message;
@@ -1983,21 +2196,8 @@ export function registerGateway(
             outcome: moved.outcome,
             player: moved.player,
           });
-          if (moved.outcome === 'moved') {
-            recordSpaceCrossing(connection, moved.player);
-            leaveTheDoor(connection, moved.player);
-          }
-          if (moved.changed) {
-            // The two fields copied out, not the connection: these maps
-            // outlive the socket, and holding it would keep it in memory.
-            const seat: Seat = {
-              userId: connection.userId,
-              cohortId: connection.cohortId,
-            };
-            const key = seatKey(seat);
-            pendingMoves.set(key, seat);
-            unsaved.set(key, seat);
-          }
+          if (moved.outcome === 'moved') arrivedAt(connection, moved.player);
+          if (moved.changed) noteMoved(connection);
           return;
         }
       }
