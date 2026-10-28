@@ -66,6 +66,7 @@ import type {
 import type { InvitePreviewResponseDto } from './dto/invite-preview.dto.js';
 import type { InviteFlagNotice } from './invite-flag-email.js';
 import type { InviteResponseDto } from './dto/invite-response.dto.js';
+import { parseInviteDate } from './invite-date.js';
 import {
   buildInviteLink,
   generateInviteToken,
@@ -1122,12 +1123,10 @@ export class InvitesService {
     if (dto.guestAccessExpiresAt == null) {
       return null;
     }
-    const at = new Date(dto.guestAccessExpiresAt);
-    if (Number.isNaN(at.getTime())) {
-      throw new InviteInvalidArgumentException(
-        'guestAccessExpiresAt is not a valid date',
-      );
-    }
+    const at = parseInviteDate(
+      dto.guestAccessExpiresAt,
+      'guestAccessExpiresAt',
+    );
     if (at.getTime() <= Date.now()) {
       throw new InviteInvalidArgumentException(
         'guestAccessExpiresAt must be in the future',
@@ -1832,10 +1831,7 @@ export class InvitesService {
     const max = new Date(Date.now() + this.inviteTtlDays * 86_400_000);
     if (!raw) return max;
 
-    const at = new Date(raw);
-    if (Number.isNaN(at.getTime())) {
-      throw new InviteInvalidArgumentException('expiresAt is not a valid date');
-    }
+    const at = parseInviteDate(raw, 'expiresAt');
     if (at.getTime() <= Date.now()) {
       throw new InviteInvalidArgumentException(
         'expiresAt must be in the future',
