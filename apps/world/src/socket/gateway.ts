@@ -41,7 +41,7 @@ import type { Tile } from '../movement/grid.js';
 import { Players, type Player } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
-import { seatKey, type Seat } from '../seat.js';
+import { SeatMap, seatKey, type Seat } from '../seat.js';
 import { SpaceLocks, lockableKeys } from '../spaces/locks.js';
 import {
   EntryRequests,
@@ -587,7 +587,7 @@ export function registerGateway(
    * positions: the tick reads where each person stands when it runs, so
    * several steps in one tick collapse into the last.
    */
-  const pendingMoves = new Map<string, Seat>();
+  const pendingMoves = new SeatMap<true>();
 
   /**
    * Sends once per tick rather than once per step. Per step, every move is a
@@ -597,7 +597,7 @@ export function registerGateway(
   function flushMoves(): void {
     const touched = new Set(nearbyStale);
     nearbyStale.clear();
-    for (const { cohortId } of pendingMoves.values()) touched.add(cohortId);
+    for (const { cohortId } of pendingMoves.keys()) touched.add(cohortId);
     sendMoves();
     if (!media || touched.size === 0) return;
     const byCohort = new Map<string, Connection[]>();
@@ -617,7 +617,7 @@ export function registerGateway(
     // Grouped by cohort: each is its own campus, and a move is news only to
     // the people standing in the same one.
     const movedIn = new Map<string, Player[]>();
-    for (const { userId, cohortId } of pendingMoves.values()) {
+    for (const { userId, cohortId } of pendingMoves.keys()) {
       const player = players.get({ userId, cohortId });
       // Left since the step: `left` has already gone out, and an entry now
       // would put back an avatar the client has just taken away.
@@ -954,7 +954,7 @@ export function registerGateway(
    * account and cohort. Not a position: the save reads where they stand when
    * it runs.
    */
-  const unsaved = new Map<string, Seat>();
+  const unsaved = new SeatMap<true>();
   /** Set once shutdown has written everybody, so the closes it causes do not write again. */
   let stopping = false;
 
@@ -972,7 +972,7 @@ export function registerGateway(
       for (const { userId, cohortId } of entries) {
         // Retried only while the account is still in that cohort.
         if (connections.holderOf({ userId, cohortId })) {
-          unsaved.set(seatKey({ userId, cohortId }), { userId, cohortId });
+          unsaved.set({ userId, cohortId }, true);
         }
       }
     });
@@ -981,7 +981,7 @@ export function registerGateway(
   /** Forgets one cohort's kept position, for access taken away. */
   function forgetSaved(seat: Seat): void {
     const { userId, cohortId } = seat;
-    unsaved.delete(seatKey(seat));
+    unsaved.delete(seat);
     positions.forget(seat).catch((err: unknown) => {
       app.log.warn(
         { err, userId, cohortId },
@@ -997,7 +997,7 @@ export function registerGateway(
    */
   function saveMoved(): void {
     const entries: PositionToSave[] = [];
-    for (const { userId, cohortId } of unsaved.values()) {
+    for (const { userId, cohortId } of unsaved.keys()) {
       const player = players.get({ userId, cohortId });
       if (player) entries.push(positionOf(player, cohortId));
     }
@@ -1191,12 +1191,11 @@ export function registerGateway(
     if (connections.holderOf(connection)) {
       return;
     }
-    const seat = seatKey(connection);
     const standing = players.get(connection);
     if (players.leave(connection, Date.now(), remember)) {
       // With them goes any step of theirs the tick has not sent yet: should
       // they be back before it runs, `joined` already says where they stand.
-      pendingMoves.delete(seat);
+      pendingMoves.delete(connection);
       broadcast(connection.cohortId, {
         type: 'left',
         userId: connection.userId,
@@ -1208,7 +1207,7 @@ export function registerGateway(
     if (!remember) {
       forgetSaved(connection);
     } else if (standing && !stopping) {
-      unsaved.delete(seat);
+      unsaved.delete(connection);
       persist([positionOf(standing, connection.cohortId)]);
     }
   }
@@ -1988,15 +1987,10 @@ export function registerGateway(
             leaveTheDoor(connection, moved.player);
           }
           if (moved.changed) {
-            // The two fields copied out, not the connection: these maps
-            // outlive the socket, and holding it would keep it in memory.
-            const seat: Seat = {
-              userId: connection.userId,
-              cohortId: connection.cohortId,
-            };
-            const key = seatKey(seat);
-            pendingMoves.set(key, seat);
-            unsaved.set(key, seat);
+            // These outlive the socket, but a SeatMap keeps only the two
+            // ids, so keying by the connection does not hold it in memory.
+            pendingMoves.set(connection, true);
+            unsaved.set(connection, true);
           }
           return;
         }
