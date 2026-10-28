@@ -304,16 +304,11 @@ export class SessionIssuer {
       return null;
     }
 
-    // The UPDATE above is what a sign-in or refresh in flight is waited out
-    // on: each holds a shared lock on this row until it commits (see
-    // assertEpochCurrent). Then the same two steps as revokeFamily, for the
-    // same reason: the UPDATE of the tokens reads afresh once the lock is
-    // held, so it revokes the row that sign-in or refresh minted too.
-    await tx
-      .select({ id: refreshTokens.id })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.userId, userId))
-      .for('update');
+    // No lock on the tokens first, unlike revokeFamily: the UPDATE above has
+    // already waited out any sign-in or refresh in flight, since each holds a
+    // shared lock on this row until it commits (see assertEpochCurrent). This
+    // statement starts after that commit, so it sees the token minted there
+    // too; one that starts later finds the epoch moved and mints nothing.
     await tx
       .update(refreshTokens)
       .set({ revokedAt: now })
