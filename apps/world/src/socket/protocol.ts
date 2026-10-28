@@ -169,6 +169,19 @@ const requestId = z
       'request.',
   );
 
+export const WalkEndReason = z
+  .enum(['arrived', 'stopped', 'refused', 'gone', 'no_way', 'moved_by_staff'])
+  .meta({
+    id: 'WalkEndReason',
+    description:
+      'arrived: you are one tile from them. stopped: you sent `stopWalking` ' +
+      'or a `move`. refused: a space you may not enter is in the way, ' +
+      'theirs or another, and you stopped beside it; `mayAsk` says whether ' +
+      'asking to enter it would be taken. gone: they left, or were ' +
+      'not here. no_way: no path reaches them. moved_by_staff: staff removed ' +
+      'you from a space mid-walk.',
+  });
+
 export const EntryRequestOutcome = z
   .enum([
     'admitted',
@@ -362,12 +375,32 @@ export const ClientMessage = z
           'them; otherwise by a NOT_ALLOWED error saying why. Counts as ' +
           'activity.',
       }),
+    z
+      .object({
+        type: z.literal('goTo'),
+        userId: z.string().describe('Whom to walk to, in your cohort.'),
+      })
+      .meta({
+        id: 'GoToMessage',
+        description:
+          'Have the server walk you to somebody, a step per `stepMs`, through ' +
+          'the same doors your own steps would be. Each step is a ' +
+          '`walking`; the walk ends with one `walkEnded`. Replaces a walk ' +
+          'already going. Yourself is a NOT_ALLOWED error. Counts as activity.',
+      }),
+    z.object({ type: z.literal('stopWalking') }).meta({
+      id: 'StopWalkingMessage',
+      description:
+        'End the walk `goTo` started, answered by `walkEnded` with ' +
+        '`stopped`. A `move` ends it too. Counts as activity.',
+    }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
 
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export type EntryRequestOutcome = z.infer<typeof EntryRequestOutcome>;
+export type WalkEndReason = z.infer<typeof WalkEndReason>;
 
 export const ServerMessage = z
   .discriminatedUnion('type', [
@@ -634,6 +667,41 @@ export const ServerMessage = z
           'Staff muted somebody or removed them from a space. Sent to the ' +
           'person it was done to and to the staff member who did it. Their ' +
           'cohort sees a removal as a `moved` and a `spaceChanged`.',
+      }),
+    z
+      .object({
+        type: z.literal('walking'),
+        userId: z.string().describe('Whom you are walking to.'),
+        player: Player,
+      })
+      .meta({
+        id: 'WalkingMessage',
+        description:
+          'The server took a step of your `goTo` walk: where you are now. ' +
+          'Only to you; everybody else sees it in `moved`.',
+      }),
+    z
+      .object({
+        type: z.literal('walkEnded'),
+        userId: z.string().describe('Whom you were walking to.'),
+        reason: WalkEndReason,
+        player: Player.describe('Where you stopped.'),
+        spaceKey: z
+          .string()
+          .nullable()
+          .describe('With `refused`, the space you stopped beside.'),
+        mayAsk: z
+          .boolean()
+          .describe(
+            'With `refused`, whether a `requestEntry` for `spaceKey` would ' +
+              'be taken from where you stopped. Offer to ask only when true.',
+          ),
+      })
+      .meta({
+        id: 'WalkEndedMessage',
+        description:
+          'Your `goTo` walk is over, and why. Only to you. Not sent when the ' +
+          'socket closes.',
       }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',

@@ -182,6 +182,42 @@ The client says which way, never where to. The server decides every position.
    When every prediction was right — nearly always — this changes nothing on
    screen.
 
+### Going to somebody
+
+A "go to" button beside somebody's name has the server walk you to them.
+Send `{ "type": "goTo", "userId": "…" }`. Busy or not, anybody in your
+cohort can be walked to.
+
+- **It walks, a step per `stepMs`,** through the same doors as your own
+  steps: walls, locks, designated spaces and removals all hold. Everybody
+  else sees an ordinary walk in `moved`, with a `spaceChanged` at each
+  crossing, and your call changes as you go.
+- **Each step it takes is a `walking`** (`{ "type": "walking", "userId":
+"…", "player": {…} }`), only to you: you are never in your own `moved`, so
+  this is where you are. Draw it as you would a `moveResult` you did not
+  predict. Mobile, which draws no map, can ignore the position.
+- **It ends with one `walkEnded`** (`{ "type": "walkEnded", "userId": "…",
+"reason": "…", "player": {…}, "spaceKey": "…" | null, "mayAsk": false }`),
+  saying where you stopped and why:
+
+  | `reason`         | Meaning                                                                                    | What to do                                                          |
+  | ---------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+  | `arrived`        | You stand next to them, in their space                                                     | Nothing                                                             |
+  | `stopped`        | You sent `stopWalking` or a `move`                                                         | Nothing                                                             |
+  | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside it (`spaceKey`) | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
+  | `gone`           | They left, or were not here                                                                | Say so                                                              |
+  | `no_way`         | No path reaches them                                                                       | Say so                                                              |
+  | `moved_by_staff` | Staff removed you from a space mid-walk                                                    | The `staffAction` says the rest                                     |
+
+- **It follows them.** If they move, the way is found again before the next
+  step.
+- **Stopping.** `{ "type": "stopWalking" }` ends it; so does any `move`,
+  which is then taken as usual. A second `goTo` replaces the first, which
+  ends with `stopped`. Closing
+  the socket ends it with no `walkEnded`, so a walk on mobile lasts as long
+  as the app keeps its socket.
+- Asking to walk to yourself is an `error` with code `NOT_ALLOWED`.
+
 ## Everybody else
 
 **Everybody else means everybody in your cohort.** Each cohort is its own

@@ -3935,6 +3935,290 @@ describe('movement', () => {
     });
   });
 
+  /** Walking somebody to somebody else, a step per stepMs. */
+  describe('going to somebody', () => {
+    const send = (conn: { ws: WebSocket }, message: Record<string, unknown>) =>
+      conn.ws.send(JSON.stringify(message));
+
+    const goTo = (conn: { ws: WebSocket }, userId: string) =>
+      send(conn, { type: 'goTo', userId });
+
+    const walkEnded = (conn: { messages: Record<string, unknown>[] }) =>
+      waitFor(conn, (m) => m.type === 'walkEnded');
+
+    const apart = (player: unknown, tile: { x: number; y: number }) => {
+      const { x, y } = player as { x: number; y: number };
+      return Math.abs(x - tile.x) + Math.abs(y - tile.y);
+    };
+
+    /** Somebody else, standing in the library at (3, 0). */
+    async function inTheLibrary() {
+      const userId = person();
+      const conn = await arrive(userId);
+      await walkToLibrary(conn);
+      return { userId, conn };
+    }
+
+    it('walks them into the space, to a tile next to the person, and the cohort sees the walk', async () => {
+      const ada = person();
+      const walker = await arrive(ada);
+      const grace = await inTheLibrary();
+
+      goTo(walker, grace.userId);
+
+      const ended = await walkEnded(walker);
+      expect(ended).toMatchObject({
+        userId: grace.userId,
+        reason: 'arrived',
+        spaceKey: null,
+      });
+      expect(apart(ended.player, { x: 3, y: 0 })).toBe(1);
+      expect(walker.messages.filter((m) => m.type === 'walking')).toHaveLength(
+        4,
+      );
+      await expect(
+        waitFor(
+          grace.conn,
+          (m) =>
+            m.type === 'spaceChanged' &&
+            m.userId === ada &&
+            m.spaceKey === 'library',
+        ),
+      ).resolves.toBeDefined();
+      await Promise.all([leave(walker), leave(grace.conn)]);
+    });
+
+    it('stops beside a space closed to them, where they can ask to enter', async () => {
+      const walker = await arrive(person());
+      const grace = await inTheLibrary();
+      send(grace.conn, { type: 'setLock', locked: true });
+      await waitFor(walker, (m) => m.type === 'lockChanged');
+
+      goTo(walker, grace.userId);
+
+      const ended = await walkEnded(walker);
+      expect(ended).toMatchObject({
+        reason: 'refused',
+        spaceKey: 'library',
+        mayAsk: true,
+      });
+      expect(ended.player).toMatchObject({ x: 2 });
+      send(walker, { type: 'requestEntry', spaceKey: 'library' });
+      await expect(
+        waitFor(grace.conn, (m) => m.type === 'entryRequested'),
+      ).resolves.toBeDefined();
+      await Promise.all([leave(walker), leave(grace.conn)]);
+    });
+
+    it('follows somebody who moves while they walk', async () => {
+      const walker = await arrive(person());
+      const grace = await inTheLibrary();
+
+      goTo(walker, grace.userId);
+      await waitFor(walker, (m) => m.type === 'walking');
+      move(grace.conn, 'down', 4);
+
+      const ended = await walkEnded(walker);
+      expect(ended).toMatchObject({ reason: 'arrived' });
+      expect(apart(ended.player, { x: 3, y: 1 })).toBe(1);
+      await Promise.all([leave(walker), leave(grace.conn)]);
+    });
+
+    it('ends the first walk when a second replaces it', async () => {
+      const walker = await arrive(person());
+      const grace = await inTheLibrary();
+      const ada = person();
+      const other = await arrive(ada);
+
+      goTo(walker, grace.userId);
+      goTo(walker, ada);
+
+      await expect(walkEnded(walker)).resolves.toMatchObject({
+        userId: grace.userId,
+        reason: 'stopped',
+      });
+      await expect(
+        waitFor(walker, (m) => m.type === 'walkEnded' && m.userId === ada),
+      ).resolves.toMatchObject({ reason: 'arrived' });
+      await Promise.all([leave(walker), leave(grace.conn), leave(other)]);
+    });
+
+    it('stops beside a closed space in the way, though theirs is open', async () => {
+      // A booth at (3, 2) inside a hall (x 2 to 4) designated for nobody.
+      const own = await buildWorld({
+        env,
+        accounts: {
+          ...accounts,
+          spacesOn: async () =>
+            new Map<string, SpaceFacts>([
+              [
+                'hall',
+                {
+                  kind: 'classroom',
+                  access: SPACE_ACCESS.Designated,
+                  retiredAt: null,
+                  locked: false,
+                  grants: [],
+                },
+              ],
+              [
+                'booth',
+                {
+                  kind: 'meeting_room',
+                  access: SPACE_ACCESS.Normal,
+                  retiredAt: null,
+                  locked: false,
+                  grants: [],
+                },
+              ],
+            ]),
+        },
+        positions: store,
+        presence: new MemoryPresenceStore(),
+        map: {
+          ...map,
+          grid: { width: 5, height: 5, spawn: { x: 0, y: 0 } },
+          spaces: spaceIndexFrom({
+            widthTiles: 5,
+            heightTiles: 5,
+            collisions: [],
+            spawn: { x: 0, y: 0 },
+            spaces: [
+              {
+                key: 'hall',
+                name: 'Hall',
+                kind: null,
+                bounds: { shape: 'rect', x: 2, y: 0, width: 3, height: 5 },
+                properties: {},
+              },
+              {
+                key: 'booth',
+                name: 'Booth',
+                kind: null,
+                bounds: { shape: 'rect', x: 3, y: 2, width: 1, height: 1 },
+                properties: {},
+              },
+            ],
+            portals: [],
+            desks: [],
+          }),
+        },
+      });
+      await own.app.listen({ port: 0, host: '127.0.0.1' });
+      const { port } = own.app.server.address() as AddressInfo;
+      const open = async (userId: string) => {
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`,
+          {
+            headers: {
+              origin: ORIGIN,
+              cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
+            },
+          },
+        );
+        const conn = { ws, messages: [] as Record<string, unknown>[] };
+        ws.on('message', (raw) =>
+          conn.messages.push(
+            JSON.parse(raw.toString()) as Record<string, unknown>,
+          ),
+        );
+        await waitFor(conn, (m) => m.type === 'snapshot');
+        return conn;
+      };
+      const admin = person();
+      accounts.admins.add(admin);
+      const grace = await open(admin);
+      const walker = await open(person());
+      try {
+        let seq = 0;
+        for (const direction of ['right', 'right', 'down', 'down', 'right']) {
+          seq += 1;
+          move(grace, direction, seq);
+          await waitFor(grace, (m) => m.type === 'moveResult' && m.seq === seq);
+          await new Promise((resolve) =>
+            setTimeout(resolve, env.WORLD_STEP_MS),
+          );
+        }
+
+        goTo(walker, admin);
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'refused',
+          spaceKey: 'hall',
+          player: { x: 1, y: 0 },
+        });
+      } finally {
+        grace.ws.close();
+        walker.ws.close();
+        await own.gateway.stop();
+        await own.app.close();
+      }
+    });
+
+    it('stops when they step themselves, then takes the step', async () => {
+      const walker = await arrive(person());
+      const grace = await inTheLibrary();
+
+      goTo(walker, grace.userId);
+      move(walker, 'down', 1);
+
+      await expect(walkEnded(walker)).resolves.toMatchObject({
+        reason: 'stopped',
+      });
+      await expect(
+        waitFor(walker, (m) => m.type === 'moveResult' && m.seq === 1),
+      ).resolves.toBeDefined();
+      await Promise.all([leave(walker), leave(grace.conn)]);
+    });
+
+    it('stops when they say stop', async () => {
+      const walker = await arrive(person());
+      const grace = await inTheLibrary();
+
+      goTo(walker, grace.userId);
+      send(walker, { type: 'stopWalking' });
+
+      await expect(walkEnded(walker)).resolves.toMatchObject({
+        reason: 'stopped',
+      });
+      await Promise.all([leave(walker), leave(grace.conn)]);
+    });
+
+    it('says they are gone when they leave mid-walk, or were never here', async () => {
+      const walker = await arrive(person());
+      const grace = await inTheLibrary();
+
+      goTo(walker, grace.userId);
+      await waitFor(walker, (m) => m.type === 'walking');
+      await leave(grace.conn);
+
+      await expect(walkEnded(walker)).resolves.toMatchObject({
+        userId: grace.userId,
+        reason: 'gone',
+      });
+
+      walker.messages.length = 0;
+      goTo(walker, 'nobody-here');
+      await expect(walkEnded(walker)).resolves.toMatchObject({
+        userId: 'nobody-here',
+        reason: 'gone',
+      });
+      await leave(walker);
+    });
+
+    it('will not walk somebody to themselves', async () => {
+      const ada = person();
+      const walker = await arrive(ada);
+
+      goTo(walker, ada);
+
+      await expect(
+        waitFor(walker, (m) => m.type === 'error'),
+      ).resolves.toMatchObject({ code: 'NOT_ALLOWED' });
+      await leave(walker);
+    });
+  });
+
   /**
    * Asking to enter the library from beside it: two steps right of the
    * spawn, at (2, 0).
