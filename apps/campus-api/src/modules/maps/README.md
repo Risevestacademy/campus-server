@@ -132,8 +132,8 @@ mentors for a classroom or live-coding room (everybody in the cohort but its
 guests), and nobody for a mentor pod until an admin adds somebody. The list
 is written once, when the sync adds the space, never again. So a space the
 sync added with no kind, and an admin later makes a classroom, starts with an
-empty list: admins only until an admin puts people on it. Whatever sets a
-space's kind should write that kind's starting list too.
+empty list: admins only until an admin puts people on it. PATCH only sets the
+kind; it does not seed the defaults or a starting list.
 
 `?dryRun=true` answers with what would change and changes nothing.
 
@@ -210,7 +210,8 @@ it. Ended grants go with the track: kept for good, they would block the
 detach, and so the cohort's deletion, forever. Their record is the audit
 log — each grant's `space_membership_granted` and `space_membership_ended`
 entries — and the `cohort_track_detached` entry names the grants it cleared.
-The detach locks the link before it looks for grants, and a grant to a
+The detach locks the link before it looks for grants, and reads them `for
+update`, so an end in flight is waited for rather than raced; a grant to a
 track holds the link with `key share`, so the two never cross: tested in
 `space-memberships.pg.spec.ts`.
 
@@ -219,8 +220,29 @@ row, so deleting the group (`DELETE /v1/cohorts/{id}/mentorship-groups/{groupId}
 refuses while a live entry names it (409, naming the spaces): end it first, so
 access is never taken away without anyone ending it. Ended entries go with the
 group, as a detached track's do, and the audit log is their record. The delete
-locks the group before it looks for entries, and a grant to a group holds it
-with `key share`, so the two never cross.
+locks the group before it looks for entries, and reads them `for update`, so an
+end in flight is waited for; a grant to a group holds it with `key share`, so
+the two never cross.
+
+## Setting a space up
+
+`GET /v1/spaces`, `GET /v1/spaces/{id}` and `PATCH /v1/spaces/{id}`, admins
+only. The list is live spaces by name; `?needsKind=true` is the queue of
+spaces the map drew and no admin has set up yet. Reading one by id still
+works after it is retired.
+
+A `PATCH` is a partial edit of `name`, `kind`, `access`, `audioMode`,
+`capacity`, `audibleRadius`, `subscribeRadius` and `hysteresisFactor`. The
+key, the map and the default flag belong to the map and cannot be changed;
+naming one is a 400 that names the field, never a silent drop. `kind: null`
+puts a space back in the queue. An edit that moves nothing writes no audit
+entry.
+
+The database remains the source of truth for the combinations a space may
+not be. A default space that is not normal and a capacity below 1 answer 400
+and name the rule; a second town hall or notice board answers 409. Every
+successful edit writes a `space_updated` entry, in the same transaction as
+the row, with the admin, the space and each changed field's `from` and `to`.
 
 ## Not here yet
 
@@ -235,6 +257,5 @@ with `key share`, so the two never cross.
 - **Which version of a map is live.** Today `world` loads the latest
   published version. Whether the database should name it is undecided, so
   the sync reports the version it read and stores none.
-- **Setting a space up.** No route changes a space's kind or settings yet.
 - **The sync does not reach `world`.** It loads its map at startup, so a new
   publish is live there after a restart, whether or not this has run.

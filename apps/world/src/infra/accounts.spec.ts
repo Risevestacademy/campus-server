@@ -14,6 +14,7 @@ import {
   SPACES_QUERY,
   SPACE_LISTS_QUERY,
   looksLikeId,
+  toWorldSpace,
 } from './accounts.js';
 
 /**
@@ -743,5 +744,38 @@ describe("world's space doors, against campus-api's schema", () => {
     expect(at(mentor, 'garden')).toBe(true);
     expect(at(outsider, 'garden')).toBe(false);
     expect(at(student, 'old')).toBe(false);
+  });
+});
+
+/**
+ * The row world reads need not come from this build's enum: world and the
+ * database deploy separately, so a newer database may know a mode this build
+ * does not. It is settled once, here, rather than carried around as a string
+ * every comparison downstream reads as "not proximity".
+ */
+describe('reading a space row', () => {
+  const row = {
+    id: '11111111-1111-4111-8111-111111111111',
+    key: 'library',
+    kind: 'meeting_room',
+    access: 'normal',
+    retired_at: null,
+    audio_mode: 'proximity',
+    audible_radius: null,
+    subscribe_radius: null,
+    hysteresis_factor: '1.4',
+  };
+
+  it('carries the modes it knows', () => {
+    expect(toWorldSpace(row, []).audioMode).toBe('proximity');
+    expect(toWorldSpace({ ...row, audio_mode: 'boundary' }, []).audioMode).toBe(
+      'boundary',
+    );
+  });
+
+  it('reads a mode it does not know as boundary, so it hears as one room', () => {
+    expect(toWorldSpace({ ...row, audio_mode: 'spatial' }, []).audioMode).toBe(
+      'boundary',
+    );
   });
 });

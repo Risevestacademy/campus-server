@@ -109,13 +109,12 @@ beforeAll(async () => {
     FF_LOG_LEVEL: 'fatal',
   } as NodeJS.ProcessEnv);
   stepMs = env.WORLD_STEP_MS;
-  world = await buildWorld(
+  world = await buildWorld({
     env,
     accounts,
-    undefined,
-    new MemoryPresenceStore(),
+    presence: new MemoryPresenceStore(),
     map,
-  );
+  });
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   port = (world.app.server.address() as AddressInfo).port;
 });

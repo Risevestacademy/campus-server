@@ -39,7 +39,7 @@ describe('POST /media/connection-check', () => {
   let world: World | undefined;
 
   async function start(env = routeEnv(MEDIA)) {
-    world = await buildWorld(env, accounts);
+    world = await buildWorld({ env, accounts });
     return world.app;
   }
 

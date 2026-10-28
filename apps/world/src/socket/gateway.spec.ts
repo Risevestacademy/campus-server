@@ -480,7 +480,13 @@ afterEach(async () => {
 });
 
 beforeAll(async () => {
-  world = await buildWorld(env, accounts, store, presence, map);
+  world = await buildWorld({
+    env,
+    accounts,
+    positions: store,
+    presence,
+    map,
+  });
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   const { port } = world.app.server.address() as AddressInfo;
   url = `ws://127.0.0.1:${port}/socket`;
@@ -3578,18 +3584,18 @@ describe('movement', () => {
     });
 
     it('keeps every drawn space to admins until the spaces have been read once', async () => {
-      const own = await buildWorld(
+      const own = await buildWorld({
         env,
-        {
+        accounts: {
           ...accounts,
           spacesOn: async () => {
             throw new Error('postgres is down');
           },
         },
-        store,
-        new MemoryPresenceStore(),
+        positions: store,
+        presence: new MemoryPresenceStore(),
         map,
-      );
+      });
       await own.app.listen({ port: 0, host: '127.0.0.1' });
       const { port } = own.app.server.address() as AddressInfo;
       const ws = new WebSocket(
@@ -3643,18 +3649,18 @@ describe('movement', () => {
         y: 1,
         facing: 'left',
       });
-      const own = await buildWorld(
+      const own = await buildWorld({
         env,
-        {
+        accounts: {
           ...accounts,
           spacesOn: async () => {
             throw new Error('postgres is down');
           },
         },
-        store,
-        new MemoryPresenceStore(),
+        positions: store,
+        presence: new MemoryPresenceStore(),
         map,
-      );
+      });
       await own.app.listen({ port: 0, host: '127.0.0.1' });
       const { port } = own.app.server.address() as AddressInfo;
       const ws = new WebSocket(
@@ -4500,13 +4506,13 @@ describe('going away while idle', () => {
   let nextUser = 0;
 
   beforeAll(async () => {
-    idle = await buildWorld(
-      { ...env, WORLD_AWAY_AFTER_SECONDS: 1 },
+    idle = await buildWorld({
+      env: { ...env, WORLD_AWAY_AFTER_SECONDS: 1 },
       accounts,
-      store,
-      new MemoryPresenceStore(),
+      positions: store,
+      presence: new MemoryPresenceStore(),
       map,
-    );
+    });
     await idle.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = idle.app.server.address() as AddressInfo;
     idleUrl = `ws://127.0.0.1:${port}/socket`;
@@ -4660,19 +4666,19 @@ describe('going away while idle', () => {
 describe('shutdown', () => {
   it('saves everybody still here and takes them out of presence before closing their sockets', async () => {
     const saved = new Map<string, unknown>();
-    const own = await buildWorld(
+    const own = await buildWorld({
       env,
       accounts,
-      {
+      positions: {
         ...store,
         save: async (players) => {
           for (const { userId, x, y, facing } of players)
             saved.set(userId, { x, y, facing });
         },
       },
-      new MemoryPresenceStore(),
+      presence: new MemoryPresenceStore(),
       map,
-    );
+    });
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = own.app.server.address() as AddressInfo;
     const ws = new WebSocket(
@@ -4722,7 +4728,13 @@ describe('shutdown', () => {
         await release.promise;
       },
     };
-    const own = await buildWorld(env, accounts, store, holding, map);
+    const own = await buildWorld({
+      env,
+      accounts,
+      positions: store,
+      presence: holding,
+      map,
+    });
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = own.app.server.address() as AddressInfo;
     const ws = new WebSocket(
@@ -4789,7 +4801,11 @@ describe.skipIf(!redisUrl)('across instances', () => {
   let redis: Redis;
 
   async function instance(): Promise<World> {
-    const own = await buildWorld(shared, accounts, store);
+    const own = await buildWorld({
+      env: shared,
+      accounts,
+      positions: store,
+    });
     instances.push(own);
     await own.app.listen({ port: 0, host: '127.0.0.1' });
     return own;

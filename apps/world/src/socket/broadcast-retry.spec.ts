@@ -74,8 +74,8 @@ let world: World;
 let port: number;
 
 beforeAll(async () => {
-  world = await buildWorld(
-    loadEnv({
+  world = await buildWorld({
+    env: loadEnv({
       AUTH_SESSION_SECRET: SECRET,
       DEPLOYMENT_ENVIRONMENT: 'development',
       DATABASE_URL: 'postgres://unused',
@@ -87,10 +87,9 @@ beforeAll(async () => {
       FF_LOG_LEVEL: 'fatal',
     } as NodeJS.ProcessEnv),
     accounts,
-    undefined,
-    new MemoryPresenceStore(),
+    presence: new MemoryPresenceStore(),
     map,
-  );
+  });
   await world.app.listen({ port: 0, host: '127.0.0.1' });
   port = (world.app.server.address() as AddressInfo).port;
 });
