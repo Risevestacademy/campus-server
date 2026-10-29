@@ -494,11 +494,14 @@ describe("world's space doors, against campus-api's schema", () => {
   const STUDENT = 'eeeeeee4-0000-4000-8000-000000000001';
   const GUEST = 'eeeeeee4-0000-4000-8000-000000000002';
   const NAMED = 'eeeeeee4-0000-4000-8000-000000000003';
+  const MENTOR = 'eeeeeee4-0000-4000-8000-000000000004';
+  const OUTSIDER = 'eeeeeee4-0000-4000-8000-000000000005';
 
   let spaceIds: Record<string, string>;
+  let groupId: string;
 
   beforeAll(async () => {
-    for (const id of [STUDENT, GUEST, NAMED]) {
+    for (const id of [STUDENT, GUEST, NAMED, MENTOR, OUTSIDER]) {
       await db.query(
         `insert into users (id, email, status) values ($1, $2, 'active')`,
         [id, `${id}@campus.local`],
@@ -530,6 +533,34 @@ describe("world's space doors, against campus-api's schema", () => {
         new Date(NOW.getTime() + HOUR),
       ],
     );
+    await db.query(
+      `insert into cohort_members (user_id, cohort_id, cohort_track_id, role, status)
+       values ($1, $3, null, 'mentor', null),
+              ($2, $3, $4, 'student', 'active')`,
+      [MENTOR, OUTSIDER, COHORT, COHORT_TRACK],
+    );
+    // One pod: its mentor, and one of the students. The other student is in
+    // no group, so a group entry must leave them outside.
+    const mentorMember = await db.query<{ id: string }>(
+      `select id from cohort_members where user_id = $1`,
+      [MENTOR],
+    );
+    const studentMember = await db.query<{ id: string }>(
+      `select id from cohort_members where user_id = $1`,
+      [STUDENT],
+    );
+    groupId = (
+      await db.query<{ id: string }>(
+        `insert into mentorship_groups (cohort_id, mentor_member_id, name)
+         values ($1, $2, 'The Ravens') returning id`,
+        [COHORT, mentorMember.rows[0].id],
+      )
+    ).rows[0].id;
+    await db.query(
+      `insert into mentorship_group_students (mentorship_group_id, cohort_id, cohort_member_id)
+       values ($1, $2, $3)`,
+      [groupId, COHORT, studentMember.rows[0].id],
+    );
 
     const map = await db.query<{ id: string }>(
       `insert into maps (key, name) values ('doors', 'Doors') returning id`,
@@ -542,6 +573,7 @@ describe("world's space doors, against campus-api's schema", () => {
       ['lounge', map.rows[0].id, 'meeting_room', 'normal', null],
       ['classroom', map.rows[0].id, 'classroom', 'designated', null],
       ['pod', map.rows[0].id, 'mentor_pod', 'designated', null],
+      ['garden', map.rows[0].id, 'meeting_room', 'designated', null],
       ['old', map.rows[0].id, 'meeting_room', 'normal', NOW],
       ['annex', other.rows[0].id, 'meeting_room', 'normal', null],
     ] as const) {
@@ -568,6 +600,12 @@ describe("world's space doors, against campus-api's schema", () => {
         new Date(NOW.getTime() - HOUR),
       ],
     );
+    // The garden is listed for the pod itself: its students and its mentor.
+    await db.query(
+      `insert into space_memberships (space_id, mentorship_group_id, valid_from)
+       values ($1, $2, $3)`,
+      [spaceIds.garden, groupId, new Date(NOW.getTime() - HOUR)],
+    );
   });
 
   async function spaces() {
@@ -587,6 +625,7 @@ describe("world's space doors, against campus-api's schema", () => {
         cohort_track_id: string | null;
         cohort_role: string | null;
         system_role: string | null;
+        mentorship_group_id: string | null;
         valid_from: Date;
         valid_to: Date | null;
       }>(SPACE_LISTS_QUERY, [rows.map((row) => row.id), NOW])
@@ -606,6 +645,7 @@ describe("world's space doors, against campus-api's schema", () => {
               toTrackId: entry.cohort_track_id,
               toCohortRole: entry.cohort_role,
               toSystemRole: entry.system_role,
+              toGroupId: entry.mentorship_group_id,
               validFrom: entry.valid_from,
               validTo: entry.valid_to,
             })),
@@ -623,6 +663,7 @@ describe("world's space doors, against campus-api's schema", () => {
         status: string | null;
         access_expires_at: Date | null;
         cohort_track_id: string | null;
+        mentorship_group_id: string | null;
       }>(MEMBERSHIP_ROWS_QUERY, [[userId], [COHORT]])
     ).rows[0];
     return {
@@ -636,6 +677,7 @@ describe("world's space doors, against campus-api's schema", () => {
         status: row.status,
         accessExpiresAt: row.access_expires_at,
         trackId: row.cohort_track_id,
+        mentorshipGroupId: row.mentorship_group_id,
       },
     };
   }
@@ -643,6 +685,7 @@ describe("world's space doors, against campus-api's schema", () => {
   it("reads every space on the map, retired ones too, and none on another map's", async () => {
     expect([...(await spaces()).keys()].sort()).toEqual([
       'classroom',
+      'garden',
       'lounge',
       'old',
       'pod',
@@ -655,16 +698,26 @@ describe("world's space doors, against campus-api's schema", () => {
     expect(pod?.grants.map((grant) => grant.toUserId)).toEqual([NAMED]);
   });
 
-  it('reads a membership row as it stands: role, track and visit', async () => {
+  it('reads a membership row as it stands: role, track, group and visit', async () => {
     expect((await person(GUEST)).membership).toMatchObject({
       role: 'guest',
       trackId: null,
+      mentorshipGroupId: null,
       accessExpiresAt: new Date(NOW.getTime() + HOUR),
     });
     expect((await person(STUDENT)).membership).toMatchObject({
       role: 'student',
       status: 'active',
       trackId: COHORT_TRACK,
+      mentorshipGroupId: groupId,
+    });
+    // A mentor holds the pod from the other side, and reads the same group.
+    expect((await person(MENTOR)).membership).toMatchObject({
+      role: 'mentor',
+      mentorshipGroupId: groupId,
+    });
+    expect((await person(OUTSIDER)).membership).toMatchObject({
+      mentorshipGroupId: null,
     });
   });
 
@@ -675,6 +728,8 @@ describe("world's space doors, against campus-api's schema", () => {
     const student = await person(STUDENT);
     const guest = await person(GUEST);
     const named = await person(NAMED);
+    const mentor = await person(MENTOR);
+    const outsider = await person(OUTSIDER);
 
     expect(at(student, 'lounge')).toBe(true);
     expect(at(guest, 'lounge')).toBe(true);
@@ -683,6 +738,11 @@ describe("world's space doors, against campus-api's schema", () => {
     expect(at(named, 'pod')).toBe(true);
     // Their entry ended an hour ago.
     expect(at(student, 'pod')).toBe(false);
+    // The garden is listed for their pod: its students and its mentor, and
+    // nobody else.
+    expect(at(student, 'garden')).toBe(true);
+    expect(at(mentor, 'garden')).toBe(true);
+    expect(at(outsider, 'garden')).toBe(false);
     expect(at(student, 'old')).toBe(false);
   });
 });
