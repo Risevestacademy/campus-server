@@ -203,14 +203,16 @@ export const WalkEndReason = z
   .meta({
     id: 'WalkEndReason',
     description:
-      'arrived: you are one tile from them, never on theirs, and in their ' +
-      'space unless it has no room beside them. stopped: you sent ' +
+      'arrived: you are one tile from them, in their space, never on their ' +
+      'tile. stopped: you sent ' +
       '`stopWalking` or a `move`. refused: a space you may not enter is in ' +
       'the way, theirs or another, and you stopped beside the first one; ' +
       '`mayAsk` says whether asking to enter it would be taken. gone: they ' +
       'left, or were not here. elsewhere: they are online, but connected to ' +
       'another world server, which a walk cannot reach. no_way: no path ' +
-      'reaches them. moved_by_staff: staff removed you from a space mid-walk.',
+      'reaches a tile beside them in their space: walls, a space with no ' +
+      'room beside them, or a chase past the step limit. moved_by_staff: ' +
+      'staff removed you from a space mid-walk.',
   });
 
 export const EntryRequestOutcome = z
@@ -409,7 +411,9 @@ export const ClientMessage = z
     z
       .object({
         type: z.literal('goTo'),
-        userId: z.string().describe('Whom to walk to, in your cohort.'),
+        userId: z
+          .string()
+          .describe('Whom to walk to: in your cohort, on this world server.'),
       })
       .meta({
         id: 'GoToMessage',
@@ -417,7 +421,9 @@ export const ClientMessage = z
           'Have the server walk you to somebody, a step per `stepMs`, through ' +
           'the same doors your own steps would be. Each step is a ' +
           '`walking`; the walk ends with one `walkEnded`. Replaces a walk ' +
-          'already going. Yourself is a NOT_ALLOWED error. Counts as activity.',
+          'already going. Somebody connected to another world server ends it ' +
+          'with `elsewhere`. Yourself is a NOT_ALLOWED error. Counts as ' +
+          'activity.',
       }),
     z.object({ type: z.literal('stopWalking') }).meta({
       id: 'StopWalkingMessage',

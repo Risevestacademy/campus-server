@@ -40,7 +40,7 @@ import type {
   Presence,
   PresenceStore,
 } from '../infra/presence.js';
-import { step, type Direction, type Tile } from '../movement/grid.js';
+import { Direction, step, walkable, type Tile } from '../movement/grid.js';
 import { pathTo } from '../movement/paths.js';
 import { Players, type Player } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
@@ -1056,7 +1056,8 @@ export function registerGateway(
   }
 
   const walks = new Map<Connection, Walk>();
-  const walkLimit = map.grid.width * map.grid.height;
+  const walkLimit =
+    env.WORLD_WALK_MAX_STEPS ?? map.grid.width * map.grid.height;
 
   function admitsStep(connection: Connection, now: number) {
     // Asked only on a step into another space: somebody already inside
@@ -1136,9 +1137,9 @@ export function registerGateway(
   }
 
   /**
-   * To a tile next to them, never onto theirs: in their space, or just
-   * outside it when it has no room beside them. When a space closed to this
-   * person is in the way, to the nearest tile beside the first one.
+   * To a tile next to them in their space, never onto theirs; undefined when
+   * their space has no such tile. When a space closed to this person is in
+   * the way, to the nearest tile beside the first one.
    */
   function planWalk(
     connection: Connection,
@@ -1148,9 +1149,15 @@ export function registerGateway(
   ): { path: Direction[]; closed: string | null } | undefined {
     const crosses = crossingFor(connection, now);
     const theirs = spaceAt(map.spaces, to);
-    const besideThem = (tile: Tile) =>
-      Math.abs(tile.x - to.x) + Math.abs(tile.y - to.y) === 1;
+    const arrived = (tile: Tile) =>
+      Math.abs(tile.x - to.x) + Math.abs(tile.y - to.y) === 1 &&
+      spaceAt(map.spaces, tile) === theirs;
     if (crosses(to)) {
+      const room = Object.values(Direction).some((direction) => {
+        const tile = step(to, direction);
+        return walkable(map.grid, tile) && arrived(tile);
+      });
+      if (!room) return undefined;
       // A yes lapses a step away from the door, so a walk holding one for
       // their space keeps to the door if it can.
       const pass = requests.passFor(connection);
@@ -1158,16 +1165,11 @@ export function registerGateway(
         crosses(tile) &&
         (spaceAt(map.spaces, tile) === pass ||
           besideSpace(map.grid, map.spaces, tile, pass as string));
-      const ways = pass === theirs ? [keepsPass, crosses] : [crosses];
-      for (const arrived of [
-        (tile: Tile) =>
-          besideThem(tile) && spaceAt(map.spaces, tile) === theirs,
-        besideThem,
-      ]) {
-        for (const mayCross of ways) {
-          const path = pathTo(map.grid, from, arrived, mayCross);
-          if (path) return { path, closed: null };
-        }
+      for (const mayCross of pass === theirs
+        ? [keepsPass, crosses]
+        : [crosses]) {
+        const path = pathTo(map.grid, from, arrived, mayCross);
+        if (path) return { path, closed: null };
       }
     } else {
       const path = pathTo(

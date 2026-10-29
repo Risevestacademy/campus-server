@@ -26,6 +26,7 @@ import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
 import { oneAtATime } from './gateway.js';
+import { CLOSES } from './protocol.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
@@ -4096,12 +4097,21 @@ describe('movement', () => {
       {
         walls = [],
         stepMs = env.WORLD_STEP_MS,
-      }: { walls?: { x: number; y: number }[]; stepMs?: number } = {},
+        walkMaxSteps,
+      }: {
+        walls?: { x: number; y: number }[];
+        stepMs?: number;
+        walkMaxSteps?: number;
+      } = {},
     ) {
       const grid = new Uint8Array(5 * 5);
       for (const wall of walls) grid[tileIndex({ width: 5 }, wall)] = 1;
       const own = await buildWorld({
-        env: { ...env, WORLD_STEP_MS: stepMs },
+        env: {
+          ...env,
+          WORLD_STEP_MS: stepMs,
+          WORLD_WALK_MAX_STEPS: walkMaxSteps,
+        },
         accounts: {
           ...accounts,
           spacesOn: async () =>
@@ -4163,7 +4173,13 @@ describe('movement', () => {
           },
         );
         sockets.push(ws);
-        const conn = { ws, messages: [] as Record<string, unknown>[] };
+        const conn = {
+          ws,
+          messages: [] as Record<string, unknown>[],
+          closed: new Promise<number>((resolve) =>
+            ws.once('close', (code) => resolve(code)),
+          ),
+        };
         ws.on('message', (raw) =>
           conn.messages.push(
             JSON.parse(raw.toString()) as Record<string, unknown>,
@@ -4180,7 +4196,10 @@ describe('movement', () => {
       return { open, close, gateway: own.gateway };
     }
 
-    /** A booth at (3, 2) inside a hall (x 2 to 4) designated for nobody. */
+    /**
+     * A booth at (3, 2) and (3, 3) inside a hall (x 2 to 4) designated for
+     * nobody.
+     */
     const hallWithBooth = (boothAccess: string) =>
       ownWorld([
         {
@@ -4191,7 +4210,7 @@ describe('movement', () => {
           width: 3,
           height: 5,
         },
-        { key: 'booth', access: boothAccess, x: 3, y: 2, width: 1, height: 1 },
+        { key: 'booth', access: boothAccess, x: 3, y: 2, width: 1, height: 2 },
       ]);
 
     it('stops beside a closed space in the way, though theirs is open', async () => {
@@ -4250,7 +4269,7 @@ describe('movement', () => {
       await Promise.all([leave(walker), leave(graceConn)]);
     });
 
-    it('stands just outside a space with no room beside them, not on their tile', async () => {
+    it('says there is no way when their space has no room beside them', async () => {
       const own = await ownWorld([
         {
           key: 'booth',
@@ -4268,9 +4287,10 @@ describe('movement', () => {
 
         goTo(walker, grace);
 
-        const ended = await walkEnded(walker);
-        expect(ended).toMatchObject({ reason: 'arrived', spaceKey: null });
-        expect(apart(ended.player, { x: 2, y: 2 })).toBe(1);
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'no_way',
+          player: { x: 0, y: 0 },
+        });
       } finally {
         await own.close();
       }
@@ -4360,17 +4380,70 @@ describe('movement', () => {
       await leave(grace.conn);
     });
 
-    it('sends nothing when the server shuts down mid-walk', async () => {
+    it('stops walking, and sends no walkEnded, when the server shuts down', async () => {
       const own = await ownWorld([], { stepMs: 500 });
-      const grace = person();
-      await own.open(grace, { x: 4, y: 4 });
-      const walker = await own.open(person());
+      try {
+        const grace = person();
+        await own.open(grace, { x: 4, y: 4 });
+        const walker = await own.open(person());
 
-      goTo(walker, grace);
+        goTo(walker, grace);
+        await waitFor(walker, (m) => m.type === 'walking');
+        await own.gateway.stop();
+
+        await expect(walker.closed).resolves.toBe(
+          CLOSES['server shutting down'].code,
+        );
+        expect(
+          walker.messages.filter((m) => m.type === 'walking'),
+        ).toHaveLength(1);
+        expect(walker.messages.some((m) => m.type === 'walkEnded')).toBe(false);
+      } finally {
+        await own.close();
+      }
+    });
+
+    it('stops beside a door that closes mid-walk', async () => {
+      const walker = await arrive(person());
+      const grace = await inTheLibrary();
+
+      goTo(walker, grace.userId);
       await waitFor(walker, (m) => m.type === 'walking');
-      await own.close();
+      send(grace.conn, { type: 'setLock', locked: true });
 
-      expect(walker.messages.some((m) => m.type === 'walkEnded')).toBe(false);
+      const ended = await walkEnded(walker);
+      expect(ended).toMatchObject({
+        reason: 'refused',
+        spaceKey: 'library',
+        mayAsk: true,
+        player: { x: 2 },
+      });
+      expect(
+        walker.messages.filter(
+          (m) => m.type === 'walking' && (m.player as { x: number }).x >= 3,
+        ),
+      ).toEqual([]);
+      await Promise.all([leave(walker), leave(grace.conn)]);
+    });
+
+    it('gives up with no_way once the walk reaches its step limit', async () => {
+      const own = await ownWorld([], { walkMaxSteps: 2 });
+      try {
+        const grace = person();
+        await own.open(grace, { x: 4, y: 4 });
+        const walker = await own.open(person());
+
+        goTo(walker, grace);
+
+        const ended = await walkEnded(walker);
+        expect(ended).toMatchObject({ reason: 'no_way' });
+        expect(apart(ended.player, { x: 0, y: 0 })).toBe(2);
+        expect(
+          walker.messages.filter((m) => m.type === 'walking'),
+        ).toHaveLength(2);
+      } finally {
+        await own.close();
+      }
     });
 
     it('says they are elsewhere when another world server holds them', async () => {

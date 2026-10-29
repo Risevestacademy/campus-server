@@ -186,7 +186,9 @@ The client says which way, never where to. The server decides every position.
 
 A "go to" button beside somebody's name has the server walk you to them.
 Send `{ "type": "goTo", "userId": "…" }`. Busy or not, anybody in your
-cohort can be walked to.
+cohort connected to the same world server can be walked to. World runs as one
+server today, so that is everybody online; once it runs as several, somebody
+connected to another ends the walk with `elsewhere`.
 
 - **It walks, a step per `stepMs`,** through the same doors as your own
   steps: walls, locks, designated spaces and removals all hold. Everybody
@@ -200,15 +202,15 @@ cohort can be walked to.
 "reason": "…", "player": {…}, "spaceKey": "…" | null, "mayAsk": false }`),
   saying where you stopped and why:
 
-  | `reason`         | Meaning                                                                                                         | What to do                                                          |
-  | ---------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-  | `arrived`        | You stand next to them, never on their tile: in their space, or just outside it when it has no room beside them | Nothing                                                             |
-  | `stopped`        | You sent `stopWalking` or a `move`                                                                              | Nothing                                                             |
-  | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)           | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
-  | `gone`           | They left, or were not here                                                                                     | Say so                                                              |
-  | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                               | Say they cannot be reached right now                                |
-  | `no_way`         | No path reaches them                                                                                            | Say so                                                              |
-  | `moved_by_staff` | Staff removed you from a space mid-walk                                                                         | The `staffAction` says the rest                                     |
+  | `reason`         | Meaning                                                                                                                             | What to do                                                          |
+  | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+  | `arrived`        | You stand next to them, in their space, never on their tile                                                                         | Nothing                                                             |
+  | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
+  | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
+  | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
+  | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                   | Say they cannot be reached right now                                |
+  | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit | Say so                                                              |
+  | `moved_by_staff` | Staff removed you from a space mid-walk                                                                                             | The `staffAction` says the rest                                     |
 
 - **It follows them.** If they move, the way is found again before the next
   step.
