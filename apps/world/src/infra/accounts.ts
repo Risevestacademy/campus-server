@@ -194,6 +194,7 @@ export type SpaceAudioMode = 'proximity' | 'boundary';
 /** A space's door, and how people in it hear one another. */
 export interface WorldSpace extends SpaceFacts {
   id: string;
+  name: string;
   audioMode: SpaceAudioMode;
   audibleRadius: number;
   subscribeRadius: number;
@@ -204,6 +205,7 @@ export interface WorldSpace extends SpaceFacts {
 export interface SpaceRow {
   id: string;
   key: string;
+  name: string;
   kind: string | null;
   access: string;
   retired_at: Date | null;
@@ -231,6 +233,7 @@ export function toWorldSpace(
 ): WorldSpace {
   return {
     id: row.id,
+    name: row.name,
     kind: row.kind,
     access: row.access,
     retiredAt: row.retired_at,
@@ -250,7 +253,7 @@ export function toWorldSpace(
 }
 
 /** Every space on one map, retired ones included. $1 the map's key. */
-export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.kind, spaces.access, spaces.retired_at,
+export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.name, spaces.kind, spaces.access, spaces.retired_at,
     spaces.audio_mode, spaces.audible_radius, spaces.subscribe_radius, spaces.hysteresis_factor
   from spaces
   join maps on maps.id = spaces.map_id

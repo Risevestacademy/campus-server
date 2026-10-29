@@ -90,6 +90,27 @@ export const Avatar = z
       'a `statusChanged`, and to their space as a `spaceChanged`.',
   });
 
+export const SpaceName = z
+  .object({
+    spaceKey: z
+      .string()
+      .describe(
+        "A drawn space's key, or " +
+          `\`${DEFAULT_SPACE_KEY}\` for the corridors and grounds.`,
+      ),
+    name: z
+      .string()
+      .describe(
+        'What to show for it. The key itself when campus-api has no row ' +
+          'for the space yet.',
+      ),
+  })
+  .meta({
+    id: 'SpaceName',
+    description:
+      'What to call a space a `spaceKey` names. The same in every cohort.',
+  });
+
 export const Call = z
   .object({
     url: z.string().describe('The media server to connect to.'),
@@ -436,6 +457,11 @@ export const ServerMessage = z
         lockedSpaces: z
           .array(z.string())
           .describe('The spaces locked in your cohort right now.'),
+        spaces: z
+          .array(SpaceName)
+          .describe(
+            `Every space a \`spaceKey\` can name on this map, \`${DEFAULT_SPACE_KEY}\` first.`,
+          ),
       })
       .meta({
         id: 'SnapshotMessage',
@@ -548,6 +574,17 @@ export const ServerMessage = z
         description:
           'Which spaces can be locked changed, because an admin changed a ' +
           'space: replaces the list from `snapshot`.',
+      }),
+    z
+      .object({
+        type: z.literal('spaces'),
+        spaces: z.array(SpaceName),
+      })
+      .meta({
+        id: 'SpacesMessage',
+        description:
+          'A space was renamed, or campus-api gained or lost a row for one: ' +
+          'replaces `snapshot.spaces`. Sent to everybody.',
       }),
     z
       .object({
@@ -887,6 +924,7 @@ export type AvatarMatchesAccount = Assert<
 >;
 
 export type Avatar = z.infer<typeof Avatar>;
+export type SpaceName = z.infer<typeof SpaceName>;
 
 export function encode(message: ServerMessage): string {
   return JSON.stringify(message);

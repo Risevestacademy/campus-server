@@ -77,6 +77,7 @@ import {
   type CloseReason,
   type EntryRequestOutcome,
   type ServerMessage,
+  type SpaceName,
 } from './protocol.js';
 
 /**
@@ -187,6 +188,7 @@ export function registerGateway(
   const removals = new SpaceRemovals();
   /** Which spaces may be locked, from the doors last read, sorted. */
   let lockable: readonly string[] = [];
+  let spaceNames = spaceNamesFrom(doors);
 
   /**
    * One read at a time. Asked again while one is running, the running one
@@ -208,6 +210,7 @@ export function registerGateway(
           doorsRead = true;
           refreshCalls();
           refreshLockable();
+          refreshSpaceNames();
           reviewRequests();
         } catch (err) {
           app.log.error(
@@ -281,6 +284,24 @@ export function registerGateway(
     }
     for (const { cohortId, spaceKey } of locks.all()) {
       if (!lockable.includes(spaceKey)) unlock(cohortId, spaceKey, null);
+    }
+  }
+
+  function spaceNamesFrom(read: ReadonlyMap<string, WorldSpace>): SpaceName[] {
+    return [DEFAULT_SPACE_KEY, ...map.spaces.keys].map((spaceKey) => ({
+      spaceKey,
+      name: read.get(spaceKey)?.name ?? spaceKey,
+    }));
+  }
+
+  function refreshSpaceNames(): void {
+    if (stopping) return;
+    const next = spaceNamesFrom(doors);
+    if (next.every(({ name }, i) => name === spaceNames[i]?.name)) return;
+    spaceNames = next;
+    const frame = encode({ type: 'spaces', spaces: next });
+    for (const connection of connections.all()) {
+      sendFrame(connection.socket, frame);
     }
   }
 
@@ -2224,6 +2245,7 @@ export function registerGateway(
       players: avatarsIn(connection.cohortId),
       lockableSpaces: [...lockable],
       lockedSpaces: locks.in(connection.cohortId),
+      spaces: [...spaceNames],
     });
     void joinCall(connection);
     void joinBroadcast(connection);
