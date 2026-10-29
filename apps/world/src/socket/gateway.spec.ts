@@ -102,6 +102,8 @@ const accounts = {
   },
   /** Cohort roles other than student: `userId:cohortId` to the role. */
   roles: new Map<string, string>(),
+  /** Mentorship groups: `userId:cohortId` to the group it holds. */
+  groups: new Map<string, string>(),
   failMemberships: false,
   /** Each seat's membership row, as the doors read it. */
   memberships: async (seats: readonly Seat[]) => {
@@ -118,6 +120,7 @@ const accounts = {
             status: 'active',
             accessExpiresAt: accounts.visitEnds.get(key) ?? null,
             trackId: null,
+            mentorshipGroupId: accounts.groups.get(key) ?? null,
           },
         ];
       }),
@@ -313,6 +316,7 @@ const map: WorldMap = {
 function openLibrary(): void {
   accounts.spaces.clear();
   accounts.spaces.set('library', {
+    name: 'Library',
     kind: 'meeting_room',
     access: SPACE_ACCESS.Normal,
     retiredAt: null,
@@ -324,6 +328,7 @@ function openLibrary(): void {
 /** The library designated, with these entries on its list. */
 function designateLibrary(...grants: SpaceGrantFacts[]): void {
   accounts.spaces.set('library', {
+    name: 'Library',
     kind: 'classroom',
     access: SPACE_ACCESS.Designated,
     retiredAt: null,
@@ -341,6 +346,7 @@ function listEntry(subject: Partial<SpaceGrantFacts>): SpaceGrantFacts {
     toTrackId: null,
     toCohortRole: null,
     toSystemRole: null,
+    toGroupId: null,
     validFrom: new Date(0),
     validTo: null,
     ...subject,
@@ -440,6 +446,7 @@ beforeEach(async () => {
   accounts.admins.clear();
   accounts.looks.clear();
   accounts.roles.clear();
+  accounts.groups.clear();
   accounts.failSpaces = false;
   accounts.failMemberships = false;
   openLibrary();
@@ -3409,6 +3416,32 @@ describe('movement', () => {
       await Promise.all([leave(first), leave(second), leave(third)]);
     });
 
+    it('lets in a student and a mentor of the group the list names', async () => {
+      const GROUP = 'group-1';
+      const student = person();
+      const mentor = person();
+      accounts.roles.set(`${mentor}:${COHORT}`, 'mentor');
+      accounts.groups.set(`${student}:${COHORT}`, GROUP);
+      accounts.groups.set(`${mentor}:${COHORT}`, GROUP);
+      designateLibrary(listEntry({ toGroupId: GROUP }));
+      await world.gateway.spacesChanged();
+
+      const first = await arrive(student);
+      const second = await arrive(mentor);
+      const third = await arrive(person());
+
+      await expect(walkToLibrary(first)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(second)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(third)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(first), leave(second), leave(third)]);
+    });
+
     it('lets an admin in, whatever the list says', async () => {
       const ada = person();
       accounts.admins.add(ada);
@@ -4216,6 +4249,63 @@ describe('movement', () => {
         waitFor(walker, (m) => m.type === 'error'),
       ).resolves.toMatchObject({ code: 'NOT_ALLOWED' });
       await leave(walker);
+    });
+  });
+
+  describe('space names', () => {
+    const renameLibrary = (name: string) => {
+      const library = accounts.spaces.get('library');
+      if (!library) throw new Error('the library has no row');
+      accounts.spaces.set('library', { ...library, name } as SpaceFacts);
+    };
+
+    it('names every space in the snapshot, with the key where there is no row', async () => {
+      const conn = await arrive(person());
+
+      await expect(
+        waitFor(conn, (m) => m.type === 'snapshot'),
+      ).resolves.toMatchObject({
+        spaces: [
+          { spaceKey: DEFAULT_SPACE_KEY, name: DEFAULT_SPACE_KEY },
+          { spaceKey: 'library', name: 'Library' },
+        ],
+      });
+      await leave(conn);
+    });
+
+    it('tells everybody, in every cohort, when a space is renamed', async () => {
+      const here = await arrive(person());
+      const there = await arrive(person(), 'cohort-backend');
+
+      renameLibrary('Reading room');
+      await world.gateway.spacesChanged();
+
+      const renamed = {
+        type: 'spaces',
+        spaces: [
+          { spaceKey: DEFAULT_SPACE_KEY, name: DEFAULT_SPACE_KEY },
+          { spaceKey: 'library', name: 'Reading room' },
+        ],
+      };
+      await expect(waitFor(here, (m) => m.type === 'spaces')).resolves.toEqual(
+        renamed,
+      );
+      await expect(waitFor(there, (m) => m.type === 'spaces')).resolves.toEqual(
+        renamed,
+      );
+      await Promise.all([leave(here), leave(there)]);
+    });
+
+    it('says nothing when a reload changes no name', async () => {
+      const conn = await arrive(person());
+
+      designateLibrary();
+      await world.gateway.spacesChanged();
+      conn.ws.send(JSON.stringify({ type: 'ping' }));
+      await waitFor(conn, (m) => m.type === 'pong');
+
+      expect(conn.messages.filter((m) => m.type === 'spaces')).toEqual([]);
+      await leave(conn);
     });
   });
 

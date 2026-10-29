@@ -64,18 +64,18 @@ refused.
 
 ## Rules the database enforces
 
-| Rule                                                             | Constraint                                              |
-| ---------------------------------------------------------------- | ------------------------------------------------------- |
-| A map is known by its key, once                                  | `maps_key_unique`                                       |
-| At most one entry map, not counting retired ones                 | `maps_single_entry`                                     |
-| A space is known by its key, once per map                        | `spaces_map_key_unique`                                 |
-| At most one default space per map, retired or not                | `spaces_one_default_per_map`                            |
-| The default space is normal: open to everybody                   | `spaces_default_is_normal`                              |
-| One town hall and one notice board on the campus                 | `spaces_single_town_hall`, `spaces_single_notice_board` |
-| A capacity, when there is one, is at least 1                     | `spaces_capacity_positive`                              |
-| A list entry names one person, track, cohort role or system role | `space_memberships_one_subject`                         |
-| An audit entry about a space names one that exists               | `audit_log_space_id_spaces_id_fk`                       |
-| A grant does not end before it starts                            | `space_memberships_valid_window`                        |
+| Rule                                                                    | Constraint                                              |
+| ----------------------------------------------------------------------- | ------------------------------------------------------- |
+| A map is known by its key, once                                         | `maps_key_unique`                                       |
+| At most one entry map, not counting retired ones                        | `maps_single_entry`                                     |
+| A space is known by its key, once per map                               | `spaces_map_key_unique`                                 |
+| At most one default space per map, retired or not                       | `spaces_one_default_per_map`                            |
+| The default space is normal: open to everybody                          | `spaces_default_is_normal`                              |
+| One town hall and one notice board on the campus                        | `spaces_single_town_hall`, `spaces_single_notice_board` |
+| A capacity, when there is one, is at least 1                            | `spaces_capacity_positive`                              |
+| A list entry names one person, track, cohort role, system role or group | `space_memberships_one_subject`                         |
+| An audit entry about a space names one that exists                      | `audit_log_space_id_spaces_id_fk`                       |
+| A grant does not end before it starts                                   | `space_memberships_valid_window`                        |
 
 They are tested against a real PostgreSQL engine, with the committed
 migrations applied, in `schema.db.spec.ts`.
@@ -173,8 +173,11 @@ these routes are the only thing that writes them.
 An entry names **exactly one subject**: a person (`userId`); everybody on a
 cohort track (`cohortTrackId`, a `cohort_tracks` row, so a track some cohort
 actually runs, and only that cohort's people); everybody holding a cohort
-role (`cohortRole`), in whichever cohort's campus they walk; or everybody
-holding a system role (`systemRole`). An entry on a normal space is allowed
+role (`cohortRole`), in whichever cohort's campus they walk; everybody
+holding a system role (`systemRole`); or everybody in a mentorship group
+(`mentorshipGroupId`) — its students and its mentor, and only that cohort's
+people, for the same reason as a track: a group belongs to one cohort. An
+entry on a normal space is allowed
 but does nothing: nobody is kept out of one to be let in. It starts the moment it is
 given and may carry an end date (`validTo`, in the future: a bare date,
 read as midnight UTC, or a timestamp with its zone); without one it has no
@@ -207,9 +210,19 @@ it. Ended grants go with the track: kept for good, they would block the
 detach, and so the cohort's deletion, forever. Their record is the audit
 log — each grant's `space_membership_granted` and `space_membership_ended`
 entries — and the `cohort_track_detached` entry names the grants it cleared.
-The detach locks the link before it looks for grants, and a grant to a
+The detach locks the link before it looks for grants, and reads them `for
+update`, so an end in flight is waited for rather than raced; a grant to a
 track holds the link with `key share`, so the two never cross: tested in
 `space-memberships.pg.spec.ts`.
+
+**A mentorship group deleted.** A group entry points at the `mentorship_groups`
+row, so deleting the group (`DELETE /v1/cohorts/{id}/mentorship-groups/{groupId}`)
+refuses while a live entry names it (409, naming the spaces): end it first, so
+access is never taken away without anyone ending it. Ended entries go with the
+group, as a detached track's do, and the audit log is their record. The delete
+locks the group before it looks for entries, and reads them `for update`, so an
+end in flight is waited for; a grant to a group holds it with `key share`, so
+the two never cross.
 
 ## Setting a space up
 

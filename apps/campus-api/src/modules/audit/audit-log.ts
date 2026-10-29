@@ -229,11 +229,12 @@ interface AuditEntryShapes {
   [AuditAction.SpaceMembershipGranted]: {
     subject: AuditSubjectType.SpaceMembership;
     details: {
-      /** Who the grant is to: exactly one of these four is set. */
+      /** Who the grant is to: exactly one of these five is set. */
       userId: string | null;
       cohortTrackId: string | null;
       cohortRole: CohortRole | null;
       systemRole: SystemRole | null;
+      mentorshipGroupId: string | null;
       /** The span it runs for, as given — `validTo` null means no end. */
       validFrom: Date;
       validTo: Date | null;
@@ -320,7 +321,14 @@ interface AuditEntryShapes {
   };
   [AuditAction.MentorshipGroupDeleted]: {
     subject: AuditSubjectType.MentorshipGroup;
-    details: MentorshipGroupRecordSnapshot;
+    details: MentorshipGroupRecordSnapshot & {
+      /**
+       * The ended space-list entries to the group that went with it — empty
+       * when it held none. Their granting and ending have entries of their
+       * own.
+       */
+      clearedSpaceMembershipIds: string[];
+    };
   };
 }
 

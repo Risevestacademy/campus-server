@@ -1,6 +1,7 @@
 import { isLiveGrant, type SpaceGrantFacts } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import {
   DRIZZLE,
@@ -11,6 +12,7 @@ import type { AuditContext } from '../audit/audit-log.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { CohortRole, cohorts, cohortTracks } from '../cohorts/schema.js';
+import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import type {
@@ -44,6 +46,7 @@ function windowOf(row: {
   cohortTrackId: string | null;
   cohortRole: string | null;
   systemRole: string | null;
+  mentorshipGroupId: string | null;
   validFrom: Date;
   validTo: Date | null;
 }): SpaceGrantFacts {
@@ -52,6 +55,7 @@ function windowOf(row: {
     toTrackId: row.cohortTrackId,
     toCohortRole: row.cohortRole,
     toSystemRole: row.systemRole,
+    toGroupId: row.mentorshipGroupId,
     validFrom: row.validFrom,
     validTo: row.validTo,
   };
@@ -69,27 +73,33 @@ function hasEnded<T extends { validTo: Date | null }>(
   return row.validTo !== null && row.validTo.getTime() <= at.getTime();
 }
 
-/** What became of a track's grants when it was taken off its cohort. */
-export type TrackGrantRelease =
+/** What became of a subject's grants when the subject itself goes. */
+export type GrantRelease =
   | { released: true; clearedIds: string[] }
   | { released: false; standingSpaceIds: string[] };
 
 /**
- * The grants side of detaching a track from its cohort
- * (CohortsService.detachTrack), run in the detach's own transaction after it
- * has locked the cohort's link to the track.
+ * Release the entries `where` names, if none of them is standing at `now`:
+ * the half a track detach and a mentorship group delete share.
  *
- * A grant that has not ended keeps the track where it is: taking the track
- * off would take that access away without anyone ending it, so nothing is
- * deleted and the spaces it opens are named. Otherwise the ended grants go —
- * kept for good they would hold the link, and so the cohort, forever — and
- * the audit log, which has each one's granting and ending, is their record.
+ * Caller's contract: hold the subject row — the mentorship group, or the
+ * cohort's link to the track — `for update` before calling. The row locks
+ * taken here stop an `end()`; they do not stop an `insert`. Only the entity
+ * lock does, and without it a grant could slip in after the read and be
+ * deleted below, ending access without anyone calling `end()`. `now` is the
+ * caller's, taken before the read, so every entry is judged against one
+ * instant rather than the moment each check happened to run. An entry that
+ * has not ended keeps the subject: deleting it would take that access away
+ * without anyone ending it, so nothing is deleted and the spaces it opens
+ * are named. Otherwise the ended entries go — kept for good they would hold
+ * the subject, and so the cohort or the group, forever — and the audit log,
+ * which has each one's granting and ending, is their record.
  */
-export async function releaseTrackGrants(
+async function releaseGrants(
   tx: Tx,
-  cohortTrackId: string,
+  where: SQL,
   now: Date,
-): Promise<TrackGrantRelease> {
+): Promise<GrantRelease> {
   const held = await tx
     .select({
       id: spaceMemberships.id,
@@ -97,7 +107,8 @@ export async function releaseTrackGrants(
       validTo: spaceMemberships.validTo,
     })
     .from(spaceMemberships)
-    .where(eq(spaceMemberships.cohortTrackId, cohortTrackId));
+    .where(where)
+    .for('update');
 
   const standing = held.filter((row) => !hasEnded(row, now));
   if (standing.length > 0) {
@@ -109,9 +120,35 @@ export async function releaseTrackGrants(
 
   const cleared = await tx
     .delete(spaceMemberships)
-    .where(eq(spaceMemberships.cohortTrackId, cohortTrackId))
+    .where(where)
     .returning({ id: spaceMemberships.id });
   return { released: true, clearedIds: cleared.map((row) => row.id) };
+}
+
+/** The grants side of detaching a track from its cohort. */
+export function releaseTrackGrants(
+  tx: Tx,
+  cohortTrackId: string,
+  now: Date,
+): Promise<GrantRelease> {
+  return releaseGrants(
+    tx,
+    eq(spaceMemberships.cohortTrackId, cohortTrackId),
+    now,
+  );
+}
+
+/** The grants side of deleting a mentorship group. */
+export function releaseGroupGrants(
+  tx: Tx,
+  mentorshipGroupId: string,
+  now: Date,
+): Promise<GrantRelease> {
+  return releaseGrants(
+    tx,
+    eq(spaceMemberships.mentorshipGroupId, mentorshipGroupId),
+    now,
+  );
 }
 
 /** How a refusal names the subject that already holds a live grant. */
@@ -120,6 +157,7 @@ const HOLDER: Record<SpaceMembershipSubjectType, string> = {
   [SpaceMembershipSubjectType.CohortTrack]: 'That track',
   [SpaceMembershipSubjectType.CohortRole]: 'That cohort role',
   [SpaceMembershipSubjectType.SystemRole]: 'That system role',
+  [SpaceMembershipSubjectType.MentorshipGroup]: 'That mentorship group',
 };
 
 /**
@@ -137,7 +175,8 @@ export class SpaceMembershipsService {
   constructor(@Inject(DRIZZLE) private readonly db: Db) {}
 
   /**
-   * Give a person, or everybody on one cohort track, standing access.
+   * Give a person, everybody on one cohort track, or everybody in a
+   * mentorship group standing access.
    *
    * The space's row is locked before anything is judged, and held to the end
    * of the transaction: two grants for one space are checked one after the
@@ -160,13 +199,18 @@ export class SpaceMembershipsService {
     const cohortTrackId = dto.cohortTrackId ?? null;
     const cohortRole = dto.cohortRole ?? null;
     const systemRole = dto.systemRole ?? null;
-    const named = [userId, cohortTrackId, cohortRole, systemRole].filter(
-      (subject) => subject !== null,
-    );
+    const mentorshipGroupId = dto.mentorshipGroupId ?? null;
+    const named = [
+      userId,
+      cohortTrackId,
+      cohortRole,
+      systemRole,
+      mentorshipGroupId,
+    ].filter((subject) => subject !== null);
     if (named.length !== 1) {
       throw new SpaceMembershipInvalidArgumentException(
-        'A grant is to exactly one of a person, a cohort track, a cohort role or a system role',
-        { userId, cohortTrackId, cohortRole, systemRole },
+        'A grant is to exactly one of a person, a cohort track, a cohort role, a system role or a mentorship group',
+        { userId, cohortTrackId, cohortRole, systemRole, mentorshipGroupId },
       );
     }
     const validTo = dto.validTo === undefined ? null : new Date(dto.validTo);
@@ -193,13 +237,28 @@ export class SpaceMembershipsService {
         );
       }
 
-      const subject = await (async (): Promise<SpaceMembershipSubjectDto> => {
+      const { subject, subjectWhere } = await (async (): Promise<{
+        subject: SpaceMembershipSubjectDto;
+        subjectWhere: SQL;
+      }> => {
         // A role needs nothing looked up: the enum is the whole of it.
         if (cohortRole !== null) {
-          return { type: SpaceMembershipSubjectType.CohortRole, cohortRole };
+          return {
+            subject: {
+              type: SpaceMembershipSubjectType.CohortRole,
+              cohortRole,
+            },
+            subjectWhere: eq(spaceMemberships.cohortRole, cohortRole),
+          };
         }
         if (systemRole !== null) {
-          return { type: SpaceMembershipSubjectType.SystemRole, systemRole };
+          return {
+            subject: {
+              type: SpaceMembershipSubjectType.SystemRole,
+              systemRole,
+            },
+            subjectWhere: eq(spaceMemberships.systemRole, systemRole),
+          };
         }
         if (userId !== null) {
           const [user] = await tx
@@ -217,65 +276,110 @@ export class SpaceMembershipsService {
             );
           }
           return {
-            type: SpaceMembershipSubjectType.User,
-            userId: user.id,
-            email: user.email,
-            displayName: user.displayName,
+            subject: {
+              type: SpaceMembershipSubjectType.User,
+              userId: user.id,
+              email: user.email,
+              displayName: user.displayName,
+            },
+            subjectWhere: eq(spaceMemberships.userId, user.id),
           };
         }
-        // A cohort track row exists only under a cohort that runs it, so the
-        // join is the refusal for "no cohort runs that track": there is no
-        // id to find. The columns come along for the answer's sake.
-        //
-        // Held with `key share` to the end, as a member's move holds it: a
-        // detach of the track locks the row before it looks for grants, so
-        // if this went first the detach waits and then sees the grant, and
-        // if the detach went first this finds no row and answers 404.
-        const [track] = await tx
-          .select({
-            id: cohortTracks.id,
-            cohortId: cohorts.id,
-            cohortName: cohorts.name,
-            trackName: tracks.name,
-            trackCode: tracks.code,
-          })
-          .from(cohortTracks)
-          .innerJoin(cohorts, eq(cohortTracks.cohortId, cohorts.id))
-          .innerJoin(tracks, eq(cohortTracks.trackId, tracks.id))
-          .where(eq(cohortTracks.id, cohortTrackId as string))
-          .limit(1)
-          .for('key share', { of: cohortTracks });
-        if (!track) {
-          throw new SpaceMembershipSubjectNotFoundException(
-            `No cohort runs a track with id ${cohortTrackId}`,
-            { cohortTrackId },
-          );
+        if (mentorshipGroupId !== null) {
+          // A group holds exactly one cohort, so the join brings its name and
+          // that cohort along for the answer. Held with `key share` to the
+          // end, as a member's move holds it: deleting a group locks its row
+          // before looking for what names it, so if this went first the
+          // delete waits and then sees the grant, and if the delete went
+          // first this finds no row and answers 404.
+          const [group] = await tx
+            .select({
+              id: mentorshipGroups.id,
+              name: mentorshipGroups.name,
+              cohortId: cohorts.id,
+              cohortName: cohorts.name,
+            })
+            .from(mentorshipGroups)
+            .innerJoin(cohorts, eq(mentorshipGroups.cohortId, cohorts.id))
+            .where(eq(mentorshipGroups.id, mentorshipGroupId))
+            .limit(1)
+            .for('key share', { of: mentorshipGroups });
+          if (!group) {
+            throw new SpaceMembershipSubjectNotFoundException(
+              `No mentorship group with id ${mentorshipGroupId}`,
+              { mentorshipGroupId },
+            );
+          }
+          return {
+            subject: {
+              type: SpaceMembershipSubjectType.MentorshipGroup,
+              mentorshipGroupId: group.id,
+              groupName: group.name,
+              cohortId: group.cohortId,
+              cohortName: group.cohortName,
+            },
+            subjectWhere: eq(spaceMemberships.mentorshipGroupId, group.id),
+          };
         }
-        return {
-          type: SpaceMembershipSubjectType.CohortTrack,
-          cohortTrackId: track.id,
-          trackName: track.trackName,
-          trackCode: track.trackCode,
-          cohortId: track.cohortId,
-          cohortName: track.cohortName,
-        };
+        if (cohortTrackId !== null) {
+          // A cohort track row exists only under a cohort that runs it, so
+          // the join is the refusal for "no cohort runs that track": there
+          // is no id to find. The columns come along for the answer's sake.
+          //
+          // Held with `key share` to the end, as a member's move holds it: a
+          // detach of the track locks the row before it looks for grants, so
+          // if this went first the detach waits and then sees the grant, and
+          // if the detach went first this finds no row and answers 404.
+          const [track] = await tx
+            .select({
+              id: cohortTracks.id,
+              cohortId: cohorts.id,
+              cohortName: cohorts.name,
+              trackName: tracks.name,
+              trackCode: tracks.code,
+            })
+            .from(cohortTracks)
+            .innerJoin(cohorts, eq(cohortTracks.cohortId, cohorts.id))
+            .innerJoin(tracks, eq(cohortTracks.trackId, tracks.id))
+            .where(eq(cohortTracks.id, cohortTrackId))
+            .limit(1)
+            .for('key share', { of: cohortTracks });
+          if (!track) {
+            throw new SpaceMembershipSubjectNotFoundException(
+              `No cohort runs a track with id ${cohortTrackId}`,
+              { cohortTrackId },
+            );
+          }
+          return {
+            subject: {
+              type: SpaceMembershipSubjectType.CohortTrack,
+              cohortTrackId: track.id,
+              trackName: track.trackName,
+              trackCode: track.trackCode,
+              cohortId: track.cohortId,
+              cohortName: track.cohortName,
+            },
+            subjectWhere: eq(spaceMemberships.cohortTrackId, track.id),
+          };
+        }
+
+        // The guard above allows exactly one subject. Reaching here means a
+        // subject was added to it without a branch that resolves it, so
+        // refuse rather than run a duplicate check on nothing.
+        throw new SpaceMembershipInvalidArgumentException(
+          'A grant is to exactly one of a person, a cohort track, a cohort role, a system role or a mentorship group',
+          { userId, cohortTrackId, cohortRole, systemRole, mentorshipGroupId },
+        );
       })();
 
+      // The space row is locked `no key update` above, and that lock — not
+      // this read — is what makes the check true under concurrency: it
+      // self-conflicts, so two grants for one space take turns. Weaken it to
+      // `key share` and two requests could both find nothing live here.
       const held = await tx
         .select()
         .from(spaceMemberships)
-        .where(
-          and(
-            eq(spaceMemberships.spaceId, spaceId),
-            userId !== null
-              ? eq(spaceMemberships.userId, userId)
-              : cohortTrackId !== null
-                ? eq(spaceMemberships.cohortTrackId, cohortTrackId)
-                : cohortRole !== null
-                  ? eq(spaceMemberships.cohortRole, cohortRole)
-                  : eq(spaceMemberships.systemRole, systemRole as SystemRole),
-          ),
-        );
+        .where(and(eq(spaceMemberships.spaceId, spaceId), subjectWhere));
       const live = held.find((row) => isLiveGrant(windowOf(row), now));
       if (live) {
         throw new SpaceMembershipAlreadyLiveException(
@@ -292,6 +396,7 @@ export class SpaceMembershipsService {
           cohortTrackId,
           cohortRole,
           systemRole,
+          mentorshipGroupId,
           grantedBy: audit.actorUserId,
           validFrom: now,
           validTo,
@@ -309,6 +414,7 @@ export class SpaceMembershipsService {
           cohortTrackId: row.cohortTrackId,
           cohortRole: row.cohortRole,
           systemRole: row.systemRole,
+          mentorshipGroupId: row.mentorshipGroupId,
           validFrom: row.validFrom,
           validTo: row.validTo,
         },
@@ -415,6 +521,10 @@ export class SpaceMembershipsService {
       throw new SpaceNotFoundException(`No space with id ${spaceId}`);
     }
 
+    // A second name for cohorts: a group's cohort and a track's cohort are
+    // two joins in one statement, and only one of them is ever filled.
+    const groupCohorts = alias(cohorts, 'group_cohorts');
+
     const rows = await this.db
       .select({
         id: spaceMemberships.id,
@@ -423,6 +533,7 @@ export class SpaceMembershipsService {
         cohortTrackId: spaceMemberships.cohortTrackId,
         cohortRole: spaceMemberships.cohortRole,
         systemRole: spaceMemberships.systemRole,
+        mentorshipGroupId: spaceMemberships.mentorshipGroupId,
         grantedBy: spaceMemberships.grantedBy,
         validFrom: spaceMemberships.validFrom,
         validTo: spaceMemberships.validTo,
@@ -432,11 +543,15 @@ export class SpaceMembershipsService {
         trackCode: tracks.code,
         cohortId: cohorts.id,
         cohortName: cohorts.name,
+        groupName: mentorshipGroups.name,
+        groupCohortId: groupCohorts.id,
+        groupCohortName: groupCohorts.name,
       })
       .from(spaceMemberships)
       // Left joins because only one subject is ever set: a person's entry
-      // fills the user columns, a track's the track and cohort ones, and a
-      // role's none of them; every row comes back in one query either way.
+      // fills the user columns, a track's the track and cohort ones, a
+      // group's its name and cohort, and a role's none of them; every row
+      // comes back in one query either way.
       .leftJoin(users, eq(spaceMemberships.userId, users.id))
       .leftJoin(
         cohortTracks,
@@ -444,6 +559,11 @@ export class SpaceMembershipsService {
       )
       .leftJoin(cohorts, eq(cohortTracks.cohortId, cohorts.id))
       .leftJoin(tracks, eq(cohortTracks.trackId, tracks.id))
+      .leftJoin(
+        mentorshipGroups,
+        eq(spaceMemberships.mentorshipGroupId, mentorshipGroups.id),
+      )
+      .leftJoin(groupCohorts, eq(mentorshipGroups.cohortId, groupCohorts.id))
       .where(eq(spaceMemberships.spaceId, spaceId))
       .orderBy(asc(spaceMemberships.validFrom), asc(spaceMemberships.id));
 
@@ -459,18 +579,34 @@ export class SpaceMembershipsService {
   }
 }
 
+/**
+ * A column a left join fills whenever the row names that subject. The
+ * foreign key says it cannot be null in that case, but the join's type does
+ * not, and a cast would quietly answer null as though it were a value.
+ */
+function required<T>(value: T | null, what: string): T {
+  if (value === null) {
+    throw new Error(`A space membership is missing ${what}`);
+  }
+  return value;
+}
+
 /** Which subject a listed row names, with what there is to say about it. */
 function subjectOf(row: {
   userId: string | null;
   cohortTrackId: string | null;
   cohortRole: CohortRole | null;
   systemRole: SystemRole | null;
+  mentorshipGroupId: string | null;
   email: string | null;
   displayName: string | null;
   trackName: string | null;
   trackCode: string | null;
   cohortId: string | null;
   cohortName: string | null;
+  groupName: string | null;
+  groupCohortId: string | null;
+  groupCohortName: string | null;
 }): SpaceMembershipSubjectDto {
   if (row.userId !== null) {
     return {
@@ -486,8 +622,11 @@ function subjectOf(row: {
       cohortTrackId: row.cohortTrackId,
       trackName: row.trackName,
       trackCode: row.trackCode,
-      cohortId: row.cohortId as string,
-      cohortName: row.cohortName,
+      cohortId: required(row.cohortId, 'the cohort a track runs in'),
+      cohortName: required(
+        row.cohortName,
+        'the name of the cohort a track runs in',
+      ),
     };
   }
   if (row.cohortRole !== null) {
@@ -496,8 +635,32 @@ function subjectOf(row: {
       cohortRole: row.cohortRole,
     };
   }
-  return {
-    type: SpaceMembershipSubjectType.SystemRole,
-    systemRole: row.systemRole as SystemRole,
-  };
+  if (row.systemRole !== null) {
+    return {
+      type: SpaceMembershipSubjectType.SystemRole,
+      systemRole: row.systemRole,
+    };
+  }
+  if (row.mentorshipGroupId !== null) {
+    return {
+      type: SpaceMembershipSubjectType.MentorshipGroup,
+      mentorshipGroupId: row.mentorshipGroupId,
+      groupName: required(
+        row.groupName,
+        'the name of the mentorship group it names',
+      ),
+      cohortId: required(
+        row.groupCohortId,
+        'the cohort of the mentorship group it names',
+      ),
+      cohortName: required(
+        row.groupCohortName,
+        'the name of the cohort of the mentorship group it names',
+      ),
+    };
+  }
+  // The one_subject check says a row names exactly one subject. Reaching
+  // here means it was bypassed; naming a subject that is not there would be
+  // worse than saying so.
+  throw new Error('A space membership names no subject');
 }

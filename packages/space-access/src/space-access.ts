@@ -76,6 +76,12 @@ export interface CohortMembershipFacts {
   accessExpiresAt: Date | null;
   /** The membership's `cohort_track_id`: what a track grant matches. */
   trackId: string | null;
+  /**
+   * The mentorship group this membership holds in this cohort, as one of its
+   * students or as its mentor; null when it holds none. A membership is in at
+   * most one group per cohort, so one id says it all.
+   */
+  mentorshipGroupId: string | null;
 }
 
 /**
@@ -93,6 +99,11 @@ export interface SpaceGrantFacts {
   toCohortRole: string | null;
   /** Everybody holding this `users.system_role`. */
   toSystemRole: string | null;
+  /**
+   * Everybody in this mentorship group — its students and its mentor: only
+   * ever one cohort's people.
+   */
+  toGroupId: string | null;
   /** When the grant starts counting. */
   validFrom: Date;
   /** When it stops, or null while it has no end. */
@@ -197,8 +208,9 @@ export function isLiveGrant(grant: SpaceGrantFacts, at: Date): boolean {
  *    different here.
  * 6. **A designated space** admits them if a live entry on its list names
  *    them: by person, by their track in this cohort, by their role in this
- *    cohort, or by their system role. A guest gets in the same way, by an
- *    entry that names them or their role.
+ *    cohort, by their system role, or by the mentorship group they hold in
+ *    this cohort — as a student or as its mentor. A guest gets in the same
+ *    way, by an entry that names them or their role.
  * 7. **Anything else** — an access value this package does not know — says
  *    no.
  *
@@ -268,9 +280,11 @@ function liveMembershipHere(
 /**
  * Whether an entry names this person: them by id; everybody on the track
  * their membership in this cohort sits on; everybody holding their role in
- * this cohort; or everybody holding their system role. A track entry never
- * matches a membership with no track, nor one on another track. An entry
- * naming none of these, if one slipped past the database, matches nobody.
+ * this cohort; everybody holding their system role; or everybody in the
+ * mentorship group their membership holds in this cohort, as student or as
+ * mentor. A track or group entry never matches a membership with none, nor
+ * one in another track or group. An entry naming none of these, if one
+ * slipped past the database, matches nobody.
  */
 function subjectIs(
   grant: SpaceGrantFacts,
@@ -288,6 +302,9 @@ function subjectIs(
   }
   if (grant.toSystemRole !== null) {
     return grant.toSystemRole === person.systemRole;
+  }
+  if (grant.toGroupId !== null) {
+    return grant.toGroupId === membership.mentorshipGroupId;
   }
   return false;
 }

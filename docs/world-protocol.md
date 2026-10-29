@@ -89,9 +89,9 @@ sequenceDiagram
   `tickMs` (how often others' moves arrive), `heartbeatSeconds`, and
   `awayAfterSeconds` (how long before an idle person shows as away; see
   [Status](#status)).
-- **`snapshot`** carries which map this is and every player in your cohort
-  on it, you included, each with their sprite, name and status. Draw from it;
-  everything after is a change to it.
+- **`snapshot`** carries which map this is, every player in your cohort
+  on it, you included, each with their sprite, name and status, and what
+  each space is called. Draw from it; everything after is a change to it.
 
 You can send as soon as the socket opens. Frames sent while the server is
 still checking the session are held, not lost, and answered in order.
@@ -267,6 +267,22 @@ Keep all four by `userId`. `moved` and `moveResult` carry a plain `Player` —
 position and facing only — so take what to draw from the `Avatar` and keep it
 until that person's `left`, or until an `appearance`, a `statusChanged` or a
 `spaceChanged` replaces part of it.
+
+**What to call a space.** Never show a `spaceKey` itself: look it up in
+`snapshot.spaces`, which names every space a `spaceKey` can be, the corridors
+and grounds (`_default`) first:
+
+```json
+[
+  { "spaceKey": "_default", "name": "Corridors and grounds" },
+  { "spaceKey": "library", "name": "Library" }
+]
+```
+
+The names are campus-api's, so an admin's rename shows everywhere, and the
+same in every cohort. When one changes, a `spaces` message (`{ "type":
+"spaces", "spaces": […] }`) replaces the whole list. You need not load the
+map to name a space; mobile, which draws no map, names them from this alone.
 
 **The sidebar.** Who is online in this cohort is who the socket has told you
 about: the `snapshot`, then `joined` and `left`. campus-api's

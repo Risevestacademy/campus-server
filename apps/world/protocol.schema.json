@@ -125,6 +125,25 @@
       "additionalProperties": false,
       "description": "Somebody on the map and what to draw for them. A later change to their sprite or name arrives as an `appearance` message, to their status as a `statusChanged`, and to their space as a `spaceChanged`."
     },
+    "SpaceName": {
+      "type": "object",
+      "properties": {
+        "spaceKey": {
+          "type": "string",
+          "description": "A drawn space's key, or `_default` for the corridors and grounds."
+        },
+        "name": {
+          "type": "string",
+          "description": "What to show for it. The key itself when campus-api has no row for the space yet."
+        }
+      },
+      "required": [
+        "spaceKey",
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "What to call a space a `spaceKey` names. The same in every cohort."
+    },
     "Call": {
       "type": "object",
       "properties": {
@@ -656,6 +675,13 @@
             "type": "string"
           },
           "description": "The spaces locked in your cohort right now."
+        },
+        "spaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SpaceName"
+          },
+          "description": "Every space a `spaceKey` can name on this map, `_default` first."
         }
       },
       "required": [
@@ -663,7 +689,8 @@
         "map",
         "players",
         "lockableSpaces",
-        "lockedSpaces"
+        "lockedSpaces",
+        "spaces"
       ],
       "additionalProperties": false,
       "description": "Sent once, right after `welcome`: the map, and everybody in your cohort on it, you included. Nobody from another cohort is ever in it."
@@ -904,6 +931,27 @@
       ],
       "additionalProperties": false,
       "description": "Which spaces can be locked changed, because an admin changed a space: replaces the list from `snapshot`."
+    },
+    "SpacesMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "spaces"
+        },
+        "spaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SpaceName"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "spaces"
+      ],
+      "additionalProperties": false,
+      "description": "A space was renamed, or campus-api gained or lost a row for one: replaces `snapshot.spaces`. Sent to everybody."
     },
     "EntryRequestedMessage": {
       "type": "object",
@@ -1267,6 +1315,9 @@
         },
         {
           "$ref": "#/definitions/LockableSpacesMessage"
+        },
+        {
+          "$ref": "#/definitions/SpacesMessage"
         },
         {
           "$ref": "#/definitions/EntryRequestedMessage"
