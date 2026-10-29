@@ -302,6 +302,7 @@ PRESENCE_UNAVAILABLE` until Redis is back.
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
+  the `goTo` cap `WORLD_WALK_MAX_STEPS` (unset: the map's width × height),
   the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
   `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
   `WORLD_PRESENCE_TTL_SECONDS`, going Away when idle

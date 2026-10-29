@@ -112,6 +112,13 @@ const schema = z
     WORLD_STEP_MS: z.coerce.number().int().min(1).default(100),
 
     /**
+     * Most steps one `goTo` walk takes before it gives up with `no_way`. Only
+     * a chase after somebody who keeps walking away reaches it. Unset: the
+     * map's width × height, longer than any shortest path.
+     */
+    WORLD_WALK_MAX_STEPS: z.coerce.number().int().min(1).optional(),
+
+    /**
      * How often everybody is told who moved. Shorter looks smoother and costs
      * more frames. Below 10ms the loop would be spinning, not batching.
      */

@@ -224,6 +224,19 @@
       ],
       "description": "moved: one tile in the direction asked. blocked: the tile is not walkable; they turn to face it without moving. refused: the tile is floor, but in a space they may not enter (designated and not on its list, or locked); they turn to face it without moving, and may ask with `requestEntry`. too_fast: over walking speed; nothing happens, not even the turn."
     },
+    "WalkEndReason": {
+      "type": "string",
+      "enum": [
+        "arrived",
+        "stopped",
+        "refused",
+        "gone",
+        "elsewhere",
+        "no_way",
+        "moved_by_staff"
+      ],
+      "description": "arrived: you are one tile from them, in their space, never on their tile. stopped: you sent `stopWalking` or a `move`. refused: a space you may not enter is in the way, theirs or another, and you stopped beside the first one; `mayAsk` says whether asking to enter it would be taken. gone: they left, or were not here. elsewhere: they are online, but connected to another world server, which a walk cannot reach. no_way: no path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase past the step limit. moved_by_staff: staff removed you from a space mid-walk."
+    },
     "EntryRequestOutcome": {
       "type": "string",
       "enum": [
@@ -449,6 +462,39 @@
       "additionalProperties": false,
       "description": "Staff only, the same staff as for `mute`: move somebody out of the space they stand in, to the nearest tile outside it, and keep them out for 90 seconds; they may ask to enter meanwhile. Not from the corridors, nor from a space that takes no requests. Answered by `staffAction`, to you and to them; otherwise by a NOT_ALLOWED error saying why. Counts as activity."
     },
+    "GoToMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "goTo"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Whom to walk to: in your cohort, on this world server."
+        }
+      },
+      "required": [
+        "type",
+        "userId"
+      ],
+      "additionalProperties": false,
+      "description": "Have the server walk you to somebody, a step per `stepMs`, through the same doors your own steps would be. Each step is a `walking`; the walk ends with one `walkEnded`. Replaces a walk already going. Somebody connected to another world server ends it with `elsewhere`. Yourself is a NOT_ALLOWED error. Counts as activity."
+    },
+    "StopWalkingMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "stopWalking"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "End the walk `goTo` started, answered by `walkEnded` with `stopped`. A `move` ends it too. Counts as activity."
+    },
     "ClientMessage": {
       "oneOf": [
         {
@@ -483,6 +529,12 @@
         },
         {
           "$ref": "#/definitions/RemoveFromSpaceMessage"
+        },
+        {
+          "$ref": "#/definitions/GoToMessage"
+        },
+        {
+          "$ref": "#/definitions/StopWalkingMessage"
         }
       ],
       "description": "Every frame a client may send."
@@ -1066,6 +1118,74 @@
       "additionalProperties": false,
       "description": "Staff muted somebody or removed them from a space. Sent to the person it was done to and to the staff member who did it. Their cohort sees a removal as a `moved` and a `spaceChanged`."
     },
+    "WalkingMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "walking"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Whom you are walking to."
+        },
+        "player": {
+          "$ref": "#/definitions/Player"
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "player"
+      ],
+      "additionalProperties": false,
+      "description": "The server took a step of your `goTo` walk: where you are now. Only to you; everybody else sees it in `moved`."
+    },
+    "WalkEndedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "walkEnded"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Whom you were walking to."
+        },
+        "reason": {
+          "$ref": "#/definitions/WalkEndReason"
+        },
+        "player": {
+          "description": "Where you stopped.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Player"
+            }
+          ]
+        },
+        "spaceKey": {
+          "description": "With `refused`, the space you stopped beside.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mayAsk": {
+          "type": "boolean",
+          "description": "With `refused`, whether a `requestEntry` for `spaceKey` would be taken from where you stopped. Offer to ask only when true."
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "reason",
+        "player",
+        "spaceKey",
+        "mayAsk"
+      ],
+      "additionalProperties": false,
+      "description": "Your `goTo` walk is over, and why. Only to you. Not sent when the socket closes."
+    },
     "ReplacedMessage": {
       "type": "object",
       "properties": {
@@ -1211,6 +1331,12 @@
         },
         {
           "$ref": "#/definitions/StaffActionMessage"
+        },
+        {
+          "$ref": "#/definitions/WalkingMessage"
+        },
+        {
+          "$ref": "#/definitions/WalkEndedMessage"
         },
         {
           "$ref": "#/definitions/ReplacedMessage"

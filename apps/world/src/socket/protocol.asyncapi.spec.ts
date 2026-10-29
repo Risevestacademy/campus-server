@@ -74,6 +74,8 @@ describe('the AsyncAPI document', () => {
       'SayMessage',
       'MuteMessage',
       'RemoveFromSpaceMessage',
+      'GoToMessage',
+      'StopWalkingMessage',
     ]);
     expect(namesIn(subscribe)).toEqual([
       'WelcomeMessage',
@@ -94,6 +96,8 @@ describe('the AsyncAPI document', () => {
       'EntryRequestEndedMessage',
       'SaidMessage',
       'StaffActionMessage',
+      'WalkingMessage',
+      'WalkEndedMessage',
       'ReplacedMessage',
       'MovedMessage',
       'MoveResultMessage',

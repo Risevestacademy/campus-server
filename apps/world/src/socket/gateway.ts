@@ -40,7 +40,8 @@ import type {
   Presence,
   PresenceStore,
 } from '../infra/presence.js';
-import type { Tile } from '../movement/grid.js';
+import { Direction, step, walkable, type Tile } from '../movement/grid.js';
+import { pathTo } from '../movement/paths.js';
 import { Players, type Player } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
@@ -78,6 +79,7 @@ import {
   type EntryRequestOutcome,
   type ServerMessage,
   type SpaceName,
+  type WalkEndReason,
 } from './protocol.js';
 
 /**
@@ -1036,6 +1038,7 @@ export function registerGateway(
     requests.dropPass(target);
     noteMoved(target);
     arrivedAt(target, player);
+    endWalk(target, 'moved_by_staff');
     // An open request turns into "may walk in" once the 90 seconds are up;
     // a millisecond after, as a timer can fire a little early.
     setTimeout(
@@ -1050,6 +1053,264 @@ export function registerGateway(
       new Date(until).toISOString(),
       player,
     );
+  }
+
+  const walks = new Map<Connection, Walk>();
+  const walkLimit =
+    env.WORLD_WALK_MAX_STEPS ?? map.grid.width * map.grid.height;
+
+  function admitsStep(connection: Connection, now: number) {
+    // Asked only on a step into another space: somebody already inside
+    // stays until they leave, whatever has changed since they came in.
+    return (target: Tile) => {
+      const into = spaceAt(map.spaces, target);
+      return (
+        into === connection.spaceKey ||
+        mayStepInto(connection, into, new Date(now)) ||
+        hasPass(connection, into)
+      );
+    };
+  }
+
+  /** admitsStep, asked once per space: a search asks of every tile. */
+  function crossingFor(connection: Connection, now: number) {
+    const admits = admitsStep(connection, now);
+    const answers = new Map<string, boolean>();
+    return (tile: Tile) => {
+      const into = spaceAt(map.spaces, tile);
+      let answer = answers.get(into);
+      if (answer === undefined) {
+        answer = admits(tile);
+        answers.set(into, answer);
+      }
+      return answer;
+    };
+  }
+
+  function goTo(connection: Connection, userId: string): void {
+    if (userId === connection.userId) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message: 'you cannot walk to yourself',
+      });
+      return;
+    }
+    endWalk(connection, 'stopped');
+    walks.set(connection, {
+      targetId: userId,
+      path: [],
+      aimedAt: null,
+      taken: 0,
+      failed: 0,
+      timer: setTimeout(() => walkOn(connection), 0).unref(),
+    });
+  }
+
+  function cancelWalk(connection: Connection): Walk | undefined {
+    const walk = walks.get(connection);
+    if (walk) {
+      clearTimeout(walk.timer);
+      walks.delete(connection);
+    }
+    return walk;
+  }
+
+  function endWalk(
+    connection: Connection,
+    reason: WalkEndReason,
+    spaceKey: string | null = null,
+  ): void {
+    const walk = cancelWalk(connection);
+    const player = players.get(connection);
+    if (!walk || !player) return;
+    send(connection.socket, {
+      type: 'walkEnded',
+      userId: walk.targetId,
+      reason,
+      player,
+      spaceKey,
+      mayAsk:
+        spaceKey !== null &&
+        whyNotAsk(connection, spaceKey, new Date()) === null,
+    });
+  }
+
+  /**
+   * To a tile next to them in their space, never onto theirs; undefined when
+   * their space has no such tile. When a space closed to this person is in
+   * the way, to the nearest tile beside the first one.
+   */
+  function planWalk(
+    connection: Connection,
+    from: Tile,
+    to: Tile,
+    now: number,
+  ): { path: Direction[]; closed: string | null } | undefined {
+    const crosses = crossingFor(connection, now);
+    const theirs = spaceAt(map.spaces, to);
+    const arrived = (tile: Tile) =>
+      Math.abs(tile.x - to.x) + Math.abs(tile.y - to.y) === 1 &&
+      spaceAt(map.spaces, tile) === theirs;
+    if (crosses(to)) {
+      const room = Object.values(Direction).some((direction) => {
+        const tile = step(to, direction);
+        return walkable(map.grid, tile) && arrived(tile);
+      });
+      if (!room) return undefined;
+      // A yes lapses a step away from the door, so a walk holding one for
+      // their space keeps to the door if it can.
+      const pass = requests.passFor(connection);
+      const keepsPass = (tile: Tile) =>
+        crosses(tile) &&
+        (spaceAt(map.spaces, tile) === pass ||
+          besideSpace(map.grid, map.spaces, tile, pass as string));
+      for (const mayCross of pass === theirs
+        ? [keepsPass, crosses]
+        : [crosses]) {
+        const path = pathTo(map.grid, from, arrived, mayCross);
+        if (path) return { path, closed: null };
+      }
+    } else {
+      const path = pathTo(
+        map.grid,
+        from,
+        (tile) => besideSpace(map.grid, map.spaces, tile, theirs),
+        crosses,
+      );
+      if (path) return { path, closed: theirs };
+    }
+    const closed = firstClosedOnTheWay(from, to, crosses);
+    if (closed === undefined) return undefined;
+    const path = pathTo(
+      map.grid,
+      from,
+      (tile) => besideSpace(map.grid, map.spaces, tile, closed),
+      crosses,
+    );
+    return path && { path, closed };
+  }
+
+  /**
+   * Walks live in this instance, so somebody connected to another one is out
+   * of reach, not gone.
+   */
+  async function endWalkNotHere(connection: Connection, walk: Walk) {
+    let reason: WalkEndReason = 'gone';
+    try {
+      const online = await presence.online(connection.cohortId);
+      if (
+        online.some(
+          (entry) =>
+            entry.userId === walk.targetId &&
+            entry.instanceId !== presence.instanceId,
+        )
+      ) {
+        reason = 'elsewhere';
+      }
+    } catch (err) {
+      app.log.warn({ err }, 'could not read presence to end a walk');
+    }
+    if (walks.get(connection) === walk) endWalk(connection, reason);
+  }
+
+  /** The first space closed to them on the way to `to`, doors aside. */
+  function firstClosedOnTheWay(
+    from: Tile,
+    to: Tile,
+    crosses: (tile: Tile) => boolean,
+  ): string | undefined {
+    const path = pathTo(
+      map.grid,
+      from,
+      (tile) => tile.x === to.x && tile.y === to.y,
+      () => true,
+    );
+    let at = from;
+    for (const direction of path ?? []) {
+      at = step(at, direction);
+      if (!crosses(at)) return spaceAt(map.spaces, at);
+    }
+    return undefined;
+  }
+
+  function walkOn(connection: Connection): void {
+    const walk = walks.get(connection);
+    if (!walk) return;
+    if (stopping || !connections.has(connection)) {
+      cancelWalk(connection);
+      return;
+    }
+    const target = connections.holderOf({
+      userId: walk.targetId,
+      cohortId: connection.cohortId,
+    });
+    if (!target) {
+      void endWalkNotHere(connection, walk);
+      return;
+    }
+    const them = players.get(target);
+    const me = players.get(connection);
+    if (!them || !me) {
+      endWalk(connection, 'gone');
+      return;
+    }
+    const now = Date.now();
+    if (
+      walk.path.length === 0 ||
+      walk.aimedAt?.x !== them.x ||
+      walk.aimedAt.y !== them.y
+    ) {
+      const plan = planWalk(connection, me, them, now);
+      if (!plan) {
+        endWalk(connection, 'no_way');
+        return;
+      }
+      if (plan.path.length === 0) {
+        endWalk(connection, plan.closed ? 'refused' : 'arrived', plan.closed);
+        return;
+      }
+      walk.path = plan.path;
+      walk.aimedAt = { x: them.x, y: them.y };
+    }
+    if (walk.taken >= walkLimit) {
+      endWalk(connection, 'no_way');
+      return;
+    }
+
+    const direction = walk.path[0] as Direction;
+    const moved = players.move(
+      connection,
+      direction,
+      now,
+      admitsStep(connection, now),
+    );
+    if (moved.changed) noteMoved(connection);
+    if (moved.outcome === 'moved') {
+      walk.path.shift();
+      walk.taken += 1;
+      walk.failed = 0;
+      send(connection.socket, {
+        type: 'walking',
+        userId: walk.targetId,
+        player: moved.player,
+      });
+      arrivedAt(connection, moved.player);
+    } else if (moved.outcome !== 'too_fast') {
+      // A door locked, or a list changed, since the path was found.
+      walk.path = [];
+      walk.failed += 1;
+      if (walk.failed >= 2) {
+        const into = spaceAt(map.spaces, step(me, direction));
+        if (moved.outcome === 'refused') endWalk(connection, 'refused', into);
+        else endWalk(connection, 'no_way');
+        return;
+      }
+    }
+    walk.timer = setTimeout(
+      () => walkOn(connection),
+      env.WORLD_STEP_MS,
+    ).unref();
   }
 
   /** Turned or moved: the next tick sends it, and the next save keeps it. */
@@ -1386,6 +1647,7 @@ export function registerGateway(
    * return is worse than a flicker for somebody who does.
    */
   function drop(connection: Connection, remember = true): void {
+    cancelWalk(connection);
     // A redeploy closes every socket, but LiveKit keeps running: calls are
     // left to the clients, which reconnect and are handed new ones.
     if (!stopping) {
@@ -2196,20 +2458,25 @@ export function registerGateway(
           noteActivity(connection);
           removeSomebody(connection, result.message.userId);
           return;
+        case 'goTo':
+          noteActivity(connection);
+          goTo(connection, result.message.userId);
+          return;
+        case 'stopWalking':
+          noteActivity(connection);
+          endWalk(connection, 'stopped');
+          return;
         case 'move': {
           noteActivity(connection);
+          endWalk(connection, 'stopped');
           const { direction, seq } = result.message;
           const now = Date.now();
-          // Asked only on a step into another space: somebody already inside
-          // stays until they leave, whatever has changed since they came in.
-          const moved = players.move(connection, direction, now, (target) => {
-            const into = spaceAt(map.spaces, target);
-            return (
-              into === connection.spaceKey ||
-              mayStepInto(connection, into, new Date(now)) ||
-              hasPass(connection, into)
-            );
-          });
+          const moved = players.move(
+            connection,
+            direction,
+            now,
+            admitsStep(connection, now),
+          );
           metrics.moved(moved.outcome);
           send(ws, {
             type: 'moveResult',
@@ -2316,6 +2583,7 @@ export function registerGateway(
       clearInterval(tick);
       clearInterval(periodicSave);
       clearInterval(presenceRenewal);
+      for (const walker of walks.keys()) cancelWalk(walker);
       // Everybody still here, whether or not they moved since the last save:
       // a redeploy should put nobody back at the spawn. Before the sockets
       // close, so the positions written are the ones they stood at.
@@ -2341,6 +2609,17 @@ export function registerGateway(
       }
     },
   };
+}
+
+interface Walk {
+  targetId: string;
+  timer: NodeJS.Timeout;
+  path: Direction[];
+  /** Where they stood when `path` was found. */
+  aimedAt: Tile | null;
+  taken: number;
+  /** Steps refused or blocked in a row. */
+  failed: number;
 }
 
 function personOf(connection: Connection): PersonFacts {
