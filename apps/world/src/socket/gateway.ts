@@ -1136,8 +1136,9 @@ export function registerGateway(
   }
 
   /**
-   * To a tile next to them in their space or, when a space closed to this
-   * person is in the way, theirs or another, to the nearest tile beside it.
+   * To a tile next to them, never onto theirs: in their space, or just
+   * outside it when it has no room beside them. When a space closed to this
+   * person is in the way, to the nearest tile beside the first one.
    */
   function planWalk(
     connection: Connection,
@@ -1147,12 +1148,9 @@ export function registerGateway(
   ): { path: Direction[]; closed: string | null } | undefined {
     const crosses = crossingFor(connection, now);
     const theirs = spaceAt(map.spaces, to);
+    const besideThem = (tile: Tile) =>
+      Math.abs(tile.x - to.x) + Math.abs(tile.y - to.y) === 1;
     if (crosses(to)) {
-      const apart = (tile: Tile) =>
-        spaceAt(map.spaces, tile) === theirs
-          ? Math.abs(tile.x - to.x) + Math.abs(tile.y - to.y)
-          : Infinity;
-      if (apart(from) <= 1) return { path: [], closed: null };
       // A yes lapses a step away from the door, so a walk holding one for
       // their space keeps to the door if it can.
       const pass = requests.passFor(connection);
@@ -1160,18 +1158,27 @@ export function registerGateway(
         crosses(tile) &&
         (spaceAt(map.spaces, tile) === pass ||
           besideSpace(map.grid, map.spaces, tile, pass as string));
-      for (const mayCross of pass === theirs
-        ? [keepsPass, crosses]
-        : [crosses]) {
-        const path =
-          pathTo(map.grid, from, (tile) => apart(tile) === 1, mayCross) ??
-          pathTo(map.grid, from, (tile) => apart(tile) === 0, mayCross);
-        if (path) return { path, closed: null };
+      const ways = pass === theirs ? [keepsPass, crosses] : [crosses];
+      for (const arrived of [
+        (tile: Tile) =>
+          besideThem(tile) && spaceAt(map.spaces, tile) === theirs,
+        besideThem,
+      ]) {
+        for (const mayCross of ways) {
+          const path = pathTo(map.grid, from, arrived, mayCross);
+          if (path) return { path, closed: null };
+        }
       }
+    } else {
+      const path = pathTo(
+        map.grid,
+        from,
+        (tile) => besideSpace(map.grid, map.spaces, tile, theirs),
+        crosses,
+      );
+      if (path) return { path, closed: theirs };
     }
-    const closed = crosses(to)
-      ? firstClosedOnTheWay(from, to, crosses)
-      : theirs;
+    const closed = firstClosedOnTheWay(from, to, crosses);
     if (closed === undefined) return undefined;
     const path = pathTo(
       map.grid,
@@ -1180,6 +1187,29 @@ export function registerGateway(
       crosses,
     );
     return path && { path, closed };
+  }
+
+  /**
+   * Walks live in this instance, so somebody connected to another one is out
+   * of reach, not gone.
+   */
+  async function endWalkNotHere(connection: Connection, walk: Walk) {
+    let reason: WalkEndReason = 'gone';
+    try {
+      const online = await presence.online(connection.cohortId);
+      if (
+        online.some(
+          (entry) =>
+            entry.userId === walk.targetId &&
+            entry.instanceId !== presence.instanceId,
+        )
+      ) {
+        reason = 'elsewhere';
+      }
+    } catch (err) {
+      app.log.warn({ err }, 'could not read presence to end a walk');
+    }
+    if (walks.get(connection) === walk) endWalk(connection, reason);
   }
 
   /** The first space closed to them on the way to `to`, doors aside. */
@@ -1213,7 +1243,11 @@ export function registerGateway(
       userId: walk.targetId,
       cohortId: connection.cohortId,
     });
-    const them = target && players.get(target);
+    if (!target) {
+      void endWalkNotHere(connection, walk);
+      return;
+    }
+    const them = players.get(target);
     const me = players.get(connection);
     if (!them || !me) {
       endWalk(connection, 'gone');

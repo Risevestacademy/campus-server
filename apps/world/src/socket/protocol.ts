@@ -191,16 +191,26 @@ const requestId = z
   );
 
 export const WalkEndReason = z
-  .enum(['arrived', 'stopped', 'refused', 'gone', 'no_way', 'moved_by_staff'])
+  .enum([
+    'arrived',
+    'stopped',
+    'refused',
+    'gone',
+    'elsewhere',
+    'no_way',
+    'moved_by_staff',
+  ])
   .meta({
     id: 'WalkEndReason',
     description:
-      'arrived: you are one tile from them. stopped: you sent `stopWalking` ' +
-      'or a `move`. refused: a space you may not enter is in the way, ' +
-      'theirs or another, and you stopped beside it; `mayAsk` says whether ' +
-      'asking to enter it would be taken. gone: they left, or were ' +
-      'not here. no_way: no path reaches them. moved_by_staff: staff removed ' +
-      'you from a space mid-walk.',
+      'arrived: you are one tile from them, never on theirs, and in their ' +
+      'space unless it has no room beside them. stopped: you sent ' +
+      '`stopWalking` or a `move`. refused: a space you may not enter is in ' +
+      'the way, theirs or another, and you stopped beside the first one; ' +
+      '`mayAsk` says whether asking to enter it would be taken. gone: they ' +
+      'left, or were not here. elsewhere: they are online, but connected to ' +
+      'another world server, which a walk cannot reach. no_way: no path ' +
+      'reaches them. moved_by_staff: staff removed you from a space mid-walk.',
   });
 
 export const EntryRequestOutcome = z

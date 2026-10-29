@@ -38,6 +38,7 @@ import {
   MemoryPresenceStore,
   type Displacement,
   type Presence,
+  type PresenceEntry,
 } from '../infra/presence.js';
 
 const SECRET = 'a-world-session-secret-of-at-least-32-chars';
@@ -250,7 +251,10 @@ const presence = {
       presence.entries.set(key, { ...held, status: entry.status });
     }
   },
-  online: async () => [],
+  /** Connections held by other instances, as `online` reads them. */
+  onOtherInstances: [] as PresenceEntry[],
+  online: async (cohortId: string) =>
+    presence.onOtherInstances.filter((entry) => entry.cohortId === cohortId),
   onlineUserIds: async () => new Set<string>(),
   onDisplaced: (listener: (displaced: Displacement) => void) => {
     presence.listeners.push(listener);
@@ -4076,62 +4080,64 @@ describe('movement', () => {
       await Promise.all([leave(walker), leave(grace.conn), leave(other)]);
     });
 
-    it('stops beside a closed space in the way, though theirs is open', async () => {
-      // A booth at (3, 2) inside a hall (x 2 to 4) designated for nobody.
+    /**
+     * A 5 × 5 world of its own, spawn at (0, 0), for a layout the shared map
+     * does not have. `open` places somebody by their saved position.
+     */
+    async function ownWorld(
+      spaces: {
+        key: string;
+        access: string;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }[],
+      {
+        walls = [],
+        stepMs = env.WORLD_STEP_MS,
+      }: { walls?: { x: number; y: number }[]; stepMs?: number } = {},
+    ) {
+      const grid = new Uint8Array(5 * 5);
+      for (const wall of walls) grid[tileIndex({ width: 5 }, wall)] = 1;
       const own = await buildWorld({
-        env,
+        env: { ...env, WORLD_STEP_MS: stepMs },
         accounts: {
           ...accounts,
           spacesOn: async () =>
-            new Map<string, SpaceFacts>([
-              [
-                'hall',
+            new Map<string, SpaceFacts>(
+              spaces.map(({ key, access }) => [
+                key,
                 {
-                  kind: 'classroom',
-                  access: SPACE_ACCESS.Designated,
+                  kind:
+                    access === SPACE_ACCESS.Designated
+                      ? 'classroom'
+                      : 'meeting_room',
+                  access,
                   retiredAt: null,
                   locked: false,
                   grants: [],
                 },
-              ],
-              [
-                'booth',
-                {
-                  kind: 'meeting_room',
-                  access: SPACE_ACCESS.Normal,
-                  retiredAt: null,
-                  locked: false,
-                  grants: [],
-                },
-              ],
-            ]),
+              ]),
+            ),
         },
         positions: store,
         presence: new MemoryPresenceStore(),
         map: {
           ...map,
-          grid: { width: 5, height: 5, spawn: { x: 0, y: 0 } },
+          grid: { width: 5, height: 5, spawn: { x: 0, y: 0 }, walls: grid },
           spaces: spaceIndexFrom({
             widthTiles: 5,
             heightTiles: 5,
             collisions: [],
             spawn: { x: 0, y: 0 },
-            spaces: [
-              {
-                key: 'hall',
-                name: 'Hall',
-                kind: null,
-                bounds: { shape: 'rect', x: 2, y: 0, width: 3, height: 5 },
-                properties: {},
-              },
-              {
-                key: 'booth',
-                name: 'Booth',
-                kind: null,
-                bounds: { shape: 'rect', x: 3, y: 2, width: 1, height: 1 },
-                properties: {},
-              },
-            ],
+            spaces: spaces.map(({ key, x, y, width, height }) => ({
+              key,
+              name: key,
+              kind: null,
+              bounds: { shape: 'rect', x, y, width, height },
+              properties: {},
+            })),
             portals: [],
             desks: [],
           }),
@@ -4139,7 +4145,14 @@ describe('movement', () => {
       });
       await own.app.listen({ port: 0, host: '127.0.0.1' });
       const { port } = own.app.server.address() as AddressInfo;
-      const open = async (userId: string) => {
+      const sockets: WebSocket[] = [];
+      const open = async (userId: string, at?: { x: number; y: number }) => {
+        if (at) {
+          store.positions.set(positionKey({ userId }), {
+            ...at,
+            facing: 'down',
+          });
+        }
         const ws = new WebSocket(
           `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`,
           {
@@ -4149,6 +4162,7 @@ describe('movement', () => {
             },
           },
         );
+        sockets.push(ws);
         const conn = { ws, messages: [] as Record<string, unknown>[] };
         ws.on('message', (raw) =>
           conn.messages.push(
@@ -4158,20 +4172,35 @@ describe('movement', () => {
         await waitFor(conn, (m) => m.type === 'snapshot');
         return conn;
       };
-      const admin = person();
-      accounts.admins.add(admin);
-      const grace = await open(admin);
-      const walker = await open(person());
+      const close = async () => {
+        for (const ws of sockets) ws.close();
+        await own.gateway.stop();
+        await own.app.close();
+      };
+      return { open, close, gateway: own.gateway };
+    }
+
+    /** A booth at (3, 2) inside a hall (x 2 to 4) designated for nobody. */
+    const hallWithBooth = (boothAccess: string) =>
+      ownWorld([
+        {
+          key: 'hall',
+          access: SPACE_ACCESS.Designated,
+          x: 2,
+          y: 0,
+          width: 3,
+          height: 5,
+        },
+        { key: 'booth', access: boothAccess, x: 3, y: 2, width: 1, height: 1 },
+      ]);
+
+    it('stops beside a closed space in the way, though theirs is open', async () => {
+      const own = await hallWithBooth(SPACE_ACCESS.Normal);
       try {
-        let seq = 0;
-        for (const direction of ['right', 'right', 'down', 'down', 'right']) {
-          seq += 1;
-          move(grace, direction, seq);
-          await waitFor(grace, (m) => m.type === 'moveResult' && m.seq === seq);
-          await new Promise((resolve) =>
-            setTimeout(resolve, env.WORLD_STEP_MS),
-          );
-        }
+        const admin = person();
+        accounts.admins.add(admin);
+        await own.open(admin, { x: 3, y: 2 });
+        const walker = await own.open(person());
 
         goTo(walker, admin);
 
@@ -4181,10 +4210,191 @@ describe('movement', () => {
           player: { x: 1, y: 0 },
         });
       } finally {
-        grace.ws.close();
-        walker.ws.close();
-        await own.gateway.stop();
-        await own.app.close();
+        await own.close();
+      }
+    });
+
+    it('stops at the first closed space in the way when theirs is closed too', async () => {
+      const own = await hallWithBooth(SPACE_ACCESS.Designated);
+      try {
+        const admin = person();
+        accounts.admins.add(admin);
+        await own.open(admin, { x: 3, y: 2 });
+        const walker = await own.open(person());
+
+        goTo(walker, admin);
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'refused',
+          spaceKey: 'hall',
+          player: { x: 1, y: 0 },
+        });
+      } finally {
+        await own.close();
+      }
+    });
+
+    it('steps off their tile rather than arrive on it', async () => {
+      const walker = await arrive(person());
+      const grace = person();
+      const graceConn = await arrive(grace);
+
+      goTo(walker, grace);
+
+      const ended = await walkEnded(walker);
+      expect(ended).toMatchObject({ reason: 'arrived' });
+      expect(apart(ended.player, { x: 0, y: 0 })).toBe(1);
+      expect(walker.messages.filter((m) => m.type === 'walking')).toHaveLength(
+        1,
+      );
+      await Promise.all([leave(walker), leave(graceConn)]);
+    });
+
+    it('stands just outside a space with no room beside them, not on their tile', async () => {
+      const own = await ownWorld([
+        {
+          key: 'booth',
+          access: SPACE_ACCESS.Normal,
+          x: 2,
+          y: 2,
+          width: 1,
+          height: 1,
+        },
+      ]);
+      try {
+        const grace = person();
+        await own.open(grace, { x: 2, y: 2 });
+        const walker = await own.open(person());
+
+        goTo(walker, grace);
+
+        const ended = await walkEnded(walker);
+        expect(ended).toMatchObject({ reason: 'arrived', spaceKey: null });
+        expect(apart(ended.player, { x: 2, y: 2 })).toBe(1);
+      } finally {
+        await own.close();
+      }
+    });
+
+    it('says there is no way when walls shut them in', async () => {
+      const own = await ownWorld([], {
+        walls: [
+          { x: 3, y: 4 },
+          { x: 4, y: 3 },
+        ],
+      });
+      try {
+        const grace = person();
+        await own.open(grace, { x: 4, y: 4 });
+        const walker = await own.open(person());
+
+        goTo(walker, grace);
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'no_way',
+          player: { x: 0, y: 0 },
+        });
+      } finally {
+        await own.close();
+      }
+    });
+
+    it('ends when staff remove them from a space mid-walk', async () => {
+      // A room over all but the right-hand column; slow steps, so the
+      // removal lands between two of them.
+      const own = await ownWorld(
+        [
+          {
+            key: 'room',
+            access: SPACE_ACCESS.Normal,
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 5,
+          },
+        ],
+        { stepMs: 500 },
+      );
+      try {
+        const admin = person();
+        accounts.admins.add(admin);
+        const staff = await own.open(admin, { x: 3, y: 4 });
+        const ada = person();
+        const walker = await own.open(ada);
+
+        goTo(walker, admin);
+        await waitFor(walker, (m) => m.type === 'walking');
+        send(staff, { type: 'removeFromSpace', userId: ada });
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'moved_by_staff',
+          player: { x: 4 },
+        });
+      } finally {
+        await own.close();
+      }
+    });
+
+    it('stops walking, and sends nothing, when the walker disconnects', async () => {
+      const ada = person();
+      const walker = await arrive(ada);
+      const grace = await inTheLibrary();
+
+      goTo(walker, grace.userId);
+      await waitFor(walker, (m) => m.type === 'walking');
+      await leave(walker);
+      const movesOf = () =>
+        grace.conn.messages.filter(
+          (m) =>
+            m.type === 'moved' &&
+            (m.players as { userId: string }[]).some((p) => p.userId === ada),
+        ).length;
+      await quiet();
+      const before = movesOf();
+      await new Promise((resolve) =>
+        setTimeout(resolve, env.WORLD_STEP_MS * 3),
+      );
+
+      expect(movesOf()).toBe(before);
+      expect(walker.messages.some((m) => m.type === 'walkEnded')).toBe(false);
+      await leave(grace.conn);
+    });
+
+    it('sends nothing when the server shuts down mid-walk', async () => {
+      const own = await ownWorld([], { stepMs: 500 });
+      const grace = person();
+      await own.open(grace, { x: 4, y: 4 });
+      const walker = await own.open(person());
+
+      goTo(walker, grace);
+      await waitFor(walker, (m) => m.type === 'walking');
+      await own.close();
+
+      expect(walker.messages.some((m) => m.type === 'walkEnded')).toBe(false);
+    });
+
+    it('says they are elsewhere when another world server holds them', async () => {
+      const walker = await arrive(person());
+      const grace = person();
+      presence.onOtherInstances.push({
+        userId: grace,
+        cohortId: COHORT,
+        connectionId: 'held-elsewhere',
+        spaceKey: DEFAULT_SPACE_KEY,
+        since: Date.now(),
+        status: 'available',
+        instanceId: 'another-instance',
+      });
+      try {
+        goTo(walker, grace);
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          userId: grace,
+          reason: 'elsewhere',
+        });
+      } finally {
+        presence.onOtherInstances.length = 0;
+        await leave(walker);
       }
     });
 
