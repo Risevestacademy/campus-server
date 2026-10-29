@@ -321,7 +321,14 @@ interface AuditEntryShapes {
   };
   [AuditAction.MentorshipGroupDeleted]: {
     subject: AuditSubjectType.MentorshipGroup;
-    details: MentorshipGroupRecordSnapshot;
+    details: MentorshipGroupRecordSnapshot & {
+      /**
+       * The ended space-list entries to the group that went with it — empty
+       * when it held none. Their granting and ending have entries of their
+       * own.
+       */
+      clearedSpaceMembershipIds: string[];
+    };
   };
 }
 

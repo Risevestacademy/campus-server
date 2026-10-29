@@ -760,14 +760,17 @@ describe('mentorship group admin routes (e2e)', () => {
           access: schema.SpaceAccess.Designated,
         })
         .returning();
-      await db.insert(schema.spaceMemberships).values(
-        [room.id, hall.id].map((spaceId) => ({
-          spaceId,
-          mentorshipGroupId: group.id,
-          grantedBy: adminId,
-          validFrom: new Date(Date.now() - 3_600_000),
-        })),
-      );
+      const entries = await db
+        .insert(schema.spaceMemberships)
+        .values(
+          [room.id, hall.id].map((spaceId) => ({
+            spaceId,
+            mentorshipGroupId: group.id,
+            grantedBy: adminId,
+            validFrom: new Date(Date.now() - 3_600_000),
+          })),
+        )
+        .returning();
 
       const res = await deleteGroup(w.cohort.id, group.id).expect(409);
       expect(res.body.error).toMatchObject({
@@ -796,6 +799,16 @@ describe('mentorship group admin routes (e2e)', () => {
         .from(schema.spaceMemberships)
         .where(eq(schema.spaceMemberships.mentorshipGroupId, group.id));
       expect(left).toHaveLength(0);
+
+      // The entry names what went with the group, as a track detach does,
+      // so the log can reconstruct which entries were swept.
+      const deleted = await deleteEntries();
+      expect(deleted).toHaveLength(1);
+      expect(deleted[0].details).toMatchObject({
+        clearedSpaceMembershipIds: expect.arrayContaining(
+          entries.map((entry) => entry.id),
+        ),
+      });
     });
 
     it('puts an accepted group invite’s student into the group', async () => {

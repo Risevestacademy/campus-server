@@ -174,9 +174,11 @@ export const MEMBERSHIP_ROWS_QUERY = `select members.user_id, members.cohort_id,
   left join mentorship_group_students as student_group
     on student_group.cohort_member_id = members.id
     and student_group.cohort_id = members.cohort_id
+    and members.role = 'student'
   left join mentorship_groups as mentored_group
     on mentored_group.mentor_member_id = members.id
     and mentored_group.cohort_id = members.cohort_id
+    and members.role = 'mentor'
   where (members.user_id, members.cohort_id) in (
     select seat.user_id, seat.cohort_id
     from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)

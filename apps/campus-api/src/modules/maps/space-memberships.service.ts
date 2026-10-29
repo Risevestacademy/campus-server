@@ -82,17 +82,18 @@ export type GrantRelease =
  * Release the entries `where` names, if none of them is standing at `now`:
  * the half a track detach and a mentorship group delete share.
  *
- * The caller has locked the subject the entries point at, so no new entry
- * can join them while this runs, and the read takes each entry `for update`,
- * so an end that is already in flight is waited for and then read, not raced
- * against. `now` is the caller's, taken before the read, so every entry is
- * judged against one instant rather than the moment each check happened to
- * run. An entry that has not ended keeps the subject: taking it away would
- * take that access away without anyone ending it, so nothing is deleted and
- * the spaces it opens are named. Otherwise the ended entries go — kept for
- * good they would hold the subject, and so the cohort or the group, forever —
- * and the audit log, which has each one's granting and ending, is their
- * record.
+ * Caller's contract: hold the subject row — the mentorship group, or the
+ * cohort's link to the track — `for update` before calling. The row locks
+ * taken here stop an `end()`; they do not stop an `insert`. Only the entity
+ * lock does, and without it a grant could slip in after the read and be
+ * deleted below, ending access without anyone calling `end()`. `now` is the
+ * caller's, taken before the read, so every entry is judged against one
+ * instant rather than the moment each check happened to run. An entry that
+ * has not ended keeps the subject: deleting it would take that access away
+ * without anyone ending it, so nothing is deleted and the spaces it opens
+ * are named. Otherwise the ended entries go — kept for good they would hold
+ * the subject, and so the cohort or the group, forever — and the audit log,
+ * which has each one's granting and ending, is their record.
  */
 async function releaseGrants(
   tx: Tx,
@@ -236,13 +237,28 @@ export class SpaceMembershipsService {
         );
       }
 
-      const subject = await (async (): Promise<SpaceMembershipSubjectDto> => {
+      const { subject, subjectWhere } = await (async (): Promise<{
+        subject: SpaceMembershipSubjectDto;
+        subjectWhere: SQL;
+      }> => {
         // A role needs nothing looked up: the enum is the whole of it.
         if (cohortRole !== null) {
-          return { type: SpaceMembershipSubjectType.CohortRole, cohortRole };
+          return {
+            subject: {
+              type: SpaceMembershipSubjectType.CohortRole,
+              cohortRole,
+            },
+            subjectWhere: eq(spaceMemberships.cohortRole, cohortRole),
+          };
         }
         if (systemRole !== null) {
-          return { type: SpaceMembershipSubjectType.SystemRole, systemRole };
+          return {
+            subject: {
+              type: SpaceMembershipSubjectType.SystemRole,
+              systemRole,
+            },
+            subjectWhere: eq(spaceMemberships.systemRole, systemRole),
+          };
         }
         if (userId !== null) {
           const [user] = await tx
@@ -260,10 +276,13 @@ export class SpaceMembershipsService {
             );
           }
           return {
-            type: SpaceMembershipSubjectType.User,
-            userId: user.id,
-            email: user.email,
-            displayName: user.displayName,
+            subject: {
+              type: SpaceMembershipSubjectType.User,
+              userId: user.id,
+              email: user.email,
+              displayName: user.displayName,
+            },
+            subjectWhere: eq(spaceMemberships.userId, user.id),
           };
         }
         if (mentorshipGroupId !== null) {
@@ -292,71 +311,75 @@ export class SpaceMembershipsService {
             );
           }
           return {
-            type: SpaceMembershipSubjectType.MentorshipGroup,
-            mentorshipGroupId: group.id,
-            groupName: group.name,
-            cohortId: group.cohortId,
-            cohortName: group.cohortName,
+            subject: {
+              type: SpaceMembershipSubjectType.MentorshipGroup,
+              mentorshipGroupId: group.id,
+              groupName: group.name,
+              cohortId: group.cohortId,
+              cohortName: group.cohortName,
+            },
+            subjectWhere: eq(spaceMemberships.mentorshipGroupId, group.id),
           };
         }
-        // A cohort track row exists only under a cohort that runs it, so the
-        // join is the refusal for "no cohort runs that track": there is no
-        // id to find. The columns come along for the answer's sake.
-        //
-        // Held with `key share` to the end, as a member's move holds it: a
-        // detach of the track locks the row before it looks for grants, so
-        // if this went first the detach waits and then sees the grant, and
-        // if the detach went first this finds no row and answers 404.
-        const [track] = await tx
-          .select({
-            id: cohortTracks.id,
-            cohortId: cohorts.id,
-            cohortName: cohorts.name,
-            trackName: tracks.name,
-            trackCode: tracks.code,
-          })
-          .from(cohortTracks)
-          .innerJoin(cohorts, eq(cohortTracks.cohortId, cohorts.id))
-          .innerJoin(tracks, eq(cohortTracks.trackId, tracks.id))
-          .where(eq(cohortTracks.id, cohortTrackId as string))
-          .limit(1)
-          .for('key share', { of: cohortTracks });
-        if (!track) {
-          throw new SpaceMembershipSubjectNotFoundException(
-            `No cohort runs a track with id ${cohortTrackId}`,
-            { cohortTrackId },
-          );
+        if (cohortTrackId !== null) {
+          // A cohort track row exists only under a cohort that runs it, so
+          // the join is the refusal for "no cohort runs that track": there
+          // is no id to find. The columns come along for the answer's sake.
+          //
+          // Held with `key share` to the end, as a member's move holds it: a
+          // detach of the track locks the row before it looks for grants, so
+          // if this went first the detach waits and then sees the grant, and
+          // if the detach went first this finds no row and answers 404.
+          const [track] = await tx
+            .select({
+              id: cohortTracks.id,
+              cohortId: cohorts.id,
+              cohortName: cohorts.name,
+              trackName: tracks.name,
+              trackCode: tracks.code,
+            })
+            .from(cohortTracks)
+            .innerJoin(cohorts, eq(cohortTracks.cohortId, cohorts.id))
+            .innerJoin(tracks, eq(cohortTracks.trackId, tracks.id))
+            .where(eq(cohortTracks.id, cohortTrackId))
+            .limit(1)
+            .for('key share', { of: cohortTracks });
+          if (!track) {
+            throw new SpaceMembershipSubjectNotFoundException(
+              `No cohort runs a track with id ${cohortTrackId}`,
+              { cohortTrackId },
+            );
+          }
+          return {
+            subject: {
+              type: SpaceMembershipSubjectType.CohortTrack,
+              cohortTrackId: track.id,
+              trackName: track.trackName,
+              trackCode: track.trackCode,
+              cohortId: track.cohortId,
+              cohortName: track.cohortName,
+            },
+            subjectWhere: eq(spaceMemberships.cohortTrackId, track.id),
+          };
         }
-        return {
-          type: SpaceMembershipSubjectType.CohortTrack,
-          cohortTrackId: track.id,
-          trackName: track.trackName,
-          trackCode: track.trackCode,
-          cohortId: track.cohortId,
-          cohortName: track.cohortName,
-        };
+
+        // The guard above allows exactly one subject. Reaching here means a
+        // subject was added to it without a branch that resolves it, so
+        // refuse rather than run a duplicate check on nothing.
+        throw new SpaceMembershipInvalidArgumentException(
+          'A grant is to exactly one of a person, a cohort track, a cohort role, a system role or a mentorship group',
+          { userId, cohortTrackId, cohortRole, systemRole, mentorshipGroupId },
+        );
       })();
 
+      // The space row is locked `no key update` above, and that lock — not
+      // this read — is what makes the check true under concurrency: it
+      // self-conflicts, so two grants for one space take turns. Weaken it to
+      // `key share` and two requests could both find nothing live here.
       const held = await tx
         .select()
         .from(spaceMemberships)
-        .where(
-          and(
-            eq(spaceMemberships.spaceId, spaceId),
-            userId !== null
-              ? eq(spaceMemberships.userId, userId)
-              : cohortTrackId !== null
-                ? eq(spaceMemberships.cohortTrackId, cohortTrackId)
-                : cohortRole !== null
-                  ? eq(spaceMemberships.cohortRole, cohortRole)
-                  : systemRole !== null
-                    ? eq(spaceMemberships.systemRole, systemRole)
-                    : eq(
-                        spaceMemberships.mentorshipGroupId,
-                        mentorshipGroupId as string,
-                      ),
-          ),
-        );
+        .where(and(eq(spaceMemberships.spaceId, spaceId), subjectWhere));
       const live = held.find((row) => isLiveGrant(windowOf(row), now));
       if (live) {
         throw new SpaceMembershipAlreadyLiveException(
@@ -600,13 +623,22 @@ function subjectOf(row: {
       trackName: row.trackName,
       trackCode: row.trackCode,
       cohortId: required(row.cohortId, 'the cohort a track runs in'),
-      cohortName: row.cohortName,
+      cohortName: required(
+        row.cohortName,
+        'the name of the cohort a track runs in',
+      ),
     };
   }
   if (row.cohortRole !== null) {
     return {
       type: SpaceMembershipSubjectType.CohortRole,
       cohortRole: row.cohortRole,
+    };
+  }
+  if (row.systemRole !== null) {
+    return {
+      type: SpaceMembershipSubjectType.SystemRole,
+      systemRole: row.systemRole,
     };
   }
   if (row.mentorshipGroupId !== null) {
@@ -621,11 +653,14 @@ function subjectOf(row: {
         row.groupCohortId,
         'the cohort of the mentorship group it names',
       ),
-      cohortName: row.groupCohortName,
+      cohortName: required(
+        row.groupCohortName,
+        'the name of the cohort of the mentorship group it names',
+      ),
     };
   }
-  return {
-    type: SpaceMembershipSubjectType.SystemRole,
-    systemRole: row.systemRole as SystemRole,
-  };
+  // The one_subject check says a row names exactly one subject. Reaching
+  // here means it was bypassed; naming a subject that is not there would be
+  // worse than saying so.
+  throw new Error('A space membership names no subject');
 }

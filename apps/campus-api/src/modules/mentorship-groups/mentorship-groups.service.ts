@@ -385,14 +385,17 @@ export class MentorshipGroupsService {
             name: group.name,
             description: group.description,
             mentorMemberId: group.mentorMemberId,
+            clearedSpaceMembershipIds: grants.clearedIds,
           },
         });
       });
     } catch (err) {
       // A pending invite inserted between the check and the delete is the
       // only thing the FKs can still refuse: a grant holds the group's row
-      // with `key share`, which the lock above waits behind.
-      if (isForeignKeyViolation(err)) {
+      // with `key share`, which the lock above waits behind. Name that
+      // constraint, so any other FK failure — a bug in the clear above, or
+      // a link added later — surfaces as itself instead of this message.
+      if (isForeignKeyViolation(err, 'invites_mentorship_group_cohort_fk')) {
         throw new MentorshipGroupConflictException(
           'Mentorship group cannot be deleted while a pending invite names it',
           { cohortId, groupId },
