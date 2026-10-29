@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { cohortRoleEnum, cohortTracks } from '../cohorts/schema.js';
+import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import { systemRoleEnum, users } from '../users/schema.js';
 
 /*
@@ -209,17 +210,19 @@ export const spaces = pgTable(
 
 /**
  * One entry on a designated space's list: a person, everybody on a cohort's
- * track, everybody holding a cohort role, or everybody holding a system role.
- * Any one live entry that names somebody lets them in.
+ * track, everybody holding a cohort role, everybody holding a system role, or
+ * everybody in a mentorship group. Any one live entry that names somebody
+ * lets them in.
  *
  * A space belongs to no cohort, so an entry naming a role reaches that role
- * in every cohort's copy of the campus; one naming a track reaches only the
- * cohort that runs it.
+ * in every cohort's copy of the campus; one naming a track or a mentorship
+ * group reaches only that cohort's people, and a group only its own students
+ * and mentor.
  *
  * It holds a span, not a switch: ending access sets valid_to, and the row
- * stays as the record that they once had it — until, for a grant to a
- * track, the track is detached from its cohort, which clears ended grants
- * and leaves the audit log as their record.
+ * stays as the record that they once had it — until the subject itself goes:
+ * a track detached from its cohort, or a mentorship group deleted, clears
+ * its ended entries and leaves the audit log as their record.
  */
 export const spaceMemberships = pgTable(
   'space_memberships',
@@ -234,6 +237,10 @@ export const spaceMemberships = pgTable(
     cohortRole: cohortRoleEnum('cohort_role'),
     /** Everybody holding this system role, whichever cohort they walk. */
     systemRole: systemRoleEnum('system_role'),
+    /** Everybody in this mentorship group: its students and its mentor. */
+    mentorshipGroupId: uuid('mentorship_group_id').references(
+      () => mentorshipGroups.id,
+    ),
     /** Null when no person granted it: the seed, a sync. */
     grantedBy: uuid('granted_by').references(() => users.id),
     validFrom: timestamp('valid_from', { withTimezone: true })
@@ -249,11 +256,12 @@ export const spaceMemberships = pgTable(
     index('space_memberships_space_idx').on(table.spaceId),
     index('space_memberships_user_idx').on(table.userId),
     index('space_memberships_cohort_track_idx').on(table.cohortTrackId),
+    index('space_memberships_mentorship_group_idx').on(table.mentorshipGroupId),
     // An entry names exactly one subject: with two it is unclear whose
     // access ends when one of them does, and with none it admits nobody.
     check(
       'space_memberships_one_subject',
-      sql`num_nonnulls(${table.userId}, ${table.cohortTrackId}, ${table.cohortRole}, ${table.systemRole}) = 1`,
+      sql`num_nonnulls(${table.userId}, ${table.cohortTrackId}, ${table.cohortRole}, ${table.systemRole}, ${table.mentorshipGroupId}) = 1`,
     ),
     check(
       'space_memberships_valid_window',

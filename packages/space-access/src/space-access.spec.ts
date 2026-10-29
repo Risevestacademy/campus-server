@@ -19,6 +19,7 @@ const DAY = 86_400_000;
 const COHORT = 'cohort-1';
 const ELSEWHERE = 'cohort-2';
 const TRACK = 'track-1';
+const GROUP = 'group-1';
 
 function membership(
   overrides: Partial<CohortMembershipFacts> = {},
@@ -30,6 +31,7 @@ function membership(
     status: ACTIVE_STUDENT_STATUS,
     accessExpiresAt: null,
     trackId: TRACK,
+    mentorshipGroupId: null,
     ...overrides,
   };
 }
@@ -68,12 +70,14 @@ function entry(overrides: Partial<SpaceGrantFacts> = {}): SpaceGrantFacts {
   const names =
     'toTrackId' in overrides ||
     'toCohortRole' in overrides ||
-    'toSystemRole' in overrides;
+    'toSystemRole' in overrides ||
+    'toGroupId' in overrides;
   return {
     toUserId: names ? null : 'person-1',
     toTrackId: null,
     toCohortRole: null,
     toSystemRole: null,
+    toGroupId: null,
     validFrom: new Date(AT.getTime() - DAY),
     validTo: null,
     ...overrides,
@@ -280,6 +284,63 @@ describe('a designated space’s list', () => {
       mayEnter(
         person({ membership: membership({ trackId: null }) }),
         designated(entry({ toTrackId: TRACK })),
+        AT,
+      ),
+    ).toBe(false);
+  });
+
+  it('admits a student in the mentorship group an entry names', () => {
+    expect(
+      mayEnter(
+        person({ membership: membership({ mentorshipGroupId: GROUP }) }),
+        designated(entry({ toGroupId: GROUP })),
+        AT,
+      ),
+    ).toBe(true);
+  });
+
+  it('admits the mentor of the mentorship group an entry names', () => {
+    expect(
+      mayEnter(
+        person({
+          membership: membership({
+            role: 'mentor',
+            status: null,
+            mentorshipGroupId: GROUP,
+          }),
+        }),
+        designated(entry({ toGroupId: GROUP })),
+        AT,
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses a member in another mentorship group', () => {
+    expect(
+      mayEnter(
+        person({ membership: membership({ mentorshipGroupId: 'group-2' }) }),
+        designated(entry({ toGroupId: GROUP })),
+        AT,
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a group entry to a member in no group', () => {
+    expect(
+      mayEnter(person(), designated(entry({ toGroupId: GROUP })), AT),
+    ).toBe(false);
+  });
+
+  it('reads a group from the membership in the cohort being walked', () => {
+    expect(
+      mayEnter(
+        person({
+          membership: membership({
+            cohortId: ELSEWHERE,
+            mentorshipGroupId: GROUP,
+          }),
+        }),
+        designated(entry({ toGroupId: GROUP })),
         AT,
       ),
     ).toBe(false);

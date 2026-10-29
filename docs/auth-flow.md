@@ -267,9 +267,9 @@ transaction:
 - **Bumps `users.session_epoch`.** Every access token already out was signed
   with the old value, so the guard answers 401 `Session has been revoked` on
   its next request, and `world` refuses it on an upgrade.
-- **Revokes every refresh family the account holds**, under the same lock a
-  refresh takes. Without this the dead access token could be swapped for a
-  new one on the new epoch.
+- **Revokes every refresh family the account holds**, after the epoch bump
+  has waited out any sign-in or refresh still minting. Without this the dead
+  access token could be swapped for a new one on the new epoch.
 
 The claim is required. A token with no `epoch` is refused outright, since it
 cannot be told apart from one that a revocation was meant to end.

@@ -23,6 +23,7 @@ import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortMemberNotFoundException } from '../cohorts/cohorts.exceptions.js';
 import { CohortRole, StudentStatus, cohortMembers } from '../cohorts/schema.js';
 import { InviteStatus, invites } from '../invites/schema.js';
+import { releaseGroupGrants } from '../maps/space-memberships.service.js';
 import { users } from '../users/schema.js';
 import type { ChangeMentorDto } from './dto/change-mentor.dto.js';
 import type { CreateMentorshipGroupDto } from './dto/create-mentorship-group.dto.js';
@@ -309,6 +310,7 @@ export class MentorshipGroupsService {
     cohortId: string,
     groupId: string,
     audit: AuditContext,
+    now: Date = new Date(),
   ): Promise<void> {
     try {
       await this.db.transaction(async (tx) => {
@@ -331,6 +333,20 @@ export class MentorshipGroupsService {
           throw new MentorshipGroupConflictException(
             'Mentorship group cannot be deleted while a pending invite names it',
             { cohortId, groupId, inviteId: pending.id },
+          );
+        }
+
+        // What a space's list says about this group: a live entry keeps the
+        // group, and every ended one goes with it, as a detached track's do.
+        // The group row is locked above, and a grant holds it with
+        // `key share`, so no entry can appear between this and the delete;
+        // the read locks the entries it finds, so an end in flight is waited
+        // for, not raced.
+        const grants = await releaseGroupGrants(tx, groupId, now);
+        if (!grants.released) {
+          throw new MentorshipGroupConflictException(
+            'Mentorship group cannot be deleted while a space’s list names it',
+            { cohortId, groupId, spaceIds: grants.standingSpaceIds },
           );
         }
 
@@ -369,13 +385,17 @@ export class MentorshipGroupsService {
             name: group.name,
             description: group.description,
             mentorMemberId: group.mentorMemberId,
+            clearedSpaceMembershipIds: grants.clearedIds,
           },
         });
       });
     } catch (err) {
       // A pending invite inserted between the check and the delete is the
-      // only thing the FKs can still refuse.
-      if (isForeignKeyViolation(err)) {
+      // only thing the FKs can still refuse: a grant holds the group's row
+      // with `key share`, which the lock above waits behind. Name that
+      // constraint, so any other FK failure — a bug in the clear above, or
+      // a link added later — surfaces as itself instead of this message.
+      if (isForeignKeyViolation(err, 'invites_mentorship_group_cohort_fk')) {
         throw new MentorshipGroupConflictException(
           'Mentorship group cannot be deleted while a pending invite names it',
           { cohortId, groupId },
