@@ -1,7 +1,7 @@
 # PostHog
 
-campus-api and world send errors to PostHog Error Tracking. Neither sends
-product events yet.
+campus-api and world send errors to PostHog Error Tracking. campus-api can
+send product events too, through [`packages/analytics`](../packages/analytics).
 
 ## What is reported
 
@@ -50,6 +50,22 @@ Both services read the same three variables, validated at boot:
 - `POSTHOG_HOST`: HTTPS, `https://eu.i.posthog.com` by default.
 
 Use one PostHog project per environment, the same one for both services.
+
+`FF_ANALYTICS_ENABLED`, off by default, sends product events. It uses the same
+token and host, and is separate so errors can run without events. campus-api
+alone reads it for now.
+
+## Consent
+
+`users.analytics_consent` holds what a person chose: `granted`, `denied`, or
+null until they choose, which counts as not granted. The consent banner sets it
+with `PUT /v1/users/me/analytics-consent`, and `GET /v1/users/me` reads it.
+
+Account, invite, membership, profile and feedback events do not depend on it.
+Presence, space and call events do: without a grant they are sent under a random
+id with no person, so cohort totals stay complete and no individual is tracked.
+Which events need consent is the `consent` flag in the package's event list;
+legal signs that list off before those events ship.
 
 ## How to verify it works
 

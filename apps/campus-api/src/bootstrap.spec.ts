@@ -3,6 +3,7 @@ import { Logger } from 'nestjs-pino';
 
 import { bootstrap } from './bootstrap.js';
 import { loadEnv } from './infra/config/env.js';
+import { ANALYTICS } from './infra/analytics/analytics.module.js';
 import { ERROR_REPORTER } from './infra/error-reporting/error-reporting.module.js';
 
 vi.mock('./app.module.js', () => ({ AppModule: class AppModule {} }));
@@ -34,15 +35,25 @@ function harness() {
       steps.push('reporter flushed');
     }),
   };
+  const analytics = {
+    shutdown: vi.fn(async () => {
+      steps.push('analytics flushed');
+    }),
+  };
   const logger = { error: vi.fn() };
   const exitProcess = vi.fn((code: number) => {
     steps.push(`exit ${code}`);
   });
-  return { steps, telemetry, reporter, logger, exitProcess };
+  return { steps, telemetry, reporter, analytics, logger, exitProcess };
 }
 
 /** Enough of a Nest app for bootstrap to configure it, until listen fails. */
-function appThatCannotListen(logger: object, reporter: object, failure: Error) {
+function appThatCannotListen(
+  logger: object,
+  reporter: object,
+  analytics: object,
+  failure: Error,
+) {
   return {
     useBodyParser: vi.fn(),
     get: vi.fn((token: unknown) =>
@@ -50,7 +61,9 @@ function appThatCannotListen(logger: object, reporter: object, failure: Error) {
         ? logger
         : token === ERROR_REPORTER
           ? reporter
-          : undefined,
+          : token === ANALYTICS
+            ? analytics
+            : undefined,
     ),
     useLogger: vi.fn(),
     set: vi.fn(),
@@ -93,13 +106,14 @@ describe('bootstrap, when the API fails to start', () => {
     consoleError.mockRestore();
   });
 
-  it('reports the failure, flushes telemetry and PostHog, then exits 1, when it cannot listen', async () => {
-    const { steps, telemetry, reporter, logger, exitProcess } = harness();
+  it('reports the failure, flushes telemetry, errors and events, then exits 1, when it cannot listen', async () => {
+    const { steps, telemetry, reporter, analytics, logger, exitProcess } =
+      harness();
     const failure = Object.assign(new Error('listen EADDRINUSE'), {
       code: 'EADDRINUSE',
     });
     vi.mocked(NestFactory.create).mockResolvedValueOnce(
-      appThatCannotListen(logger, reporter, failure) as never,
+      appThatCannotListen(logger, reporter, analytics, failure) as never,
     );
 
     await bootstrap(config, telemetry, exitProcess);
@@ -110,7 +124,11 @@ describe('bootstrap, when the API fails to start', () => {
       'bootstrap',
     );
     expect(steps).toEqual(
-      expect.arrayContaining(['telemetry flushed', 'reporter flushed']),
+      expect.arrayContaining([
+        'telemetry flushed',
+        'reporter flushed',
+        'analytics flushed',
+      ]),
     );
     expect(steps.at(-1)).toBe('exit 1');
   });

@@ -17,7 +17,13 @@ import type {
   UpdateProfileDto,
 } from './dto/profile.dto.js';
 import { loadLiveMemberships } from '../live-memberships.js';
-import { hasAdminPowers, UserStatus, users, type User } from '../schema.js';
+import {
+  hasAdminPowers,
+  UserStatus,
+  users,
+  type AnalyticsConsent,
+  type User,
+} from '../schema.js';
 import {
   CohortProfilesForbiddenException,
   ProfileNotFoundException,
@@ -87,6 +93,23 @@ export class ProfileService {
       }
       return updated;
     });
+    return this.toOwnProfile(row, now);
+  }
+
+  /** Records the person's choice, and when they made it. */
+  async setAnalyticsConsent(
+    userId: string,
+    consent: AnalyticsConsent,
+    now: Date = new Date(),
+  ): Promise<OwnProfileDto> {
+    const [row] = await this.db
+      .update(users)
+      .set({ analyticsConsent: consent, analyticsConsentAt: now })
+      .where(eq(users.id, userId))
+      .returning();
+    if (!row) {
+      throw new ProfileNotFoundException('No such profile', { userId });
+    }
     return this.toOwnProfile(row, now);
   }
 
@@ -244,6 +267,7 @@ export class ProfileService {
       spriteKey: spriteKeyOrNone(row.spriteKey),
       systemRole: row.systemRole,
       memberships: memberships.get(row.id) ?? [],
+      analyticsConsent: row.analyticsConsent,
       createdAt: row.createdAt,
     };
   }
