@@ -113,6 +113,37 @@ Do this once for staging and once for production.
      opens its trace.
    - **Metrics:** names start `nodejs_` and `v8js_`.
 
+## Dashboards
+
+Four dashboards live in [`infra/grafana/dashboards`](../infra/grafana/dashboards),
+tagged `campus` and linked to each other:
+
+| File            | Shows                                                                                        | Reads           |
+| --------------- | -------------------------------------------------------------------------------------------- | --------------- |
+| `api.json`      | campus-api's requests, latency and errors by route, outgoing calls by host, error log lines  | traces, logs    |
+| `world.json`    | open sockets, connect success, upgrades by outcome, closes, traffic, the work behind sockets | metrics, traces |
+| `database.json` | Postgres queries by operation, latency, failures by code, queries over 100 ms                | traces          |
+| `runtime.json`  | event loop delay and utilization, heap, GC pauses, active resources                          | metrics         |
+
+The API and database dashboards read TraceQL metrics from the spans, not
+exported metrics, so they work while `FF_OTEL_METRICS_ENABLED` is off, as it
+is for campus-api on staging. The runtime dashboard shows only services that
+export metrics, so on staging only world.
+
+**Import or update one:** Dashboards → New → Import, and upload the file. The
+data source pickers at the top of each dashboard choose the stack's `…-prom`,
+`…-traces` and `…-logs` by name. Each dashboard has a fixed uid, so
+importing a newer file over it replaces it. Change a dashboard by editing it
+in Grafana, then Export → Export as JSON with "Export the dashboard to use in
+another instance" off, and commit the file in place of the old one, so the
+repository stays the copy that counts.
+
+Connect success on the world dashboard can read slightly low just after a
+deploy: a refused tab that closes during world's first read of the spaces
+after a boot is counted as abandoned (issue #118). A counter's first increase
+after a restart can also be missed, which matters only at staging's low
+volume.
+
 ## When nothing arrives
 
 - **401 from the endpoint:** the headers are wrong. The value must keep the
