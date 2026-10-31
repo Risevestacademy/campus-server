@@ -8,7 +8,7 @@ import type { Plugin } from 'vitest/config';
 const fromApp = (path: string) =>
   fileURLToPath(new URL(`../${path}`, import.meta.url));
 
-function createProgram(): ts.Program {
+function createProgram(paths: Record<string, string[]>): ts.Program {
   const configPath = fromApp('tsconfig.build.json');
   const { config } = ts.readConfigFile(configPath, ts.sys.readFile);
   const { options, fileNames } = ts.parseJsonConfigFileContent(
@@ -18,6 +18,10 @@ function createProgram(): ts.Program {
   );
   return ts.createProgram(fileNames, {
     ...options,
+    // A workspace package with no build has no types, and the plugin would
+    // document anything typed from it as a bare object.
+    paths,
+    rootDir: undefined,
     declaration: false,
     incremental: false,
     sourceMap: false,
@@ -37,15 +41,23 @@ export function swaggerPlugin(): Plugin {
     (plugin: { name: string }) => plugin.name === '@nestjs/swagger',
   );
   let program: ts.Program | undefined;
+  const paths: Record<string, string[]> = {};
 
   return {
     name: 'nest-swagger',
     enforce: 'pre',
+    configResolved(config) {
+      for (const { find, replacement } of config.resolve.alias) {
+        if (typeof find === 'string') {
+          paths[find] = [replacement];
+        }
+      }
+    },
     transform(_code, id) {
       if (!id.endsWith('.dto.ts')) {
         return;
       }
-      program ??= createProgram();
+      program ??= createProgram(paths);
       const sourceFile = program.getSourceFile(id);
       if (!sourceFile) {
         return;
