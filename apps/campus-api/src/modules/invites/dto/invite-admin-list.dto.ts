@@ -17,7 +17,7 @@ import { InviteStatus } from '../schema.js';
  * contract ever mentioning it.
  */
 export class InviteIdParamDto {
-  @ApiProperty({ example: '44444444-4444-4444-8444-444444444444' })
+  /** @example 44444444-4444-4444-8444-444444444444 */
   @IsUUID()
   id: string;
 }
@@ -30,25 +30,21 @@ export class InviteIdParamDto {
  * tracks, so the three stay trivially interchangeable for a caller.
  */
 export class ListInvitesQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    enum: InviteStatus,
-    enumName: 'InviteStatus',
-    description:
-      'Restrict to one status. Omit for all of them. `pending` is what an ' +
-      'admin wants most often — the open offers that are still redeemable — ' +
-      'and `revoked` is the answer to "who killed this invite".',
-  })
+  /**
+   * Restrict to one status. Omit for all of them. `pending` is what an admin
+   * wants most often — the open offers that are still redeemable — and
+   * `revoked` is the answer to "who killed this invite".
+   */
+  @ApiPropertyOptional({ enum: InviteStatus, enumName: 'InviteStatus' })
   @IsOptional()
   @IsEnum(InviteStatus)
   status?: InviteStatus;
 
-  @ApiPropertyOptional({
-    type: Boolean,
-    description:
-      '`true` for the invites an invitee has flagged as wrong, `false` for ' +
-      'the ones nobody has. Omit for both. Combine with `status=pending` ' +
-      'for the flags still worth acting on.',
-  })
+  /**
+   * `true` for the invites an invitee has flagged as wrong, `false` for the
+   * ones nobody has. Omit for both. Combine with `status=pending` for the flags
+   * still worth acting on.
+   */
   @IsOptional()
   // A query string has no booleans, only the words for them.
   @Transform(({ value }: { value: unknown }) =>
@@ -57,26 +53,22 @@ export class ListInvitesQueryDto extends PaginationQueryDto {
   @IsBoolean()
   flagged?: boolean;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '11111111-1111-4111-8111-111111111111',
-    description:
-      'Invites to this cohort. An admin invite names no cohort, so it never ' +
-      'matches. A cohort that does not exist matches nothing: an empty ' +
-      'page, not a 404.',
-  })
+  /**
+   * Invites to this cohort. An admin invite names no cohort, so it never
+   * matches. A cohort that does not exist matches nothing: an empty page, not a
+   * 404.
+   * @example 11111111-1111-4111-8111-111111111111
+   */
   @IsOptional()
   @IsUUID()
   cohortId?: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '33333333-3333-4333-8333-333333333333',
-    description:
-      'Invites placed on this track, in whichever cohort runs it: the ' +
-      'catalogue track id, as the roster takes it. Add `cohortId` for one ' +
-      'cohort’s intake on the track.',
-  })
+  /**
+   * Invites placed on this track, in whichever cohort runs it: the catalogue
+   * track id, as the roster takes it. Add `cohortId` for one cohort’s intake on
+   * the track.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
   @IsOptional()
   @IsUUID()
   trackId?: string;
@@ -96,97 +88,80 @@ export class ListInvitesQueryDto extends PaginationQueryDto {
  * revoked, and `revokedBy`/`revokedAt` say who ended it and when.
  */
 export class AdminInviteListItemDto {
-  @ApiProperty({ example: '44444444-4444-4444-8444-444444444444' })
+  /** @example 44444444-4444-4444-8444-444444444444 */
   id: string;
 
-  @ApiProperty({ example: 'new.student@campus.local' })
+  /** @example new.student@campus.local */
   email: string;
 
-  @ApiProperty({
-    enum: InviteStatus,
-    enumName: 'InviteStatus',
-    description:
-      'Read against expiresAt, not off the stored column: a lapsed invite ' +
-      'is `expired` here even before anything has materialised the flip, so ' +
-      '`pending` always means still redeemable.',
-  })
+  /**
+   * Read against expiresAt, not off the stored column: a lapsed invite is
+   * `expired` here even before anything has materialised the flip, so `pending`
+   * always means still redeemable.
+   */
+  @ApiProperty({ enum: InviteStatus, enumName: 'InviteStatus' })
   status: InviteStatus;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    example: '11111111-1111-4111-8111-111111111111',
-    description: 'Null for an invite that grants a system role only.',
-  })
+  /**
+   * Null for an invite that grants a system role only.
+   * @example 11111111-1111-4111-8111-111111111111
+   */
+  @ApiProperty({ format: 'uuid' })
   cohortId: string | null;
 
-  @ApiProperty({
-    enum: CohortRole,
-    enumName: 'CohortRole',
-    nullable: true,
-    description: 'Null for an invite that grants a system role only.',
-  })
+  /** Null for an invite that grants a system role only. */
+  @ApiProperty({ enum: CohortRole, enumName: 'CohortRole', nullable: true })
   cohortRole: CohortRole | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
   systemRole: SystemRole;
 
-  @ApiProperty({
-    example: '2026-09-29T12:00:00.000Z',
-    description: 'When the link stops being redeemable.',
-  })
+  /**
+   * When the link stops being redeemable.
+   * @example 2026-09-29T12:00:00.000Z
+   */
   expiresAt: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    example: '22222222-2222-4222-8222-222222222222',
-    description: 'Who sent it. Never null — an invite always has an author.',
-  })
+  /**
+   * Who sent it. Never null — an invite always has an author.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
+  @ApiProperty({ type: String, format: 'uuid' })
   invitedBy: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    example: '33333333-3333-4333-8333-333333333333',
-    description:
-      'Who revoked it. Null unless status is `revoked`: accepted and ' +
-      'declined invites have no actor to name. Also null on the few invites ' +
-      'a data migration revoked, which nobody did by hand.',
-  })
+  /**
+   * Who revoked it. Null unless status is `revoked`: accepted and declined
+   * invites have no actor to name. Also null on the few invites a data
+   * migration revoked, which nobody did by hand.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
+  @ApiProperty({ type: String, format: 'uuid', nullable: true })
   revokedBy: string | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    example: '2026-09-25T09:30:00.000Z',
-    description: 'When it was revoked. Null unless status is `revoked`.',
-  })
+  /**
+   * When it was revoked. Null unless status is `revoked`.
+   * @example 2026-09-25T09:30:00.000Z
+   */
+  @ApiProperty({ type: String, format: 'date-time', nullable: true })
   revokedAt: string | null;
 
+  /**
+   * When the invitee flagged a mistake on it. Null if they never did. A flag
+   * changes nothing else: the invite can still be accepted.
+   */
   @ApiProperty({
     type: String,
     format: 'date-time',
     nullable: true,
     example: null,
-    description:
-      'When the invitee flagged a mistake on it. Null if they never did. A ' +
-      'flag changes nothing else: the invite can still be accepted.',
   })
   flaggedAt: string | null;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: null,
-    description: 'What the invitee said is wrong. Null unless flagged.',
-  })
+  /** What the invitee said is wrong. Null unless flagged. */
+  @ApiProperty({ example: null })
   flagMessage: string | null;
 
-  @ApiProperty({ example: '2026-09-22T12:00:00.000Z' })
+  /** @example 2026-09-22T12:00:00.000Z */
   createdAt: string;
 }
 

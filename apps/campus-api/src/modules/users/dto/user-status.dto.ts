@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 
@@ -11,15 +11,13 @@ export const SUSPENSION_REASON_MAX_LENGTH = 500;
  * suspend for something everybody can see and need not write it down twice.
  */
 export class SuspendUserDto {
-  @ApiPropertyOptional({
-    example: 'Posted the answer to a live assessment.',
-    maxLength: SUSPENSION_REASON_MAX_LENGTH,
-    description:
-      'Why, in the admin’s own words. Kept in the audit log beside the ' +
-      'actor and the target — nowhere else on the account — so a list or a ' +
-      'card never shows it. Blank is taken as no reason rather than ' +
-      'refused, since the field is optional.',
-  })
+  /**
+   * Why, in the admin’s own words. Kept in the audit log beside the actor and
+   * the target — nowhere else on the account — so a list or a card never shows
+   * it. Blank is taken as no reason rather than refused, since the field is
+   * optional.
+   * @example "Posted the answer to a live assessment."
+   */
   // Trimmed first, so a message of spaces is no reason rather than a reason
   // that says nothing. NUL goes too: Postgres refuses it in text, and that
   // would be a 500 for a character nobody can see.
@@ -36,10 +34,10 @@ export class SuspendUserDto {
 
 /** The account after the change, as much as the caller needs to redraw a row. */
 export class UserStatusDto {
-  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  /** @example 22222222-2222-4222-8222-222222222222 */
   id: string;
 
-  @ApiProperty({ example: 'ada@campus.local' })
+  /** @example ada@campus.local */
   email: string;
 
   @ApiProperty({ enum: UserStatus, enumName: 'UserStatus' })

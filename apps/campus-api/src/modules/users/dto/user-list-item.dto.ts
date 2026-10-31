@@ -4,24 +4,24 @@ import { CohortRole, StudentStatus } from '../../cohorts/schema.js';
 import { SystemRole, UserStatus } from '../schema.js';
 
 export class UserMembershipCohortDto {
-  @ApiProperty({ example: '11111111-1111-4111-8111-111111111111' })
+  /** @example 11111111-1111-4111-8111-111111111111 */
   id: string;
 
-  @ApiProperty({ example: 'Product Design 2026' })
+  /** @example "Product Design 2026" */
   name: string;
 
-  @ApiProperty({ example: 'PD26' })
+  /** @example PD26 */
   code: string;
 }
 
 export class UserMembershipTrackDto {
-  @ApiProperty({ example: '55555555-5555-4555-8555-555555555555' })
+  /** @example 55555555-5555-4555-8555-555555555555 */
   id: string;
 
-  @ApiProperty({ example: 'Product Design' })
+  /** @example "Product Design" */
   name: string;
 
-  @ApiProperty({ example: 'PD' })
+  /** @example PD */
   code: string;
 }
 
@@ -33,41 +33,27 @@ export class UserMembershipTrackDto {
  * account's `status`, which this says nothing about.
  */
 export class UserMembershipDto {
-  @ApiProperty({ type: () => UserMembershipCohortDto })
   cohort: UserMembershipCohortDto;
 
-  @ApiProperty({
-    type: () => UserMembershipTrackDto,
-    nullable: true,
-    description: 'Set for students; null for every other role.',
-  })
+  /** Set for students; null for every other role. */
   track: UserMembershipTrackDto | null;
 
   @ApiProperty({ enum: CohortRole, enumName: 'CohortRole' })
   role: CohortRole;
 
+  /** Students only; null for every other role. */
   @ApiProperty({
     enum: StudentStatus,
     enumName: 'StudentStatus',
     nullable: true,
-    description: 'Students only; null for every other role.',
   })
   status: StudentStatus | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-09-22T12:00:00.000Z',
-  })
+  /** @example 2026-09-22T12:00:00.000Z */
   joinedAt: Date;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    example: null,
-    description: 'Guests only: when the visit ends.',
-  })
+  /** Guests only: when the visit ends. */
+  @ApiProperty({ example: null })
   accessExpiresAt: Date | null;
 }
 
@@ -79,22 +65,22 @@ export class UserMembershipDto {
  * withheld until somebody decides it belongs here.
  */
 export class UserListItemDto {
-  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  /** @example 22222222-2222-4222-8222-222222222222 */
   id: string;
 
-  @ApiProperty({ example: 'ada@campus.local' })
+  /** @example ada@campus.local */
   email: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada' })
+  /** @example Ada */
   firstName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Lovelace' })
+  /** @example Lovelace */
   lastName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada Lovelace' })
+  /** @example "Ada Lovelace" */
   displayName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({ example: null })
   avatarUrl: string | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
@@ -103,33 +89,25 @@ export class UserListItemDto {
   @ApiProperty({ enum: UserStatus, enumName: 'UserStatus' })
   status: UserStatus;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    example: '2026-10-01T08:15:00.000Z',
-    description: 'Null for an account that has never signed in.',
-  })
+  /**
+   * Null for an account that has never signed in.
+   * @example 2026-10-01T08:15:00.000Z
+   */
   lastLoginAt: Date | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-09-22T12:00:00.000Z',
-  })
+  /** @example 2026-09-22T12:00:00.000Z */
   createdAt: Date;
 
-  @ApiProperty({
-    type: () => [UserMembershipDto],
-    description:
-      'Every live place this person holds on a roster, most recently ' +
-      'joined first. All of them, whatever the filters: a filter chooses ' +
-      'who is listed, not how much of them is shown. Empty for somebody ' +
-      'with no live membership — an admin with no cohort, or a member who ' +
-      'has left.\n\n' +
-      'This is the roster, not access. A suspended account keeps its ' +
-      'memberships and is listed with them, so an admin can see where the ' +
-      'person belongs, but it cannot sign in: read `status` for that.',
-  })
+  /**
+   * Every live place this person holds on a roster, most recently joined first.
+   * All of them, whatever the filters: a filter chooses who is listed, not how
+   * much of them is shown. Empty for somebody with no live membership — an
+   * admin with no cohort, or a member who has left.
+
+This is the roster, not
+   * access. A suspended account keeps its memberships and is listed with them,
+   * so an admin can see where the person belongs, but it cannot sign in: read
+   * `status` for that.
+   */
   memberships: UserMembershipDto[];
 }

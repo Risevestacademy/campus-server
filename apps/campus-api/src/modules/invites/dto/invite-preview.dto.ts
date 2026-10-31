@@ -9,10 +9,10 @@ import { SystemRole } from '../../users/schema.js';
  * token is what makes the link work.
  */
 export class InvitePreviewRequestDto {
-  @ApiProperty({
-    example: 'hFiA6EvJBOTvjt53b6SuvRAOCUiWl7umU4OWZl08WnU',
-    description: 'The `token` from the invite link, exactly as it arrived.',
-  })
+  /**
+   * The `token` from the invite link, exactly as it arrived.
+   * @example hFiA6EvJBOTvjt53b6SuvRAOCUiWl7umU4OWZl08WnU
+   */
   // Checked bottom-up, and only the first failure is reported: emptiness
   // first, or a missing token is described as too long.
   @MaxLength(256)
@@ -22,32 +22,36 @@ export class InvitePreviewRequestDto {
 }
 
 export class InvitePreviewCohortDto {
-  @ApiProperty({ example: 'Product Design 2026' })
+  /** @example "Product Design 2026" */
   name: string;
 
-  @ApiProperty({ example: 'PD26' })
+  /** @example PD26 */
   code: string;
 
-  @ApiPropertyOptional({ type: String, example: '2026-09-01', nullable: true })
+  /** @example 2026-09-01 */
+  @ApiPropertyOptional()
   startDate: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '2027-06-30', nullable: true })
+  /** @example 2027-06-30 */
+  @ApiPropertyOptional()
   endDate: string | null;
 }
 
 export class InvitePreviewTrackDto {
-  @ApiProperty({ example: 'Product Design' })
+  /** @example "Product Design" */
   name: string;
 
-  @ApiProperty({ example: 'PD' })
+  /** @example PD */
   code: string;
 }
 
 export class InvitePreviewInviterDto {
-  @ApiPropertyOptional({ type: String, example: 'Jerry', nullable: true })
+  /** @example Jerry */
+  @ApiPropertyOptional()
   firstName: string | null;
 
-  @ApiPropertyOptional({ type: String, example: 'Smith', nullable: true })
+  /** @example Smith */
+  @ApiPropertyOptional()
   lastName: string | null;
 }
 
@@ -57,59 +61,39 @@ export class InvitePreviewInviterDto {
  * be acted on — accepting still takes a Google sign-in as the invited address.
  */
 export class InvitePreviewResponseDto {
-  @ApiProperty({
-    example: 'ada@campus.local',
-    description:
-      'The address the invite was sent to. Show it beside "Continue with ' +
-      'Google": signing in with any other account is refused with ' +
-      'invite_required.',
-  })
+  /**
+   * The address the invite was sent to. Show it beside "Continue with Google":
+   * signing in with any other account is refused with invite_required.
+   * @example ada@campus.local
+   */
   email: string;
 
-  @ApiProperty({
-    type: () => InvitePreviewCohortDto,
-    nullable: true,
-    description: 'Null for an admin invite, which joins no cohort.',
-  })
+  /** Null for an admin invite, which joins no cohort. */
   cohort: InvitePreviewCohortDto | null;
 
-  @ApiProperty({
-    type: () => InvitePreviewTrackDto,
-    nullable: true,
-    description: 'Set for students; null for every other role.',
-  })
+  /** Set for students; null for every other role. */
   track: InvitePreviewTrackDto | null;
 
+  /** Null for an admin invite — show systemRole instead. */
   @ApiPropertyOptional({
     enum: CohortRole,
     enumName: 'CohortRole',
     nullable: true,
-    description: 'Null for an admin invite — show systemRole instead.',
   })
   cohortRole: CohortRole | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
   systemRole: SystemRole;
 
-  @ApiProperty({ type: () => InvitePreviewInviterDto })
   invitedBy: InvitePreviewInviterDto;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-10-07T12:00:00.000Z',
-    description: 'When the link stops working.',
-  })
+  /**
+   * When the link stops working.
+   * @example 2026-10-07T12:00:00.000Z
+   */
   expiresAt: Date;
 
-  @ApiPropertyOptional({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    example: null,
-    description:
-      'Guests only: when the visit being offered ends. Say so before they ' +
-      'accept.',
-  })
+  /** Guests only: when the visit being offered ends. Say so before they accept. */
+  @ApiPropertyOptional({ example: null })
   guestAccessExpiresAt: Date | null;
 }

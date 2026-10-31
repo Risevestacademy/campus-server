@@ -7,19 +7,28 @@ import {
 } from '@nestjs/swagger';
 
 export class PaginationMetaDto {
-  @ApiProperty({ description: 'Current page number (1-based).', example: 1 })
+  /**
+   * Current page number (1-based).
+   * @example 1
+   */
   page: number;
 
-  @ApiProperty({ description: 'Number of items per page.', example: 20 })
+  /**
+   * Number of items per page.
+   * @example 20
+   */
   perPage: number;
 
-  @ApiProperty({
-    description: 'Total number of items across all pages.',
-    example: 152,
-  })
+  /**
+   * Total number of items across all pages.
+   * @example 152
+   */
   total: number;
 
-  @ApiProperty({ description: 'Total number of pages.', example: 8 })
+  /**
+   * Total number of pages.
+   * @example 8
+   */
   totalPages: number;
 }
 
@@ -57,16 +66,11 @@ function pageSchemaFor(itemType: ItemType): new () => unknown {
 
   @ApiSchema({ name: `Paginated${itemType.name}` })
   class PaginatedPage {
-    @ApiProperty({
-      description: 'The page of items.',
-      type: () => [itemType],
-    })
+    /** The page of items. */
+    @ApiProperty({ type: () => [itemType] })
     items: unknown[];
 
-    @ApiProperty({
-      description: 'Pagination metadata.',
-      type: PaginationMetaDto,
-    })
+    /** Pagination metadata. */
     meta: PaginationMetaDto;
   }
 

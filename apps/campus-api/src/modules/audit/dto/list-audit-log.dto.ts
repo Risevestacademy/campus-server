@@ -56,43 +56,35 @@ export class ListAuditLogQueryDto extends PaginationQueryDto {
   @IsEnum(AuditAction)
   action?: AuditAction;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '22222222-2222-4222-8222-222222222222',
-    description: 'Entries written by this account.',
-  })
+  /**
+   * Entries written by this account.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
   @IsOptional()
   @IsUUID()
   actorUserId?: string;
 
-  @ApiPropertyOptional({
-    enum: AuditSubjectType,
-    enumName: 'AuditSubjectType',
-    description: 'Entries about this kind of thing.',
-  })
+  /** Entries about this kind of thing. */
+  @ApiPropertyOptional({ enum: AuditSubjectType, enumName: 'AuditSubjectType' })
   @IsOptional()
   @IsEnum(AuditSubjectType)
   subjectType?: AuditSubjectType;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '44444444-4444-4444-8444-444444444444',
-    description:
-      'Entries about the thing with this id. Send `subjectType` as well ' +
-      'for one thing’s history.',
-  })
+  /**
+   * Entries about the thing with this id. Send `subjectType` as well for one
+   * thing’s history.
+   * @example 44444444-4444-4444-8444-444444444444
+   */
   @IsOptional()
   @IsUUID()
   subjectId?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    format: 'date-time',
-    example: '2026-10-01T00:00:00.000Z',
-    description:
-      'Entries written at or after this instant. A bare date ' +
-      '(`2026-10-01`) is midnight UTC; a timestamp must carry its zone.',
-  })
+  /**
+   * Entries written at or after this instant. A bare date (`2026-10-01`) is
+   * midnight UTC; a timestamp must carry its zone.
+   * @example 2026-10-01T00:00:00.000Z
+   */
+  @ApiPropertyOptional({ type: String, format: 'date-time' })
   @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(DATE_OR_ZONED_INSTANT, {
@@ -100,15 +92,13 @@ export class ListAuditLogQueryDto extends PaginationQueryDto {
   })
   from?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    format: 'date-time',
-    example: '2026-10-08T00:00:00.000Z',
-    description:
-      'Entries written before this instant, which is left out, so ranges ' +
-      'placed end to end never count an entry twice. All of 7 October is ' +
-      '`from=2026-10-07&to=2026-10-08`. Must be after `from`.',
-  })
+  /**
+   * Entries written before this instant, which is left out, so ranges placed
+   * end to end never count an entry twice. All of 7 October is
+   * `from=2026-10-07&to=2026-10-08`. Must be after `from`.
+   * @example 2026-10-08T00:00:00.000Z
+   */
+  @ApiPropertyOptional({ type: String, format: 'date-time' })
   @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(DATE_OR_ZONED_INSTANT, {
@@ -126,15 +116,12 @@ export class AuditLogEntryDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    description:
-      'The account that did it. Null when no person did: the seed, a ' +
-      'migration. Not always an admin: an invitee is the actor when they ' +
-      'flag an invite or accept one.',
-  })
+  /**
+   * The account that did it. Null when no person did: the seed, a migration.
+   * Not always an admin: an invitee is the actor when they flag an invite or
+   * accept one.
+   */
+  @ApiProperty({ format: 'uuid' })
   actorUserId: string | null;
 
   @ApiProperty({ enum: AuditAction, enumName: 'AuditAction' })
@@ -147,44 +134,29 @@ export class AuditLogEntryDto {
   })
   subjectType: string | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    description:
-      'Not checked against anything: the thing may since have been deleted.',
-  })
+  /** Not checked against anything: the thing may since have been deleted. */
+  @ApiProperty({ format: 'uuid' })
   subjectId: string | null;
 
-  @ApiProperty({
-    type: 'object',
-    additionalProperties: true,
-    nullable: true,
-    example: { name: 'Software Engineering', code: 'SE' },
-    description:
-      'What the action records beyond its subject. The shape is fixed per ' +
-      '`action`; dates are ISO 8601 strings. Ids of people, never ' +
-      'addresses or names — except free text an admin wrote about a ' +
-      'person: `membership_revived.previous.dismissalReason` and ' +
-      '`user_suspended.reason`.',
-  })
+  /**
+   * What the action records beyond its subject. The shape is fixed per
+   * `action`; dates are ISO 8601 strings. Ids of people, never addresses or
+   * names — except free text an admin wrote about a person:
+   * `membership_revived.previous.dismissalReason` and `user_suspended.reason`.
+   * @example {"name":"Software Engineering","code":"SE"}
+   */
   details: Record<string, unknown> | null;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    description:
-      'The request’s correlation id, which leads to its log lines. Null ' +
-      'for entries written outside a request. Caller-supplied text: a ' +
-      'pointer, not proof.',
-  })
+  /**
+   * The request’s correlation id, which leads to its log lines. Null for
+   * entries written outside a request. Caller-supplied text: a pointer, not
+   * proof.
+   */
   correlationId: string | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-10-07T09:30:00.000Z',
-    description: 'When the change committed.',
-  })
+  /**
+   * When the change committed.
+   * @example 2026-10-07T09:30:00.000Z
+   */
   createdAt: Date;
 }

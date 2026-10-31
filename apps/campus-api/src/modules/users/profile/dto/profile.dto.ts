@@ -34,7 +34,7 @@ function Cleaned(): PropertyDecorator {
 
 /** The `:id` of the routes about one user. */
 export class UserIdParamDto {
-  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  /** @example 22222222-2222-4222-8222-222222222222 */
   @IsUUID()
   id: string;
 }
@@ -47,40 +47,35 @@ export class UserIdParamDto {
  * with, and changing it would change who they are.
  */
 export class UpdateProfileDto {
-  @ApiPropertyOptional({ type: String, nullable: true, example: 'Ada' })
+  /** @example Ada */
   @Cleaned()
   @IsOptional()
   @IsString()
   @MaxLength(80)
   firstName?: string | null;
 
-  @ApiPropertyOptional({ type: String, nullable: true, example: 'Lovelace' })
+  /** @example Lovelace */
   @Cleaned()
   @IsOptional()
   @IsString()
   @MaxLength(80)
   lastName?: string | null;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    example: 'Ada L.',
-    description: 'The name shown beside the avatar in the campus.',
-  })
+  /**
+   * The name shown beside the avatar in the campus.
+   * @example "Ada L."
+   */
   @Cleaned()
   @IsOptional()
   @IsString()
   @MaxLength(80)
   displayName?: string | null;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    example: '+234 801 234 5678',
-    description:
-      'Digits, with an optional leading + and spaces, hyphens or brackets ' +
-      'between them. Seen by the owner and admins only.',
-  })
+  /**
+   * Digits, with an optional leading + and spaces, hyphens or brackets between
+   * them. Seen by the owner and admins only.
+   * @example "+234 801 234 5678"
+   */
   @Cleaned()
   @IsOptional()
   @IsString()
@@ -89,22 +84,17 @@ export class UpdateProfileDto {
   })
   phone?: string | null;
 
-  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 500 })
   @Cleaned()
   @IsOptional()
   @IsString()
   @MaxLength(500)
   bio?: string | null;
 
-  @ApiPropertyOptional({
-    type: String,
-    enum: SPRITE_KEYS,
-    nullable: true,
-    example: SPRITE_KEYS[0],
-    description:
-      'The character they walk the campus as. Anybody in the campus with ' +
-      'them sees the change straight away.',
-  })
+  /**
+   * The character they walk the campus as. Anybody in the campus with them sees
+   * the change straight away.
+   */
+  @ApiPropertyOptional({ example: SPRITE_KEYS[0] })
   @Cleaned()
   @IsOptional()
   @IsIn(SPRITE_KEYS, {
@@ -115,77 +105,58 @@ export class UpdateProfileDto {
 
 /** The caller's own profile: everything, since it is theirs. */
 export class OwnProfileDto {
-  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  /** @example 22222222-2222-4222-8222-222222222222 */
   id: string;
 
-  @ApiProperty({
-    example: 'ada@campus.local',
-    description: 'The Google account they sign in with. Not editable.',
-  })
+  /**
+   * The Google account they sign in with. Not editable.
+   * @example ada@campus.local
+   */
   email: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada' })
+  /** @example Ada */
   firstName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Lovelace' })
+  /** @example Lovelace */
   lastName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada L.' })
+  /** @example "Ada L." */
   displayName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({ example: null })
   phone: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({ example: null })
   bio: string | null;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: 'https://lh3.googleusercontent.com/a/example',
-    description:
-      'The picture Google gave at first sign-in. Null when it gave none.',
-  })
+  /**
+   * The picture Google gave at first sign-in. Null when it gave none.
+   * @example https://lh3.googleusercontent.com/a/example
+   */
   avatarUrl: string | null;
 
-  @ApiProperty({
-    type: String,
-    enum: SPRITE_KEYS,
-    nullable: true,
-    example: null,
-    description:
-      'The character they walk the campus as. Null when they have picked ' +
-      'none, or picked one that is no longer offered.',
-  })
+  /**
+   * The character they walk the campus as. Null when they have picked none, or
+   * picked one that is no longer offered.
+   */
+  @ApiProperty({ example: null })
   spriteKey: SpriteKey | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
   systemRole: SystemRole;
 
-  @ApiProperty({
-    type: () => [UserMembershipDto],
-    description: 'Every cohort they hold a live place in.',
-  })
+  /** Every cohort they hold a live place in. */
   memberships: UserMembershipDto[];
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-09-22T12:00:00.000Z',
-  })
+  /** @example 2026-09-22T12:00:00.000Z */
   createdAt: Date;
 }
 
 /** A place on a roster, as much of it as a profile card shows. */
 export class ProfileCardMembershipDto {
-  @ApiProperty({ type: () => UserMembershipCohortDto })
   cohort: UserMembershipCohortDto;
 
-  @ApiProperty({
-    type: () => UserMembershipTrackDto,
-    nullable: true,
-    description: 'Set for students; null for every other role.',
-  })
+  /** Set for students; null for every other role. */
   track: UserMembershipTrackDto | null;
 
   @ApiProperty({ enum: CohortRole, enumName: 'CohortRole' })
@@ -198,63 +169,50 @@ export class ProfileCardMembershipDto {
  * number is not on it: that is for the owner and admins.
  */
 export class ProfileCardDto {
-  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  /** @example 22222222-2222-4222-8222-222222222222 */
   id: string;
 
-  @ApiProperty({ example: 'ada@campus.local' })
+  /** @example ada@campus.local */
   email: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada' })
+  /** @example Ada */
   firstName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Lovelace' })
+  /** @example Lovelace */
   lastName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada L.' })
+  /** @example "Ada L." */
   displayName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({ example: null })
   bio: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({ example: null })
   avatarUrl: string | null;
 
-  @ApiProperty({
-    type: String,
-    enum: SPRITE_KEYS,
-    nullable: true,
-    example: null,
-    description:
-      'The character they walk the campus as. Null when they have picked ' +
-      'none, or picked one that is no longer offered.',
-  })
+  /**
+   * The character they walk the campus as. Null when they have picked none, or
+   * picked one that is no longer offered.
+   */
+  @ApiProperty({ example: null })
   spriteKey: SpriteKey | null;
 
-  @ApiProperty({
-    type: () => [ProfileCardMembershipDto],
-    description:
-      'The cohorts the viewer shares with this person, most recently ' +
-      'joined first. An admin, and the person themselves, see every live ' +
-      'one.',
-  })
+  /**
+   * The cohorts the viewer shares with this person, most recently joined first.
+   * An admin, and the person themselves, see every live one.
+   */
   memberships: ProfileCardMembershipDto[];
 }
 
 /** One person in a cohort, as the sidebar draws them. */
 export class CohortProfileDto {
-  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  /** @example 22222222-2222-4222-8222-222222222222 */
   id: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada L.' })
+  /** @example "Ada L." */
   displayName: string | null;
 
-  @ApiProperty({
-    type: String,
-    enum: SPRITE_KEYS,
-    nullable: true,
-    example: null,
-    description:
-      'Null when they have picked none, or picked one that is no longer offered.',
-  })
+  /** Null when they have picked none, or picked one that is no longer offered. */
+  @ApiProperty({ example: null })
   spriteKey: SpriteKey | null;
 }

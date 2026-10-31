@@ -47,47 +47,47 @@ const tidyOptional = (params: { value: unknown }): unknown => {
 
 /** Where the member was, as their client reports it. All of it optional. */
 export class FeedbackContextDto {
-  @ApiPropertyOptional({
-    example: '/campus',
-    maxLength: 300,
-    description: 'The page or screen they were on.',
-  })
+  /**
+   * The page or screen they were on.
+   * @example /campus
+   */
   @IsOptional()
   @Transform(tidyOptional)
   @IsString()
   @MaxLength(300)
   path?: string;
 
-  @ApiPropertyOptional({
-    example: 'campus',
-    maxLength: 64,
-    description: 'The map they were on, from `snapshot.map.id`.',
-  })
+  /**
+   * The map they were on, from `snapshot.map.id`.
+   * @example campus
+   */
   @IsOptional()
   @Transform(tidyOptional)
   @IsString()
   @MaxLength(64)
   mapId?: string;
 
-  @ApiPropertyOptional({
-    example: 'd686dbad05445e71',
-    maxLength: 64,
-    description: 'That map’s version, from `snapshot.map.version`.',
-  })
+  /**
+   * That map’s version, from `snapshot.map.version`.
+   * @example d686dbad05445e71
+   */
   @IsOptional()
   @Transform(tidyOptional)
   @IsString()
   @MaxLength(64)
   mapVersion?: string;
 
-  @ApiPropertyOptional({ example: 75, description: 'The tile they stood on.' })
+  /**
+   * The tile they stood on.
+   * @example 75
+   */
   @IsOptional()
   @IsInt()
   @Min(0)
   @Max(100_000)
   x?: number;
 
-  @ApiPropertyOptional({ example: 59 })
+  /** @example 59 */
   @IsOptional()
   @IsInt()
   @Min(0)
@@ -100,69 +100,54 @@ export class CreateFeedbackDto {
   @IsEnum(FeedbackType)
   type: FeedbackType;
 
-  @ApiProperty({
-    example: 'The library door will not open',
-    maxLength: FEEDBACK_TITLE_MAX_LENGTH,
-  })
+  /** @example "The library door will not open" */
   @Transform(tidy)
   @IsString()
   @IsNotEmpty()
   @MaxLength(FEEDBACK_TITLE_MAX_LENGTH)
   title: string;
 
-  @ApiProperty({
-    example: 'I walk up to it from the courtyard and nothing happens.',
-    maxLength: FEEDBACK_DETAILS_MAX_LENGTH,
-  })
+  /** @example "I walk up to it from the courtyard and nothing happens." */
   @Transform(tidy)
   @IsString()
   @IsNotEmpty()
   @MaxLength(FEEDBACK_DETAILS_MAX_LENGTH)
   details: string;
 
-  @ApiPropertyOptional({
-    example: 'The library, by the east door',
-    maxLength: FEEDBACK_ABOUT_MAX_LENGTH,
-    description:
-      'Who or where, in the member’s own words: who a report is about, ' +
-      'where a bug happened. Offered on every type and required on none. ' +
-      'Blank is taken as not given.',
-  })
+  /**
+   * Who or where, in the member’s own words: who a report is about, where a bug
+   * happened. Offered on every type and required on none. Blank is taken as not
+   * given.
+   * @example "The library, by the east door"
+   */
   @IsOptional()
   @Transform(tidyOptional)
   @IsString()
   @MaxLength(FEEDBACK_ABOUT_MAX_LENGTH)
   about?: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '22222222-2222-4222-8222-222222222222',
-    description:
-      'The account a report is about, when the member picked a person ' +
-      'rather than typing a name. Only on a `report`. That person is not ' +
-      'told.',
-  })
+  /**
+   * The account a report is about, when the member picked a person rather than
+   * typing a name. Only on a `report`. That person is not told.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
   @IsOptional()
   @IsUUID()
   reportedUserId?: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '11111111-1111-4111-8111-111111111111',
-    description:
-      'The cohort they were in when they sent it. One the sender is in, or ' +
-      'any cohort from an admin.',
-  })
+  /**
+   * The cohort they were in when they sent it. One the sender is in, or any
+   * cohort from an admin.
+   * @example 11111111-1111-4111-8111-111111111111
+   */
   @IsOptional()
   @IsUUID()
   cohortId?: string;
 
-  @ApiPropertyOptional({
-    type: () => FeedbackContextDto,
-    description:
-      'Where they were, filled in by the client rather than typed. A hint ' +
-      'for whoever reads a bug.',
-  })
+  /**
+   * Where they were, filled in by the client rather than typed. A hint for
+   * whoever reads a bug.
+   */
   @IsOptional()
   // One object. Without this a list of them passes, each checked on its own,
   // and is saved as something no reader expects.
@@ -180,14 +165,10 @@ export class FeedbackReceiptDto {
   @ApiProperty({ enum: FeedbackType, enumName: 'FeedbackType' })
   type: FeedbackType;
 
-  @ApiProperty({ example: 'The library door will not open' })
+  /** @example "The library door will not open" */
   title: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-10-12T09:30:00.000Z',
-  })
+  /** @example 2026-10-12T09:30:00.000Z */
   createdAt: Date;
 }
 
@@ -203,11 +184,10 @@ export class ListFeedbackQueryDto extends PaginationQueryDto {
   @IsEnum(FeedbackStatus)
   status?: FeedbackStatus;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '22222222-2222-4222-8222-222222222222',
-    description: 'Everything this account has sent.',
-  })
+  /**
+   * Everything this account has sent.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
   @IsOptional()
   @IsUUID()
   submittedBy?: string;
@@ -218,10 +198,10 @@ export class FeedbackPersonDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
 
-  @ApiProperty({ example: 'ada@campus.local' })
+  /** @example ada@campus.local */
   email: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada Lovelace' })
+  /** @example "Ada Lovelace" */
   displayName: string | null;
 }
 
@@ -233,83 +213,49 @@ export class FeedbackListItemDto {
   @ApiProperty({ enum: FeedbackType, enumName: 'FeedbackType' })
   type: FeedbackType;
 
-  @ApiProperty({ example: 'The library door will not open' })
+  /** @example "The library door will not open" */
   title: string;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: 'The library, by the east door',
-    description: 'Who or where, as the member put it. Null when not given.',
-  })
+  /**
+   * Who or where, as the member put it. Null when not given.
+   * @example "The library, by the east door"
+   */
   about: string | null;
 
   @ApiProperty({ enum: FeedbackStatus, enumName: 'FeedbackStatus' })
   status: FeedbackStatus;
 
-  @ApiProperty({ type: () => FeedbackPersonDto })
   submittedBy: FeedbackPersonDto;
 
-  @ApiProperty({
-    type: () => FeedbackPersonDto,
-    nullable: true,
-    description: 'The account a report names, if it names one.',
-  })
+  /** The account a report names, if it names one. */
   reportedUser: FeedbackPersonDto | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-10-12T09:30:00.000Z',
-  })
+  /** @example 2026-10-12T09:30:00.000Z */
   createdAt: Date;
 }
 
 /** One piece of feedback, whole. */
 export class FeedbackDto extends FeedbackListItemDto {
-  @ApiProperty({
-    example: 'I walk up to it from the courtyard and nothing happens.',
-  })
+  /** @example "I walk up to it from the courtyard and nothing happens." */
   details: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    description: 'The cohort they were in, if their client said.',
-  })
+  /** The cohort they were in, if their client said. */
+  @ApiProperty({ format: 'uuid' })
   cohortId: string | null;
 
-  @ApiProperty({
-    type: () => FeedbackContextDto,
-    nullable: true,
-    description:
-      'Where the member’s client said they were. Not checked against ' +
-      'anything.',
-  })
+  /** Where the member’s client said they were. Not checked against anything. */
   context: FeedbackContextDto | null;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: 'Mozilla/5.0 (Macintosh; …) Chrome/141.0',
-    description: 'The browser or app that sent it.',
-  })
+  /**
+   * The browser or app that sent it.
+   * @example "Mozilla/5.0 (Macintosh; …) Chrome/141.0"
+   */
   userAgent: string | null;
 
-  @ApiProperty({
-    type: () => FeedbackPersonDto,
-    nullable: true,
-    description: 'The admin who marked it resolved. Null while it is open.',
-  })
+  /** The admin who marked it resolved. Null while it is open. */
   resolvedBy: FeedbackPersonDto | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    example: '2026-10-13T11:00:00.000Z',
-  })
+  /** @example 2026-10-13T11:00:00.000Z */
   resolvedAt: Date | null;
 }
 
@@ -320,10 +266,7 @@ export class UpdateFeedbackStatusDto {
 }
 
 export class FeedbackIdParamDto {
-  @ApiProperty({
-    format: 'uuid',
-    example: '66666666-6666-4666-8666-666666666666',
-  })
+  /** @example 66666666-6666-4666-8666-666666666666 */
   @IsUUID()
   id: string;
 }
