@@ -63,7 +63,9 @@ with `PUT /v1/users/me/analytics-consent`, and `GET /v1/users/me` reads it.
 
 Account, invite, membership, profile and feedback events do not depend on it.
 Presence, space and call events do: without a grant they are sent under a random
-id with no person, so cohort totals stay complete and no individual is tracked.
+id with no person, so no individual is tracked. PostHog links no group to such an
+event, so cohort totals count the `cohort_id` property, which every event with a
+cohort carries.
 Which events need consent is the `consent` flag in the package's event list;
 legal signs that list off before those events ship.
 

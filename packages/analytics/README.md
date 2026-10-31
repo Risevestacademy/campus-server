@@ -29,10 +29,14 @@ line names the event and the field, never the value.
 - `trackAnonymous` is for an event with no known person, such as a failed
   sign-in: a random id, and PostHog makes no person from it.
 - An event marked as needing consent goes out de-identified unless the caller
-  passes `consented: true`: the session's stand-in id instead of `users.id`, no
-  person, and the cohort group kept, so cohort totals stay complete.
+  passes `consented: true`: the session's stand-in id instead of `users.id`, and
+  no person.
 - A cohort is a PostHog group rather than a person property, because a person
-  can belong to several at once.
+  can belong to several at once. PostHog links no group to an event without a
+  person, so every event also carries `cohort_id`: count by that property, not
+  the group, when a total has to include de-identified events.
+- A correlation id is sent only if it is a UUID, which is what the services
+  generate. A caller can send anything, so any other one is left off.
 
 ## Tests
 

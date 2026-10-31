@@ -8,10 +8,25 @@ import { EVENTS, type EventName, type EventProperties } from './events.js';
 /** Long enough to send what is queued, short of a platform's kill. */
 const SHUTDOWN_TIMEOUT_MS = 3_000;
 
-/** A caller can send any correlation id, so one that could hold data is left off. */
-const OPAQUE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Names in a drop's log line can come from a caller, so odd ones aren't shown. */
+const PRINTABLE_NAME = /^[$A-Za-z_][\w.]{0,63}$/;
 
 const uuid = z.uuid();
+
+function printable(name: unknown): string {
+  return typeof name === 'string' && PRINTABLE_NAME.test(name)
+    ? name
+    : '(not shown)';
+}
+
+/** A strict object reports unknown fields in `keys`, with an empty path. */
+function rejectedFields(issues: z.core.$ZodIssue[]): string[] {
+  return issues.flatMap((issue) =>
+    issue.code === 'unrecognized_keys'
+      ? issue.keys.map(printable)
+      : [issue.path.map(printable).join('.') || '(properties)'],
+  );
+}
 
 export interface TrackOptions {
   /** Sends the event under this cohort's PostHog group. */
@@ -79,6 +94,23 @@ export function analyticsOver(
   sink: AnalyticsSink,
   { environment, release, onDropped }: AnalyticsStamp,
 ): Analytics {
+  function drop(event: unknown, reason: string): void {
+    try {
+      onDropped?.(printable(event), reason);
+    } catch {
+      // Nothing is left to tell, and the caller must not hear about it.
+    }
+  }
+
+  function guarded(event: unknown, work: () => void): void {
+    try {
+      work();
+    } catch (err) {
+      const name = err instanceof Error ? err.name : 'unknown';
+      drop(event, `could not send: ${name}`);
+    }
+  }
+
   function send(
     event: EventName,
     properties: unknown,
@@ -86,74 +118,80 @@ export function analyticsOver(
     anonymous: boolean,
     { cohortId, correlationId }: TrackOptions,
   ): void {
-    try {
-      const parsed = EVENTS[event].schema.safeParse(properties);
-      if (!parsed.success) {
-        const fields = parsed.error.issues.map((i) => i.path.join('.'));
-        onDropped?.(event, `invalid fields: ${fields.join(', ')}`);
-        return;
-      }
-      if (cohortId !== undefined && !uuid.safeParse(cohortId).success) {
-        onDropped?.(event, 'invalid cohort id');
-        return;
-      }
-      const data = parsed.data as Record<string, unknown>;
-      sink.capture({
-        distinctId,
-        event,
-        properties: {
-          ...data,
-          client: data.client ?? 'server',
-          app_version: release,
-          environment,
-          ...(correlationId && OPAQUE_ID.test(correlationId)
-            ? { correlation_id: correlationId }
-            : {}),
-          ...(anonymous ? { $process_person_profiles: false } : {}),
-        },
-        ...(cohortId ? { groups: { cohort: cohortId } } : {}),
-      });
-    } catch (err) {
-      onDropped?.(event, `could not send: ${(err as Error).name}`);
+    const parsed = EVENTS[event].schema.safeParse(properties);
+    if (!parsed.success) {
+      const fields = rejectedFields(parsed.error.issues);
+      drop(event, `invalid fields: ${fields.join(', ')}`);
+      return;
     }
+    if (cohortId !== undefined && !uuid.safeParse(cohortId).success) {
+      drop(event, 'invalid cohort id');
+      return;
+    }
+    const data = parsed.data as Record<string, unknown>;
+    sink.capture({
+      distinctId,
+      event,
+      properties: {
+        ...data,
+        client: data.client ?? 'server',
+        app_version: release,
+        environment,
+        ...(uuid.safeParse(correlationId).success
+          ? { correlation_id: correlationId }
+          : {}),
+        ...(cohortId ? { cohort_id: cohortId } : {}),
+        ...(anonymous ? { $process_person_profile: false } : {}),
+      },
+      // PostHog links no group to an event without a person.
+      ...(cohortId && !anonymous ? { groups: { cohort: cohortId } } : {}),
+    });
   }
 
   return {
     track(event, distinctId, properties, options = {}) {
-      const named = !EVENTS[event].consent || options.consented === true;
-      if (named && !uuid.safeParse(distinctId).success) {
-        onDropped?.(event, 'invalid distinct id');
-        return;
-      }
-      const standIn = uuid.safeParse(options.sessionId).success
-        ? (options.sessionId as string)
-        : randomUUID();
-      send(event, properties, named ? distinctId : standIn, !named, options);
+      guarded(event, () => {
+        if (!Object.hasOwn(EVENTS, event)) {
+          drop(event, 'unknown event');
+          return;
+        }
+        const named = !EVENTS[event].consent || options.consented === true;
+        if (named && !uuid.safeParse(distinctId).success) {
+          drop(event, 'invalid distinct id');
+          return;
+        }
+        const standIn = uuid.safeParse(options.sessionId).success
+          ? (options.sessionId as string)
+          : randomUUID();
+        send(event, properties, named ? distinctId : standIn, !named, options);
+      });
     },
     trackAnonymous(event, properties, options = {}) {
-      send(event, properties, randomUUID(), true, options);
+      guarded(event, () => {
+        if (!Object.hasOwn(EVENTS, event)) {
+          drop(event, 'unknown event');
+          return;
+        }
+        send(event, properties, randomUUID(), true, options);
+      });
     },
     identifyPerson(distinctId, properties) {
-      if (!uuid.safeParse(distinctId).success) {
-        onDropped?.('$identify', 'invalid distinct id');
-        return;
-      }
-      try {
+      guarded('$identify', () => {
+        if (!uuid.safeParse(distinctId).success) {
+          drop('$identify', 'invalid distinct id');
+          return;
+        }
         sink.identifyPerson(distinctId, properties);
-      } catch (err) {
-        onDropped?.('$identify', `could not send: ${(err as Error).name}`);
-      }
+      });
     },
     identifyCohort(cohortId, properties) {
-      if (!uuid.safeParse(cohortId).success) {
-        onDropped?.('$groupidentify', 'invalid cohort id');
-        return;
-      }
-      try {
+      guarded('$groupidentify', () => {
+        if (!uuid.safeParse(cohortId).success) {
+          drop('$groupidentify', 'invalid cohort id');
+          return;
+        }
         sink.identifyCohort(cohortId, properties);
-      } catch (err) {
-        onDropped?.('$groupidentify', `could not send: ${(err as Error).name}`);
-      }
+      });
     },
     shutdown: () => sink.shutdown(),
   };
