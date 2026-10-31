@@ -57,6 +57,25 @@ export function ApiUpdateOwnProfile(): MethodDecorator {
   );
 }
 
+export function ApiSetAnalyticsConsent(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Choose whether analytics may name you',
+      description:
+        'For the consent banner. Decides whether presence, space and call ' +
+        'analytics are tied to this account. Without a grant they are still ' +
+        'counted, under a random id. Account, invite and membership events ' +
+        'do not depend on this. It can be changed at any time.',
+    }),
+    ApiOkResponse({ type: OwnProfileDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: '`consent` is not `granted` or `denied`.',
+    }),
+    noSession,
+  );
+}
+
 export function ApiGetProfileCard(): MethodDecorator {
   return applyDecorators(
     ApiOperation({

@@ -50,6 +50,9 @@ importers:
 
   apps/campus-api:
     dependencies:
+      '@campus/analytics':
+        specifier: workspace:*
+        version: link:../../packages/analytics
       '@campus/error-reporting':
         specifier: workspace:*
         version: link:../../packages/error-reporting
@@ -259,6 +262,28 @@ importers:
       ws:
         specifier: ^8.22.0
         version: 8.22.0
+
+  packages/analytics:
+    dependencies:
+      posthog-node:
+        specifier: ^5.51.7
+        version: 5.51.7(rxjs@7.8.2)
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.81.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.1))
 
   packages/error-reporting:
     dependencies:
@@ -3814,9 +3839,6 @@ packages:
     resolution: {integrity: sha512-xYqdZFUK/VYazNl/oCDYN+3WloWQwMfZxBoiNt6qNyk+xfOdi598muWE42rNZFp1kNOiqW936q5RhUdnpqElSg==}
     engines: {node: '>=18'}
 
-  zod@4.5.4:
-    resolution: {integrity: sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==}
-
   zod@4.6.5:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
@@ -5031,7 +5053,7 @@ snapshots:
       '@scalar/helpers': 0.11.2
       nanoid: 5.1.16
       type-fest: 5.9.0
-      zod: 4.5.4
+      zod: 4.6.5
 
   '@scalar/validation@0.6.3': {}
 
@@ -6959,7 +6981,5 @@ snapshots:
       yargs-parser: 22.0.0
 
   yoctocolors@2.2.0: {}
-
-  zod@4.5.4: {}
 
   zod@4.6.5: {}

@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@campus/session": "workspace:*",
+    "@campus/analytics": "workspace:*",
     "@campus/error-reporting": "workspace:*",
     "@campus/telemetry": "workspace:*",
     "@campus/media": "workspace:*",

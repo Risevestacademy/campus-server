@@ -23,7 +23,17 @@ export enum UserStatus {
   Suspended = 'suspended',
 }
 
+/** Null on the row until the person chooses, which counts as not granted. */
+export enum AnalyticsConsent {
+  Granted = 'granted',
+  Denied = 'denied',
+}
+
 export const systemRoleEnum = pgEnum('system_role', SystemRole);
+export const analyticsConsentEnum = pgEnum(
+  'analytics_consent',
+  AnalyticsConsent,
+);
 export const userStatusEnum = pgEnum('user_status', UserStatus);
 
 export const users = pgTable(
@@ -64,6 +74,10 @@ export const users = pgTable(
      */
     sessionEpoch: integer('session_epoch').notNull().default(0),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+    analyticsConsent: analyticsConsentEnum('analytics_consent'),
+    analyticsConsentAt: timestamp('analytics_consent_at', {
+      withTimezone: true,
+    }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Put,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import type { AuthenticatedUser } from '../../../shared/auth/authenticated-user.js';
@@ -7,11 +15,13 @@ import { SessionGuard } from '../../auth/session.guard.js';
 import {
   ApiGetOwnProfile,
   ApiGetProfileCard,
+  ApiSetAnalyticsConsent,
   ApiUpdateOwnProfile,
 } from './docs/profile.docs.js';
 import {
   OwnProfileDto,
   ProfileCardDto,
+  SetAnalyticsConsentDto,
   UpdateProfileDto,
   UserIdParamDto,
 } from './dto/profile.dto.js';
@@ -44,6 +54,15 @@ export class ProfileController {
     @Body() dto: UpdateProfileDto,
   ): Promise<OwnProfileDto> {
     return this.profiles.updateOwn(user.id, dto);
+  }
+
+  @Put('me/analytics-consent')
+  @ApiSetAnalyticsConsent()
+  setAnalyticsConsent(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SetAnalyticsConsentDto,
+  ): Promise<OwnProfileDto> {
+    return this.profiles.setAnalyticsConsent(user.id, dto.consent);
   }
 
   @Get(':id/profile')

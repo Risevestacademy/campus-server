@@ -16,6 +16,12 @@ describe('loadEnv PostHog validation', () => {
     );
   });
 
+  it('throws when FF_ANALYTICS_ENABLED is true but POSTHOG_PROJECT_TOKEN is missing', () => {
+    expect(() => testEnv({ FF_ANALYTICS_ENABLED: 'true' })).toThrow(
+      /POSTHOG_PROJECT_TOKEN/,
+    );
+  });
+
   it('throws when POSTHOG_PROJECT_TOKEN is not prefixed with "phc_"', () => {
     expect(() =>
       testEnv({
