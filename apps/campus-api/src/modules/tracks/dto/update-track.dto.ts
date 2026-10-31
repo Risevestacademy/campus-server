@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsNotEmpty,
   IsOptional,
@@ -19,7 +19,7 @@ const trim = ({ value }: { value: unknown }) =>
  * can be changed but not cleared, so null is refused.
  */
 export class UpdateTrackDto {
-  @ApiPropertyOptional({ example: 'Software Engineering', maxLength: 128 })
+  /** @example "Software Engineering" */
   @IsOptionalNotNull()
   @Transform(trim)
   @IsString()
@@ -27,21 +27,19 @@ export class UpdateTrackDto {
   @MaxLength(128)
   name?: string;
 
-  @ApiPropertyOptional({
-    example: 'SE',
-    maxLength: 32,
-    description: 'Unique across tracks. Stored uppercase.',
-  })
+  /**
+   * Unique across tracks. Stored uppercase.
+   * @example SE
+   */
+  @ApiPropertyOptional({ maxLength: 32 })
   @IsOptionalNotNull()
   @IsCatalogCode()
   code?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    example: 'Backend and infra',
-    description: 'An empty string or null clears it.',
-  })
+  /**
+   * An empty string or null clears it.
+   * @example "Backend and infra"
+   */
   @IsOptional()
   @Transform(trim)
   @IsString()
@@ -49,7 +47,7 @@ export class UpdateTrackDto {
 }
 
 export class TrackIdParamDto {
-  @ApiProperty({ example: '33333333-3333-4333-8333-333333333333' })
+  /** @example 33333333-3333-4333-8333-333333333333 */
   @IsUUID()
   id: string;
 }

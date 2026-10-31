@@ -22,13 +22,11 @@ import { SystemRole, UserStatus } from '../schema.js';
  * that cohort and a mentor somewhere else.
  */
 export class ListUsersQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    example: 'ada',
-    maxLength: 128,
-    description:
-      'Matches any part of the email address, first name, last name, full ' +
-      'name or display name, ignoring case.',
-  })
+  /**
+   * Matches any part of the email address, first name, last name, full name or
+   * display name, ignoring case.
+   * @example ada
+   */
   @IsOptional()
   // NUL is dropped: Postgres refuses it in text, which would be a 500.
   @Transform(({ value }: { value: unknown }) =>
@@ -43,41 +41,32 @@ export class ListUsersQueryDto extends PaginationQueryDto {
   @IsEnum(SystemRole)
   systemRole?: SystemRole;
 
-  @ApiPropertyOptional({
-    enum: UserStatus,
-    enumName: 'UserStatus',
-    description: 'The account’s own status, not a membership’s.',
-  })
+  /** The account’s own status, not a membership’s. */
+  @ApiPropertyOptional({ enum: UserStatus, enumName: 'UserStatus' })
   @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '11111111-1111-4111-8111-111111111111',
-    description: 'People with a live membership in this cohort.',
-  })
+  /**
+   * People with a live membership in this cohort.
+   * @example 11111111-1111-4111-8111-111111111111
+   */
   @IsOptional()
   @IsUUID()
   cohortId?: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '55555555-5555-4555-8555-555555555555',
-    description:
-      'People with a live membership on this track, in any cohort that ' +
-      'runs it. Send `cohortId` as well for one cohort’s intake of the ' +
-      'track. Only students are placed on a track, so this finds students.',
-  })
+  /**
+   * People with a live membership on this track, in any cohort that runs it.
+   * Send `cohortId` as well for one cohort’s intake of the track. Only students
+   * are placed on a track, so this finds students.
+   * @example 55555555-5555-4555-8555-555555555555
+   */
   @IsOptional()
   @IsUUID()
   trackId?: string;
 
-  @ApiPropertyOptional({
-    enum: CohortRole,
-    enumName: 'CohortRole',
-    description: 'People holding this role in a live membership.',
-  })
+  /** People holding this role in a live membership. */
+  @ApiPropertyOptional({ enum: CohortRole, enumName: 'CohortRole' })
   @IsOptional()
   @IsEnum(CohortRole)
   cohortRole?: CohortRole;

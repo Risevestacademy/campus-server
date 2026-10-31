@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
   IsEmail,
@@ -38,10 +38,10 @@ const INVITABLE_SYSTEM_ROLES = [SystemRole.User, SystemRole.Admin];
  * - cohortRole 'student' requires cohortTrackId (invites_student_requires_track).
  */
 export class CreateInviteDto {
-  @ApiProperty({
-    example: 'new.student@campus.local',
-    description: 'Invitee address. Stored lowercase.',
-  })
+  /**
+   * Invitee address. Stored lowercase.
+   * @example new.student@campus.local
+   */
   @IsEmail()
   @IsNotEmpty()
   @Transform(({ value }: { value: unknown }) =>
@@ -49,69 +49,65 @@ export class CreateInviteDto {
   )
   email: string;
 
-  @ApiPropertyOptional({
-    example: '11111111-1111-4111-8111-111111111111',
-    description: 'Required for every invite but an admin one.',
-  })
+  /**
+   * Required for every invite but an admin one.
+   * @example 11111111-1111-4111-8111-111111111111
+   */
   @IsOptional()
   @IsUUID()
   cohortId?: string;
 
+  /** Required for every invite but an admin one. */
   @ApiPropertyOptional({
     enum: CohortRole,
     enumName: 'CohortRole',
     example: CohortRole.Student,
-    description: 'Required for every invite but an admin one.',
   })
   @IsOptional()
   @IsEnum(CohortRole)
   cohortRole?: CohortRole;
 
-  @ApiPropertyOptional({
-    example: '22222222-2222-4222-8222-222222222222',
-    description:
-      'Required when cohortRole is student. Must belong to cohortId.',
-  })
+  /**
+   * Required when cohortRole is student. Must belong to cohortId.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
   @IsOptional()
   @IsUUID()
   cohortTrackId?: string;
 
-  @ApiPropertyOptional({
-    example: '33333333-3333-4333-8333-333333333333',
-    description: 'Optional pod assignment. Requires cohortId.',
-  })
+  /**
+   * Optional pod assignment. Requires cohortId.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
   @IsOptional()
   @IsUUID()
   mentorshipGroupId?: string;
 
-  @ApiPropertyOptional({
-    enum: INVITABLE_SYSTEM_ROLES,
-    example: SystemRole.User,
-    description:
-      "Defaults to 'user'. Admin invites pass 'admin' with no cohort " +
-      'fields. An invite cannot make a super admin: only the seed does.',
-  })
+  /**
+   * Defaults to 'user'. Admin invites pass 'admin' with no cohort fields. An
+   * invite cannot make a super admin: only the seed does.
+   */
+  @ApiPropertyOptional({ example: SystemRole.User })
   @IsOptional()
   @IsIn(INVITABLE_SYSTEM_ROLES, {
     message: `systemRole must be one of: ${INVITABLE_SYSTEM_ROLES.join(', ')}`,
   })
   systemRole?: SystemRole;
 
-  @ApiPropertyOptional({
-    example: '2026-10-01T00:00:00.000Z',
-    description: 'Defaults to now + INVITE_TTL_DAYS. Must be in the future.',
-  })
+  /**
+   * Defaults to now + INVITE_TTL_DAYS. Must be in the future.
+   * @example 2026-10-01T00:00:00.000Z
+   */
   @IsOptional()
   @IsDateString()
   expiresAt?: string;
 
-  @ApiPropertyOptional({
-    example: '2026-12-01T00:00:00.000Z',
-    description:
-      'When the guest stops being one — required for cohortRole guest, and ' +
-      'rejected for every other role. Not the same as expiresAt, which is ' +
-      'how long this invite stays redeemable.',
-  })
+  /**
+   * When the guest stops being one — required for cohortRole guest, and
+   * rejected for every other role. Not the same as expiresAt, which is how long
+   * this invite stays redeemable.
+   * @example 2026-12-01T00:00:00.000Z
+   */
   @IsOptional()
   @IsDateString()
   guestAccessExpiresAt?: string;

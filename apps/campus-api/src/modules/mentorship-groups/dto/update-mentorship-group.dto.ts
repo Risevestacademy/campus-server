@@ -1,5 +1,4 @@
 import { Transform } from 'class-transformer';
-import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 import { IsOptionalNotNull } from '../../../shared/dto/optional-not-null.js';
@@ -7,11 +6,10 @@ import { MENTORSHIP_GROUP_NAME_MAX_LENGTH } from './create-mentorship-group.dto.
 
 /** A partial edit of the name or description. */
 export class UpdateMentorshipGroupDto {
-  @ApiPropertyOptional({
-    example: 'Pod A',
-    maxLength: MENTORSHIP_GROUP_NAME_MAX_LENGTH,
-    description: 'Unique within the cohort, whatever its case.',
-  })
+  /**
+   * Unique within the cohort, whatever its case.
+   * @example "Pod A"
+   */
   @IsOptionalNotNull()
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.replaceAll('\u0000', '').trim() : value,
@@ -21,12 +19,10 @@ export class UpdateMentorshipGroupDto {
   @MaxLength(MENTORSHIP_GROUP_NAME_MAX_LENGTH)
   name?: string;
 
-  @ApiPropertyOptional({
-    example: 'Mentors the backend track.',
-    type: String,
-    nullable: true,
-    description: 'null clears it.',
-  })
+  /**
+   * null clears it.
+   * @example "Mentors the backend track."
+   */
   @Transform(({ value }: { value: unknown }) => {
     if (typeof value !== 'string') return value;
     const trimmed = value.replaceAll('\u0000', '').trim();
