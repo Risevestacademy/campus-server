@@ -127,16 +127,33 @@ describe('the HTTP surface', () => {
     await app.close();
   });
 
-  it('echoes the correlation id it was given', async () => {
+  it('echoes a correlation id that is a UUID', async () => {
+    const { app, gateway } = await buildWorld({ env, accounts });
+    const id = '0b9d3c4e-8f2a-4c1d-9e7b-5a6f3d2c1b0a';
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { 'x-correlation-id': id },
+    });
+
+    expect(response.headers['x-correlation-id']).toBe(id);
+    await gateway.stop();
+    await app.close();
+  });
+
+  it('replaces a correlation id that is not a UUID', async () => {
     const { app, gateway } = await buildWorld({ env, accounts });
 
     const response = await app.inject({
       method: 'GET',
       url: '/health',
-      headers: { 'x-correlation-id': 'from-the-api' },
+      headers: { 'x-correlation-id': 'ada@example.com' },
     });
 
-    expect(response.headers['x-correlation-id']).toBe('from-the-api');
+    expect(response.headers['x-correlation-id']).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     await gateway.stop();
     await app.close();
   });

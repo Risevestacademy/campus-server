@@ -10,7 +10,7 @@ import {
 } from 'class-validator';
 
 import { CohortRole } from '../../../cohorts/schema.js';
-import { SystemRole } from '../../schema.js';
+import { AnalyticsConsent, SystemRole } from '../../schema.js';
 import {
   UserMembershipCohortDto,
   UserMembershipDto,
@@ -148,8 +148,29 @@ export class OwnProfileDto {
   /** Every cohort they hold a live place in. */
   memberships: UserMembershipDto[];
 
+  /**
+   * What they chose for presence, space and call analytics. Null until they
+   * choose, which counts as not granted.
+   */
+  @ApiProperty({
+    enum: AnalyticsConsent,
+    enumName: 'AnalyticsConsent',
+    nullable: true,
+  })
+  analyticsConsent: AnalyticsConsent | null;
+
   /** @example 2026-09-22T12:00:00.000Z */
   createdAt: Date;
+}
+
+export class SetAnalyticsConsentDto {
+  @ApiProperty({
+    enum: AnalyticsConsent,
+    enumName: 'AnalyticsConsent',
+    example: AnalyticsConsent.Granted,
+  })
+  @IsIn(Object.values(AnalyticsConsent))
+  consent: AnalyticsConsent;
 }
 
 /** A place on a roster, as much of it as a profile card shows. */

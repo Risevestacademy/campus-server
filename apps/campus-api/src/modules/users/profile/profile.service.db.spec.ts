@@ -15,7 +15,7 @@ import {
 } from '../../cohorts/schema.js';
 import { tracks } from '../../tracks/schema.js';
 import { ProfileService } from './profile.service.js';
-import { SystemRole, UserStatus, users } from '../schema.js';
+import { AnalyticsConsent, SystemRole, UserStatus, users } from '../schema.js';
 import {
   CohortProfilesForbiddenException,
   ProfileNotFoundException,
@@ -254,6 +254,48 @@ describe('own profile', () => {
   it('404s an account that is not there', async () => {
     await expect(
       service.getOwn('99999999-9999-4999-8999-999999999999'),
+    ).rejects.toBeInstanceOf(ProfileNotFoundException);
+  });
+});
+
+describe('analytics consent', () => {
+  it('is unset until they choose, then records the choice and when', async () => {
+    const ada = await person('ada@campus.local');
+    const decidedAt = new Date('2026-10-30T12:00:00.000Z');
+
+    expect((await service.getOwn(ada.id)).analyticsConsent).toBeNull();
+
+    const profile = await service.setAnalyticsConsent(
+      ada.id,
+      AnalyticsConsent.Granted,
+      decidedAt,
+    );
+
+    expect(profile.analyticsConsent).toBe(AnalyticsConsent.Granted);
+    const [row] = await db.select().from(users).where(eq(users.id, ada.id));
+    expect(row.analyticsConsent).toBe(AnalyticsConsent.Granted);
+    expect(row.analyticsConsentAt).toEqual(decidedAt);
+  });
+
+  it('can be withdrawn, and touches nobody else', async () => {
+    const ada = await person('ada@campus.local');
+    const grace = await person('grace@campus.local');
+
+    await service.setAnalyticsConsent(ada.id, AnalyticsConsent.Granted);
+    await service.setAnalyticsConsent(ada.id, AnalyticsConsent.Denied);
+
+    expect((await service.getOwn(ada.id)).analyticsConsent).toBe(
+      AnalyticsConsent.Denied,
+    );
+    expect((await service.getOwn(grace.id)).analyticsConsent).toBeNull();
+  });
+
+  it('is a not-found for an account that is gone', async () => {
+    await expect(
+      service.setAnalyticsConsent(
+        '99999999-9999-4999-8999-999999999999',
+        AnalyticsConsent.Denied,
+      ),
     ).rejects.toBeInstanceOf(ProfileNotFoundException);
   });
 });
