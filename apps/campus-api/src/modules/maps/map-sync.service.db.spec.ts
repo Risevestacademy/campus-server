@@ -1029,8 +1029,13 @@ describe('telling world the spaces changed', () => {
         map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
       ]);
       expect(result.changed).toBe(true);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(heard).toEqual([]);
+
+      // Notices arrive in commit order, so one sent above would come first.
+      await db.execute(
+        sql`select pg_notify(${SPACES_CHANGED_CHANNEL}, 'marker')`,
+      );
+      await vi.waitFor(() => expect(heard).toContain('marker'));
+      expect(heard).toEqual(['marker']);
     } finally {
       await stop();
     }

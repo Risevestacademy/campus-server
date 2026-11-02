@@ -211,14 +211,20 @@ interface AuditEntryShapes {
       spacesAdded: string[];
       spacesRestored: string[];
       spacesRetired: string[];
-      desksAdded: string[];
-      desksRestored: string[];
-      desksRetired: string[];
+      /** Absent from entries written before desks were synced. */
+      desksAdded?: string[];
+      desksRestored?: string[];
+      desksRetired?: string[];
     };
   };
   [AuditAction.MapRetired]: {
     subject: AuditSubjectType.Map;
-    details: { key: string; spacesRetired: string[]; desksRetired: string[] };
+    details: {
+      key: string;
+      spacesRetired: string[];
+      /** Absent from entries written before desks were synced. */
+      desksRetired?: string[];
+    };
   };
   [AuditAction.FeedbackResolved]: {
     subject: AuditSubjectType.Feedback;

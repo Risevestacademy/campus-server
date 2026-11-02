@@ -1,6 +1,6 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 
 import {
   DRIZZLE,
@@ -103,7 +103,7 @@ export class MapSyncService {
         }
         const publishedMaps = await this.published.read();
 
-        const { result, worldChanged } = await new Reconciliation(
+        const { result, worldChanged, mapIds } = await new Reconciliation(
           tx,
           now,
           publishedMaps,
@@ -113,7 +113,13 @@ export class MapSyncService {
           // is what makes the answer exact. Throwing is what takes it back.
           throw new DryRun({ ...result, dryRun: true });
         }
-        await this.record(tx, admin, options.correlationId, result.maps);
+        await this.record(
+          tx,
+          admin,
+          options.correlationId,
+          result.maps,
+          mapIds,
+        );
         // A space added, restored or retired changes who may stand where, so
         // world reloads its spaces once this commits. Desks it does not read.
         if (worldChanged) {
@@ -135,12 +141,10 @@ export class MapSyncService {
     admin: AuthenticatedUser,
     correlationId: string | undefined,
     changes: MapSyncMapDto[],
+    mapIds: ReadonlyMap<string, string>,
   ): Promise<void> {
-    const rows = await tx.select({ id: maps.id, key: maps.key }).from(maps);
-    const idOf = new Map(rows.map((row) => [row.key, row.id]));
-
     for (const map of changes) {
-      const id = idOf.get(map.key);
+      const id = mapIds.get(map.key);
       if (map.outcome === MapSyncOutcome.Unchanged || !id) {
         continue;
       }
@@ -207,6 +211,8 @@ class Reconciliation {
   private readonly results = new Map<string, MapSyncMapDto>();
   private readonly publishedByKey: Map<string, PublishedMap>;
   private known: MapRow[] = [];
+  /** Every map's id by key, those this sync added included. */
+  private readonly mapIds = new Map<string, string>();
   private knownSpaces: Space[] = [];
 
   constructor(
@@ -217,8 +223,13 @@ class Reconciliation {
     this.publishedByKey = new Map(publishedMaps.map((map) => [map.key, map]));
   }
 
-  async run(): Promise<{ result: MapSyncResultDto; worldChanged: boolean }> {
+  async run(): Promise<{
+    result: MapSyncResultDto;
+    worldChanged: boolean;
+    mapIds: ReadonlyMap<string, string>;
+  }> {
     this.known = await this.tx.select().from(maps).orderBy(asc(maps.key));
+    for (const map of this.known) this.mapIds.set(map.key, map.id);
     this.knownSpaces = await this.tx.select().from(spaces);
 
     await this.retireUnpublished();
@@ -252,6 +263,7 @@ class Reconciliation {
         maps: all,
       },
       worldChanged,
+      mapIds: this.mapIds,
     };
   }
 
@@ -495,6 +507,7 @@ class Reconciliation {
         MapSyncOutcome.Created,
       );
       this.results.set(published.key, result);
+      this.mapIds.set(published.key, row.id);
       return { mapId: row.id, result };
     }
 
@@ -526,17 +539,17 @@ class Reconciliation {
    * other. Either way off its map, its claims end.
    */
   private async reconcileDesks(): Promise<void> {
-    const mapRows = await this.tx
-      .select({ id: maps.id, key: maps.key })
-      .from(maps);
-    const mapIdOf = new Map(mapRows.map((row) => [row.key, row.id]));
-    const mapKeyOf = new Map(mapRows.map((row) => [row.id, row.key]));
-
+    const mapKeyOf = new Map(
+      [...this.mapIds].map(([key, id]) => [id, key] as const),
+    );
     const drawnOn = new Map<string, string>();
     for (const published of this.publishedMaps) {
       for (const key of published.desks) drawnOn.set(key, published.key);
     }
 
+    const leaving: string[] = [];
+    const retiring: string[] = [];
+    const restoring = new Map<string, string[]>();
     // Locked, so a claim that checks its desk is live under a share lock
     // waits for this sync, and is never left open on a desk it retired.
     for (const desk of await this.tx.select().from(desks).for('update')) {
@@ -547,33 +560,57 @@ class Reconciliation {
       if (live && now === was) continue;
 
       if (live) {
-        await this.releaseClaims(desk.id);
+        leaving.push(desk.id);
         this.deskChanges(was)?.retired.push(desk.key);
       }
       if (now === undefined) {
-        if (live) {
-          await this.tx
-            .update(desks)
-            .set({ retiredAt: this.now })
-            .where(eq(desks.id, desk.id));
-        }
+        if (live) retiring.push(desk.id);
         continue;
       }
-      await this.tx
-        .update(desks)
-        .set({ retiredAt: null, mapId: mapIdOf.get(now) })
-        .where(eq(desks.id, desk.id));
+      const mapId = this.mapIds.get(now)!;
+      restoring.set(mapId, [...(restoring.get(mapId) ?? []), desk.id]);
       this.deskChanges(now)?.restored.push(desk.key);
     }
 
-    for (const [key, mapKey] of drawnOn) {
-      await this.tx.insert(desks).values({
-        mapId: mapIdOf.get(mapKey)!,
-        key,
-        createdAt: this.now,
-        updatedAt: this.now,
-      });
-      this.deskChanges(mapKey)?.added.push(key);
+    if (leaving.length > 0) {
+      await this.tx
+        .update(deskClaims)
+        .set({
+          // The claim's time is the database's, this sync's the server's.
+          releasedAt: sql`greatest(${deskClaims.claimedAt}, ${this.now})`,
+          releaseReason: DeskReleaseReason.DeskRetired,
+        })
+        .where(
+          and(
+            inArray(deskClaims.deskId, leaving),
+            isNull(deskClaims.releasedAt),
+          ),
+        );
+    }
+    if (retiring.length > 0) {
+      await this.tx
+        .update(desks)
+        .set({ retiredAt: this.now, updatedAt: this.now })
+        .where(inArray(desks.id, retiring));
+    }
+    for (const [mapId, ids] of restoring) {
+      await this.tx
+        .update(desks)
+        .set({ retiredAt: null, mapId, updatedAt: this.now })
+        .where(inArray(desks.id, ids));
+    }
+    if (drawnOn.size > 0) {
+      await this.tx.insert(desks).values(
+        [...drawnOn].map(([key, mapKey]) => ({
+          mapId: this.mapIds.get(mapKey)!,
+          key,
+          createdAt: this.now,
+          updatedAt: this.now,
+        })),
+      );
+      for (const [key, mapKey] of drawnOn) {
+        this.deskChanges(mapKey)?.added.push(key);
+      }
     }
 
     for (const result of this.results.values()) {
@@ -587,17 +624,6 @@ class Reconciliation {
         result.outcome = MapSyncOutcome.Updated;
       }
     }
-  }
-
-  private async releaseClaims(deskId: string): Promise<void> {
-    await this.tx
-      .update(deskClaims)
-      .set({
-        // The claim's time is the database's, this sync's the server's.
-        releasedAt: sql`greatest(${deskClaims.claimedAt}, ${this.now})`,
-        releaseReason: DeskReleaseReason.DeskRetired,
-      })
-      .where(and(eq(deskClaims.deskId, deskId), isNull(deskClaims.releasedAt)));
   }
 
   private deskChanges(mapKey: string | undefined) {
