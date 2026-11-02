@@ -29,6 +29,8 @@ export interface PublishedMap {
   version: string;
   isEntry: boolean;
   spaces: PublishedSpace[];
+  /** The key of every desk drawn on it. */
+  desks: string[];
 }
 
 /** A space as the map draws it. Where it is stays with the map. */
@@ -160,6 +162,7 @@ export class PublishedMapsReader {
         name: space.name,
         tiledClass: space.kind,
       })),
+      desks: layout.desks.map((desk) => desk.key),
     }));
   }
 }
@@ -186,6 +189,13 @@ function fitProblems(mapKey: string, layout: MapLayout): string[] {
     if (space.name.length > NAME_MAX) {
       problems.push(
         `Space "${space.key}" on "${mapKey}" has a display name longer than ${NAME_MAX} characters.`,
+      );
+    }
+  }
+  for (const desk of layout.desks) {
+    if (desk.key.length > KEY_MAX) {
+      problems.push(
+        `Desk "${desk.key}" on "${mapKey}" has a name longer than ${KEY_MAX} characters.`,
       );
     }
   }

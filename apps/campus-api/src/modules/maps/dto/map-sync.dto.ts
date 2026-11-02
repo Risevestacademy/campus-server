@@ -25,7 +25,7 @@ export enum MapSyncOutcome {
   Created = 'created',
   /** Was retired, and is published again. */
   Restored = 'restored',
-  /** Already known; its entry flag or its spaces changed. */
+  /** Already known; its entry flag, its spaces or its desks changed. */
   Updated = 'updated',
   /** Already known, and nothing about it changed. */
   Unchanged = 'unchanged',
@@ -73,6 +73,24 @@ export class MapSyncSpacesDto {
   needsKind: string[];
 }
 
+export class MapSyncDesksDto {
+  /** @example ["desk_a1"] */
+  added: string[];
+
+  /**
+   * Desks that were retired and are on the map again, or that were on another
+   * map before and are drawn on this one now.
+   */
+  restored: string[];
+
+  /**
+   * Desks no longer on the map, gone or drawn on another map now, which then
+   * lists them as restored. Their rows stay, and every open claim on them
+   * ends.
+   */
+  retired: string[];
+}
+
 export class MapSyncMapDto {
   /**
    * The map’s ID in Sanity.
@@ -94,6 +112,8 @@ export class MapSyncMapDto {
   outcome: MapSyncOutcome;
 
   spaces: MapSyncSpacesDto;
+
+  desks: MapSyncDesksDto;
 }
 
 export class MapSyncResultDto {
