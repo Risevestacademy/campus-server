@@ -35,7 +35,8 @@ export function ApiSyncMaps(): MethodDecorator {
         'that leaves its map, retired or moved, ends every open claim on ' +
         'it.\n\n' +
         'What it never changes: a name, a kind or a setting an admin may ' +
-        'have set. A sync only adds, retires and restores.\n\n' +
+        'have set. Beyond ending the claims on a desk that leaves its map, ' +
+        'a sync only adds, retires and restores.\n\n' +
         'All of it happens or none of it. The published maps are read whole ' +
         'first, and if they cannot be adopted the database is not ' +
         'touched.\n\n' +

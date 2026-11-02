@@ -7,6 +7,7 @@ import {
   type Db,
   type DbExecutor,
 } from '../../infra/database/database.constants.js';
+import { timestamptz } from '../../infra/database/timestamptz.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
@@ -577,7 +578,7 @@ class Reconciliation {
         .update(deskClaims)
         .set({
           // The claim's time is the database's, this sync's the server's.
-          releasedAt: sql`greatest(${deskClaims.claimedAt}, ${this.now.toISOString()}::timestamptz)`,
+          releasedAt: sql`greatest(${deskClaims.claimedAt}, ${timestamptz(this.now)})`,
           releaseReason: DeskReleaseReason.DeskRetired,
         })
         .where(
