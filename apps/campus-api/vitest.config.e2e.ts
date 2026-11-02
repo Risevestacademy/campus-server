@@ -2,7 +2,10 @@ import { fileURLToPath } from 'node:url';
 
 import { defineConfig } from 'vitest/config';
 
+import { swaggerPlugin } from './test/swagger-plugin.vite.js';
+
 export default defineConfig({
+  plugins: [swaggerPlugin()],
   // Workspace packages ship built output, so importing one by name means
   // tests only run after a build. Pointing at the source keeps a test run
   // independent of build order — the built entry is what production uses,

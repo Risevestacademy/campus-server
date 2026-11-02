@@ -13,60 +13,44 @@ import type { IssuedSession } from '../session-issuer.js';
  * a generated client must not model them as fields that may be missing.
  */
 export class SessionTokensDto {
-  @ApiProperty({
-    enum: Object.values(SessionScope),
-    enumName: 'SessionScope',
-    description:
-      '`full_access` belongs in the campus. `provisional` still has an ' +
-      'invite to answer, and every route but onboarding refuses it.',
-  })
+  /**
+   * `full_access` belongs in the campus. `provisional` still has an invite to
+   * answer, and every route but onboarding refuses it.
+   */
+  @ApiProperty({ enum: Object.values(SessionScope), enumName: 'SessionScope' })
   scope: SessionScope;
 
-  @ApiProperty({
-    description: 'Send as `Authorization: Bearer <accessToken>` on every call.',
-  })
+  /** Send as `Authorization: Bearer <accessToken>` on every call. */
   accessToken: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-09-30T12:15:00.000Z',
-    description: 'When the access token lapses. Refresh a little before this.',
-  })
+  /**
+   * When the access token lapses. Refresh a little before this.
+   * @example 2026-09-30T12:15:00.000Z
+   */
   expiresAt: Date;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    description:
-      'Exchange at POST /v1/auth/refresh for a new pair. Works once: keep ' +
-      'the one each refresh returns. Null for a provisional session, which ' +
-      'cannot be refreshed.',
-  })
+  /**
+   * Exchange at POST /v1/auth/refresh for a new pair. Works once: keep the one
+   * each refresh returns. Null for a provisional session, which cannot be
+   * refreshed.
+   */
   refreshToken: string | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    example: '2026-10-30T12:00:00.000Z',
-    description:
-      'When the refresh token lapses. Past this, the user signs in again. ' +
-      'Null for a provisional session.',
-  })
+  /**
+   * When the refresh token lapses. Past this, the user signs in again. Null for
+   * a provisional session.
+   * @example 2026-10-30T12:00:00.000Z
+   */
   refreshExpiresAt: Date | null;
 }
 
 export class TokenSignInResponseDto extends SessionTokensDto {
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: '66666666-6666-4666-8666-666666666666',
-    description:
-      'The invite to answer, if any: for a provisional session, the one it ' +
-      'was issued for; for a full-access session, a pending invite to ' +
-      'another cohort. Load it with GET /v1/invites/validate-user-invite.',
-  })
+  /**
+   * The invite to answer, if any: for a provisional session, the one it was
+   * issued for; for a full-access session, a pending invite to another cohort.
+   * Load it with GET /v1/invites/validate-user-invite.
+   * @example 66666666-6666-4666-8666-666666666666
+   */
   inviteId: string | null;
 }
 

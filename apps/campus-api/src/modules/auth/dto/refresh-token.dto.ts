@@ -1,4 +1,3 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 /**
@@ -6,11 +5,10 @@ import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
  * A browser sends no body at all.
  */
 export class RefreshTokenDto {
-  @ApiPropertyOptional({
-    description:
-      'The refresh token, for a client that holds its tokens itself. Ignored ' +
-      'when the refresh cookie is present.',
-  })
+  /**
+   * The refresh token, for a client that holds its tokens itself. Ignored when
+   * the refresh cookie is present.
+   */
   @IsOptional()
   @IsString()
   @IsNotEmpty()
