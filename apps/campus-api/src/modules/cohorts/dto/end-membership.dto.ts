@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 
@@ -25,15 +25,13 @@ export const MEMBERSHIP_REASON_MAX_LENGTH = 500;
  * field is optional everywhere but there.
  */
 export class EndMembershipDto {
-  @ApiPropertyOptional({
-    example: 'Posted the answer to a live assessment.',
-    maxLength: MEMBERSHIP_REASON_MAX_LENGTH,
-    description:
-      'Why, in the admin’s own words. Required for a dismissal, optional ' +
-      'for the other four. Kept on the membership and in the audit log, so ' +
-      'the roster shows it under state=ended. Blank is taken as no reason ' +
-      'rather than refused.',
-  })
+  /**
+   * Why, in the admin’s own words. Required for a dismissal, optional for the
+   * other four. Kept on the membership and in the audit log, so the roster
+   * shows it under state=ended. Blank is taken as no reason rather than
+   * refused.
+   * @example "Posted the answer to a live assessment."
+   */
   // Trimmed first, so a message of spaces is no reason rather than a reason
   // that says nothing. NUL goes too: Postgres refuses it in text, and that
   // would be a 500 for a character nobody can see.
@@ -50,44 +48,41 @@ export class EndMembershipDto {
 
 /** The membership after the change, with how it ended and why. */
 export class EndMembershipResponseDto {
-  @ApiProperty({
-    example: '55555555-5555-4555-8555-555555555555',
-    description: "The membership's own id.",
-  })
+  /**
+   * The membership's own id.
+   * @example 55555555-5555-4555-8555-555555555555
+   */
   id: string;
 
-  @ApiProperty({ example: '11111111-1111-4111-8111-111111111111' })
+  /** @example 11111111-1111-4111-8111-111111111111 */
   cohortId: string;
 
-  @ApiProperty({ example: '44444444-4444-4444-8444-444444444444' })
+  /** @example 44444444-4444-4444-8444-444444444444 */
   userId: string;
 
   @ApiProperty({ enum: CohortRole, enumName: 'CohortRole' })
   role: CohortRole;
 
+  /**
+   * The student status the end set; null for a removal, which carries no
+   * student status.
+   */
   @ApiProperty({
     enum: StudentStatus,
     enumName: 'StudentStatus',
     nullable: true,
-    description:
-      'The student status the end set; null for a removal, which carries ' +
-      'no student status.',
   })
   status: StudentStatus | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-10-13T12:00:00.000Z',
-    description: 'When the membership ended.',
-  })
+  /**
+   * When the membership ended.
+   * @example 2026-10-13T12:00:00.000Z
+   */
   leftAt: Date;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: 'Posted the answer to a live assessment.',
-    description: 'What the admin wrote, or null when they wrote nothing.',
-  })
+  /**
+   * What the admin wrote, or null when they wrote nothing.
+   * @example "Posted the answer to a live assessment."
+   */
   reason: string | null;
 }

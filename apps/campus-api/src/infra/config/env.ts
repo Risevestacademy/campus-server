@@ -361,12 +361,12 @@ export class Env {
   @IsBoolean()
   FF_OTEL_METRICS_ENABLED: boolean = true;
 
-  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED)
+  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED || o.FF_ANALYTICS_ENABLED)
   @IsNotEmpty()
   @Matches(/^phc_/, { message: 'POSTHOG_PROJECT_TOKEN must start with "phc_"' })
   POSTHOG_PROJECT_TOKEN?: string;
 
-  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED)
+  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED || o.FF_ANALYTICS_ENABLED)
   @IsUrl({ protocols: ['https'], require_protocol: true })
   POSTHOG_HOST: string = 'https://eu.i.posthog.com';
 
@@ -377,6 +377,14 @@ export class Env {
   })
   @IsBoolean()
   FF_POSTHOG_ENABLED: boolean = false;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_ANALYTICS_ENABLED: boolean = false;
 
   /** Set by Railway on every deploy; the release errors and traces name. */
   @IsOptional()

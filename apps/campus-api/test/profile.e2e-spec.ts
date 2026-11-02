@@ -78,15 +78,17 @@ describe('profile routes (e2e)', () => {
       .token;
 
   const as = (token: string) => {
-    const call = (method: 'get' | 'patch') => (path: string, body?: object) => {
-      const req = request(app.getHttpServer())
-        [method](path)
-        .set('Authorization', `Bearer ${token}`);
-      return body ? req.send(body) : req;
-    };
+    const call =
+      (method: 'get' | 'patch' | 'put') => (path: string, body?: object) => {
+        const req = request(app.getHttpServer())
+          [method](path)
+          .set('Authorization', `Bearer ${token}`);
+        return body ? req.send(body) : req;
+      };
     return {
       get: call('get'),
       patch: call('patch'),
+      put: call('put'),
     };
   };
 
@@ -141,6 +143,7 @@ describe('profile routes (e2e)', () => {
     it.each([
       ['get', '/v1/users/me'],
       ['patch', '/v1/users/me'],
+      ['put', '/v1/users/me/analytics-consent'],
       ['get', '/v1/users/11111111-1111-4111-8111-111111111111/profile'],
     ] as const)('refuses %s %s without a session', async (method, path) => {
       await request(app.getHttpServer())[method](path).expect(401);
@@ -152,6 +155,33 @@ describe('profile routes (e2e)', () => {
       await as(adaToken).get('/v1/users').expect(403);
       await as(adaToken).get('/v1/users/me').expect(200);
     });
+  });
+
+  describe('analytics consent', () => {
+    it('starts unset, then keeps what they choose, and it can change', async () => {
+      const before = await as(adaToken).get('/v1/users/me').expect(200);
+      expect(before.body.analyticsConsent).toBeNull();
+
+      const granted = await as(adaToken)
+        .put('/v1/users/me/analytics-consent', { consent: 'granted' })
+        .expect(200);
+      expect(granted.body.analyticsConsent).toBe('granted');
+
+      await as(adaToken)
+        .put('/v1/users/me/analytics-consent', { consent: 'denied' })
+        .expect(200);
+      const after = await as(adaToken).get('/v1/users/me').expect(200);
+      expect(after.body.analyticsConsent).toBe('denied');
+    });
+
+    it.each([['maybe'], [null], [undefined]])(
+      'refuses %s as a choice',
+      async (consent) => {
+        await as(adaToken)
+          .put('/v1/users/me/analytics-consent', { consent })
+          .expect(400);
+      },
+    );
   });
 
   describe('own profile', () => {

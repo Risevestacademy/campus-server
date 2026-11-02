@@ -26,7 +26,7 @@ async function problemsOf(read: Promise<unknown>): Promise<string[]> {
 }
 
 describe('PublishedMapsReader', () => {
-  it('reads each map: which it is, at what version, and the spaces drawn on it', async () => {
+  it('reads each map: which it is, at what version, and the spaces and desks drawn on it', async () => {
     const sanity = fakeSanity(
       {
         campus: tiledMap({
@@ -34,6 +34,10 @@ describe('PublishedMapsReader', () => {
             { key: 'library', name: 'The Library', class: 'open' },
             { key: 'room_1', class: 'meeting_room' },
             { key: 'nook' },
+          ],
+          desks: [
+            { key: 'desk_a1', space: 'library' },
+            { key: 'desk_a2', space: 'library' },
           ],
         }),
         annex: tiledMap({ entry: false }),
@@ -54,8 +58,15 @@ describe('PublishedMapsReader', () => {
           // No class at all: the map suggests nothing.
           { key: 'nook', name: 'nook', tiledClass: null },
         ],
+        desks: ['desk_a1', 'desk_a2'],
       },
-      { key: 'annex', version: 'annex-v1', isEntry: false, spaces: [] },
+      {
+        key: 'annex',
+        version: 'annex-v1',
+        isEntry: false,
+        spaces: [],
+        desks: [],
+      },
     ]);
   });
 
@@ -283,6 +294,7 @@ describe('PublishedMapsReader', () => {
                 { key: 'k'.repeat(65) },
                 { key: 'hall', name: 'n'.repeat(129) },
               ],
+              desks: [{ key: 'd'.repeat(65), space: 'hall' }],
             }),
           }).fetch,
         ).read(),
@@ -292,6 +304,9 @@ describe('PublishedMapsReader', () => {
         expect.stringMatching(/name longer than 64 characters/),
         expect.stringMatching(
           /"hall" on "campus" has a display name longer than 128/,
+        ),
+        expect.stringMatching(
+          /^Desk "d+" on "campus" has a name longer than 64/,
         ),
       ]);
     });

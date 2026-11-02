@@ -162,6 +162,20 @@
       "when": 1793086871194,
       "tag": "0022_space_membership_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793358185136,
+      "tag": "0023_analytics_consent",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793638762679,
+      "tag": "0024_desks",
+      "breakpoints": true
     }
   ]
 }

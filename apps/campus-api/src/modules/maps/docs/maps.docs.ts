@@ -29,9 +29,14 @@ export function ApiSyncMaps(): MethodDecorator {
         '- One that is published again comes back as the same row, with ' +
         'what it had.\n' +
         '- Every map is given its default space, for the tiles inside no ' +
-        'drawn one.\n\n' +
+        'drawn one.\n' +
+        '- Desks are added, retired and restored the same way, by key. A ' +
+        'desk drawn on another map keeps its row and moves with it. A desk ' +
+        'that leaves its map, retired or moved, ends every open claim on ' +
+        'it.\n\n' +
         'What it never changes: a name, a kind or a setting an admin may ' +
-        'have set. A sync only adds, retires and restores.\n\n' +
+        'have set. Beyond ending the claims on a desk that leaves its map, ' +
+        'a sync only adds, retires and restores.\n\n' +
         'All of it happens or none of it. The published maps are read whole ' +
         'first, and if they cannot be adopted the database is not ' +
         'touched.\n\n' +

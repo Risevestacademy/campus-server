@@ -2,27 +2,23 @@ import { randomUUID } from 'node:crypto';
 
 export const CORRELATION_ID_HEADER = 'x-correlation-id';
 
-/**
- * The longest correlation id a request may bring. The audit log's column is
- * this wide, and that is the reason for the number: an id is only useful if
- * the log line, the response header and the audit entry all carry the same
- * one.
- */
+/** The audit log's column width; a UUID fits with room to spare. */
 export const CORRELATION_ID_MAX_LENGTH = 64;
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * The id a request is known by everywhere: the caller's `x-correlation-id`
- * when it sent a usable one, a fresh id otherwise.
+ * when it is a UUID, a fresh one otherwise.
  *
- * Decided once, as the request arrives, so nothing downstream has to trim or
- * second-guess it. An id that is empty or too long is replaced outright
- * rather than cut: a shortened id would match the caller's in no system,
- * while a new one is at least returned to them in the response header.
+ * Decided once, as the request arrives, so the log lines, the response header,
+ * error reports, analytics and the audit entry all carry the same id. Anything
+ * else a caller sends is replaced rather than kept, since free text could hold
+ * a name or an email and would reach every one of those.
  */
 export function resolveCorrelationId(incoming: unknown): string {
-  return typeof incoming === 'string' &&
-    incoming.length > 0 &&
-    incoming.length <= CORRELATION_ID_MAX_LENGTH
+  return typeof incoming === 'string' && UUID.test(incoming)
     ? incoming
     : randomUUID();
 }
