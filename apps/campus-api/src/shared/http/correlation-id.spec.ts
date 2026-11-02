@@ -1,27 +1,26 @@
-import {
-  CORRELATION_ID_MAX_LENGTH,
-  resolveCorrelationId,
-} from './correlation-id.js';
+import { resolveCorrelationId } from './correlation-id.js';
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 describe('resolveCorrelationId', () => {
-  it('keeps the id the caller sent', () => {
-    expect(resolveCorrelationId('req-123')).toBe('req-123');
-  });
-
-  it('keeps one exactly as long as the limit', () => {
-    const id = 'c'.repeat(CORRELATION_ID_MAX_LENGTH);
+  it('keeps a UUID the caller sent', () => {
+    const id = '0b9d3c4e-8f2a-4c1d-9e7b-5a6f3d2c1b0a';
 
     expect(resolveCorrelationId(id)).toBe(id);
   });
 
-  // Replaced, not cut: the start of somebody's id is an id nobody has.
-  it('replaces one that is too long', () => {
-    const id = 'c'.repeat(CORRELATION_ID_MAX_LENGTH + 1);
+  it.each([
+    ['an email', 'ada@example.com'],
+    ['a name', 'Ada_Lovelace'],
+    ['a phone number', '08012345678'],
+    ['a slug', 'req-123'],
+    ['too long', 'c'.repeat(200)],
+  ])('replaces one that is %s', (_label, incoming) => {
+    const id = resolveCorrelationId(incoming);
 
-    expect(resolveCorrelationId(id)).toMatch(UUID);
+    expect(id).toMatch(UUID);
+    expect(id).not.toBe(incoming);
   });
 
   it.each([

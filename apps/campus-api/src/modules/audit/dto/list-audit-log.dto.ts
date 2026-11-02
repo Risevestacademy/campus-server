@@ -175,8 +175,8 @@ export class AuditLogEntryDto {
     nullable: true,
     description:
       'The request’s correlation id, which leads to its log lines. Null ' +
-      'for entries written outside a request. Caller-supplied text: a ' +
-      'pointer, not proof.',
+      'for entries written outside a request. A UUID the caller may have ' +
+      'chosen: a pointer, not proof.',
   })
   correlationId: string | null;
 

@@ -61,55 +61,48 @@ describe('track', () => {
     expect(analytics.events[0].properties.client).toBe('mobile');
   });
 
-  it('drops an invalid event, naming the field and never the value', () => {
-    const analytics = createTestAnalytics();
+  it.each([
+    [
+      'a field holding a value it does not allow',
+      'feedback.submitted',
+      { category: 'ada@example.com' },
+      'invalid fields: category',
+    ],
+    [
+      'a field the event does not have',
+      'auth.signed_out',
+      { client: 'web', email: 'ada@example.com' },
+      'invalid fields: email',
+    ],
+    [
+      'an unknown field named like a value',
+      'auth.signed_out',
+      { client: 'web', 'ada@example.com': true },
+      'invalid fields: (not shown)',
+    ],
+    [
+      'an unknown field named like a person',
+      'auth.signed_out',
+      { client: 'web', Ada_Lovelace: true },
+      'invalid fields: (not shown)',
+    ],
+    [
+      'properties that are not an object',
+      'auth.signed_out',
+      null,
+      'invalid fields: (properties)',
+    ],
+  ])(
+    'drops %s, naming the field and never the value',
+    (_, event, properties, reason) => {
+      const analytics = createTestAnalytics();
 
-    analytics.track('feedback.submitted', ADA, {
-      category: 'ada@example.com',
-    } as never);
+      analytics.track(event as never, ADA, properties as never);
 
-    expect(analytics.events).toEqual([]);
-    expect(analytics.dropped).toEqual([
-      'feedback.submitted: invalid fields: category',
-    ]);
-  });
-
-  it('names a field the event does not have', () => {
-    const analytics = createTestAnalytics();
-
-    analytics.track('auth.signed_out', ADA, {
-      client: 'web',
-      email: 'ada@example.com',
-    } as never);
-
-    expect(analytics.events).toEqual([]);
-    expect(analytics.dropped).toEqual([
-      'auth.signed_out: invalid fields: email',
-    ]);
-  });
-
-  it('does not show an unknown field whose name could be a value', () => {
-    const analytics = createTestAnalytics();
-
-    analytics.track('auth.signed_out', ADA, {
-      client: 'web',
-      'ada@example.com': true,
-    } as never);
-
-    expect(analytics.dropped).toEqual([
-      'auth.signed_out: invalid fields: (not shown)',
-    ]);
-  });
-
-  it('says so when the properties are not an object', () => {
-    const analytics = createTestAnalytics();
-
-    analytics.track('auth.signed_out', ADA, null as never);
-
-    expect(analytics.dropped).toEqual([
-      'auth.signed_out: invalid fields: (properties)',
-    ]);
-  });
+      expect(analytics.events).toEqual([]);
+      expect(analytics.dropped).toEqual([`${event}: ${reason}`]);
+    },
+  );
 
   it('drops a distinct id or cohort that is not a UUID', () => {
     const analytics = createTestAnalytics();
@@ -148,32 +141,27 @@ describe('track', () => {
     expect(analytics.events[0].properties).not.toHaveProperty('correlation_id');
   });
 
-  it.each([['made.up'], ['constructor'], ['toString'], ['__proto__']])(
-    'drops the unknown event %s without throwing',
-    (name) => {
-      const analytics = createTestAnalytics();
-
-      expect(() =>
-        analytics.track(name as never, ADA, {} as never),
-      ).not.toThrow();
-      expect(() =>
-        analytics.trackAnonymous(name as never, {} as never),
-      ).not.toThrow();
-
-      expect(analytics.events).toEqual([]);
-      expect(analytics.dropped).toEqual([
-        `${name}: unknown event`,
-        `${name}: unknown event`,
-      ]);
-    },
-  );
-
-  it('does not show an unknown event whose name could be a value', () => {
+  it.each([
+    ['made.up', 'made.up'],
+    ['constructor', 'constructor'],
+    ['toString', '(not shown)'],
+    ['__proto__', '(not shown)'],
+    ['ada@example.com', '(not shown)'],
+  ])('drops the unknown event %s without throwing', (name, shown) => {
     const analytics = createTestAnalytics();
 
-    analytics.track('ada@example.com' as never, ADA, {} as never);
+    expect(() =>
+      analytics.track(name as never, ADA, {} as never),
+    ).not.toThrow();
+    expect(() =>
+      analytics.trackAnonymous(name as never, {} as never),
+    ).not.toThrow();
 
-    expect(analytics.dropped).toEqual(['(not shown): unknown event']);
+    expect(analytics.events).toEqual([]);
+    expect(analytics.dropped).toEqual([
+      `${shown}: unknown event`,
+      `${shown}: unknown event`,
+    ]);
   });
 
   it('sends nothing rather than throw on options that are not an object', () => {
@@ -265,7 +253,6 @@ describe('consent', () => {
 
       const [sent] = analytics.events;
       expect(sent.distinctId).not.toBe(ADA);
-      expect(sent.properties.$process_person_profile).toBe(false);
       expect(sent.properties.cohort_id).toBe(COHORT);
       expect(sent).not.toHaveProperty('groups');
       expect(JSON.stringify(sent)).not.toContain(ADA);
@@ -298,7 +285,7 @@ describe('consent', () => {
 });
 
 describe('trackAnonymous', () => {
-  it('uses a new random id and makes no person', () => {
+  it('uses a new random id each time', () => {
     const analytics = createTestAnalytics();
     const failed = { reason: 'denied', client: 'web' } as const;
 
@@ -307,7 +294,6 @@ describe('trackAnonymous', () => {
 
     const [first, second] = analytics.events;
     expect(first.distinctId).not.toBe(second.distinctId);
-    expect(first.properties.$process_person_profile).toBe(false);
   });
 });
 

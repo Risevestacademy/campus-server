@@ -35,8 +35,8 @@ line names the event and the field, never the value.
   can belong to several at once. PostHog links no group to an event without a
   person, so every event also carries `cohort_id`: count by that property, not
   the group, when a total has to include de-identified events.
-- A correlation id is sent only if it is a UUID, which is what the services
-  generate. A caller can send anything, so any other one is left off.
+- A correlation id is sent only if it is a UUID. campus-api and world replace
+  any other `x-correlation-id` a caller sends, so in a request every id is one.
 
 ## Tests
 

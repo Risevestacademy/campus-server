@@ -8,8 +8,11 @@ import { EVENTS, type EventName, type EventProperties } from './events.js';
 /** Long enough to send what is queued, short of a platform's kill. */
 const SHUTDOWN_TIMEOUT_MS = 3_000;
 
-/** Names in a drop's log line can come from a caller, so odd ones aren't shown. */
-const PRINTABLE_NAME = /^[$A-Za-z_][\w.]{0,63}$/;
+/**
+ * Names in a drop's log line can come from a caller, so only the shape of our
+ * own field and event names is shown: lower case, as no person's name is.
+ */
+const PRINTABLE_NAME = /^\$?[a-z][a-z0-9_.]{0,63}$/;
 
 const uuid = z.uuid();
 
@@ -29,8 +32,9 @@ function rejectedFields(issues: z.core.$ZodIssue[]): string[] {
 }
 
 export interface TrackOptions {
-  /** Sends the event under this cohort's PostHog group. */
+  /** Sent as `cohort_id`, and as the cohort's group when the event has a person. */
   cohortId?: string;
+  /** Sent only if it is a UUID. */
   correlationId?: string;
   /** Whether the person granted consent. Unset counts as not granted. */
   consented?: boolean;
@@ -111,6 +115,12 @@ export function analyticsOver(
     }
   }
 
+  function known(event: unknown): event is EventName {
+    if (typeof event === 'string' && Object.hasOwn(EVENTS, event)) return true;
+    drop(event, 'unknown event');
+    return false;
+  }
+
   function send(
     event: EventName,
     properties: unknown,
@@ -151,10 +161,7 @@ export function analyticsOver(
   return {
     track(event, distinctId, properties, options = {}) {
       guarded(event, () => {
-        if (!Object.hasOwn(EVENTS, event)) {
-          drop(event, 'unknown event');
-          return;
-        }
+        if (!known(event)) return;
         const named = !EVENTS[event].consent || options.consented === true;
         if (named && !uuid.safeParse(distinctId).success) {
           drop(event, 'invalid distinct id');
@@ -168,10 +175,7 @@ export function analyticsOver(
     },
     trackAnonymous(event, properties, options = {}) {
       guarded(event, () => {
-        if (!Object.hasOwn(EVENTS, event)) {
-          drop(event, 'unknown event');
-          return;
-        }
+        if (!known(event)) return;
         send(event, properties, randomUUID(), true, options);
       });
     },
