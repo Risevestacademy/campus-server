@@ -554,22 +554,22 @@ class Reconciliation {
     // waits for this sync, and is never left open on a desk it retired.
     for (const desk of await this.tx.select().from(desks).for('update')) {
       const was = mapKeyOf.get(desk.mapId);
-      const now = drawnOn.get(desk.key);
+      const drawnOnMap = drawnOn.get(desk.key);
       drawnOn.delete(desk.key);
       const live = desk.retiredAt === null;
-      if (live && now === was) continue;
+      if (live && drawnOnMap === was) continue;
 
       if (live) {
         leaving.push(desk.id);
         this.deskChanges(was)?.retired.push(desk.key);
       }
-      if (now === undefined) {
+      if (drawnOnMap === undefined) {
         if (live) retiring.push(desk.id);
         continue;
       }
-      const mapId = this.mapIds.get(now)!;
+      const mapId = this.mapIds.get(drawnOnMap)!;
       restoring.set(mapId, [...(restoring.get(mapId) ?? []), desk.id]);
-      this.deskChanges(now)?.restored.push(desk.key);
+      this.deskChanges(drawnOnMap)?.restored.push(desk.key);
     }
 
     if (leaving.length > 0) {
@@ -577,7 +577,7 @@ class Reconciliation {
         .update(deskClaims)
         .set({
           // The claim's time is the database's, this sync's the server's.
-          releasedAt: sql`greatest(${deskClaims.claimedAt}, ${this.now})`,
+          releasedAt: sql`greatest(${deskClaims.claimedAt}, ${this.now.toISOString()}::timestamptz)`,
           releaseReason: DeskReleaseReason.DeskRetired,
         })
         .where(

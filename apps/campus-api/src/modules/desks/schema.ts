@@ -84,7 +84,8 @@ export const deskClaims = pgTable(
     releaseReason: deskReleaseReasonEnum('release_reason'),
   },
   (table) => [
-    // Only members of the cohort hold its desks.
+    // Proves only that they were a member once: leaving keeps the row, with
+    // left_at set, so whatever claims a desk checks left_at is null.
     foreignKey({
       columns: [table.cohortId, table.userId],
       foreignColumns: [cohortMembers.cohortId, cohortMembers.userId],

@@ -5,6 +5,8 @@ import {
   connectRealPostgres,
   unique,
 } from '../../infra/database/testing/real-postgres.js';
+import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
+import { DeskReleaseReason, deskClaims, desks } from '../desks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { MapSyncService } from './map-sync.service.js';
 import { MapSyncBusyException } from './maps.exceptions.js';
@@ -59,7 +61,11 @@ describe.skipIf(!REAL_POSTGRES_URL)('MapSyncService, two syncs at once', () => {
   });
 
   /** The campus as published, under keys no other test or run will use. */
-  const campus = (key: string, spaceKeys: string[]): PublishedMap[] => [
+  const campus = (
+    key: string,
+    spaceKeys: string[],
+    deskKeys: string[] = [],
+  ): PublishedMap[] => [
     {
       key,
       version: `${key}-${spaceKeys.join('-')}`,
@@ -69,7 +75,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('MapSyncService, two syncs at once', () => {
         name: spaceKey,
         tiledClass: 'open',
       })),
-      desks: [],
+      desks: deskKeys,
     },
   ];
 
@@ -190,5 +196,47 @@ describe.skipIf(!REAL_POSTGRES_URL)('MapSyncService, two syncs at once', () => {
       .from(maps)
       .where(inArray(maps.key, [key]));
     expect(row.retiredAt).toBeNull();
+  }, 30_000);
+
+  /** The time a sync writes goes through postgres.js, which PGlite does not. */
+  it('retires a held desk and ends its claim', async () => {
+    const key = `campus-${unique()}`;
+    const desk = `desk-${unique()}`;
+    reader.read.mockResolvedValue(campus(key, ['library'], [desk]));
+    await service.sync(admin);
+
+    const [row] = await pg.db.select().from(desks).where(eq(desks.key, desk));
+    const [cohort] = await pg.db
+      .insert(cohorts)
+      .values({
+        name: 'Desk cohort',
+        code: `D${unique()}`.toUpperCase().slice(0, 16),
+      })
+      .returning();
+    await pg.db.insert(cohortMembers).values({
+      cohortId: cohort.id,
+      userId: admin.id,
+      role: CohortRole.Mentor,
+    });
+    await pg.db
+      .insert(deskClaims)
+      .values({ deskId: row.id, cohortId: cohort.id, userId: admin.id });
+
+    reader.read.mockResolvedValue(campus(key, ['library']));
+    await service.sync(admin);
+
+    const [after] = await pg.db
+      .select({ retiredAt: desks.retiredAt })
+      .from(desks)
+      .where(eq(desks.id, row.id));
+    expect(after.retiredAt).not.toBeNull();
+    const [claim] = await pg.db
+      .select()
+      .from(deskClaims)
+      .where(eq(deskClaims.deskId, row.id));
+    expect(claim).toMatchObject({
+      releaseReason: DeskReleaseReason.DeskRetired,
+      releasedAt: expect.any(Date),
+    });
   }, 30_000);
 });

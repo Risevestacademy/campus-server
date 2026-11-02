@@ -77,10 +77,17 @@ export class MapSyncDesksDto {
   /** @example ["desk_a1"] */
   added: string[];
 
-  /** Desks that were retired and are on the map again. */
+  /**
+   * Desks that were retired and are on the map again, or that were on another
+   * map before and are drawn on this one now.
+   */
   restored: string[];
 
-  /** Desks no longer on the map. Their rows stay, marked retired. */
+  /**
+   * Desks no longer on the map, gone or drawn on another map now, which then
+   * lists them as restored. Their rows stay, and every open claim on them
+   * ends.
+   */
   retired: string[];
 }
 
