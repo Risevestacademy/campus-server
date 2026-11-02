@@ -115,6 +115,7 @@ It reads every published map from Sanity (`SANITY_PROJECT_ID`,
 | A drawn space with no row                       | Adds the row, with the kind its Tiled class suggests and that kind's settings   |
 | A retired map or space that is published again  | Brings the same row back, with the settings it had                              |
 | A row whose map or space is no longer published | Retires it. A retired map takes all its spaces with it                          |
+| A desk drawn, gone, or drawn on another map     | Adds, retires or brings back its row in `desks`, by key, and follows its map    |
 | The entry flag on a different map               | Moves it                                                                        |
 | A map or space that is already there            | Nothing. A name, a kind or a setting an admin has changed is never written over |
 

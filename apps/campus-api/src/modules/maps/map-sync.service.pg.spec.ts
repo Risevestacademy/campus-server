@@ -69,6 +69,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('MapSyncService, two syncs at once', () => {
         name: spaceKey,
         tiledClass: 'open',
       })),
+      desks: [],
     },
   ];
 

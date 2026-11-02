@@ -10,6 +10,7 @@ import {
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { DeskReleaseReason, deskClaims, desks } from '../desks/schema.js';
 import {
   MapSyncOutcome,
   type MapSyncMapDto,
@@ -68,6 +69,7 @@ class DryRun extends Error {
  * - Every map is given its default space, for the tiles inside no drawn
  *   one. The database stops a map having two; this is what makes sure it
  *   has one.
+ * - Desks are added, retired and restored the same way, by key.
  *
  * All of it happens in one transaction or not at all, and only once the
  * published maps have been read whole and found fit to adopt. A sync that
@@ -101,7 +103,11 @@ export class MapSyncService {
         }
         const publishedMaps = await this.published.read();
 
-        const result = await new Reconciliation(tx, now, publishedMaps).run();
+        const { result, worldChanged } = await new Reconciliation(
+          tx,
+          now,
+          publishedMaps,
+        ).run();
         if (dryRun) {
           // Everything above really happened, inside this transaction, which
           // is what makes the answer exact. Throwing is what takes it back.
@@ -109,8 +115,8 @@ export class MapSyncService {
         }
         await this.record(tx, admin, options.correlationId, result.maps);
         // A space added, restored or retired changes who may stand where, so
-        // world reloads its spaces once this commits.
-        if (result.changed) {
+        // world reloads its spaces once this commits. Desks it does not read.
+        if (worldChanged) {
           await tellWorld(tx);
         }
         return result;
@@ -144,7 +150,11 @@ export class MapSyncService {
           correlationId,
           action: AuditAction.MapRetired,
           subject: { type: AuditSubjectType.Map, id },
-          details: { key: map.key, spacesRetired: map.spaces.retired },
+          details: {
+            key: map.key,
+            spacesRetired: map.spaces.retired,
+            desksRetired: map.desks.retired,
+          },
         });
         continue;
       }
@@ -161,6 +171,9 @@ export class MapSyncService {
           spacesAdded: map.spaces.added.map((space) => space.key),
           spacesRestored: map.spaces.restored,
           spacesRetired: map.spaces.retired,
+          desksAdded: map.desks.added,
+          desksRestored: map.desks.restored,
+          desksRetired: map.desks.retired,
         },
       });
     }
@@ -187,7 +200,8 @@ async function tryLock(tx: DbExecutor): Promise<boolean> {
  *
  * 1. retire what is no longer published, before anything is added;
  * 2. take the entry flag off the map that no longer holds it;
- * 3. add or restore each published map and its spaces.
+ * 3. add or restore each published map and its spaces;
+ * 4. add, retire and restore desks, now every published map has a row.
  */
 class Reconciliation {
   private readonly results = new Map<string, MapSyncMapDto>();
@@ -203,7 +217,7 @@ class Reconciliation {
     this.publishedByKey = new Map(publishedMaps.map((map) => [map.key, map]));
   }
 
-  async run(): Promise<MapSyncResultDto> {
+  async run(): Promise<{ result: MapSyncResultDto; worldChanged: boolean }> {
     this.known = await this.tx.select().from(maps).orderBy(asc(maps.key));
     this.knownSpaces = await this.tx.select().from(spaces);
 
@@ -223,14 +237,21 @@ class Reconciliation {
         singletons.conflicts,
       );
     }
+    const worldChanged = [...this.results.values()].some(
+      (map) => map.outcome !== MapSyncOutcome.Unchanged,
+    );
+    await this.reconcileDesks();
 
     const all = [...this.results.values()].sort((a, b) =>
       a.key.localeCompare(b.key),
     );
     return {
-      dryRun: false,
-      changed: all.some((map) => map.outcome !== MapSyncOutcome.Unchanged),
-      maps: all,
+      result: {
+        dryRun: false,
+        changed: all.some((map) => map.outcome !== MapSyncOutcome.Unchanged),
+        maps: all,
+      },
+      worldChanged,
     };
   }
 
@@ -499,6 +520,90 @@ class Reconciliation {
     return { mapId: existing.id, result };
   }
 
+  /**
+   * By key, which is unique across every map: a desk drawn on another map
+   * than before keeps its row, retired from the one and restored on the
+   * other. Either way off its map, its claims end.
+   */
+  private async reconcileDesks(): Promise<void> {
+    const mapRows = await this.tx
+      .select({ id: maps.id, key: maps.key })
+      .from(maps);
+    const mapIdOf = new Map(mapRows.map((row) => [row.key, row.id]));
+    const mapKeyOf = new Map(mapRows.map((row) => [row.id, row.key]));
+
+    const drawnOn = new Map<string, string>();
+    for (const published of this.publishedMaps) {
+      for (const key of published.desks) drawnOn.set(key, published.key);
+    }
+
+    // Locked, so a claim that checks its desk is live under a share lock
+    // waits for this sync, and is never left open on a desk it retired.
+    for (const desk of await this.tx.select().from(desks).for('update')) {
+      const was = mapKeyOf.get(desk.mapId);
+      const now = drawnOn.get(desk.key);
+      drawnOn.delete(desk.key);
+      const live = desk.retiredAt === null;
+      if (live && now === was) continue;
+
+      if (live) {
+        await this.releaseClaims(desk.id);
+        this.deskChanges(was)?.retired.push(desk.key);
+      }
+      if (now === undefined) {
+        if (live) {
+          await this.tx
+            .update(desks)
+            .set({ retiredAt: this.now })
+            .where(eq(desks.id, desk.id));
+        }
+        continue;
+      }
+      await this.tx
+        .update(desks)
+        .set({ retiredAt: null, mapId: mapIdOf.get(now) })
+        .where(eq(desks.id, desk.id));
+      this.deskChanges(now)?.restored.push(desk.key);
+    }
+
+    for (const [key, mapKey] of drawnOn) {
+      await this.tx.insert(desks).values({
+        mapId: mapIdOf.get(mapKey)!,
+        key,
+        createdAt: this.now,
+        updatedAt: this.now,
+      });
+      this.deskChanges(mapKey)?.added.push(key);
+    }
+
+    for (const result of this.results.values()) {
+      const changed = result.desks;
+      changed.added.sort();
+      changed.restored.sort();
+      changed.retired.sort();
+      const any =
+        changed.added.length + changed.restored.length + changed.retired.length;
+      if (any > 0 && result.outcome === MapSyncOutcome.Unchanged) {
+        result.outcome = MapSyncOutcome.Updated;
+      }
+    }
+  }
+
+  private async releaseClaims(deskId: string): Promise<void> {
+    await this.tx
+      .update(deskClaims)
+      .set({
+        // The claim's time is the database's, this sync's the server's.
+        releasedAt: sql`greatest(${deskClaims.claimedAt}, ${this.now})`,
+        releaseReason: DeskReleaseReason.DeskRetired,
+      })
+      .where(and(eq(deskClaims.deskId, deskId), isNull(deskClaims.releasedAt)));
+  }
+
+  private deskChanges(mapKey: string | undefined) {
+    return mapKey === undefined ? undefined : this.results.get(mapKey)?.desks;
+  }
+
   /** Every map has one, and this is what sees to it. */
   private async ensureDefaultSpace(
     mapId: string,
@@ -595,5 +700,6 @@ function blank(
     isEntry,
     outcome,
     spaces: { added: [], restored: [], retired: [], needsKind: [] },
+    desks: { added: [], restored: [], retired: [] },
   };
 }
