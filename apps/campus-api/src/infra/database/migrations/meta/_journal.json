@@ -162,6 +162,13 @@
       "when": 1793086871194,
       "tag": "0022_space_membership_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793358185136,
+      "tag": "0023_analytics_consent",
+      "breakpoints": true
     }
   ]
 }

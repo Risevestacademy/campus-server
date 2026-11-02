@@ -15,6 +15,12 @@ export default defineConfig({
       '@campus/telemetry/paths': fileURLToPath(
         new URL('../../packages/telemetry/src/paths.ts', import.meta.url),
       ),
+      '@campus/analytics/testing': fileURLToPath(
+        new URL('../../packages/analytics/src/testing.ts', import.meta.url),
+      ),
+      '@campus/analytics': fileURLToPath(
+        new URL('../../packages/analytics/src/index.ts', import.meta.url),
+      ),
       '@campus/error-reporting/testing': fileURLToPath(
         new URL(
           '../../packages/error-reporting/src/testing.ts',

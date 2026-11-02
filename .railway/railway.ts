@@ -116,6 +116,7 @@ export default defineRailway((ctx) => {
       builder: 'RAILPACK',
       watchPatterns: [
         '/apps/campus-api/**',
+        '/packages/analytics/**',
         '/packages/error-reporting/**',
         '/packages/media/**',
         '/packages/session/**',
@@ -150,6 +151,7 @@ export default defineRailway((ctx) => {
       DEFAULT_ADMIN_EMAIL: preserve(),
       DEPLOYMENT_ENVIRONMENT: preserve(),
       EMAIL_FROM: preserve(),
+      FF_ANALYTICS_ENABLED: preserve(),
       FF_EMAIL_ENABLED: preserve(),
       FF_GOOGLE_AUTH_ENABLED: preserve(),
       FF_GOOGLE_CALENDAR_ENABLED: preserve(),

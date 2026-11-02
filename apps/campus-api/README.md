@@ -95,6 +95,7 @@ a clear error.
 | `FF_OTEL_ENABLED`                 | `true`                                                 | Master switch for OpenTelemetry                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `FF_OTEL_METRICS_ENABLED`         | `true`                                                 | Enable Node.js runtime metrics export                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `FF_POSTHOG_ENABLED`              | `false`                                                | Master switch for PostHog error tracking. When `true`, `POSTHOG_PROJECT_TOKEN` is required and the app refuses to boot without it                                                                                                                                                                                                                                                                                                          |
+| `FF_ANALYTICS_ENABLED`            | `false`                                                | Master switch for product events to PostHog. When `true`, `POSTHOG_PROJECT_TOKEN` is required and the app refuses to boot without it                                                                                                                                                                                                                                                                                                       |
 | `POSTHOG_PROJECT_TOKEN`           | _(unset)_                                              | PostHog project API key (`phc_…`). Use the project matching this environment, so frontend and backend events land together                                                                                                                                                                                                                                                                                                                 |
 | `POSTHOG_HOST`                    | `https://eu.i.posthog.com`                             | PostHog ingestion host; must be `https`                                                                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -232,11 +233,11 @@ Key behaviors:
 
 - **Structured JSON** by default; pretty single-line output when `FF_LOG_PRETTY=true`.
 - **Correlation IDs**: every request gets an `x-correlation-id`. If the caller
-  provides one of up to 64 characters, it is honored and echoed back on the
-  response; otherwise — none sent, or one longer than that — a UUID is
-  generated and returned instead. All log lines for that request carry it
-  under `req.id`, and audit entries written by the request carry the same
-  value.
+  sends a UUID, it is honored and echoed back on the response; otherwise — none
+  sent, or anything else — a UUID is generated and returned instead, so free
+  text never reaches the logs, error reports, analytics or the audit log. All
+  log lines for that request carry it under `req.id`, and audit entries written
+  by the request carry the same value.
 - **Trace correlation**: when OpenTelemetry is enabled, every log line also
   carries `trace_id` and `span_id` extracted from the active span, so logs and
   traces can be joined in an observability backend.

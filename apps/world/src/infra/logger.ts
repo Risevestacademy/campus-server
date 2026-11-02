@@ -74,9 +74,13 @@ export function silenceRoutes(
   });
 }
 
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** The caller's id when it is a UUID; free text could hold a name or an email. */
 export function correlationId(headers: Record<string, unknown>): string {
   const incoming = headers[CORRELATION_ID_HEADER];
-  return typeof incoming === 'string' && incoming.length > 0
-    ? incoming.slice(0, 200)
+  return typeof incoming === 'string' && UUID.test(incoming)
+    ? incoming
     : randomUUID();
 }
