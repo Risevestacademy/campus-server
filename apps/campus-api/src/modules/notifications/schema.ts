@@ -36,7 +36,7 @@ export const notifications = pgTable(
     /** Which table the event happened in, e.g. `notice`, `calendar_event`. */
     referenceType: varchar('reference_type', { length: 64 }).notNull(),
     /** The id of the row in that table. Not a foreign key — see above. */
-    referenceId: uuid('reference_id').notNull(),
+    referenceId: varchar('reference_id', { length: 255 }).notNull(),
     /** Null until the recipient marks it read. */
     readAt: timestamp('read_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })

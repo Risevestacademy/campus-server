@@ -2577,7 +2577,7 @@
         },
         "reference_id": {
           "name": "reference_id",
-          "type": "uuid",
+          "type": "varchar(255)",
           "primaryKey": false,
           "notNull": true
         },

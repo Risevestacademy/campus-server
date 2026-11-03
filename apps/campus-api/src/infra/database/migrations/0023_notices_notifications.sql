@@ -18,7 +18,7 @@ CREATE TABLE "notifications" (
 	"recipient_id" uuid NOT NULL,
 	"kind" varchar(64) NOT NULL,
 	"reference_type" varchar(64) NOT NULL,
-	"reference_id" uuid NOT NULL,
+	"reference_id" varchar(255) NOT NULL,
 	"read_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
