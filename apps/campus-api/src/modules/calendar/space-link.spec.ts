@@ -1,6 +1,6 @@
 import { extractSpaceKey } from './space-link.js';
 
-const APP = 'https://campus.example.com';
+const APP = 'https://campus.test';
 
 it('extracts the space key from the location', () => {
   expect(extractSpaceKey(APP, `${APP}/space/meeting-room-1`, null, null)).toBe(
@@ -63,8 +63,8 @@ it('returns null for all-null fields', () => {
 it('handles an app URL with a trailing slash', () => {
   expect(
     extractSpaceKey(
-      'https://campus.example.com/',
-      `https://campus.example.com/space/pod`,
+      'https://campus.test/',
+      `https://campus.test/space/pod`,
       null,
       null,
     ),
