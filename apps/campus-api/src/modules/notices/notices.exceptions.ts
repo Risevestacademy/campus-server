@@ -1,0 +1,18 @@
+import { DomainException } from '../../shared/exceptions/domain.exception.js';
+import { ExceptionCode } from '../../shared/exceptions/exception-code.enum.js';
+
+export class NoticeNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
+
+export class NoticeForbiddenException extends DomainException {
+  readonly code = ExceptionCode.Forbidden;
+}
+
+export class NoticeConflictException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
+export class NoticeInvalidArgumentException extends DomainException {
+  readonly code = ExceptionCode.InvalidArgument;
+}
