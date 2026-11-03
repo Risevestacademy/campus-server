@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
+import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import {
   ApiCreateRoomLink,
@@ -41,8 +42,15 @@ export class SpaceRoomLinksController {
     @Param() params: RoomLinkSpaceParamDto,
     @Body() body: CreateRoomLinkDto,
     @CurrentUser() user: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<RoomLinkDto> {
-    return this.links.create(user, params.cohortId, params.spaceId, body.title);
+    return this.links.create(
+      user,
+      params.cohortId,
+      params.spaceId,
+      body.title,
+      { actorUserId: user.id, correlationId },
+    );
   }
 
   @Get()
@@ -77,7 +85,11 @@ export class RoomLinksController {
   revoke(
     @Param() params: RoomLinkCodeParamDto,
     @CurrentUser() user: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<void> {
-    return this.links.revoke(user, params.code);
+    return this.links.revoke(user, params.code, {
+      actorUserId: user.id,
+      correlationId,
+    });
   }
 }

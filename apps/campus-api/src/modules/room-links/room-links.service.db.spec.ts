@@ -1,6 +1,6 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { PGlite } from '@electric-sql/pglite';
-import { eq } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import type { Env } from '../../infra/config/config.module.js';
 import * as schema from '../../infra/database/schema/index.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import {
   AudioMode,
@@ -116,6 +117,7 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Design review',
+      { actorUserId: mentor.id },
     );
     const opened = await service.open(guest, made.code);
 
@@ -143,6 +145,7 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Retro',
+      { actorUserId: mentor.id },
       later,
     );
     const older = await service.create(
@@ -150,6 +153,7 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Standup',
+      { actorUserId: mentor.id },
       earlier,
     );
     const listed = await service.list(mentor, cohortId, pod.id);
@@ -161,19 +165,23 @@ describe('RoomLinksService', () => {
   it('lets admins in without a place in the cohort, and only staff manage links', async () => {
     const { cohortId, mentor, guest, admin, pod } = await setting();
 
-    const made = await service.create(admin, cohortId, pod.id, 'Town hall');
+    const made = await service.create(admin, cohortId, pod.id, 'Town hall', {
+      actorUserId: admin.id,
+    });
     await expect(service.open(admin, made.code)).resolves.toMatchObject({
       cohortId,
     });
     await expect(
-      service.create(guest, cohortId, pod.id, 'Mine'),
+      service.create(guest, cohortId, pod.id, 'Mine', {
+        actorUserId: guest.id,
+      }),
     ).rejects.toThrow(RoomLinkForbiddenException);
     await expect(service.list(guest, cohortId, pod.id)).rejects.toThrow(
       RoomLinkForbiddenException,
     );
-    await expect(service.revoke(guest, made.code)).rejects.toThrow(
-      RoomLinkForbiddenException,
-    );
+    await expect(
+      service.revoke(guest, made.code, { actorUserId: guest.id }),
+    ).rejects.toThrow(RoomLinkForbiddenException);
     await expect(service.list(mentor, cohortId, pod.id)).resolves.toHaveLength(
       1,
     );
@@ -181,14 +189,16 @@ describe('RoomLinksService', () => {
 
   it('is a 404 to anybody without a live place in its cohort', async () => {
     const { cohortId, mentor, guest, outsider, pod } = await setting();
-    const made = await service.create(mentor, cohortId, pod.id, 'Class');
+    const made = await service.create(mentor, cohortId, pod.id, 'Class', {
+      actorUserId: mentor.id,
+    });
 
     await expect(service.open(outsider, made.code)).rejects.toThrow(
       RoomLinkNotFoundException,
     );
-    await expect(service.revoke(outsider, made.code)).rejects.toThrow(
-      RoomLinkNotFoundException,
-    );
+    await expect(
+      service.revoke(outsider, made.code, { actorUserId: outsider.id }),
+    ).rejects.toThrow(RoomLinkNotFoundException);
 
     await db
       .update(cohortMembers)
@@ -201,11 +211,15 @@ describe('RoomLinksService', () => {
 
   it('stops opening once revoked, and revoking again changes nothing', async () => {
     const { cohortId, mentor, guest, pod } = await setting();
-    const kept = await service.create(mentor, cohortId, pod.id, 'Kept');
-    const dropped = await service.create(mentor, cohortId, pod.id, 'Dropped');
+    const kept = await service.create(mentor, cohortId, pod.id, 'Kept', {
+      actorUserId: mentor.id,
+    });
+    const dropped = await service.create(mentor, cohortId, pod.id, 'Dropped', {
+      actorUserId: mentor.id,
+    });
 
-    await service.revoke(mentor, dropped.code);
-    await service.revoke(mentor, dropped.code);
+    await service.revoke(mentor, dropped.code, { actorUserId: mentor.id });
+    await service.revoke(mentor, dropped.code, { actorUserId: mentor.id });
 
     await expect(service.open(guest, dropped.code)).rejects.toThrow(
       RoomLinkNotFoundException,
@@ -219,7 +233,9 @@ describe('RoomLinksService', () => {
 
   it('leads nowhere once its space is retired, and is not made for a space not set up', async () => {
     const { cohortId, mentor, guest, pod } = await setting();
-    const made = await service.create(mentor, cohortId, pod.id, 'Lab');
+    const made = await service.create(mentor, cohortId, pod.id, 'Lab', {
+      actorUserId: mentor.id,
+    });
     const unkinded = await space(unique(), null);
 
     await db
@@ -231,10 +247,14 @@ describe('RoomLinksService', () => {
       RoomLinkNotFoundException,
     );
     await expect(
-      service.create(mentor, cohortId, pod.id, 'Again'),
+      service.create(mentor, cohortId, pod.id, 'Again', {
+        actorUserId: mentor.id,
+      }),
     ).rejects.toThrow(RoomLinkNotFoundException);
     await expect(
-      service.create(mentor, cohortId, unkinded.id, 'Nope'),
+      service.create(mentor, cohortId, unkinded.id, 'Nope', {
+        actorUserId: mentor.id,
+      }),
     ).rejects.toThrow(RoomLinkNotFoundException);
   }, 30_000);
 
@@ -243,7 +263,9 @@ describe('RoomLinksService', () => {
     const annexRoom = await space(unique(), SpaceKind.MeetingRoom, otherMapId);
 
     await expect(
-      service.create(mentor, cohortId, annexRoom.id, 'Off the map'),
+      service.create(mentor, cohortId, annexRoom.id, 'Off the map', {
+        actorUserId: mentor.id,
+      }),
     ).rejects.toThrow(RoomLinkNotFoundException);
 
     await db.insert(roomLinks).values({
@@ -274,7 +296,9 @@ describe('RoomLinksService', () => {
       .returning();
 
     await expect(
-      service.create(mentor, cohortId, corridors.id, 'Hallway chat'),
+      service.create(mentor, cohortId, corridors.id, 'Hallway chat', {
+        actorUserId: mentor.id,
+      }),
     ).rejects.toThrow(RoomLinkNotFoundException);
   }, 30_000);
 
@@ -282,11 +306,73 @@ describe('RoomLinksService', () => {
     const { cohortId, mentor, pod } = await setting();
     const behind = new Date(Date.now() - 60_000);
 
-    const made = await service.create(mentor, cohortId, pod.id, 'Sync', behind);
+    const made = await service.create(
+      mentor,
+      cohortId,
+      pod.id,
+      'Sync',
+      { actorUserId: mentor.id },
+      behind,
+    );
 
     expect(made.createdAt).toEqual(behind);
     await expect(
-      service.revoke(mentor, made.code, new Date(behind.getTime() + 1)),
+      service.revoke(
+        mentor,
+        made.code,
+        { actorUserId: mentor.id },
+        new Date(behind.getTime() + 1),
+      ),
     ).resolves.toBeUndefined();
+  }, 30_000);
+
+  it('audits making and revoking a link, and nothing else', async () => {
+    const { cohortId, mentor, guest, pod } = await setting();
+
+    const made = await service.create(
+      mentor,
+      cohortId,
+      pod.id,
+      'Office hours',
+      { actorUserId: mentor.id, correlationId: 'req-1' },
+    );
+    await service.open(guest, made.code);
+    await expect(
+      service.create(guest, cohortId, pod.id, 'Mine', {
+        actorUserId: guest.id,
+      }),
+    ).rejects.toThrow(RoomLinkForbiddenException);
+    await service.revoke(mentor, made.code, { actorUserId: mentor.id });
+    await service.revoke(mentor, made.code, { actorUserId: mentor.id });
+
+    const [link] = await db
+      .select({ id: roomLinks.id })
+      .from(roomLinks)
+      .where(eq(roomLinks.code, made.code));
+    const entries = await db
+      .select()
+      .from(auditLog)
+      .where(inArray(auditLog.actorUserId, [mentor.id, guest.id]))
+      .orderBy(asc(auditLog.createdAt), asc(auditLog.action));
+    const details = { cohortId, code: made.code, title: 'Office hours' };
+    expect(entries).toMatchObject([
+      {
+        action: AuditAction.RoomLinkCreated,
+        actorUserId: mentor.id,
+        subjectType: AuditSubjectType.RoomLink,
+        subjectId: link.id,
+        spaceId: pod.id,
+        correlationId: 'req-1',
+        details,
+      },
+      {
+        action: AuditAction.RoomLinkRevoked,
+        actorUserId: mentor.id,
+        subjectId: link.id,
+        spaceId: pod.id,
+        details,
+      },
+    ]);
+    expect(entries).toHaveLength(2);
   }, 30_000);
 });

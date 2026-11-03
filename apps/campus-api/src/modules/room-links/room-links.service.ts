@@ -10,6 +10,8 @@ import {
 import { isUniqueViolation } from '../../infra/database/unique-violation.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { appUrl } from '../../shared/http/app-url.js';
+import { writeAuditEntry, type AuditContext } from '../audit/audit-log.js';
+import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortNotFoundException } from '../cohorts/cohorts.exceptions.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
@@ -69,6 +71,7 @@ export class RoomLinksService {
     cohortId: string,
     spaceId: string,
     title: string,
+    audit: AuditContext,
     now: Date = new Date(),
   ): Promise<RoomLinkDto> {
     await requireStaff(this.db, user, cohortId, now);
@@ -76,18 +79,27 @@ export class RoomLinksService {
 
     for (let attempt = 1; ; attempt++) {
       try {
-        const [link] = await this.db
-          .insert(roomLinks)
-          .values({
-            code: generateRoomLinkCode(),
-            cohortId,
+        return await this.db.transaction(async (tx) => {
+          const [link] = await tx
+            .insert(roomLinks)
+            .values({
+              code: generateRoomLinkCode(),
+              cohortId,
+              spaceId,
+              title,
+              createdBy: user.id,
+              createdAt: now,
+            })
+            .returning({ id: roomLinks.id, code: roomLinks.code });
+          await writeAuditEntry(tx, {
+            ...audit,
             spaceId,
-            title,
-            createdBy: user.id,
-            createdAt: now,
-          })
-          .returning({ code: roomLinks.code });
-        return this.toDto(await this.find(link.code));
+            action: AuditAction.RoomLinkCreated,
+            subject: { type: AuditSubjectType.RoomLink, id: link.id },
+            details: { cohortId, code: link.code, title },
+          });
+          return this.toDto(await this.find(link.code, tx));
+        });
       } catch (err) {
         if (
           attempt < CODE_ATTEMPTS &&
@@ -127,9 +139,9 @@ export class RoomLinksService {
   }
 
   /**
-   * Where a link leads. A revoked link, one to a space no longer on the entry map,
-   * and one to a cohort the caller holds no place in are all a 404, so a code
-   * says nothing to somebody it is not for.
+   * Where a link leads. A revoked link, one to a space no longer on the entry
+   * map, and one to a cohort the caller holds no place in are all a 404, so a
+   * code says nothing to somebody it is not for.
    */
   async open(
     user: AuthenticatedUser,
@@ -148,10 +160,11 @@ export class RoomLinksService {
     return this.toDto(link);
   }
 
-  /** Revoking a link already revoked changes nothing. */
+  /** Revoking a link already revoked changes nothing, and writes no entry. */
   async revoke(
     user: AuthenticatedUser,
     code: string,
+    audit: AuditContext,
     now: Date = new Date(),
   ): Promise<void> {
     const [link] = await this.db
@@ -176,14 +189,27 @@ export class RoomLinksService {
         { code },
       );
     }
-    await this.db
-      .update(roomLinks)
-      .set({ revokedAt: now })
-      .where(and(eq(roomLinks.id, link.id), isNull(roomLinks.revokedAt)));
+    await this.db.transaction(async (tx) => {
+      const [revoked] = await tx
+        .update(roomLinks)
+        .set({ revokedAt: now })
+        .where(and(eq(roomLinks.id, link.id), isNull(roomLinks.revokedAt)))
+        .returning({ spaceId: roomLinks.spaceId, title: roomLinks.title });
+      if (!revoked) {
+        return;
+      }
+      await writeAuditEntry(tx, {
+        ...audit,
+        spaceId: revoked.spaceId,
+        action: AuditAction.RoomLinkRevoked,
+        subject: { type: AuditSubjectType.RoomLink, id: link.id },
+        details: { cohortId: link.cohortId, code, title: revoked.title },
+      });
+    });
   }
 
-  private async find(code: string): Promise<LinkRow> {
-    const [link] = await this.db
+  private async find(code: string, db: DbExecutor = this.db): Promise<LinkRow> {
+    const [link] = await db
       .select(linkColumns)
       .from(roomLinks)
       .innerJoin(spaces, eq(spaces.id, roomLinks.spaceId))

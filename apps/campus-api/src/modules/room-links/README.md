@@ -34,5 +34,7 @@ Routes:
 - **Who manages links.** Admins, and the cohort's live professors and mentors,
   make, list and revoke them. Revoking sets `revoked_at` and keeps the row;
   revoking twice is fine.
+- **Making and revoking are audited.** `room_link_created` and
+  `room_link_revoked`, with `space_id` set; opening a link writes nothing.
 - **Links do not expire.** They last until revoked or until the space leaves
   the map.
