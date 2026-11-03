@@ -28,7 +28,7 @@ const noSpace = ApiNotFoundResponse({
   type: ApiErrorResponseDto,
   description:
     'No space with that id is set up on the entry map (retired, no kind yet, ' +
-    'or on another map), ' +
+    "a map's corridors, or on another map), " +
     'or (admins) no such cohort.',
 });
 

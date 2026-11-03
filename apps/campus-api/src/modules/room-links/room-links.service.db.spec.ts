@@ -1,3 +1,4 @@
+import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { PGlite } from '@electric-sql/pglite';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -244,5 +245,25 @@ describe('RoomLinksService', () => {
     await expect(service.open(guest, 'AnnexLink1')).rejects.toThrow(
       RoomLinkNotFoundException,
     );
+  }, 30_000);
+
+  it('is not made for the corridors, where no meeting happens', async () => {
+    const { cohortId, mentor } = await setting();
+    const [corridors] = await db
+      .insert(spaces)
+      .values({
+        mapId,
+        key: DEFAULT_SPACE_KEY,
+        name: 'Corridors',
+        kind: SpaceKind.Open,
+        isMapDefault: true,
+        audioMode: AudioMode.Proximity,
+        access: SpaceAccess.Normal,
+      })
+      .returning();
+
+    await expect(
+      service.create(mentor, cohortId, corridors.id, 'Hallway chat'),
+    ).rejects.toThrow(RoomLinkNotFoundException);
   }, 30_000);
 });

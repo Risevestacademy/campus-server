@@ -26,6 +26,8 @@ Routes:
 - **Only spaces on the entry map.** World plays the entry map alone, so a
   link to a space on any other map is refused, and one made before the entry
   map moved stops opening.
+- **Not the corridors.** No meeting happens in a map's default space, so it
+  takes no links.
 - **A link nobody may open is a 404.** Revoked, its space retired or never set
   up, or a cohort the caller holds no place in: the answer is the same, so a
   code says nothing to somebody it is not for.

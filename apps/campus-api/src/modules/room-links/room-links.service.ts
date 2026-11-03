@@ -37,6 +37,7 @@ const liveSpace: SQL = and(
   isNotNull(spaces.kind),
   isNull(maps.retiredAt),
   eq(maps.isEntry, true),
+  eq(spaces.isMapDefault, false),
 ) as SQL;
 
 const linkColumns = {
