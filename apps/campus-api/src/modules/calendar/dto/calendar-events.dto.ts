@@ -91,6 +91,14 @@ export class CalendarEventDto {
    * @example https://www.google.com/calendar/event?eid=N2NiaDhycGMxMGxy
    */
   url!: string | null;
+
+  /**
+   * The key of the campus space this event is tied to, when the event's
+   * location, video-conference link or description contains a campus room
+   * URL. Null when no live space was matched.
+   * @example meeting-room-1
+   */
+  spaceKey!: string | null;
 }
 
 export class CalendarEventsDto {

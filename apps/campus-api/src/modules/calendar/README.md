@@ -107,6 +107,23 @@ more answers with the first 1,000 and `truncated: true`.
 - Google failing any other way, or taking longer than its timeout: `503`,
   and the grant is kept.
 
+## Campus room links
+
+A calendar event can name a campus space. Staff paste a campus room URL
+into the Google Calendar event's **location**, **video-conference link** or
+**description**:
+
+```
+{APP_PUBLIC_URL}/space/{spaceKey}
+```
+
+For example, `https://campus.example.com/space/meeting-room-1`.
+
+When the events endpoint returns, it scans each event's location, meeting
+URL and description — in that order — for the first match. If the space
+key names a live, set-up space (not retired, and with a kind assigned), the
+event carries it as `spaceKey`; otherwise `spaceKey` is `null`.
+
 ## Talking to Google
 
 Every request the calendar makes to Google, OAuth and Calendar API alike,

@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { and, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
+import { CONFIG, type Env } from '../../infra/config/config.module.js';
+import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import { spaces } from '../maps/schema.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import {
@@ -51,14 +55,19 @@ class AccessTokenRejected extends Error {}
 /** A member's events, read from Google when asked and never stored. */
 @Injectable()
 export class CalendarEventsService {
+  private readonly appUrl: string;
+
   constructor(
     private readonly grants: CalendarGrantsService,
     private readonly tokens: AccessTokenCache,
     private readonly revocations: CalendarRevocationService,
     @Inject(CALENDAR_FETCH) private readonly fetch: typeof globalThis.fetch,
+    @Inject(CONFIG) config: Env,
+    @Inject(DRIZZLE) private readonly db: Db,
     private readonly logger: PinoLogger,
   ) {
     this.logger.setContext(CalendarEventsService.name);
+    this.appUrl = config.APP_PUBLIC_URL;
   }
 
   async events(
@@ -74,7 +83,9 @@ export class CalendarEventsService {
     }
     try {
       const signal = AbortSignal.timeout(READ_BUDGET_MS);
-      return { connected: true, ...(await this.read(grant, from, to, signal)) };
+      const result = await this.read(grant, from, to, signal);
+      await this.resolveSpaceKeys(result.events);
+      return { connected: true, ...result };
     } catch (err) {
       if (!(err instanceof GrantWithdrawnError)) {
         throw err;
@@ -133,7 +144,9 @@ export class CalendarEventsService {
         ...(pageToken ? { pageToken } : {}),
       }).toString();
       const body = await this.get(url, token, signal);
-      events.push(...(body.items ?? []).flatMap(toCalendarEvent));
+      events.push(
+        ...(body.items ?? []).flatMap((e) => toCalendarEvent(e, this.appUrl)),
+      );
       pageToken = body.nextPageToken;
       if (!pageToken) {
         break;
@@ -181,6 +194,36 @@ export class CalendarEventsService {
       'google calendar refused a read',
     );
     throw new CalendarUnavailableError();
+  }
+
+  /**
+   * Checks every extracted space key against live spaces in the database.
+   * Keys that do not match a live, set-up space are nulled out so the
+   * client never sees a dangling reference.
+   */
+  private async resolveSpaceKeys(events: CalendarEventDto[]): Promise<void> {
+    const candidates = [
+      ...new Set(events.map((e) => e.spaceKey).filter(Boolean)),
+    ] as string[];
+    if (candidates.length === 0) return;
+
+    const rows = await this.db
+      .select({ key: spaces.key })
+      .from(spaces)
+      .where(
+        and(
+          inArray(spaces.key, candidates),
+          isNull(spaces.retiredAt),
+          isNotNull(spaces.kind),
+        ),
+      );
+    const live = new Set(rows.map((r) => r.key));
+
+    for (const event of events) {
+      if (event.spaceKey && !live.has(event.spaceKey)) {
+        event.spaceKey = null;
+      }
+    }
   }
 }
 

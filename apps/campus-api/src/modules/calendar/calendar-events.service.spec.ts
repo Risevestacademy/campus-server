@@ -1,5 +1,7 @@
 import type { PinoLogger } from 'nestjs-pino';
 
+import type { Env } from '../../infra/config/config.module.js';
+import type { Db } from '../../infra/database/database.constants.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import type {
@@ -20,6 +22,8 @@ import {
   type GoogleCalendarClient,
 } from './google-calendar.client.js';
 
+const APP_URL = 'http://localhost:3000';
+
 const GRANT: CalendarGrant = {
   userId: 'user-1',
   refreshToken: 'google-refresh',
@@ -31,6 +35,13 @@ const google = { refresh: vi.fn() };
 const revocations = { sweepIfDue: vi.fn() };
 const fetch = vi.fn();
 const logger = { info: vi.fn(), error: vi.fn(), setContext: vi.fn() };
+const db = {
+  select: vi.fn().mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue([]),
+    }),
+  }),
+};
 
 let tokens: AccessTokenCache;
 function calendar(): CalendarEventsService {
@@ -40,6 +51,8 @@ function calendar(): CalendarEventsService {
     tokens,
     revocations as unknown as CalendarRevocationService,
     fetch,
+    { APP_PUBLIC_URL: APP_URL } as Env,
+    db as unknown as Db,
     logger as unknown as PinoLogger,
   );
 }
@@ -76,6 +89,11 @@ beforeEach(() => {
     });
   });
   fetch.mockImplementation(() => Promise.resolve(answer(200, { items: [] })));
+  db.select.mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue([]),
+    }),
+  });
 });
 
 it('reads the member’s primary calendar for the window asked', async () => {
@@ -101,6 +119,7 @@ it('reads the member’s primary calendar for the window asked', async () => {
         location: null,
         meetingUrl: 'https://meet.google.com/abc-defg-hij',
         url: 'https://www.google.com/calendar/event?eid=abc',
+        spaceKey: null,
       },
     ],
   });
@@ -326,4 +345,50 @@ it('is not there while the calendar is switched off, but still sweeps', async ()
     calendar().events('user-1', { from: 'not checked first' }),
   ).rejects.toThrow(CalendarNotConfiguredError);
   expect(revocations.sweepIfDue).toHaveBeenCalled();
+});
+
+it('sets spaceKey when the location contains a campus room link for a live space', async () => {
+  const event = {
+    ...standup,
+    location: `${APP_URL}/space/pod-a`,
+  };
+  fetch.mockResolvedValue(answer(200, { items: [event] }));
+  db.select.mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue([{ key: 'pod-a' }]),
+    }),
+  });
+
+  const { events } = await calendar().events('user-1', {});
+
+  expect(events[0].spaceKey).toBe('pod-a');
+});
+
+it('nulls the space key when the space is retired or has no kind', async () => {
+  const event = {
+    ...standup,
+    location: `${APP_URL}/space/gone-room`,
+  };
+  fetch.mockResolvedValue(answer(200, { items: [event] }));
+
+  const { events } = await calendar().events('user-1', {});
+
+  expect(events[0].spaceKey).toBeNull();
+});
+
+it('extracts the space key from the event description', async () => {
+  const event = {
+    ...standup,
+    description: `Join us at ${APP_URL}/space/classroom-b for class`,
+  };
+  fetch.mockResolvedValue(answer(200, { items: [event] }));
+  db.select.mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue([{ key: 'classroom-b' }]),
+    }),
+  });
+
+  const { events } = await calendar().events('user-1', {});
+
+  expect(events[0].spaceKey).toBe('classroom-b');
 });
