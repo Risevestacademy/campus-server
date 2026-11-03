@@ -122,7 +122,7 @@ export class RoomLinksService {
           liveSpace,
         ),
       )
-      .orderBy(desc(roomLinks.createdAt));
+      .orderBy(desc(roomLinks.createdAt), desc(roomLinks.id));
     return rows.map((row) => this.toDto(row));
   }
 

@@ -133,18 +133,29 @@ describe('RoomLinksService', () => {
     });
   }, 30_000);
 
-  it('keeps several live links to one space, one per event', async () => {
+  it('keeps several live links to one space, one per event, newest first', async () => {
     const { cohortId, mentor, pod } = await setting();
+    const earlier = new Date(Date.now() - 60_000);
+    const later = new Date(Date.now() - 30_000);
 
-    const first = await service.create(mentor, cohortId, pod.id, 'Standup');
-    const second = await service.create(mentor, cohortId, pod.id, 'Retro');
+    const newer = await service.create(
+      mentor,
+      cohortId,
+      pod.id,
+      'Retro',
+      later,
+    );
+    const older = await service.create(
+      mentor,
+      cohortId,
+      pod.id,
+      'Standup',
+      earlier,
+    );
     const listed = await service.list(mentor, cohortId, pod.id);
 
-    expect(first.code).not.toBe(second.code);
-    expect(listed.map((link) => link.title).sort()).toEqual([
-      'Retro',
-      'Standup',
-    ]);
+    expect(newer.code).not.toBe(older.code);
+    expect(listed.map((link) => link.title)).toEqual(['Retro', 'Standup']);
   }, 30_000);
 
   it('lets admins in without a place in the cohort, and only staff manage links', async () => {
