@@ -15,9 +15,11 @@ export interface Player {
  *   would walking into a wall, so `changed` may be true.
  * - `refused`: the tile is floor, in a space they may not enter. They turn
  *   to face it, as at a wall.
+ * - `full`: the tile is floor, in a space they could enter but it is at
+ *   capacity. They turn to face it, as at a wall.
  * - `too_fast`: over the walking speed. Nothing happens, not even the turn.
  */
-export type MoveOutcome = 'moved' | 'blocked' | 'refused' | 'too_fast';
+export type MoveOutcome = 'moved' | 'blocked' | 'refused' | 'full' | 'too_fast';
 
 export interface MoveResult {
   outcome: MoveOutcome;
@@ -214,7 +216,7 @@ export class Players {
     seat: Seat,
     direction: Direction,
     now: number,
-    admits: (target: Tile) => boolean = () => true,
+    admits: (target: Tile) => true | 'refused' | 'full' = () => true,
   ): MoveResult {
     const held = getIn(this.standing, seat);
     if (!held) {
@@ -248,9 +250,10 @@ export class Players {
         changed: turned,
       };
     }
-    if (!admits(target)) {
+    const admission = admits(target);
+    if (admission !== true) {
       return {
-        outcome: 'refused',
+        outcome: admission,
         player: { ...held.player },
         changed: turned,
       };

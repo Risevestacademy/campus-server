@@ -195,6 +195,8 @@ export type SpaceAudioMode = 'proximity' | 'boundary';
 export interface WorldSpace extends SpaceFacts {
   id: string;
   name: string;
+  /** Null for no limit. */
+  capacity: number | null;
   audioMode: SpaceAudioMode;
   audibleRadius: number;
   subscribeRadius: number;
@@ -209,6 +211,7 @@ export interface SpaceRow {
   kind: string | null;
   access: string;
   retired_at: Date | null;
+  capacity: string | null;
   audio_mode: string;
   audible_radius: string | null;
   subscribe_radius: string | null;
@@ -239,6 +242,7 @@ export function toWorldSpace(
     retiredAt: row.retired_at,
     locked: false,
     grants,
+    capacity: row.capacity === null ? null : Number(row.capacity),
     audioMode: audioModeOf(row.audio_mode),
     audibleRadius:
       row.audible_radius === null
@@ -254,7 +258,7 @@ export function toWorldSpace(
 
 /** Every space on one map, retired ones included. $1 the map's key. */
 export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.name, spaces.kind, spaces.access, spaces.retired_at,
-    spaces.audio_mode, spaces.audible_radius, spaces.subscribe_radius, spaces.hysteresis_factor
+    spaces.capacity, spaces.audio_mode, spaces.audible_radius, spaces.subscribe_radius, spaces.hysteresis_factor
   from spaces
   join maps on maps.id = spaces.map_id
   where maps.key = $1`;

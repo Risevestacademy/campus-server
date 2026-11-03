@@ -5410,6 +5410,148 @@ describe('movement', () => {
       await Promise.all([leave(staff), leave(conn)]);
     });
   });
+
+  describe('capacity', () => {
+    function openLibraryWithCapacity(capacity: number | null): void {
+      accounts.spaces.clear();
+      accounts.spaces.set('library', {
+        name: 'Library',
+        kind: 'meeting_room',
+        access: SPACE_ACCESS.Normal,
+        retiredAt: null,
+        locked: false,
+        grants: [],
+        capacity,
+      } as SpaceFacts & { capacity: number | null });
+    }
+
+    it('refuses a step into a space that is at capacity', async () => {
+      openLibraryWithCapacity(2);
+      await world.gateway.spacesChanged();
+
+      const first = await arrive(person());
+      const second = await arrive(person());
+      const third = await arrive(person());
+
+      await expect(walkToLibrary(first)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(second)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(third)).resolves.toMatchObject({
+        outcome: 'full',
+        player: { x: 2, y: 0, facing: 'right' },
+      });
+      await Promise.all([leave(first), leave(second), leave(third)]);
+    });
+
+    it('lets somebody in once a person leaves a full space', async () => {
+      openLibraryWithCapacity(1);
+      await world.gateway.spacesChanged();
+
+      const first = await arrive(person());
+      const second = await arrive(person());
+
+      await expect(walkToLibrary(first)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(second)).resolves.toMatchObject({
+        outcome: 'full',
+      });
+
+      // First leaves the library by walking left.
+      await step(first, 'left', 4);
+      await expect(step(second, 'right', 4)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await Promise.all([leave(first), leave(second)]);
+    });
+
+    it('does not enforce capacity when it is null', async () => {
+      openLibraryWithCapacity(null);
+      await world.gateway.spacesChanged();
+
+      const first = await arrive(person());
+      const second = await arrive(person());
+      const third = await arrive(person());
+
+      await expect(walkToLibrary(first)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(second)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(third)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await Promise.all([leave(first), leave(second), leave(third)]);
+    });
+
+    it('enforces capacity even on an admin', async () => {
+      openLibraryWithCapacity(1);
+      await world.gateway.spacesChanged();
+
+      const admin = person();
+      accounts.admins.add(admin);
+      const regular = await arrive(person());
+      const adminConn = await arrive(admin);
+
+      await expect(walkToLibrary(regular)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      await expect(walkToLibrary(adminConn)).resolves.toMatchObject({
+        outcome: 'full',
+      });
+      await Promise.all([leave(regular), leave(adminConn)]);
+    });
+
+    it('enforces capacity even on a pass holder', async () => {
+      openLibraryWithCapacity(1);
+      await world.gateway.spacesChanged();
+
+      const first = await arrive(person());
+      const second = await arrive(person());
+
+      await expect(walkToLibrary(first)).resolves.toMatchObject({
+        outcome: 'moved',
+      });
+      // Lock the library so the second person would need a pass.
+      first.ws.send(JSON.stringify({ type: 'setLock', locked: true }));
+      await waitFor(first, (m) => m.type === 'lockChanged');
+      // The second can't enter (locked + full), but even with a hypothetical pass, full wins.
+      await expect(walkToLibrary(second)).resolves.toMatchObject({
+        outcome: 'refused',
+      });
+      await Promise.all([leave(first), leave(second)]);
+    });
+
+    it('ends a walk with full when the target space fills up', async () => {
+      openLibraryWithCapacity(1);
+      await world.gateway.spacesChanged();
+
+      const insider = await arrive(person());
+      const outsider = person();
+      const target = person();
+      const outsiderConn = await arrive(outsider);
+      const targetConn = await arrive(target);
+
+      // Target walks into the library.
+      await walkToLibrary(targetConn);
+      // Insider fills the library.
+      await walkToLibrary(insider);
+
+      // Outsider tries to walk to target inside the full library.
+      outsiderConn.ws.send(JSON.stringify({ type: 'goTo', userId: target }));
+      const ended = await waitFor(outsiderConn, (m) => m.type === 'walkEnded');
+      expect(ended).toMatchObject({ reason: 'full', spaceKey: 'library' });
+      await Promise.all([
+        leave(insider),
+        leave(outsiderConn),
+        leave(targetConn),
+      ]);
+    });
+  });
 });
 
 /**
