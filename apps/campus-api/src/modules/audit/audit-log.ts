@@ -326,6 +326,10 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.MentorshipGroup;
     details: { cohortId: string; cohortMemberId: string };
   };
+  [AuditAction.DeskFreed]: {
+    subject: AuditSubjectType.DeskClaim;
+    details: { cohortId: string; deskKey: string; holderId: string };
+  };
   [AuditAction.MentorshipGroupDeleted]: {
     subject: AuditSubjectType.MentorshipGroup;
     details: MentorshipGroupRecordSnapshot & {

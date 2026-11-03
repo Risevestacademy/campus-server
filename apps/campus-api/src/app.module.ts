@@ -20,6 +20,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { FeedbackModule } from './modules/feedback/feedback.module.js';
 import { InvitesModule } from './modules/invites/invites.module.js';
 import { MapsModule } from './modules/maps/maps.module.js';
+import { DesksModule } from './modules/desks/desks.module.js';
 import { MentorshipGroupsModule } from './modules/mentorship-groups/mentorship-groups.module.js';
 import { RoomLinksModule } from './modules/room-links/room-links.module.js';
 import { TracksModule } from './modules/tracks/tracks.module.js';
@@ -40,6 +41,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     TracksModule,
     CohortAdminModule,
     MentorshipGroupsModule,
+    DesksModule,
     UserAdminModule,
     ProfileModule,
     AuditModule,

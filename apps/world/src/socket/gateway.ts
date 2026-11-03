@@ -145,6 +145,11 @@ export interface Gateway {
    * space on the map again. Resolves once the doors answer from it.
    */
   spacesChanged(): Promise<void>;
+  /**
+   * campus-api says who holds a desk may have changed, in one cohort or, with
+   * null, in every cohort: tell the people there to fetch the desks again.
+   */
+  desksChanged(cohortId: string | null): void;
   stop(): Promise<void>;
   /**
    * Stops the gauges reading the sockets. Not part of stop(), so the final
@@ -2577,6 +2582,17 @@ export function registerGateway(
       }
     },
     spacesChanged: reloadDoors,
+    desksChanged(cohortId: string | null): void {
+      if (stopping) return;
+      if (cohortId !== null) {
+        broadcast(cohortId, { type: 'desksChanged' });
+        return;
+      }
+      const frame = encode({ type: 'desksChanged' });
+      for (const connection of connections.all()) {
+        sendFrame(connection.socket, frame);
+      }
+    },
     dispose: metrics.dispose,
     async stop(): Promise<void> {
       clearInterval(heartbeat);

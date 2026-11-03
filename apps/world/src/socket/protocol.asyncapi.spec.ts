@@ -91,6 +91,7 @@ describe('the AsyncAPI document', () => {
       'NearbyMessage',
       'LockChangedMessage',
       'LockableSpacesMessage',
+      'DesksChangedMessage',
       'SpacesMessage',
       'EntryRequestedMessage',
       'EntryRequestEndedMessage',
