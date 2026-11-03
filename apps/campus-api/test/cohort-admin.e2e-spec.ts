@@ -1976,7 +1976,7 @@ describe('cohort and track admin routes (e2e)', () => {
 
     it('records who created a track, and in which request', async () => {
       const response = await createTrack()
-        .set('x-correlation-id', 'e2e-track-1')
+        .set('x-correlation-id', '11111111-0000-4000-8000-00000000e2e1')
         .expect(201);
 
       expect(await entries()).toEqual([
@@ -1985,7 +1985,7 @@ describe('cohort and track admin routes (e2e)', () => {
           action: AuditAction.TrackCreated,
           subjectType: AuditSubjectType.Track,
           subjectId: response.body.id,
-          correlationId: 'e2e-track-1',
+          correlationId: '11111111-0000-4000-8000-00000000e2e1',
           details: { name: 'Software Engineering', code: 'SE' },
         }),
       ]);
@@ -2071,7 +2071,7 @@ describe('cohort and track admin routes (e2e)', () => {
           code: 'c2',
           startDate: null,
         })
-        .set('x-correlation-id', 'e2e-cohort-edit')
+        .set('x-correlation-id', '11111111-0000-4000-8000-00000000e2e2')
         .expect(200);
 
       expect((await entries()).at(-1)).toMatchObject({
@@ -2079,7 +2079,7 @@ describe('cohort and track admin routes (e2e)', () => {
         action: AuditAction.CohortUpdated,
         subjectType: AuditSubjectType.Cohort,
         subjectId: cohort.id,
-        correlationId: 'e2e-cohort-edit',
+        correlationId: '11111111-0000-4000-8000-00000000e2e2',
         details: {
           changes: {
             code: { from: 'C1', to: 'C2' },
@@ -2181,7 +2181,7 @@ describe('cohort and track admin routes (e2e)', () => {
 
       await as(adminCookie)
         .post(`/v1/invites/${invite.id}/revoke`, {})
-        .set('x-correlation-id', 'e2e-revoke')
+        .set('x-correlation-id', '11111111-0000-4000-8000-00000000e2e3')
         .expect(200);
 
       const entry = (await entries()).at(-1);
@@ -2190,7 +2190,7 @@ describe('cohort and track admin routes (e2e)', () => {
         action: AuditAction.InviteRevoked,
         subjectType: AuditSubjectType.Invite,
         subjectId: invite.id,
-        correlationId: 'e2e-revoke',
+        correlationId: '11111111-0000-4000-8000-00000000e2e3',
         details: { cohortId: null },
       });
       expect(JSON.stringify(entry?.details)).not.toContain('campus.local');
@@ -2224,33 +2224,29 @@ describe('cohort and track admin routes (e2e)', () => {
       expect(await entries()).toHaveLength(before);
     });
 
-    // An id too long to store is replaced as the request arrives, not cut
-    // down when the entry is written — so the caller, the logs and the entry
+    // Replaced as the request arrives, so the caller, the logs and the entry
     // all end up holding the same one.
-    it('gives a request with an over-long correlation id a new one, everywhere', async () => {
-      const long = 'c'.repeat(200);
-
+    it('gives a request whose correlation id is not a UUID a new one, everywhere', async () => {
       const response = await createTrack()
-        .set('x-correlation-id', long)
+        .set('x-correlation-id', 'ada@example.com')
         .expect(201);
 
       const returned = response.headers['x-correlation-id'];
-      expect(returned).not.toContain('c'.repeat(64));
-      expect(returned.length).toBeLessThanOrEqual(64);
+      expect(returned).not.toBe('ada@example.com');
       const [entry] = await entries();
       expect(entry.correlationId).toBe(returned);
     });
 
-    it('stores a correlation id of the longest allowed length whole', async () => {
-      const longest = 'c'.repeat(64);
+    it('stores a correlation id that is a UUID whole', async () => {
+      const id = '0b9d3c4e-8f2a-4c1d-9e7b-5a6f3d2c1b0a';
 
       const response = await createTrack()
-        .set('x-correlation-id', longest)
+        .set('x-correlation-id', id)
         .expect(201);
 
-      expect(response.headers['x-correlation-id']).toBe(longest);
+      expect(response.headers['x-correlation-id']).toBe(id);
       const [entry] = await entries();
-      expect(entry.correlationId).toBe(longest);
+      expect(entry.correlationId).toBe(id);
     });
 
     // The entry and the change share a transaction, so a refusal leaves

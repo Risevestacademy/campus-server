@@ -1,5 +1,5 @@
 {
-  "id": "3d5c8949-250d-42f7-915f-2385d0312dd7",
+  "id": "324f7671-bb55-4a25-99a2-bb083a0c00d4",
   "prevId": "ecaf9d1a-362c-48be-b34b-11b3b33b5e0e",
   "version": "7",
   "dialect": "postgresql",
@@ -2381,297 +2381,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.notices": {
-      "name": "notices",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "author_id": {
-          "name": "author_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scope": {
-          "name": "scope",
-          "type": "varchar(16)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "cohort_id": {
-          "name": "cohort_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cohort_track_id": {
-          "name": "cohort_track_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "title": {
-          "name": "title",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "body": {
-          "name": "body",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "pinned": {
-          "name": "pinned",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "notices_scope_created_idx": {
-          "name": "notices_scope_created_idx",
-          "columns": [
-            {
-              "expression": "scope",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "notices_cohort_idx": {
-          "name": "notices_cohort_idx",
-          "columns": [
-            {
-              "expression": "cohort_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "notices_author_id_users_id_fk": {
-          "name": "notices_author_id_users_id_fk",
-          "tableFrom": "notices",
-          "tableTo": "users",
-          "columnsFrom": [
-            "author_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "notices_cohort_id_cohorts_id_fk": {
-          "name": "notices_cohort_id_cohorts_id_fk",
-          "tableFrom": "notices",
-          "tableTo": "cohorts",
-          "columnsFrom": [
-            "cohort_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "notices_cohort_track_fk": {
-          "name": "notices_cohort_track_fk",
-          "tableFrom": "notices",
-          "tableTo": "cohort_tracks",
-          "columnsFrom": [
-            "cohort_track_id",
-            "cohort_id"
-          ],
-          "columnsTo": [
-            "id",
-            "cohort_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "notices_cohort_matches_scope": {
-          "name": "notices_cohort_matches_scope",
-          "value": "(\"notices\".\"scope\" = 'campus') = (\"notices\".\"cohort_id\" is null)"
-        },
-        "notices_track_matches_scope": {
-          "name": "notices_track_matches_scope",
-          "value": "(\"notices\".\"scope\" = 'cohort-track') = (\"notices\".\"cohort_track_id\" is not null)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.notifications": {
-      "name": "notifications",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "recipient_id": {
-          "name": "recipient_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reference_type": {
-          "name": "reference_type",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reference_id": {
-          "name": "reference_id",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "read_at": {
-          "name": "read_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "notifications_recipient_created_idx": {
-          "name": "notifications_recipient_created_idx",
-          "columns": [
-            {
-              "expression": "recipient_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "notifications_recipient_kind_reference_unique": {
-          "name": "notifications_recipient_kind_reference_unique",
-          "columns": [
-            {
-              "expression": "recipient_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "reference_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "reference_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "notifications_recipient_id_users_id_fk": {
-          "name": "notifications_recipient_id_users_id_fk",
-          "tableFrom": "notifications",
-          "tableTo": "users",
-          "columnsFrom": [
-            "recipient_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.tracks": {
       "name": "tracks",
       "schema": "",
@@ -2856,6 +2565,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "analytics_consent": {
+          "name": "analytics_consent",
+          "type": "analytics_consent",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "analytics_consent_at": {
+          "name": "analytics_consent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -3033,6 +2754,14 @@
         "notice_board",
         "stage",
         "help_desk"
+      ]
+    },
+    "public.analytics_consent": {
+      "name": "analytics_consent",
+      "schema": "public",
+      "values": [
+        "granted",
+        "denied"
       ]
     },
     "public.system_role": {

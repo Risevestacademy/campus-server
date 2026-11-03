@@ -14,8 +14,16 @@ export interface DrawnSpace {
   class?: string;
 }
 
+export interface DrawnDesk {
+  /** The object's name in Tiled: the desk's key. */
+  key: string;
+  /** The key of the space it is drawn in, which must be drawn too. */
+  space: string;
+}
+
 export interface TiledMapOptions {
   spaces?: DrawnSpace[];
+  desks?: DrawnDesk[];
   /** Whether people enter the campus here. One map of a campus must. */
   entry?: boolean;
   /** Left out, the map has nothing nobody can walk through, and is refused. */
@@ -27,9 +35,11 @@ const TILE = 32;
 /**
  * A 20 × 20 Tiled map: a wall along its top row, a spawn at tile 1,1 when it
  * is the entry map, and each space a one-tile square on a row of its own.
+ * A desk is a point in the middle of its space's square.
  */
 export function tiledMap({
   spaces = [],
+  desks = [],
   entry = true,
   walls = true,
 }: TiledMapOptions = {}): Record<string, unknown> {
@@ -57,8 +67,7 @@ export function tiledMap({
         id: nextId++,
         name: space.key,
         ...(space.class === undefined ? {} : { type: space.class }),
-        x: (1 + (index % 9) * 2) * TILE,
-        y: (3 + Math.floor(index / 9) * 2) * TILE,
+        ...spaceCorner(index),
         width: TILE,
         height: TILE,
         properties:
@@ -66,6 +75,26 @@ export function tiledMap({
             ? []
             : [{ name: 'name', type: 'string', value: space.name }],
       })),
+    });
+  }
+  if (desks.length > 0) {
+    layers.push({
+      type: 'objectgroup',
+      name: 'desks',
+      objects: desks.map((desk) => {
+        const index = spaces.findIndex((space) => space.key === desk.space);
+        if (index === -1) {
+          throw new Error(`Desk "${desk.key}" is in a space not drawn.`);
+        }
+        const corner = spaceCorner(index);
+        return {
+          id: nextId++,
+          name: desk.key,
+          x: corner.x + TILE / 2,
+          y: corner.y + TILE / 2,
+          point: true,
+        };
+      }),
     });
   }
   return {
@@ -76,6 +105,13 @@ export function tiledMap({
     infinite: false,
     tilesets: [],
     layers,
+  };
+}
+
+function spaceCorner(index: number): { x: number; y: number } {
+  return {
+    x: (1 + (index % 9) * 2) * TILE,
+    y: (3 + Math.floor(index / 9) * 2) * TILE,
   };
 }
 

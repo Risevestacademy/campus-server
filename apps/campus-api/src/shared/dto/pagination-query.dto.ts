@@ -11,12 +11,9 @@ import { IsInt, IsOptional, Max, Min } from 'class-validator';
 export const MAX_PAGE = 10_000;
 
 export class PaginationQueryDto {
+  /** @example 1 */
   @ApiPropertyOptional({
     description: `Page to fetch, 1-based, up to ${MAX_PAGE}.`,
-    default: 1,
-    example: 1,
-    minimum: 1,
-    maximum: MAX_PAGE,
   })
   @IsOptional()
   @Type(() => Number)
@@ -25,13 +22,11 @@ export class PaginationQueryDto {
   @Max(MAX_PAGE)
   page: number = 1;
 
-  @ApiPropertyOptional({
-    description: 'Number of items per page.',
-    default: 20,
-    example: 20,
-    minimum: 1,
-    maximum: 100,
-  })
+  /**
+   * Number of items per page.
+   * @example 20
+   */
+  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

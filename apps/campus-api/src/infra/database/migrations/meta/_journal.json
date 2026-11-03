@@ -166,8 +166,22 @@
     {
       "idx": 23,
       "version": "7",
+      "when": 1793358185136,
+      "tag": "0023_analytics_consent",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793638762679,
+      "tag": "0024_desks",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
       "when": 1793604942531,
-      "tag": "0023_notices_notifications",
+      "tag": "0025_notices_notifications",
       "breakpoints": true
     }
   ]
