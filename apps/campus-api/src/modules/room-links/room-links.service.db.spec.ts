@@ -266,4 +266,16 @@ describe('RoomLinksService', () => {
       service.create(mentor, cohortId, corridors.id, 'Hallway chat'),
     ).rejects.toThrow(RoomLinkNotFoundException);
   }, 30_000);
+
+  it('dates a link by the same clock that revokes it', async () => {
+    const { cohortId, mentor, pod } = await setting();
+    const behind = new Date(Date.now() - 60_000);
+
+    const made = await service.create(mentor, cohortId, pod.id, 'Sync', behind);
+
+    expect(made.createdAt).toEqual(behind);
+    await expect(
+      service.revoke(mentor, made.code, new Date(behind.getTime() + 1)),
+    ).resolves.toBeUndefined();
+  }, 30_000);
 });

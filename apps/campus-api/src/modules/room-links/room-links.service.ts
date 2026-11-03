@@ -84,6 +84,7 @@ export class RoomLinksService {
             spaceId,
             title,
             createdBy: user.id,
+            createdAt: now,
           })
           .returning({ code: roomLinks.code });
         return this.toDto(await this.find(link.code));
