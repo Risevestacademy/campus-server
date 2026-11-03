@@ -27,7 +27,8 @@ const notStaff = ApiForbiddenResponse({
 const noSpace = ApiNotFoundResponse({
   type: ApiErrorResponseDto,
   description:
-    'No space with that id is set up on the map (retired, or no kind yet), ' +
+    'No space with that id is set up on the entry map (retired, no kind yet, ' +
+    'or on another map), ' +
     'or (admins) no such cohort.',
 });
 
@@ -93,7 +94,7 @@ export function ApiOpenRoomLink(): MethodDecorator {
       type: ApiErrorResponseDto,
       description:
         'No such link, it was revoked, its space is no longer set up on ' +
-        'the map, or the caller holds no live place in its cohort.',
+        'the entry map, or the caller holds no live place in its cohort.',
     }),
   );
 }

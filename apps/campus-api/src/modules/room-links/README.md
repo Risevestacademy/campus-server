@@ -23,6 +23,9 @@ Routes:
   one checks the caller has a live place in its cohort, or is an admin, so a
   code found by somebody else lets them in nowhere. Getting into the space is
   still world's to decide, as for anybody walking up to it.
+- **Only spaces on the entry map.** World plays the entry map alone, so a
+  link to a space on any other map is refused, and one made before the entry
+  map moved stops opening.
 - **A link nobody may open is a 404.** Revoked, its space retired or never set
   up, or a cohort the caller holds no place in: the answer is the same, so a
   code says nothing to somebody it is not for.

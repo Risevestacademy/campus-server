@@ -36,6 +36,7 @@ const liveSpace: SQL = and(
   isNull(spaces.retiredAt),
   isNotNull(spaces.kind),
   isNull(maps.retiredAt),
+  eq(maps.isEntry, true),
 ) as SQL;
 
 const linkColumns = {
@@ -124,7 +125,7 @@ export class RoomLinksService {
   }
 
   /**
-   * Where a link leads. A revoked link, one to a space no longer on the map,
+   * Where a link leads. A revoked link, one to a space no longer on the entry map,
    * and one to a cohort the caller holds no place in are all a 404, so a code
    * says nothing to somebody it is not for.
    */
@@ -286,7 +287,7 @@ async function requireLiveSpace(
     .where(and(eq(spaces.id, spaceId), liveSpace));
   if (!space) {
     throw new RoomLinkNotFoundException(
-      'No space with that id is set up on the map',
+      'No space with that id is set up on the entry map',
       { spaceId },
     );
   }

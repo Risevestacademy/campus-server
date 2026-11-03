@@ -1,11 +1,11 @@
+import { PGlite } from '@electric-sql/pglite';
 import { eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/pglite';
+import { migrate } from 'drizzle-orm/pglite/migrator';
+import { fileURLToPath } from 'node:url';
 
 import type { Env } from '../../infra/config/config.module.js';
-import {
-  REAL_POSTGRES_URL,
-  connectRealPostgres,
-  unique,
-} from '../../infra/database/testing/real-postgres.js';
+import * as schema from '../../infra/database/schema/index.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import {
@@ -22,29 +22,38 @@ import {
   RoomLinkNotFoundException,
 } from './room-links.exceptions.js';
 import { RoomLinksService } from './room-links.service.js';
+import { roomLinks } from './schema.js';
 
-describe.skipIf(!REAL_POSTGRES_URL)('RoomLinksService on real Postgres', () => {
-  let pg: ReturnType<typeof connectRealPostgres>;
-  let service: RoomLinksService;
+const MIGRATIONS = fileURLToPath(
+  new URL('../../infra/database/migrations', import.meta.url),
+);
+
+const db = drizzle(new PGlite(), { schema });
+const service = new RoomLinksService(
+  db as never,
+  {
+    APP_PUBLIC_URL: 'https://campus.test/',
+  } as Env,
+);
+
+let counter = 0;
+const unique = () => `${++counter}`;
+
+describe('RoomLinksService', () => {
   let mapId: string;
+  let otherMapId: string;
 
   beforeAll(async () => {
-    pg = connectRealPostgres();
-    service = new RoomLinksService(
-      pg.db as never,
-      {
-        APP_PUBLIC_URL: 'https://campus.test/',
-      } as Env,
-    );
-    const [map] = await pg.db
+    await migrate(db, { migrationsFolder: MIGRATIONS });
+    const [entry, other] = await db
       .insert(maps)
-      .values({ key: `room-links-${unique()}`, name: 'Room links' })
+      .values([
+        { key: 'campus', name: 'Campus', isEntry: true },
+        { key: 'annex', name: 'Annex' },
+      ])
       .returning();
-    mapId = map.id;
-  });
-
-  afterAll(async () => {
-    await pg.close();
+    mapId = entry.id;
+    otherMapId = other.id;
   });
 
   const person = async (
@@ -52,18 +61,18 @@ describe.skipIf(!REAL_POSTGRES_URL)('RoomLinksService on real Postgres', () => {
     name: string,
     systemRole = SystemRole.User,
   ): Promise<AuthenticatedUser> => {
-    const [row] = await pg.db
+    const [row] = await db
       .insert(users)
       .values({ email: `${name}-${tag}@campus.local`, systemRole })
       .returning();
     return { id: row.id, email: row.email, systemRole };
   };
 
-  const space = async (tag: string, kind: SpaceKind | null) => {
-    const [row] = await pg.db
+  const space = async (tag: string, kind: SpaceKind | null, on = mapId) => {
+    const [row] = await db
       .insert(spaces)
       .values({
-        mapId,
+        mapId: on,
         key: `pod-${unique()}`,
         name: `Pod ${tag}`,
         kind,
@@ -77,7 +86,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('RoomLinksService on real Postgres', () => {
   /** A cohort with a mentor and a guest, an admin and an outsider, and a pod. */
   const setting = async () => {
     const tag = unique();
-    const [cohort] = await pg.db
+    const [cohort] = await db
       .insert(cohorts)
       .values({ name: 'Links', code: `L${tag}`.toUpperCase().slice(0, 32) })
       .returning();
@@ -85,7 +94,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('RoomLinksService on real Postgres', () => {
     const guest = await person(tag, 'guest');
     const outsider = await person(tag, 'outsider');
     const admin = await person(tag, 'admin', SystemRole.Admin);
-    await pg.db.insert(cohortMembers).values([
+    await db.insert(cohortMembers).values([
       { cohortId: cohort.id, userId: mentor.id, role: CohortRole.Mentor },
       {
         cohortId: cohort.id,
@@ -169,7 +178,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('RoomLinksService on real Postgres', () => {
       RoomLinkNotFoundException,
     );
 
-    await pg.db
+    await db
       .update(cohortMembers)
       .set({ leftAt: new Date() })
       .where(eq(cohortMembers.userId, guest.id));
@@ -201,7 +210,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('RoomLinksService on real Postgres', () => {
     const made = await service.create(mentor, cohortId, pod.id, 'Lab');
     const unkinded = await space(unique(), null);
 
-    await pg.db
+    await db
       .update(spaces)
       .set({ retiredAt: new Date() })
       .where(eq(spaces.id, pod.id));
@@ -215,5 +224,25 @@ describe.skipIf(!REAL_POSTGRES_URL)('RoomLinksService on real Postgres', () => {
     await expect(
       service.create(mentor, cohortId, unkinded.id, 'Nope'),
     ).rejects.toThrow(RoomLinkNotFoundException);
+  }, 30_000);
+
+  it('only leads to spaces on the entry map, which world plays', async () => {
+    const { cohortId, mentor, guest } = await setting();
+    const annexRoom = await space(unique(), SpaceKind.MeetingRoom, otherMapId);
+
+    await expect(
+      service.create(mentor, cohortId, annexRoom.id, 'Off the map'),
+    ).rejects.toThrow(RoomLinkNotFoundException);
+
+    await db.insert(roomLinks).values({
+      code: 'AnnexLink1',
+      cohortId,
+      spaceId: annexRoom.id,
+      title: 'Made before the entry map moved',
+      createdBy: mentor.id,
+    });
+    await expect(service.open(guest, 'AnnexLink1')).rejects.toThrow(
+      RoomLinkNotFoundException,
+    );
   }, 30_000);
 });
