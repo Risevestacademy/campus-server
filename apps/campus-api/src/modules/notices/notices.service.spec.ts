@@ -1,14 +1,18 @@
 import { PGlite } from '@electric-sql/pglite';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
 import type { Db } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
-import { ExceptionCode } from '../../shared/exceptions/exception-code.enum.js';
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
-import { cohortTracks, cohorts } from '../cohorts/schema.js';
+import {
+  CohortRole,
+  cohortMembers,
+  cohortTracks,
+  cohorts,
+} from '../cohorts/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { NoticeScope, notices } from './schema.js';
@@ -98,18 +102,17 @@ beforeEach(async () => {
   cohortTrackId = ct.id;
 
   // Professor is a professor of the cohort.
-  const { cohortMembers } = await import('../cohorts/schema.js');
   await pglite.insert(cohortMembers).values({
     cohortId,
     userId: professorUserId,
-    role: 'professor',
+    role: CohortRole.Professor,
   });
 
   // Mentor is a mentor of the cohort.
   await pglite.insert(cohortMembers).values({
     cohortId,
     userId: mentorUserId,
-    role: 'mentor',
+    role: CohortRole.Mentor,
   });
 });
 
