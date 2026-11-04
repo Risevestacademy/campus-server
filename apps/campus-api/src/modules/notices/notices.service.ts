@@ -1,7 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, isNull, sql } from 'drizzle-orm';
 
-import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import {
+  DRIZZLE,
+  type Db,
+  type DbExecutor,
+} from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import {
   type AuditContext,
@@ -34,7 +38,12 @@ export class NoticesService {
     audit: AuditContext,
   ): Promise<Notice> {
     this.validateScopeReferences(dto);
-    await this.assertCanManageNotices(actor, dto.scope, dto.cohortId ?? null);
+    await this.assertCanManageNotices(
+      this.db,
+      actor,
+      dto.scope,
+      dto.cohortId ?? null,
+    );
 
     return this.db.transaction(async (tx) => {
       if (dto.cohortTrackId) {
@@ -94,6 +103,7 @@ export class NoticesService {
       }
 
       await this.assertCanManageNotices(
+        tx,
         actor,
         existing.scope as NoticeScope,
         existing.cohortId,
@@ -145,6 +155,7 @@ export class NoticesService {
       }
 
       await this.assertCanManageNotices(
+        tx,
         actor,
         existing.scope as NoticeScope,
         existing.cohortId,
@@ -155,6 +166,14 @@ export class NoticesService {
       }
 
       if (pinned) {
+        // The row lock above covers only this notice: hold the scope's lock
+        // until commit so two pins in one scope count one after the other.
+        await this.lockScopePins(
+          tx,
+          existing.scope as NoticeScope,
+          existing.cohortId,
+          existing.cohortTrackId,
+        );
         const pinnedInScope = await this.countPinnedInScope(
           tx,
           existing.scope as NoticeScope,
@@ -206,6 +225,7 @@ export class NoticesService {
       }
 
       await this.assertCanManageNotices(
+        tx,
         actor,
         existing.scope as NoticeScope,
         existing.cohortId,
@@ -272,7 +292,12 @@ export class NoticesService {
     }
   }
 
+  /**
+   * Reads through `db`, so callers inside a transaction pass it rather than
+   * taking a second pool connection while theirs is held.
+   */
   private async assertCanManageNotices(
+    db: DbExecutor,
     actor: AuthenticatedUser,
     scope: NoticeScope,
     cohortId: string | null,
@@ -293,7 +318,7 @@ export class NoticesService {
       );
     }
 
-    const [membership] = await this.db
+    const [membership] = await db
       .select({ role: cohortMembers.role })
       .from(cohortMembers)
       .where(
@@ -332,6 +357,22 @@ export class NoticesService {
         { cohortTrackId, cohortId },
       );
     }
+  }
+
+  /**
+   * A transaction-scoped advisory lock on one scope's pins, released at
+   * commit or rollback. Campus notices have no row to lock, hence a key.
+   */
+  private async lockScopePins(
+    tx: DbExecutor,
+    scope: NoticeScope,
+    cohortId: string | null,
+    cohortTrackId: string | null,
+  ): Promise<void> {
+    const key = `notices:pins:${scope}:${cohortTrackId ?? cohortId ?? '-'}`;
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`,
+    );
   }
 
   private async countPinnedInScope(
