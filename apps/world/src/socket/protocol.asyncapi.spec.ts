@@ -75,6 +75,8 @@ describe('the AsyncAPI document', () => {
       'MuteMessage',
       'RemoveFromSpaceMessage',
       'GoToMessage',
+      'GoToSpaceMessage',
+      'GoToTileMessage',
       'StopWalkingMessage',
     ]);
     expect(namesIn(subscribe)).toEqual([

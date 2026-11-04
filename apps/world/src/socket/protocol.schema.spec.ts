@@ -65,6 +65,8 @@ describe('protocol.schema.json', () => {
         'MuteMessage',
         'RemoveFromSpaceMessage',
         'GoToMessage',
+        'GoToSpaceMessage',
+        'GoToTileMessage',
         'StopWalkingMessage',
         'ActiveMessage',
         'ServerMessage',
