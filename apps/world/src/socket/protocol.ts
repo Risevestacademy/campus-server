@@ -190,6 +190,22 @@ const requestId = z
       'request.',
   );
 
+/** What a walk is to: exactly one of the three is set. */
+const walkTarget = {
+  userId: z
+    .string()
+    .nullable()
+    .describe('Whom you are walking to, for a `goTo` walk.'),
+  toSpaceKey: z
+    .string()
+    .nullable()
+    .describe('The space you are walking into, for a `goToSpace` walk.'),
+  toTile: z
+    .object({ x: z.number().int().min(0), y: z.number().int().min(0) })
+    .nullable()
+    .describe('The tile you are walking onto, for a `goToTile` walk.'),
+};
+
 export const WalkEndReason = z
   .enum([
     'arrived',
@@ -203,16 +219,18 @@ export const WalkEndReason = z
   .meta({
     id: 'WalkEndReason',
     description:
-      'arrived: you are one tile from them, in their space, never on their ' +
-      'tile. stopped: you sent ' +
-      '`stopWalking` or a `move`. refused: a space you may not enter is in ' +
-      'the way, theirs or another, and you stopped beside the first one; ' +
-      '`mayAsk` says whether asking to enter it would be taken. gone: they ' +
-      'left, or were not here. elsewhere: they are online, but connected to ' +
-      'another world server, which a walk cannot reach. no_way: no path ' +
-      'reaches a tile beside them in their space: walls, a space with no ' +
-      'room beside them, or a chase past the step limit. moved_by_staff: ' +
-      'staff removed you from a space mid-walk.',
+      'arrived: walking to somebody, you are one tile from them, in their ' +
+      'space, never on their tile; to a space, you are on the free tile ' +
+      'nearest its middle, or its middle when none is free; to a tile, you ' +
+      'are on it. stopped: you sent `stopWalking` or a `move`. refused: a ' +
+      'space you may not enter is in the way, or is where you were going, ' +
+      'and you stopped beside the first one; `mayAsk` says whether asking ' +
+      'to enter it would be taken. gone: they left, or were not here. ' +
+      'elsewhere: they are online, but connected to another world server, ' +
+      'which a walk cannot reach. gone and elsewhere end only walks to ' +
+      'somebody. no_way: no path reaches where you were going: walls, a ' +
+      'space with no room beside them, or a walk past the step limit. ' +
+      'moved_by_staff: staff removed you from a space mid-walk.',
   });
 
 export const EntryRequestOutcome = z
@@ -425,11 +443,46 @@ export const ClientMessage = z
           'with `elsewhere`. Yourself is a NOT_ALLOWED error. Counts as ' +
           'activity.',
       }),
+    z
+      .object({
+        type: z.literal('goToSpace'),
+        spaceKey: z
+          .string()
+          .describe(
+            "A drawn space's key on this map. The corridors take `goToTile`.",
+          ),
+      })
+      .meta({
+        id: 'GoToSpaceMessage',
+        description:
+          'Have the server walk you into a space, to the free tile nearest ' +
+          'its middle, the way `goTo` walks you to somebody: a `walking` a ' +
+          'step, then one `walkEnded`. A space closed to you ends it beside ' +
+          'the space with `refused`. Replaces a walk already going. A key ' +
+          'not drawn on this map, or the corridors, is a NOT_ALLOWED error. ' +
+          'Counts as activity.',
+      }),
+    z
+      .object({
+        type: z.literal('goToTile'),
+        x: z.number().int().min(0).describe('Tile column.'),
+        y: z.number().int().min(0).describe('Tile row.'),
+      })
+      .meta({
+        id: 'GoToTileMessage',
+        description:
+          'Have the server walk you onto a tile, the way `goTo` walks you to ' +
+          'somebody: a `walking` a step, then one `walkEnded`. A tile in a ' +
+          'space closed to you ends it beside the space with `refused`. ' +
+          'Replaces a walk already going. A tile off the map or inside a ' +
+          'wall is a NOT_ALLOWED error. Counts as activity.',
+      }),
     z.object({ type: z.literal('stopWalking') }).meta({
       id: 'StopWalkingMessage',
       description:
-        'End the walk `goTo` started, answered by `walkEnded` with ' +
-        '`stopped`. A `move` ends it too. Counts as activity.',
+        'End the walk `goTo`, `goToSpace` or `goToTile` started, answered by ' +
+        '`walkEnded` with `stopped`. A `move` ends it too. Counts as ' +
+        'activity.',
     }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
@@ -626,6 +679,17 @@ export const ServerMessage = z
       }),
     z
       .object({
+        type: z.literal('desksChanged'),
+      })
+      .meta({
+        id: 'DesksChangedMessage',
+        description:
+          'Who holds a desk in your cohort may have changed, or desks were ' +
+          'added to or taken off the map: fetch ' +
+          '`GET /v1/cohorts/{cohortId}/desks` from campus-api again.',
+      }),
+    z
+      .object({
         type: z.literal('spaces'),
         spaces: z.array(SpaceName),
       })
@@ -724,19 +788,19 @@ export const ServerMessage = z
     z
       .object({
         type: z.literal('walking'),
-        userId: z.string().describe('Whom you are walking to.'),
+        ...walkTarget,
         player: Player,
       })
       .meta({
         id: 'WalkingMessage',
         description:
-          'The server took a step of your `goTo` walk: where you are now. ' +
-          'Only to you; everybody else sees it in `moved`.',
+          'The server took a step of your walk: where you are now. Only to ' +
+          'you; everybody else sees it in `moved`.',
       }),
     z
       .object({
         type: z.literal('walkEnded'),
-        userId: z.string().describe('Whom you were walking to.'),
+        ...walkTarget,
         reason: WalkEndReason,
         player: Player.describe('Where you stopped.'),
         spaceKey: z
@@ -753,8 +817,8 @@ export const ServerMessage = z
       .meta({
         id: 'WalkEndedMessage',
         description:
-          'Your `goTo` walk is over, and why. Only to you. Not sent when the ' +
-          'socket closes.',
+          'Your walk is over, and why. Only to you. Not sent when the socket ' +
+          'closes.',
       }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',

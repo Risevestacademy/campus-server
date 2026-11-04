@@ -12,6 +12,7 @@ import {
   COHORT_ROLES,
   SPACE_ACCESS,
   mayEnter,
+  roomLinkOpen,
   type CohortMembershipFacts,
   type PersonFacts,
   type SpaceFacts,
@@ -25,6 +26,7 @@ import {
   type Account,
   type AccountLookup,
   type Appearance,
+  type RoomLinkPass,
   type WorldSpace,
 } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
@@ -40,10 +42,16 @@ import type {
   Presence,
   PresenceStore,
 } from '../infra/presence.js';
-import { Direction, step, walkable, type Tile } from '../movement/grid.js';
+import {
+  Direction,
+  step,
+  tileIndex,
+  walkable,
+  type Tile,
+} from '../movement/grid.js';
 import { pathTo } from '../movement/paths.js';
 import { Players, type Player } from '../movement/players.js';
-import { spaceAt } from '../movement/spaces.js';
+import { floorByMiddle, spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
 import { SpaceLocks, lockableKeys } from '../spaces/locks.js';
@@ -145,6 +153,11 @@ export interface Gateway {
    * space on the map again. Resolves once the doors answer from it.
    */
   spacesChanged(): Promise<void>;
+  /**
+   * campus-api says who holds a desk may have changed, in one cohort or, with
+   * null, in every cohort: tell the people there to fetch the desks again.
+   */
+  desksChanged(cohortId: string | null): void;
   stop(): Promise<void>;
   /**
    * Stops the gauges reading the sockets. Not part of stop(), so the final
@@ -183,6 +196,8 @@ export function registerGateway(
   let doors: ReadonlyMap<string, WorldSpace> = new Map();
   /** Whether a read has ever succeeded, so a missing key means no row. */
   let doorsRead = false;
+  /** Who entered through a room link, read with the doors. */
+  let roomLinkPasses: readonly RoomLinkPass[] = [];
   let doorsLoading: Promise<void> | undefined;
   let readDoorsAgain = false;
 
@@ -210,6 +225,7 @@ export function registerGateway(
             accounts.spacesOn(map.id, new Date()),
           );
           doorsRead = true;
+          await readRoomLinkPasses();
           refreshCalls();
           refreshLockable();
           refreshSpaceNames();
@@ -245,6 +261,34 @@ export function registerGateway(
    * default space is the way to everywhere else and the database keeps it
    * normal, so it is never asked about.
    */
+  /** Apart from the doors, so a failed read leaves the doors current. */
+  async function readRoomLinkPasses(): Promise<void> {
+    try {
+      roomLinkPasses = await traced('world.room_link_passes.read', () =>
+        accounts.roomLinkPassesOn(map.id, new Date()),
+      );
+    } catch (err) {
+      app.log.error(
+        { err },
+        'could not read room link passes; they keep what they had',
+      );
+    }
+  }
+
+  function holdsRoomLinkPass(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): boolean {
+    return roomLinkPasses.some(
+      (pass) =>
+        pass.spaceKey === spaceKey &&
+        pass.userId === connection.userId &&
+        pass.cohortId === connection.cohortId &&
+        roomLinkOpen(pass, now),
+    );
+  }
+
   function mayStepInto(
     connection: Connection,
     spaceKey: string,
@@ -258,6 +302,14 @@ export function registerGateway(
     }
     const space =
       doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ);
+    // A pass gets past the list and a lock, never the rest of the door.
+    if (holdsRoomLinkPass(connection, spaceKey, now)) {
+      return mayEnter(
+        personOf(connection),
+        { ...space, access: SPACE_ACCESS.Normal, locked: false },
+        now,
+      );
+    }
     return mayEnter(
       personOf(connection),
       locks.isLocked(connection.cohortId, spaceKey)
@@ -1096,15 +1148,77 @@ export function registerGateway(
       });
       return;
     }
+    startWalk(connection, { kind: 'person', userId });
+  }
+
+  function goToSpace(connection: Connection, spaceKey: string): void {
+    if (
+      spaceKey === DEFAULT_SPACE_KEY ||
+      !map.spaces.keys.includes(spaceKey) ||
+      floorOf(spaceKey).length === 0
+    ) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message:
+          spaceKey === DEFAULT_SPACE_KEY
+            ? 'walk to a tile in the corridors, not to the corridors'
+            : 'no space with that key to walk into',
+      });
+      return;
+    }
+    startWalk(connection, { kind: 'space', spaceKey });
+  }
+
+  function goToTile(connection: Connection, tile: Tile): void {
+    if (!walkable(map.grid, tile)) {
+      send(connection.socket, {
+        type: 'error',
+        code: ServerErrorCode.NotAllowed,
+        message: 'that tile is off the map or in a wall',
+      });
+      return;
+    }
+    startWalk(connection, { kind: 'tile', tile });
+  }
+
+  function startWalk(connection: Connection, target: WalkTarget): void {
     endWalk(connection, 'stopped');
     walks.set(connection, {
-      targetId: userId,
+      target,
       path: [],
       aimedAt: null,
       taken: 0,
       failed: 0,
+      rechecked: false,
       timer: setTimeout(() => walkOn(connection), 0).unref(),
     });
+  }
+
+  const floors = new Map<string, Tile[]>();
+
+  function floorOf(spaceKey: string): Tile[] {
+    let floor = floors.get(spaceKey);
+    if (!floor) {
+      floor = floorByMiddle(map.grid, map.spaces, spaceKey);
+      floors.set(spaceKey, floor);
+    }
+    return floor;
+  }
+
+  /** The free tile nearest the space's middle, or its middle when none is. */
+  function middleOf(connection: Connection, spaceKey: string): Tile {
+    const floor = floorOf(spaceKey);
+    const taken = new Set(
+      players
+        .in(connection.cohortId)
+        .filter((player) => player.userId !== connection.userId)
+        .map((player) => tileIndex(map.grid, player)),
+    );
+    return (
+      floor.find((tile) => !taken.has(tileIndex(map.grid, tile))) ??
+      (floor[0] as Tile)
+    );
   }
 
   function cancelWalk(connection: Connection): Walk | undefined {
@@ -1126,7 +1240,7 @@ export function registerGateway(
     if (!walk || !player) return;
     send(connection.socket, {
       type: 'walkEnded',
-      userId: walk.targetId,
+      ...targetFields(walk.target),
       reason,
       player,
       spaceKey,
@@ -1146,18 +1260,54 @@ export function registerGateway(
     from: Tile,
     to: Tile,
     now: number,
-  ): { path: Direction[]; closed: string | null } | undefined {
+  ): WalkPlan | undefined {
     const crosses = crossingFor(connection, now);
     const theirs = spaceAt(map.spaces, to);
     const arrived = (tile: Tile) =>
       Math.abs(tile.x - to.x) + Math.abs(tile.y - to.y) === 1 &&
       spaceAt(map.spaces, tile) === theirs;
+    const room = Object.values(Direction).some((direction) => {
+      const tile = step(to, direction);
+      return walkable(map.grid, tile) && arrived(tile);
+    });
+    if (crosses(to) && !room) return undefined;
+    return planToward(connection, from, to, arrived, crosses);
+  }
+
+  /** Onto the tile asked for, or the free one nearest a space's middle. */
+  function planPlaceWalk(
+    connection: Connection,
+    from: Tile,
+    target: Exclude<WalkTarget, { kind: 'person' }>,
+    now: number,
+  ): WalkPlan | undefined {
+    const to =
+      target.kind === 'space'
+        ? middleOf(connection, target.spaceKey)
+        : target.tile;
+    return planToward(
+      connection,
+      from,
+      to,
+      (tile) => tile.x === to.x && tile.y === to.y,
+      crossingFor(connection, now),
+    );
+  }
+
+  /**
+   * To a tile `arrived` accepts near `to`. When `to`'s space is closed to this
+   * person, or a closed space is in the way, to the nearest tile beside the
+   * first one.
+   */
+  function planToward(
+    connection: Connection,
+    from: Tile,
+    to: Tile,
+    arrived: (tile: Tile) => boolean,
+    crosses: (tile: Tile) => boolean,
+  ): WalkPlan | undefined {
+    const theirs = spaceAt(map.spaces, to);
     if (crosses(to)) {
-      const room = Object.values(Direction).some((direction) => {
-        const tile = step(to, direction);
-        return walkable(map.grid, tile) && arrived(tile);
-      });
-      if (!room) return undefined;
       // A yes lapses a step away from the door, so a walk holding one for
       // their space keeps to the door if it can.
       const pass = requests.passFor(connection);
@@ -1195,14 +1345,18 @@ export function registerGateway(
    * Walks live in this instance, so somebody connected to another one is out
    * of reach, not gone.
    */
-  async function endWalkNotHere(connection: Connection, walk: Walk) {
+  async function endWalkNotHere(
+    connection: Connection,
+    walk: Walk,
+    targetId: string,
+  ) {
     let reason: WalkEndReason = 'gone';
     try {
       const online = await presence.online(connection.cohortId);
       if (
         online.some(
           (entry) =>
-            entry.userId === walk.targetId &&
+            entry.userId === targetId &&
             entry.instanceId !== presence.instanceId,
         )
       ) {
@@ -1241,37 +1395,47 @@ export function registerGateway(
       cancelWalk(connection);
       return;
     }
-    const target = connections.holderOf({
-      userId: walk.targetId,
-      cohortId: connection.cohortId,
-    });
-    if (!target) {
-      void endWalkNotHere(connection, walk);
-      return;
+    let them: Player | undefined;
+    if (walk.target.kind === 'person') {
+      const target = connections.holderOf({
+        userId: walk.target.userId,
+        cohortId: connection.cohortId,
+      });
+      if (!target) {
+        void endWalkNotHere(connection, walk, walk.target.userId);
+        return;
+      }
+      them = players.get(target);
+      if (!them) {
+        endWalk(connection, 'gone');
+        return;
+      }
     }
-    const them = players.get(target);
     const me = players.get(connection);
-    if (!them || !me) {
-      endWalk(connection, 'gone');
+    if (!me) {
+      cancelWalk(connection);
       return;
     }
     const now = Date.now();
     if (
       walk.path.length === 0 ||
-      walk.aimedAt?.x !== them.x ||
-      walk.aimedAt.y !== them.y
+      (them && (walk.aimedAt?.x !== them.x || walk.aimedAt.y !== them.y))
     ) {
-      const plan = planWalk(connection, me, them, now);
+      const plan =
+        walk.target.kind === 'person'
+          ? planWalk(connection, me, them as Player, now)
+          : planPlaceWalk(connection, me, walk.target, now);
       if (!plan) {
         endWalk(connection, 'no_way');
         return;
       }
       if (plan.path.length === 0) {
-        endWalk(connection, plan.closed ? 'refused' : 'arrived', plan.closed);
+        if (plan.closed) refuseWalk(connection, walk, plan.closed);
+        else endWalk(connection, 'arrived');
         return;
       }
       walk.path = plan.path;
-      walk.aimedAt = { x: them.x, y: them.y };
+      walk.aimedAt = them ? { x: them.x, y: them.y } : null;
     }
     if (walk.taken >= walkLimit) {
       endWalk(connection, 'no_way');
@@ -1292,7 +1456,7 @@ export function registerGateway(
       walk.failed = 0;
       send(connection.socket, {
         type: 'walking',
-        userId: walk.targetId,
+        ...targetFields(walk.target),
         player: moved.player,
       });
       arrivedAt(connection, moved.player);
@@ -1302,7 +1466,7 @@ export function registerGateway(
       walk.failed += 1;
       if (walk.failed >= 2) {
         const into = spaceAt(map.spaces, step(me, direction));
-        if (moved.outcome === 'refused') endWalk(connection, 'refused', into);
+        if (moved.outcome === 'refused') refuseWalk(connection, walk, into);
         else endWalk(connection, 'no_way');
         return;
       }
@@ -1311,6 +1475,25 @@ export function registerGateway(
       () => walkOn(connection),
       env.WORLD_STEP_MS,
     ).unref();
+  }
+
+  /**
+   * A pass made by entering through a room link reaches world by a read that
+   * may not have finished when the walk began, so a walk about to be refused
+   * reads the passes once more first, and goes on if the door now opens.
+   */
+  function refuseWalk(connection: Connection, walk: Walk, into: string): void {
+    if (walk.rechecked) {
+      endWalk(connection, 'refused', into);
+      return;
+    }
+    walk.rechecked = true;
+    void readRoomLinkPasses().then(() => {
+      if (walks.get(connection) !== walk) return;
+      walk.path = [];
+      walk.failed = 0;
+      walkOn(connection);
+    });
   }
 
   /** Turned or moved: the next tick sends it, and the next save keeps it. */
@@ -2462,6 +2645,17 @@ export function registerGateway(
           noteActivity(connection);
           goTo(connection, result.message.userId);
           return;
+        case 'goToSpace':
+          noteActivity(connection);
+          goToSpace(connection, result.message.spaceKey);
+          return;
+        case 'goToTile':
+          noteActivity(connection);
+          goToTile(connection, {
+            x: result.message.x,
+            y: result.message.y,
+          });
+          return;
         case 'stopWalking':
           noteActivity(connection);
           endWalk(connection, 'stopped');
@@ -2577,6 +2771,17 @@ export function registerGateway(
       }
     },
     spacesChanged: reloadDoors,
+    desksChanged(cohortId: string | null): void {
+      if (stopping) return;
+      if (cohortId !== null) {
+        broadcast(cohortId, { type: 'desksChanged' });
+        return;
+      }
+      const frame = encode({ type: 'desksChanged' });
+      for (const connection of connections.all()) {
+        sendFrame(connection.socket, frame);
+      }
+    },
     dispose: metrics.dispose,
     async stop(): Promise<void> {
       clearInterval(heartbeat);
@@ -2611,15 +2816,37 @@ export function registerGateway(
   };
 }
 
+type WalkTarget =
+  | { kind: 'person'; userId: string }
+  | { kind: 'space'; spaceKey: string }
+  | { kind: 'tile'; tile: Tile };
+
+interface WalkPlan {
+  path: Direction[];
+  closed: string | null;
+}
+
+/** A walk's target as `walking` and `walkEnded` name it. */
+function targetFields(target: WalkTarget) {
+  return {
+    userId: target.kind === 'person' ? target.userId : null,
+    toSpaceKey: target.kind === 'space' ? target.spaceKey : null,
+    toTile:
+      target.kind === 'tile' ? { x: target.tile.x, y: target.tile.y } : null,
+  };
+}
+
 interface Walk {
-  targetId: string;
+  target: WalkTarget;
   timer: NodeJS.Timeout;
   path: Direction[];
-  /** Where they stood when `path` was found. */
+  /** Where the person walked to stood when `path` was found. */
   aimedAt: Tile | null;
   taken: number;
   /** Steps refused or blocked in a row. */
   failed: number;
+  /** Whether the passes were read again before a refusal, as they are once. */
+  rechecked: boolean;
 }
 
 function personOf(connection: Connection): PersonFacts {

@@ -126,7 +126,9 @@ it by the client but mean nothing to the server yet.
 **Spaces have doors.** Most spaces admit anybody in the campus unless the
 people inside have locked them (see [Locks](#locks)). A _designated_ space
 admits only the people its list names (an admin keeps the list in
-campus-api). A step into a space you may not enter is answered `refused`,
+campus-api). Entering through a room link while its event runs (campus-api's
+`POST /v1/room-links/{code}/enter`) lets you into that link's space, locked or
+designated, until the event ends. A step into a space you may not enter is answered `refused`,
 like a wall you cannot see. The corridors and grounds (every tile
 in no drawn space) are always open. Only the step _into_ a space is asked
 about: somebody already inside stays until they step out, whatever changes
@@ -195,16 +197,17 @@ connected to another ends the walk with `elsewhere`.
   else sees an ordinary walk in `moved`, with a `spaceChanged` at each
   crossing, and your call changes as you go.
 - **Each step it takes is a `walking`** (`{ "type": "walking", "userId":
-"…", "player": {…} }`), only to you: you are never in your own `moved`, so
+"…", "toSpaceKey": null, "toTile": null, "player": {…} }`), only to you: you are never in your own `moved`, so
   this is where you are. Draw it as you would a `moveResult` you did not
   predict. Mobile, which draws no map, can ignore the position.
 - **It ends with one `walkEnded`** (`{ "type": "walkEnded", "userId": "…",
-"reason": "…", "player": {…}, "spaceKey": "…" | null, "mayAsk": false }`),
+"toSpaceKey": null, "toTile": null, "reason": "…", "player": {…},
+"spaceKey": "…" | null, "mayAsk": false }`),
   saying where you stopped and why:
 
   | `reason`         | Meaning                                                                                                                             | What to do                                                          |
   | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-  | `arrived`        | You stand next to them, in their space, never on their tile                                                                         | Nothing                                                             |
+  | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                       | Nothing                                                             |
   | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
   | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
   | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
@@ -220,6 +223,27 @@ connected to another ends the walk with `elsewhere`.
   the socket ends it with no `walkEnded`, so a walk on mobile lasts as long
   as the app keeps its socket.
 - Asking to walk to yourself is an `error` with code `NOT_ALLOWED`.
+
+### Going to a space or a tile
+
+The same walk, to a place instead of a person: a room link's page sends
+`goToSpace` once it knows the space, and a tap on the map can send
+`goToTile`.
+
+- **`{ "type": "goToSpace", "spaceKey": "…" }`** walks you into a drawn
+  space, to the free tile nearest its middle, or its middle when every tile
+  is taken. A key not drawn on this map, or `_default`, is an `error` with
+  `NOT_ALLOWED`: the corridors take `goToTile`.
+- **`{ "type": "goToTile", "x": 0, "y": 0 }`** walks you onto that tile. A
+  tile off the map or in a wall is an `error` with `NOT_ALLOWED`.
+- **`walking` and `walkEnded` say what the walk is to**: exactly one of
+  `userId`, `toSpaceKey` and `toTile` is set, the others `null`.
+- **`arrived`** means you stand on the tile the walk aimed at. **`refused`**
+  works as for a person: a closed space in the way, or the space you were
+  walking into or the tile is in, stops you beside it with `spaceKey` and
+  `mayAsk`. `gone` and `elsewhere` only end walks to somebody.
+- **Stopping and replacing** work as for `goTo`: `stopWalking`, a `move`, or
+  any new `goTo`, `goToSpace` or `goToTile` ends the walk going.
 
 ## Everybody else
 
@@ -521,6 +545,22 @@ own locks.
   `lockChanged` then has `userId: null`. A world restart ends every lock.
 - **A step refused while it is locked** looks the same as any other
   `refused`. Use the locked list to tell the person why.
+
+## Desks
+
+Desks, and who holds which in your cohort, come from campus-api:
+`GET /v1/cohorts/{cohortId}/desks`. Claiming and letting go are campus-api
+routes too. world carries no desk state; it only says when to fetch again.
+
+- **When to fetch.** On arriving, and whenever `{ "type": "desksChanged" }`
+  arrives. It comes after anybody in your cohort claims or lets go of a desk,
+  an admin frees one, a membership or account ends, or a map sync adds or
+  retires desks (that last one goes to every cohort).
+- **Wait a moment first.** A message for every cohort, from a map sync or
+  world reconnecting to the database, reaches every client at once. Wait a
+  random 0–2 seconds before fetching, so they don't all arrive together.
+- **Your own claim** answers with the desk as it now is, so you need not
+  wait for the message to draw it.
 
 ## Staff: muting and removing
 

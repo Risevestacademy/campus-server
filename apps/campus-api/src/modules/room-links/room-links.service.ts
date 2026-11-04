@@ -1,5 +1,16 @@
+import { roomLinkOpen } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, isNotNull, isNull, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import {
@@ -8,6 +19,7 @@ import {
   type DbExecutor,
 } from '../../infra/database/database.constants.js';
 import { isUniqueViolation } from '../../infra/database/unique-violation.js';
+import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { appUrl } from '../../shared/http/app-url.js';
 import { writeAuditEntry, type AuditContext } from '../audit/audit-log.js';
@@ -16,16 +28,39 @@ import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortNotFoundException } from '../cohorts/cohorts.exceptions.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import { maps, spaces } from '../maps/schema.js';
+import { tellWorld } from '../maps/tell-world.js';
 import { UserStatus, hasAdminPowers, users } from '../users/schema.js';
-import type { RoomLinkDto } from './dto/room-link.dto.js';
-import { ROOM_LINK_PATH, generateRoomLinkCode } from './room-link-code.js';
+import type {
+  RoomLinkDto,
+  RoomLinkEntryDto,
+  RoomLinkTargetDto,
+} from './dto/room-link.dto.js';
+import {
+  ROOM_LINK_CODE,
+  ROOM_LINK_PATH,
+  generateRoomLinkCode,
+} from './room-link-code.js';
 import {
   RoomLinkForbiddenException,
   RoomLinkNotFoundException,
 } from './room-links.exceptions.js';
-import { roomLinks } from './schema.js';
+import { roomLinkPasses, roomLinks } from './schema.js';
 
 type Standing = 'admin' | 'staff' | 'member';
+
+/** When a link's event runs. */
+export interface RoomLinkWindow {
+  startsAt: Date;
+  endsAt: Date;
+}
+
+/** A link somebody may open, as `forEntry` found it, for `enter`. */
+export interface RoomLinkEntry {
+  id: string;
+  createdBy: string;
+  standing: Standing;
+  link: LinkRow;
+}
 
 const STAFF_ROLES: readonly CohortRole[] = [
   CohortRole.Professor,
@@ -49,10 +84,21 @@ const linkColumns = {
   spaceId: roomLinks.spaceId,
   spaceKey: spaces.key,
   spaceName: spaces.name,
+  startsAt: roomLinks.startsAt,
+  endsAt: roomLinks.endsAt,
   createdAt: roomLinks.createdAt,
 };
 
 type LinkRow = Omit<RoomLinkDto, 'url'>;
+
+const targetColumns = {
+  code: roomLinks.code,
+  cohortId: roomLinks.cohortId,
+  spaceId: roomLinks.spaceId,
+  spaceKey: spaces.key,
+  spaceName: spaces.name,
+  title: roomLinks.title,
+};
 
 /**
  * Links to a space in one cohort's campus, one per event. Admins and the
@@ -71,9 +117,11 @@ export class RoomLinksService {
     cohortId: string,
     spaceId: string,
     title: string,
+    window: RoomLinkWindow | null,
     audit: AuditContext,
     now: Date = new Date(),
   ): Promise<RoomLinkDto> {
+    requireOrdered(window);
     await requireStaff(this.db, user, cohortId, now);
     await requireLiveSpace(this.db, spaceId);
 
@@ -89,6 +137,8 @@ export class RoomLinksService {
               title,
               createdBy: user.id,
               createdAt: now,
+              startsAt: window?.startsAt ?? null,
+              endsAt: window?.endsAt ?? null,
             })
             .returning({ id: roomLinks.id, code: roomLinks.code });
           await writeAuditEntry(tx, {
@@ -96,7 +146,12 @@ export class RoomLinksService {
             spaceId,
             action: AuditAction.RoomLinkCreated,
             subject: { type: AuditSubjectType.RoomLink, id: link.id },
-            details: { cohortId, code: link.code, title },
+            details: {
+              cohortId,
+              code: link.code,
+              title,
+              ...windowDetails(window),
+            },
           });
           return this.toDto(await this.find(link.code, tx));
         });
@@ -148,16 +203,173 @@ export class RoomLinksService {
     code: string,
     now: Date = new Date(),
   ): Promise<RoomLinkDto> {
+    return this.toDto((await this.forEntry(user, code, now)).link);
+  }
+
+  /** A link the caller may open, by the rules of `open`, ready to enter. */
+  async forEntry(
+    user: AuthenticatedUser,
+    code: string,
+    now: Date = new Date(),
+  ): Promise<RoomLinkEntry> {
     const link = await this.find(code);
+    const [row] = await this.db
+      .select({ id: roomLinks.id, createdBy: roomLinks.createdBy })
+      .from(roomLinks)
+      .where(eq(roomLinks.code, code));
     try {
-      await standing(this.db, user, link.cohortId, now);
+      const held = await standing(this.db, user, link.cohortId, now);
+      return { id: row.id, createdBy: row.createdBy, standing: held, link };
     } catch (err) {
       if (err instanceof RoomLinkForbiddenException) {
         throw notFound(code);
       }
       throw err;
     }
-    return this.toDto(link);
+  }
+
+  /**
+   * Opens the link to walk into its space. `found` is the event as the
+   * maker's calendar has it now, when it runs now; it moves the window there.
+   * Anybody opening the link while the window is open gets a pass, which
+   * world honours until the window ends. Admins enter anywhere already.
+   */
+  async enter(
+    user: AuthenticatedUser,
+    entry: RoomLinkEntry,
+    found: RoomLinkWindow | null,
+    now: Date = new Date(),
+  ): Promise<RoomLinkEntryDto> {
+    const { link } = entry;
+    const moved =
+      found !== null &&
+      (link.startsAt?.getTime() !== found.startsAt.getTime() ||
+        link.endsAt?.getTime() !== found.endsAt.getTime());
+    const window = found ?? link;
+    const open = roomLinkOpen(window, now);
+    const pass = open && entry.standing !== 'admin';
+    if (moved || pass) {
+      await this.db.transaction(async (tx) => {
+        if (moved) {
+          await tx
+            .update(roomLinks)
+            .set({ startsAt: found.startsAt, endsAt: found.endsAt })
+            .where(eq(roomLinks.id, entry.id));
+        }
+        if (pass) {
+          await tx
+            .insert(roomLinkPasses)
+            .values({ roomLinkId: entry.id, userId: user.id, createdAt: now })
+            .onConflictDoNothing();
+        }
+        await tellWorld(tx);
+      });
+    }
+    return {
+      ...this.toDto({
+        ...link,
+        startsAt: window.startsAt,
+        endsAt: window.endsAt,
+      }),
+      admitted: open || entry.standing === 'admin',
+    };
+  }
+
+  /** Sets when the link's event runs, or with null, that it has no window. */
+  async setWindow(
+    user: AuthenticatedUser,
+    code: string,
+    window: RoomLinkWindow | null,
+    audit: AuditContext,
+    now: Date = new Date(),
+  ): Promise<RoomLinkDto> {
+    requireOrdered(window);
+    const entry = await this.forEntry(user, code, now);
+    if (entry.standing === 'member') {
+      throw new RoomLinkForbiddenException(
+        "Only staff and admins may change a room link's window",
+        { code },
+      );
+    }
+    return this.db.transaction(async (tx) => {
+      await tx
+        .update(roomLinks)
+        .set({
+          startsAt: window?.startsAt ?? null,
+          endsAt: window?.endsAt ?? null,
+        })
+        .where(eq(roomLinks.id, entry.id));
+      await writeAuditEntry(tx, {
+        ...audit,
+        spaceId: entry.link.spaceId,
+        action: AuditAction.RoomLinkWindowChanged,
+        subject: { type: AuditSubjectType.RoomLink, id: entry.id },
+        details: {
+          cohortId: entry.link.cohortId,
+          code,
+          before: windowDetails(
+            entry.link.startsAt && entry.link.endsAt
+              ? { startsAt: entry.link.startsAt, endsAt: entry.link.endsAt }
+              : null,
+          ),
+          after: windowDetails(window),
+        },
+      });
+      await tellWorld(tx);
+      return this.toDto(await this.find(code, tx));
+    });
+  }
+
+  /**
+   * Of these codes, the links the caller may open, by the same rules as
+   * `open`: not revoked, the space live on the entry map and not the
+   * corridors, and the caller a live member of the link's cohort or an admin.
+   * Codes that fail any of that are left out rather than refused, so one
+   * lookup serves a whole list of events. In no particular order.
+   */
+  async resolve(
+    user: AuthenticatedUser,
+    codes: readonly string[],
+    now: Date = new Date(),
+  ): Promise<RoomLinkTargetDto[]> {
+    const wanted = [...new Set(codes)].filter((c) => ROOM_LINK_CODE.test(c));
+    if (wanted.length === 0) {
+      return [];
+    }
+    const [account] = await this.db
+      .select({ systemRole: users.systemRole, status: users.status })
+      .from(users)
+      .where(eq(users.id, user.id));
+    if (!account || account.status === UserStatus.Suspended) {
+      return [];
+    }
+    const member = hasAdminPowers(account.systemRole)
+      ? undefined
+      : exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(cohortMembers)
+            .where(
+              and(
+                eq(cohortMembers.cohortId, roomLinks.cohortId),
+                eq(cohortMembers.userId, user.id),
+                isLiveMembership(now),
+              ),
+            ),
+        );
+    return this.db
+      .select(targetColumns)
+      .from(roomLinks)
+      .innerJoin(spaces, eq(spaces.id, roomLinks.spaceId))
+      .innerJoin(maps, eq(maps.id, spaces.mapId))
+      .where(
+        and(
+          inArray(roomLinks.code, wanted),
+          isNull(roomLinks.revokedAt),
+          liveSpace,
+          member,
+        ),
+      );
   }
 
   /** Revoking a link already revoked changes nothing, and writes no entry. */
@@ -205,6 +417,7 @@ export class RoomLinksService {
         subject: { type: AuditSubjectType.RoomLink, id: link.id },
         details: { cohortId: link.cohortId, code, title: revoked.title },
       });
+      await tellWorld(tx);
     });
   }
 
@@ -229,6 +442,22 @@ export class RoomLinksService {
       url: appUrl(this.config, `${ROOM_LINK_PATH}${row.code}`),
     };
   }
+}
+
+function requireOrdered(window: RoomLinkWindow | null): void {
+  if (window && window.endsAt.getTime() <= window.startsAt.getTime()) {
+    throw new InvalidArgumentException('A window must end after it starts', {
+      startsAt: window.startsAt.toISOString(),
+      endsAt: window.endsAt.toISOString(),
+    });
+  }
+}
+
+function windowDetails(window: RoomLinkWindow | null) {
+  return {
+    startsAt: window?.startsAt.toISOString() ?? null,
+    endsAt: window?.endsAt.toISOString() ?? null,
+  };
 }
 
 function notFound(code: string): RoomLinkNotFoundException {

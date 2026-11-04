@@ -1,5 +1,5 @@
 {
-  "id": "84592f5c-63ec-4059-acc1-2c3770eea47a",
+  "id": "e3513813-dda6-41f1-8f2b-f30b10310c65",
   "prevId": "88fef134-6d18-49e9-9bec-92e70107bc14",
   "version": "7",
   "dialect": "postgresql",
@@ -1052,21 +1052,6 @@
           ],
           "columnsTo": [
             "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "desk_claims_cohort_member_fk": {
-          "name": "desk_claims_cohort_member_fk",
-          "tableFrom": "desk_claims",
-          "tableTo": "cohort_members",
-          "columnsFrom": [
-            "cohort_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "cohort_id",
-            "user_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -2690,12 +2675,6 @@
           "notNull": true,
           "default": "now()"
         },
-        "removed_at": {
-          "name": "removed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "updated_at": {
           "name": "updated_at",
           "type": "timestamp with time zone",
@@ -3393,7 +3372,9 @@
         "released",
         "freed_by_admin",
         "enrolment_ended",
-        "desk_retired"
+        "desk_retired",
+        "account_suspended",
+        "admin_role_removed"
       ]
     },
     "public.feedback_status": {

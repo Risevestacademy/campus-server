@@ -14,3 +14,5 @@ export * from './system-role.js';
 export * from './profile.js';
 // And the one space both know of that no map draws.
 export * from './spaces.js';
+// And where a change to who holds a desk is announced.
+export * from './desks.js';

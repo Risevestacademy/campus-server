@@ -22,8 +22,10 @@ const accounts = {
   liveMemberships: async () => new Set<string>(),
   memberships: async () => new Map(),
   spacesOn: async () => new Map(),
+  roomLinkPassesOn: async () => [],
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
+  onDesksChanged: async () => undefined,
   close: async () => undefined,
 };
 

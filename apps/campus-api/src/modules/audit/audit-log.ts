@@ -332,6 +332,10 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.MentorshipGroup;
     details: { cohortId: string; cohortMemberId: string };
   };
+  [AuditAction.DeskFreed]: {
+    subject: AuditSubjectType.DeskClaim;
+    details: { cohortId: string; deskKey: string; holderId: string };
+  };
   [AuditAction.MentorshipGroupDeleted]: {
     subject: AuditSubjectType.MentorshipGroup;
     details: MentorshipGroupRecordSnapshot & {
@@ -374,12 +378,31 @@ interface AuditEntryShapes {
   };
   [AuditAction.RoomLinkCreated]: {
     subject: AuditSubjectType.RoomLink;
-    details: { cohortId: string; code: string; title: string };
+    details: {
+      cohortId: string;
+      code: string;
+      title: string;
+    } & RoomLinkWindowDetails;
   };
   [AuditAction.RoomLinkRevoked]: {
     subject: AuditSubjectType.RoomLink;
     details: { cohortId: string; code: string; title: string };
   };
+  [AuditAction.RoomLinkWindowChanged]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      before: RoomLinkWindowDetails;
+      after: RoomLinkWindowDetails;
+    };
+  };
+}
+
+/** When a room link's event runs, as ISO timestamps; both null for none. */
+interface RoomLinkWindowDetails {
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 /**

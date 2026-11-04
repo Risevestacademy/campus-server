@@ -1,7 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
-  foreignKey,
   pgEnum,
   pgTable,
   timestamp,
@@ -10,7 +9,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-import { cohortMembers, cohorts } from '../cohorts/schema.js';
+import { cohorts } from '../cohorts/schema.js';
 import { maps } from '../maps/schema.js';
 import { users } from '../users/schema.js';
 
@@ -23,6 +22,9 @@ export enum DeskReleaseReason {
   EnrolmentEnded = 'enrolment_ended',
   /** The desk is no longer on the published map. */
   DeskRetired = 'desk_retired',
+  AccountSuspended = 'account_suspended',
+  /** An admin with no live place in the cohort became a plain user. */
+  AdminRoleRemoved = 'admin_role_removed',
 }
 
 export const deskReleaseReasonEnum = pgEnum(
@@ -63,6 +65,10 @@ export const desks = pgTable(
  * Who holds a desk, per cohort: each cohort's copy of the campus has its own
  * holder for a desk, and a person holds at most one desk in each cohort they
  * are in. Ending a claim sets released_at; the row stays as history.
+ *
+ * Who may hold one is the claim route's to check, not a foreign key's: an
+ * admin may, with no membership in the cohort, and a member only while
+ * their membership is live.
  */
 export const deskClaims = pgTable(
   'desk_claims',
@@ -84,13 +90,6 @@ export const deskClaims = pgTable(
     releaseReason: deskReleaseReasonEnum('release_reason'),
   },
   (table) => [
-    // Proves only that they were a member once: leaving keeps the row, with
-    // left_at set, so whatever claims a desk checks left_at is null.
-    foreignKey({
-      columns: [table.cohortId, table.userId],
-      foreignColumns: [cohortMembers.cohortId, cohortMembers.userId],
-      name: 'desk_claims_cohort_member_fk',
-    }),
     uniqueIndex('desk_claims_one_holder')
       .on(table.deskId, table.cohortId)
       .where(sql`${table.releasedAt} is null`),

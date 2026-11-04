@@ -107,6 +107,38 @@ more answers with the first 1,000 and `truncated: true`.
 - Google failing any other way, or taking longer than its timeout: `503`,
   and the grant is kept.
 
+## Rooms
+
+Staff make a room link for an event in the room-links module and paste it
+into the Google Calendar event's **location** or **description**:
+
+```
+{APP_PUBLIC_URL}/join/{code}
+```
+
+The events endpoint looks in the location, then the description, for the
+first such link, and resolves every code it found in one lookup through
+`RoomLinksService.resolve`, which applies the same rules as opening a link.
+An event whose link the member may open carries
+`room: { code, cohortId, spaceId, spaceKey, spaceName, title }`; any other
+event, and every event when the lookup fails, carries `room: null`. The
+video-conference link is not looked at: Google only ever puts a Meet link
+there.
+
+### When a room link's event runs
+
+Entering through a room link (`POST /v1/room-links/{code}/enter`) reads the
+calendar of whoever made the link, if they have connected one: one request
+for their events running now or starting within ten minutes. The first of
+those they organised themselves that carries the link sets the link's window
+to its times, so a meeting moved in Google opens its room at the new time.
+Events somebody else organised are left out, so inviting the maker to an
+event cannot move a window. Nothing else is kept.
+
+The read is held to three seconds. No grant, the calendar switched off,
+Google failing or slow, or no such event: the link's stored window stands.
+A grant Google has withdrawn is deleted, as for any read.
+
 ## Talking to Google
 
 Every request the calendar makes to Google, OAuth and Calendar API alike,

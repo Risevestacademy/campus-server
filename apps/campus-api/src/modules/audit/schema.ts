@@ -168,6 +168,10 @@ export enum AuditAction {
   NoticeRemoved = 'notice_removed',
   RoomLinkCreated = 'room_link_created',
   RoomLinkRevoked = 'room_link_revoked',
+  /** Staff set, moved or cleared when a room link's event runs. */
+  RoomLinkWindowChanged = 'room_link_window_changed',
+  /** An admin ended somebody else's claim on a desk. */
+  DeskFreed = 'desk_freed',
 }
 
 export enum AuditSubjectType {
@@ -186,6 +190,8 @@ export enum AuditSubjectType {
   MentorshipGroup = 'mentorship_group',
   Notice = 'notice',
   RoomLink = 'room_link',
+  /** One row of `desk_claims`: somebody holding a desk in a cohort. */
+  DeskClaim = 'desk_claim',
 }
 
 /**
