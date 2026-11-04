@@ -1,5 +1,4 @@
 import {
-  broadcastRoomName,
   microphoneMuter,
   mintRoomToken,
   participantIdentity,
@@ -21,20 +20,14 @@ import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
 import {
-  DEFAULT_SUBSCRIBE_RADIUS,
   type Account,
   type AccountLookup,
-  type Appearance,
   type WorldSpace,
 } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
 import { annotate, traced } from '../infra/traced.js';
-import type {
-  PositionStore,
-  PositionToSave,
-  SavedPosition,
-} from '../infra/positions.js';
+import type { PositionStore, SavedPosition } from '../infra/positions.js';
 import type {
   Displacement,
   Presence,
@@ -71,19 +64,19 @@ import {
   type UpgradeDecision,
 } from './authenticate.js';
 import { Connections, type CallSpec, type Connection } from './connections.js';
-import { SayBudget, inEarshot, type Hearing } from './earshot.js';
+import { createContext, sendClose } from './context.js';
+import { SayBudget } from './earshot.js';
 import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
 import { FrameBudget } from './frame-budget.js';
-import { deliver } from './outbound.js';
+import { avatarOf, createAppearance } from './features/appearance.js';
+import { createBroadcastRoom } from './features/broadcast-room.js';
+import { createChat } from './features/chat.js';
+import { createPositions } from './features/positions.js';
 import {
   ServerErrorCode,
-  CLOSES,
   decode,
   encode,
-  type Avatar,
-  type CloseReason,
   type EntryRequestOutcome,
-  type ServerMessage,
   type SpaceName,
   type WalkEndReason,
 } from './protocol.js';
@@ -123,15 +116,6 @@ const STAFF_ROLES = new Set<string>([
   COHORT_ROLES.Professor,
   COHORT_ROLES.Mentor,
 ]);
-
-/**
- * Closes a socket for one of the reasons in CLOSES, with the code that goes
- * with it. A reason is all a caller names, so the code it is sent with and
- * what the schema tells clients about it can never disagree.
- */
-function sendClose(socket: WebSocket, reason: CloseReason): void {
-  socket.close(CLOSES[reason].code, reason);
-}
 
 /** How one upgrade ended, counted once, whichever way it ends. */
 interface Attempt {
@@ -175,15 +159,14 @@ export function registerGateway(
   const connections = new Connections();
   const metrics = worldMetrics(connections);
 
-  function closeFor(socket: WebSocket, reason: CloseReason): void {
-    metrics.closedByServer(reason);
-    sendClose(socket, reason);
-  }
   const players = new Players(
     map.grid,
     env.WORLD_STEP_MS,
     env.WORLD_RECONNECT_GRACE_SECONDS * 1000,
   );
+  const ctx = createContext({ app, env, map, connections, players, metrics });
+  const { send, sendFrame, broadcast, closeFor } = ctx;
+  const appearance = createAppearance(ctx, accounts);
 
   /**
    * Every space on this map as the database last said, by key: what each
@@ -708,6 +691,8 @@ export function registerGateway(
   const media = mediaCredentials(env);
   const removeFromCall = media ? participantRemover(media) : undefined;
   const muteMicrophone = media ? microphoneMuter(media) : undefined;
+  const chat = createChat(ctx, (spaceKey) => doors.get(spaceKey));
+  const broadcastRoom = createBroadcastRoom(ctx, media, removeFromRoom);
   /** Cohorts whose `nearby` lists may be out of date though nobody moved. */
   const nearbyStale = new Set<string>();
 
@@ -822,126 +807,6 @@ export function registerGateway(
     send(connection.socket, {
       type: 'call',
       call: { ...call, url: token.url, token: token.token },
-    });
-  }
-
-  /**
-   * Relays a line of chat to whoever can hear the speaker, and back to the
-   * speaker. A space with no row yet is heard by distance, at the default
-   * radius. Never stored, and never logged: what people say is theirs.
-   */
-  function say(connection: Connection, text: string, budget: SayBudget): void {
-    if (!budget.admit(Date.now())) {
-      send(connection.socket, {
-        type: 'error',
-        code: ServerErrorCode.NotAllowed,
-        message: 'saying too much too fast',
-      });
-      return;
-    }
-    const speaker = players.get(connection);
-    if (!speaker) return;
-    const space = doors.get(connection.spaceKey);
-    const hearing: Hearing =
-      space && space.audioMode !== 'proximity'
-        ? { kind: 'room' }
-        : {
-            kind: 'proximity',
-            radius: space?.subscribeRadius ?? DEFAULT_SUBSCRIBE_RADIUS,
-          };
-    const others = connections.all().flatMap((other) => {
-      if (other.cohortId !== connection.cohortId || other === connection) {
-        return [];
-      }
-      const player = players.get(other);
-      return player
-        ? [{ connection: other, ...player, spaceKey: other.spaceKey }]
-        : [];
-    });
-    const frame = encode({
-      type: 'said',
-      id: randomUUID(),
-      userId: connection.userId,
-      spaceKey: connection.spaceKey,
-      text,
-      at: new Date().toISOString(),
-    });
-    sendFrame(connection.socket, frame);
-    for (const listener of inEarshot(
-      { ...speaker, spaceKey: connection.spaceKey },
-      others,
-      hearing,
-    )) {
-      sendFrame(listener.connection.socket, frame);
-    }
-  }
-
-  /**
-   * How long a token that may speak in the broadcast room lasts. Only for
-   * joining, as LiveKit keeps a connected participant's token fresh itself;
-   * short, so an admin who stops being one cannot rejoin with it and speak.
-   */
-  const SPEAKING_TOKEN_TTL_SECONDS = 60;
-  /** Sockets whose broadcast token could not be minted: the heartbeat tries again. */
-  const broadcastMissing = new WeakSet<Connection>();
-
-  function leaveBroadcast(connection: Connection): void {
-    const broadcast = connection.broadcast;
-    if (!broadcast) return;
-    connection.broadcast = undefined;
-    removeFromRoom(broadcast.room, broadcast.identity);
-  }
-
-  /**
-   * Hands the socket its cohort's broadcast room, beside the space's call:
-   * admins may speak there, microphone only; everybody else listens.
-   */
-  async function joinBroadcast(connection: Connection): Promise<void> {
-    if (!media) return;
-    broadcastMissing.delete(connection);
-    leaveBroadcast(connection);
-    let room: string;
-    try {
-      room = broadcastRoomName(connection.cohortId);
-    } catch {
-      send(connection.socket, { type: 'broadcast', call: null });
-      return;
-    }
-    const canSpeak = hasAdminPowers(connection.systemRole);
-    const identity = participantIdentity(connection.userId);
-    connection.broadcast = { room, identity, canSpeak };
-    let token;
-    try {
-      token = await mintRoomToken(media, {
-        room,
-        identity,
-        name: connection.appearance.displayName ?? undefined,
-        canPublish: canSpeak,
-        audioOnly: true,
-        ttlSeconds: canSpeak ? SPEAKING_TOKEN_TTL_SECONDS : undefined,
-      });
-    } catch (err) {
-      app.log.error(
-        { err, userId: connection.userId },
-        'could not mint a token for the broadcast room',
-      );
-      if (connection.broadcast?.identity === identity) {
-        connection.broadcast = undefined;
-        if (connections.has(connection)) {
-          broadcastMissing.add(connection);
-          send(connection.socket, { type: 'broadcast', call: null });
-        }
-      }
-      return;
-    }
-    if (
-      connection.broadcast?.identity !== identity ||
-      !connections.has(connection)
-    )
-      return;
-    send(connection.socket, {
-      type: 'broadcast',
-      call: { url: token.url, room, token: token.token, canSpeak },
     });
   }
 
@@ -1442,9 +1307,8 @@ export function registerGateway(
       userId: connection.userId,
       cohortId: connection.cohortId,
     };
-    const key = seatKey(seat);
-    pendingMoves.set(key, seat);
-    unsaved.set(key, seat);
+    pendingMoves.set(seatKey(seat), seat);
+    positionWrites.moved(seat);
   }
 
   /** On a new tile: maybe in another space, maybe away from a door. */
@@ -1557,67 +1421,10 @@ export function registerGateway(
   const tick = setInterval(flushMoves, env.WORLD_TICK_MS);
   tick.unref();
 
-  /**
-   * Who has moved since their position was last written to the store, by
-   * account and cohort. Not a position: the save reads where they stand when
-   * it runs.
-   */
-  const unsaved = new Map<string, Seat>();
   /** Set once shutdown has written everybody, so the closes it causes do not write again. */
   let stopping = false;
 
-  /**
-   * Writes positions without holding anybody up. A failure only means the
-   * position is not kept — see PositionStore — so it is logged, and anybody
-   * still here is put back for the next periodic save to retry. Somebody who
-   * has left cannot be retried that way: if the save as they left fails,
-   * what was last written for them, at most one interval old, stands.
-   */
-  function persist(entries: readonly PositionToSave[]): void {
-    if (entries.length === 0) return;
-    positions.save(entries).catch((err: unknown) => {
-      app.log.warn({ err, count: entries.length }, 'could not save positions');
-      for (const { userId, cohortId } of entries) {
-        // Retried only while the account is still in that cohort.
-        if (connections.holderOf({ userId, cohortId })) {
-          unsaved.set(seatKey({ userId, cohortId }), { userId, cohortId });
-        }
-      }
-    });
-  }
-
-  /** Forgets one cohort's kept position, for access taken away. */
-  function forgetSaved(seat: Seat): void {
-    const { userId, cohortId } = seat;
-    unsaved.delete(seatKey(seat));
-    positions.forget(seat).catch((err: unknown) => {
-      app.log.warn(
-        { err, userId, cohortId },
-        'could not forget saved position',
-      );
-    });
-  }
-
-  /**
-   * Everybody still here who moved since the last write, as a store write in
-   * the cohort they moved in. Somebody who left in the meantime was written
-   * as they left (drop), so is skipped here.
-   */
-  function saveMoved(): void {
-    const entries: PositionToSave[] = [];
-    for (const { userId, cohortId } of unsaved.values()) {
-      const player = players.get({ userId, cohortId });
-      if (player) entries.push(positionOf(player, cohortId));
-    }
-    unsaved.clear();
-    persist(entries);
-  }
-
-  const periodicSave = setInterval(
-    saveMoved,
-    env.WORLD_POSITION_SAVE_SECONDS * 1000,
-  );
-  periodicSave.unref();
+  const positionWrites = createPositions(ctx, positions);
 
   function presenceOf(connection: Connection): Presence {
     return {
@@ -1773,7 +1580,7 @@ export function registerGateway(
     // left to the clients, which reconnect and are handed new ones.
     if (!stopping) {
       leaveCall(connection);
-      leaveBroadcast(connection);
+      broadcastRoom.leave(connection);
     }
     nearbyStale.add(connection.cohortId);
     // A connection displaced here no longer holds the account's presence;
@@ -1815,68 +1622,10 @@ export function registerGateway(
     // began, everybody has been written already. Access taken away forgets
     // this connection's cohort: there is nothing to come back to.
     if (!remember) {
-      forgetSaved(connection);
+      positionWrites.forget(connection);
     } else if (standing && !stopping) {
-      unsaved.delete(seat);
-      persist([positionOf(standing, connection.cohortId)]);
+      positionWrites.left(standing, connection.cohortId);
     }
-  }
-
-  /**
-   * For what happens rarely enough to send at once, unlike moves. Only
-   * to the cohort it happened in: each cohort is its own campus, and nobody
-   * in one sees or hears of anybody in another, though they share this
-   * process and the one map it loaded.
-   */
-  function broadcast(
-    cohortId: string,
-    message: ServerMessage,
-    except?: Connection,
-  ): void {
-    const frame = encode(message);
-    for (const connection of connections.all()) {
-      if (connection.cohortId === cohortId && connection !== except) {
-        sendFrame(connection.socket, frame);
-      }
-    }
-  }
-
-  /**
-   * Puts the account's sprite and name on one of its sockets, and tells that
-   * socket's cohort, itself included, when they differ from what was being
-   * drawn there. Only for a socket that still holds the account's place in
-   * its cohort: the read crossed an await, and a socket replaced meanwhile
-   * has nobody left to tell.
-   */
-  function showAppearance(connection: Connection, account: Appearance): void {
-    if (!connections.has(connection)) {
-      return;
-    }
-    const { displayName, spriteKey } = account;
-    if (
-      connection.appearance.displayName === displayName &&
-      connection.appearance.spriteKey === spriteKey
-    ) {
-      return;
-    }
-    connection.appearance = { displayName, spriteKey };
-    broadcast(connection.cohortId, {
-      type: 'appearance',
-      userId: connection.userId,
-      displayName,
-      spriteKey,
-    });
-  }
-
-  /** Everybody standing in one cohort's campus, with what to draw for them. */
-  function avatarsIn(cohortId: string): Avatar[] {
-    return players.in(cohortId).flatMap((player) => {
-      const connection = connections.holderOf({
-        userId: player.userId,
-        cohortId,
-      });
-      return connection ? [avatarOf(player, connection)] : [];
-    });
   }
 
   /**
@@ -1956,16 +1705,16 @@ export function registerGateway(
           // The account was read anyway. A change whose notification this
           // process missed, while it was reconnecting to the database, is
           // caught here, a heartbeat late at worst.
-          showAppearance(connection, account);
+          appearance.show(connection, account);
           connection.systemRole = account.systemRole;
           // Made or unmade an admin: a new token, to speak or only listen.
           // Or the last one could not be minted: try again.
           if (
-            broadcastMissing.has(connection) ||
+            broadcastRoom.isMissing(connection) ||
             (connection.broadcast &&
               connection.broadcast.canSpeak !== account.admin)
           ) {
-            void joinBroadcast(connection);
+            void broadcastRoom.join(connection);
           }
           if (!account.admin && rows !== undefined) {
             connection.membership = rows.get(seatKey(connection)) ?? null;
@@ -2277,7 +2026,7 @@ export function registerGateway(
     if (!decision.ok && decision.userId) {
       const { userId } = decision;
       if (cohortId !== undefined) {
-        forgetSaved({ userId, cohortId });
+        positionWrites.forget({ userId, cohortId });
       }
       const open = connections.forUser(userId);
       for (const connection of open) {
@@ -2569,7 +2318,7 @@ export function registerGateway(
           return;
         case 'say':
           noteActivity(connection);
-          say(connection, result.message.text, sayBudget);
+          chat.say(connection, result.message.text, sayBudget);
           return;
         case 'mute':
           noteActivity(connection);
@@ -2641,13 +2390,13 @@ export function registerGateway(
         width: map.grid.width,
         height: map.grid.height,
       },
-      players: avatarsIn(connection.cohortId),
+      players: appearance.avatarsIn(connection.cohortId),
       lockableSpaces: [...lockable],
       lockedSpaces: locks.in(connection.cohortId),
       spaces: [...spaceNames],
     });
     void joinCall(connection);
-    void joinBroadcast(connection);
+    void broadcastRoom.join(connection);
     reviewRequests(connection.cohortId, connection.spaceKey);
 
     // Handlers are on: whatever arrived during authentication is delivered
@@ -2671,43 +2420,10 @@ export function registerGateway(
     sendClose(ws, refusal);
   }
 
-  function send(ws: WebSocket, message: ServerMessage): void {
-    sendFrame(ws, encode(message));
-  }
-
-  function sendFrame(ws: WebSocket, frame: string): void {
-    const bufferedBytes = ws.bufferedAmount;
-    const delivery = deliver(ws, frame, env.WORLD_MAX_BUFFERED_BYTES);
-    if (delivery === 'sent') {
-      metrics.sentFrame();
-    } else if (delivery === 'lagging') {
-      metrics.closedByServer('not_reading');
-      app.log.warn({ bufferedBytes }, 'socket not reading, terminating');
-    }
-  }
-
   return {
     connections,
     players,
-    async appearanceChanged(userId: string): Promise<void> {
-      if (connections.forUser(userId).length === 0) {
-        return; // Not on this process's campus: nobody here to tell.
-      }
-      let account;
-      try {
-        account = await accounts.find(userId);
-      } catch (err) {
-        // The heartbeat reads the account again and catches it then.
-        app.log.error({ err, userId }, 'could not re-read a changed profile');
-        return;
-      }
-      if (account) {
-        // Every cohort they are standing in is told, each once.
-        for (const connection of connections.forUser(userId)) {
-          showAppearance(connection, account);
-        }
-      }
-    },
+    appearanceChanged: appearance.changed,
     spacesChanged: reloadDoors,
     desksChanged(cohortId: string | null): void {
       if (stopping) return;
@@ -2724,24 +2440,13 @@ export function registerGateway(
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       clearInterval(tick);
-      clearInterval(periodicSave);
       clearInterval(presenceRenewal);
       for (const walker of walks.keys()) cancelWalk(walker);
       // Everybody still here, whether or not they moved since the last save:
       // a redeploy should put nobody back at the spawn. Before the sockets
       // close, so the positions written are the ones they stood at.
       stopping = true;
-      unsaved.clear();
-      try {
-        await positions.save(
-          connections.all().flatMap((connection) => {
-            const player = players.get(connection);
-            return player ? [positionOf(player, connection.cohortId)] : [];
-          }),
-        );
-      } catch (err) {
-        app.log.warn({ err }, 'could not save positions on shutdown');
-      }
+      await positionWrites.stop();
       try {
         await presence.leave(connections.all().map(presenceOf));
       } catch (err) {
@@ -2797,26 +2502,6 @@ function personOf(connection: Connection): PersonFacts {
 /** The seat an accepted upgrade asks for. */
 function seatOf(decision: Extract<UpgradeDecision, { ok: true }>): Seat {
   return { userId: decision.claims.userId, cohortId: decision.cohortId };
-}
-
-function avatarOf(player: Player, connection: Connection): Avatar {
-  return {
-    ...player,
-    ...connection.appearance,
-    status: connection.availability.shown,
-    spaceKey: connection.spaceKey,
-  };
-}
-
-/** A store write for one player, in the cohort named. */
-function positionOf(player: Player, cohortId: string): PositionToSave {
-  return {
-    userId: player.userId,
-    cohortId,
-    x: player.x,
-    y: player.y,
-    facing: player.facing,
-  };
 }
 
 /** A repeated parameter arrives as an array, which reads as none at all. */
