@@ -176,6 +176,20 @@
       "when": 1793638762679,
       "tag": "0024_desks",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793702715429,
+      "tag": "0025_notices_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793702720556,
+      "tag": "0026_room_links",
+      "breakpoints": true
     }
   ]
 }

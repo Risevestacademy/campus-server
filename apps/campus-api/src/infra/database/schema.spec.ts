@@ -17,6 +17,8 @@ import {
   mentorshipGroupStudents,
   mentorshipGroups,
 } from '../../modules/mentorship-groups/schema.js';
+import { NoticeScope, notices } from '../../modules/notices/schema.js';
+import { notifications } from '../../modules/notifications/schema.js';
 import { tracks } from '../../modules/tracks/schema.js';
 import { SystemRole, users } from '../../modules/users/schema.js';
 
@@ -29,7 +31,16 @@ import { SystemRole, users } from '../../modules/users/schema.js';
 const MIGRATIONS = fileURLToPath(new URL('./migrations', import.meta.url));
 
 const db = drizzle(new PGlite(), {
-  schema: { users, tracks, cohorts, cohortTracks, cohortMembers, invites },
+  schema: {
+    users,
+    tracks,
+    cohorts,
+    cohortTracks,
+    cohortMembers,
+    invites,
+    notices,
+    notifications,
+  },
 });
 
 /** Asserts the write failed on one specific named constraint. */
@@ -71,7 +82,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await db.execute(
-    sql`truncate mentorship_group_students, mentorship_groups, space_memberships, spaces, maps, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate mentorship_group_students, mentorship_groups, notices, notifications, space_memberships, spaces, maps, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
   );
 
   const [admin] = await db
@@ -761,5 +772,185 @@ describe('mentorship groups', () => {
       }),
       'invites_mentorship_group_student',
     );
+  });
+});
+
+describe('notices', () => {
+  const notice = (overrides: Partial<typeof notices.$inferInsert> = {}) =>
+    db
+      .insert(notices)
+      .values({
+        authorId: fixtures.adminId,
+        scope: NoticeScope.Campus,
+        title: 'Term starts on Monday',
+        body: 'Classes resume on the 4th. Bring your laptop.',
+        ...overrides,
+      })
+      .returning();
+
+  /** One row per scope, each naming exactly the references its scope allows. */
+  it('holds a notice in each of the three scopes', async () => {
+    const [campus] = await notice();
+    const [cohort] = await notice({
+      scope: NoticeScope.Cohort,
+      cohortId: fixtures.cohortId,
+    });
+    const [track] = await notice({
+      scope: NoticeScope.CohortTrack,
+      cohortId: fixtures.cohortId,
+      cohortTrackId: fixtures.cohortTrackId,
+      title: 'Track sync moved to Thursday',
+    });
+
+    const rows = await db.select().from(notices);
+    expect(rows).toHaveLength(3);
+    expect(rows.find((row) => row.id === campus.id)).toMatchObject({
+      authorId: fixtures.adminId,
+      scope: NoticeScope.Campus,
+      cohortId: null,
+      cohortTrackId: null,
+      pinned: false,
+      title: 'Term starts on Monday',
+      body: 'Classes resume on the 4th. Bring your laptop.',
+    });
+    expect(rows.find((row) => row.id === cohort.id)).toMatchObject({
+      scope: NoticeScope.Cohort,
+      cohortId: fixtures.cohortId,
+      cohortTrackId: null,
+    });
+    expect(rows.find((row) => row.id === track.id)).toMatchObject({
+      scope: NoticeScope.CohortTrack,
+      cohortId: fixtures.cohortId,
+      cohortTrackId: fixtures.cohortTrackId,
+    });
+    expect(campus.createdAt).toBeInstanceOf(Date);
+    expect(campus.updatedAt).toBeInstanceOf(Date);
+  });
+
+  it('refuses a campus notice that names a cohort', async () => {
+    await expectViolation(
+      notice({ scope: NoticeScope.Campus, cohortId: fixtures.cohortId }),
+      'notices_cohort_matches_scope',
+    );
+  });
+
+  /** The same rule read from the other side: a scoped notice needs its cohort. */
+  it('refuses a cohort-scoped notice with no cohort', async () => {
+    await expectViolation(
+      notice({ scope: NoticeScope.Cohort }),
+      'notices_cohort_matches_scope',
+    );
+  });
+
+  it('refuses a track-scoped notice with no track', async () => {
+    await expectViolation(
+      notice({ scope: NoticeScope.CohortTrack, cohortId: fixtures.cohortId }),
+      'notices_track_matches_scope',
+    );
+  });
+
+  it('refuses a cohort notice that names a track', async () => {
+    await expectViolation(
+      notice({
+        scope: NoticeScope.Cohort,
+        cohortId: fixtures.cohortId,
+        cohortTrackId: fixtures.cohortTrackId,
+      }),
+      'notices_track_matches_scope',
+    );
+  });
+
+  it('requires the track to belong to the notice cohort', async () => {
+    await expectViolation(
+      notice({
+        scope: NoticeScope.CohortTrack,
+        cohortId: fixtures.cohortId,
+        cohortTrackId: fixtures.otherCohortTrackId,
+      }),
+      'notices_cohort_track_fk',
+    );
+  });
+});
+
+describe('notifications', () => {
+  let noticeId: string;
+
+  const notice = () =>
+    db
+      .insert(notices)
+      .values({
+        authorId: fixtures.adminId,
+        scope: NoticeScope.Campus,
+        title: 'Term starts on Monday',
+        body: 'Classes resume on the 4th.',
+      })
+      .returning();
+
+  const alert = (overrides: Partial<typeof notifications.$inferInsert> = {}) =>
+    db
+      .insert(notifications)
+      .values({
+        recipientId: fixtures.adminId,
+        kind: 'notice_posted',
+        referenceType: 'notice',
+        referenceId: noticeId,
+        ...overrides,
+      })
+      .returning();
+
+  beforeEach(async () => {
+    const [row] = await notice();
+    noticeId = row.id;
+  });
+
+  it('stores an alert for a recipient, unread until they read it', async () => {
+    const [written] = await alert();
+    const [row] = await db
+      .select()
+      .from(notifications)
+      .where(sql`${notifications.id} = ${written.id}`);
+
+    expect(row).toBeDefined();
+    expect(row).toMatchObject({
+      recipientId: fixtures.adminId,
+      kind: 'notice_posted',
+      referenceType: 'notice',
+      referenceId: noticeId,
+      readAt: null,
+    });
+    expect(row?.createdAt).toBeInstanceOf(Date);
+  });
+
+  it('refuses the same alert twice for the same person', async () => {
+    await alert();
+
+    await expectViolation(
+      alert(),
+      'notifications_recipient_kind_reference_unique',
+    );
+
+    // A different person, or a different event, is a different alert.
+    const [otherUser] = await db
+      .insert(users)
+      .values({ email: 'other@campus.local' })
+      .returning();
+    await expect(alert({ recipientId: otherUser.id })).resolves.toBeDefined();
+    await expect(
+      alert({ kind: 'entry_request_answered', referenceType: 'entry_request' }),
+    ).resolves.toBeDefined();
+  });
+
+  /**
+   * No foreign key on the reference: a notice that is removed must leave the
+   * alert behind, as the record that it was once posted.
+   */
+  it('keeps the alert after the notice it points at is deleted', async () => {
+    await alert();
+    await db.delete(notices).where(sql`${notices.id} = ${noticeId}`);
+
+    expect(await db.select().from(notices)).toHaveLength(0);
+    const rows = await db.select().from(notifications);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ referenceId: noticeId });
   });
 });
