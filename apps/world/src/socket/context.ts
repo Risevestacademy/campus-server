@@ -22,6 +22,8 @@ export interface WorldContext {
   connections: Connections;
   players: Players;
   metrics: WorldMetrics;
+  /** Set once shutdown has written everybody, so the closes it causes do not write again. */
+  isStopping(): boolean;
   send(ws: WebSocket, message: ServerMessage): void;
   sendFrame(ws: WebSocket, frame: string): void;
   /**
@@ -50,7 +52,7 @@ export function sendClose(socket: WebSocket, reason: CloseReason): void {
 export function createContext(
   base: Pick<
     WorldContext,
-    'app' | 'env' | 'map' | 'connections' | 'players' | 'metrics'
+    'app' | 'env' | 'map' | 'connections' | 'players' | 'metrics' | 'isStopping'
   >,
 ): WorldContext {
   const { app, env, connections, metrics } = base;

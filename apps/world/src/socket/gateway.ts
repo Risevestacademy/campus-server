@@ -13,17 +13,12 @@ import {
   mayEnter,
   type CohortMembershipFacts,
   type PersonFacts,
-  type SpaceFacts,
 } from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 
-import {
-  type Account,
-  type AccountLookup,
-  type WorldSpace,
-} from '../infra/accounts.js';
+import { type Account, type AccountLookup } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
 import { annotate, traced } from '../infra/traced.js';
@@ -45,7 +40,6 @@ import { Players, type Player } from '../movement/players.js';
 import { floorByMiddle, spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
-import { SpaceLocks, lockableKeys } from '../spaces/locks.js';
 import { SpaceRemovals, nearestOutside } from '../spaces/removals.js';
 import {
   EntryRequests,
@@ -71,45 +65,16 @@ import { FrameBudget } from './frame-budget.js';
 import { avatarOf, createAppearance } from './features/appearance.js';
 import { createBroadcastRoom } from './features/broadcast-room.js';
 import { createChat } from './features/chat.js';
+import { createDoors } from './features/doors.js';
+import { createLocks } from './features/locks.js';
 import { createPositions } from './features/positions.js';
 import {
   ServerErrorCode,
   decode,
   encode,
   type EntryRequestOutcome,
-  type SpaceName,
   type WalkEndReason,
 } from './protocol.js';
-
-/**
- * What a drawn space the database has no row for is taken as: a normal
- * space, open to anybody in the campus. The map was published and the sync
- * has not run since, and a room nobody has set up is not a reason to keep
- * people out of it. The boot log names the space. A row with no kind is a
- * different thing: an admin's space not yet set up, which admits admins only.
- */
-const NOT_YET_SYNCED: SpaceFacts = {
-  kind: 'open',
-  access: SPACE_ACCESS.Normal,
-  retiredAt: null,
-  locked: false,
-  grants: [],
-};
-
-/**
- * What every drawn space is taken as before the spaces have been read even
- * once, as when the database is out of reach at boot: admins only. Not
- * knowing whether a room is designated is not the same as knowing it has no
- * row, and the safe guess about a list nobody has read is that you are not
- * on it. The corridors stay open; the next read that succeeds opens the rest.
- */
-const NOT_YET_READ: SpaceFacts = {
-  kind: null,
-  access: SPACE_ACCESS.Designated,
-  retiredAt: null,
-  locked: false,
-  grants: [],
-};
 
 /** The cohort roles that moderate a designated space whose list names them. */
 const STAFF_ROLES = new Set<string>([
@@ -158,81 +123,35 @@ export function registerGateway(
 ): Gateway {
   const connections = new Connections();
   const metrics = worldMetrics(connections);
+  let stopping = false;
 
   const players = new Players(
     map.grid,
     env.WORLD_STEP_MS,
     env.WORLD_RECONNECT_GRACE_SECONDS * 1000,
   );
-  const ctx = createContext({ app, env, map, connections, players, metrics });
+  const ctx = createContext({
+    app,
+    env,
+    map,
+    connections,
+    players,
+    metrics,
+    isStopping: () => stopping,
+  });
   const { send, sendFrame, broadcast, closeFor } = ctx;
   const appearance = createAppearance(ctx, accounts);
 
-  /**
-   * Every space on this map as the database last said, by key: what each
-   * door decides from. Read whole, at boot, whenever campus-api says a space
-   * or a list changed, and every heartbeat in case that word went missing.
-   * A read that fails keeps what the doors had.
-   */
-  let doors: ReadonlyMap<string, WorldSpace> = new Map();
-  /** Whether a read has ever succeeded, so a missing key means no row. */
-  let doorsRead = false;
-  let doorsLoading: Promise<void> | undefined;
-  let readDoorsAgain = false;
-
-  const locks = new SpaceLocks();
+  const doors = createDoors(ctx, accounts, afterSpacesRead);
+  const locks = createLocks(ctx, doors, reviewRequests);
   const removals = new SpaceRemovals();
-  /** Which spaces may be locked, from the doors last read, sorted. */
-  let lockable: readonly string[] = [];
-  let spaceNames = spaceNamesFrom(doors);
 
-  /**
-   * One read at a time. Asked again while one is running, the running one
-   * reads once more when it is done, so a change that lands mid-read is
-   * never left behind; everybody asking waits for the same read.
-   */
-  function reloadDoors(): Promise<void> {
-    if (doorsLoading) {
-      readDoorsAgain = true;
-      return doorsLoading;
-    }
-    doorsLoading = (async () => {
-      do {
-        readDoorsAgain = false;
-        try {
-          doors = await traced('world.spaces.read', () =>
-            accounts.spacesOn(map.id, new Date()),
-          );
-          doorsRead = true;
-          refreshCalls();
-          refreshLockable();
-          refreshSpaceNames();
-          reviewRequests();
-        } catch (err) {
-          app.log.error(
-            { err },
-            'could not read the spaces; doors keep what they had',
-          );
-        }
-      } while (readDoorsAgain);
-    })().finally(() => {
-      doorsLoading = undefined;
-    });
-    return doorsLoading;
+  function afterSpacesRead(): void {
+    refreshCalls();
+    locks.refreshLockable();
+    doors.refreshNames();
+    reviewRequests();
   }
-
-  const doorsReady = reloadDoors().then(() => {
-    if (!doorsRead) {
-      return; // Already logged, and the heartbeat reads again.
-    }
-    const unknown = map.spaces.keys.filter((key) => !doors.has(key));
-    if (unknown.length > 0) {
-      app.log.warn(
-        { spaces: unknown },
-        'drawn spaces with no row in the database: open to everybody until the maps are synced',
-      );
-    }
-  });
 
   /**
    * Whether this socket's person may step into a space, at `now`. The map's
@@ -250,8 +169,7 @@ export function registerGateway(
     if (removals.isRemoved(connection, spaceKey, now.getTime())) {
       return false;
     }
-    const space =
-      doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ);
+    const space = doors.factsFor(spaceKey);
     return mayEnter(
       personOf(connection),
       locks.isLocked(connection.cohortId, spaceKey)
@@ -259,96 +177,6 @@ export function registerGateway(
         : space,
       now,
     );
-  }
-
-  /**
-   * After the spaces are read: tells everybody when the lockable spaces have
-   * changed, and ends the locks on any that can no longer be locked.
-   */
-  function refreshLockable(): void {
-    if (stopping) return;
-    const next = lockableKeys(doors);
-    if (
-      next.length !== lockable.length ||
-      next.some((key, i) => key !== lockable[i])
-    ) {
-      lockable = next;
-      const frame = encode({ type: 'lockableSpaces', spaceKeys: next });
-      for (const connection of connections.all()) {
-        sendFrame(connection.socket, frame);
-      }
-    }
-    for (const { cohortId, spaceKey } of locks.all()) {
-      if (!lockable.includes(spaceKey)) unlock(cohortId, spaceKey, null);
-    }
-  }
-
-  function spaceNamesFrom(read: ReadonlyMap<string, WorldSpace>): SpaceName[] {
-    return [DEFAULT_SPACE_KEY, ...map.spaces.keys].map((spaceKey) => ({
-      spaceKey,
-      name: read.get(spaceKey)?.name ?? spaceKey,
-    }));
-  }
-
-  function refreshSpaceNames(): void {
-    if (stopping) return;
-    const next = spaceNamesFrom(doors);
-    if (next.every(({ name }, i) => name === spaceNames[i]?.name)) return;
-    spaceNames = next;
-    const frame = encode({ type: 'spaces', spaces: next });
-    for (const connection of connections.all()) {
-      sendFrame(connection.socket, frame);
-    }
-  }
-
-  function setLock(connection: Connection, locked: boolean): void {
-    const { cohortId, spaceKey, userId } = connection;
-    if (!lockable.includes(spaceKey)) {
-      send(connection.socket, {
-        type: 'error',
-        code: ServerErrorCode.NotAllowed,
-        message: 'this space cannot be locked',
-      });
-      return;
-    }
-    if (!locked) {
-      unlock(cohortId, spaceKey, userId);
-    } else if (locks.lock(cohortId, spaceKey)) {
-      broadcast(cohortId, { type: 'lockChanged', spaceKey, locked, userId });
-    }
-  }
-
-  /** `userId` is who unlocked it, or null when the lock ended on its own. */
-  function unlock(
-    cohortId: string,
-    spaceKey: string,
-    userId: string | null,
-  ): void {
-    if (locks.unlock(cohortId, spaceKey)) {
-      broadcast(cohortId, {
-        type: 'lockChanged',
-        spaceKey,
-        locked: false,
-        userId,
-      });
-      reviewRequests(cohortId, spaceKey);
-    }
-  }
-
-  /** A lock ends when the last person in that cohort's copy of the space leaves. */
-  function unlockIfEmpty(cohortId: string, spaceKey: string): void {
-    if (
-      locks.isLocked(cohortId, spaceKey) &&
-      !connections
-        .all()
-        .some(
-          (connection) =>
-            connection.cohortId === cohortId &&
-            connection.spaceKey === spaceKey,
-        )
-    ) {
-      unlock(cohortId, spaceKey, null);
-    }
   }
 
   const requests = new EntryRequests<Connection>();
@@ -691,7 +519,7 @@ export function registerGateway(
   const media = mediaCredentials(env);
   const removeFromCall = media ? participantRemover(media) : undefined;
   const muteMicrophone = media ? microphoneMuter(media) : undefined;
-  const chat = createChat(ctx, (spaceKey) => doors.get(spaceKey));
+  const chat = createChat(ctx, doors.get);
   const broadcastRoom = createBroadcastRoom(ctx, media, removeFromRoom);
   /** Cohorts whose `nearby` lists may be out of date though nobody moved. */
   const nearbyStale = new Set<string>();
@@ -1421,9 +1249,6 @@ export function registerGateway(
   const tick = setInterval(flushMoves, env.WORLD_TICK_MS);
   tick.unref();
 
-  /** Set once shutdown has written everybody, so the closes it causes do not write again. */
-  let stopping = false;
-
   const positionWrites = createPositions(ctx, positions);
 
   function presenceOf(connection: Connection): Presence {
@@ -1462,7 +1287,7 @@ export function registerGateway(
       userId: connection.userId,
       spaceKey,
     });
-    unlockIfEmpty(connection.cohortId, left);
+    locks.unlockIfEmpty(connection.cohortId, left);
     reviewRequests(connection.cohortId, left);
     reviewRequests(connection.cohortId, spaceKey);
     void joinCall(connection);
@@ -1593,7 +1418,7 @@ export function registerGateway(
     const held = connections.has(connection);
     connections.remove(connection);
     if (!stopping) {
-      unlockIfEmpty(connection.cohortId, connection.spaceKey);
+      locks.unlockIfEmpty(connection.cohortId, connection.spaceKey);
       if (held) {
         if (requests.openFor(connection)?.asker === connection) {
           endRequest(connection, 'withdrawn');
@@ -1878,7 +1703,7 @@ export function registerGateway(
   const heartbeat = setInterval(() => {
     sweepUnwelcome();
     sweepSessions();
-    void reloadDoors();
+    void doors.reload();
     if (!stopping) retryRemovals();
     const now = Date.now();
     players.forgetExpired(now);
@@ -2092,7 +1917,7 @@ export function registerGateway(
         );
       }
     }
-    await doorsReady;
+    await doors.ready;
 
     if (closed || ws.readyState !== ws.OPEN) {
       attempt.outcome = 'abandoned';
@@ -2153,7 +1978,7 @@ export function registerGateway(
       saved &&
       savedIn &&
       membershipKnown &&
-      doorsRead &&
+      doors.hasBeenRead() &&
       !mayStepInto(connection, savedIn, new Date())
     ) {
       app.log.info(
@@ -2298,7 +2123,7 @@ export function registerGateway(
           return;
         case 'setLock':
           noteActivity(connection);
-          setLock(connection, result.message.locked);
+          locks.setLock(connection, result.message.locked);
           return;
         case 'requestEntry':
           noteActivity(connection);
@@ -2391,9 +2216,9 @@ export function registerGateway(
         height: map.grid.height,
       },
       players: appearance.avatarsIn(connection.cohortId),
-      lockableSpaces: [...lockable],
-      lockedSpaces: locks.in(connection.cohortId),
-      spaces: [...spaceNames],
+      lockableSpaces: [...locks.lockableSpaces()],
+      lockedSpaces: locks.lockedIn(connection.cohortId),
+      spaces: [...doors.names()],
     });
     void joinCall(connection);
     void broadcastRoom.join(connection);
@@ -2424,7 +2249,7 @@ export function registerGateway(
     connections,
     players,
     appearanceChanged: appearance.changed,
-    spacesChanged: reloadDoors,
+    spacesChanged: doors.reload,
     desksChanged(cohortId: string | null): void {
       if (stopping) return;
       if (cohortId !== null) {
