@@ -14,6 +14,8 @@ type ChatContext = Pick<
   'connections' | 'players' | 'send' | 'sendFrame'
 >;
 
+export type Chat = ReturnType<typeof createChat>;
+
 export function createChat(
   ctx: ChatContext,
   spaceOf: (spaceKey: string) => WorldSpace | undefined,

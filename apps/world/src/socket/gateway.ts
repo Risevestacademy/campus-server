@@ -1,32 +1,21 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
-import { mayEnter, type CohortMembershipFacts } from '@campus/space-access';
-import { randomUUID } from 'node:crypto';
+import { mayEnter } from '@campus/space-access';
 import type { FastifyInstance } from 'fastify';
-import type { WebSocket } from 'ws';
 
 import { type AccountLookup } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
-import { annotate, traced } from '../infra/traced.js';
-import type { PositionStore, SavedPosition } from '../infra/positions.js';
+import type { PositionStore } from '../infra/positions.js';
 import type { PresenceStore } from '../infra/presence.js';
 import { type Tile } from '../movement/grid.js';
 import { Players } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
-import { Availability, Status } from '../status/availability.js';
-import {
-  decideUpgrade,
-  type Refusal,
-  type UpgradeDecision,
-} from './authenticate.js';
+import {} from './authenticate.js';
 import { Connections, personOf, type Connection } from './connections.js';
-import { createContext, sendClose } from './context.js';
-import { SayBudget } from './earshot.js';
-import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
-import { FrameBudget } from './frame-budget.js';
-import { avatarOf, createAppearance } from './features/appearance.js';
+import { createContext } from './context.js';
+import { createAppearance } from './features/appearance.js';
 import { createBroadcastRoom } from './features/broadcast-room.js';
 import { createCalls } from './features/calls.js';
 import { createChat } from './features/chat.js';
@@ -39,12 +28,9 @@ import { createPositions } from './features/positions.js';
 import { createPresence } from './features/presence.js';
 import { createSweeps } from './features/sweeps.js';
 import { createWalks } from './features/walks.js';
-import { ServerErrorCode, decode, encode } from './protocol.js';
-
-/** How one upgrade ended, counted once, whichever way it ends. */
-interface Attempt {
-  outcome?: 'opened' | 'refused' | 'failed' | 'abandoned';
-}
+import { createDispatch } from './dispatch.js';
+import { registerSocketRoute } from './open-connection.js';
+import { encode } from './protocol.js';
 
 export interface Gateway {
   connections: Connections;
@@ -98,7 +84,7 @@ export function registerGateway(
     metrics,
     isStopping: () => stopping,
   });
-  const { send, sendFrame, broadcast, closeFor } = ctx;
+  const { sendFrame, broadcast, closeFor } = ctx;
   const appearance = createAppearance(ctx, accounts);
 
   const doors = createDoors(ctx, accounts, afterSpacesRead);
@@ -335,486 +321,32 @@ export function registerGateway(
   // Never hold the process open for a heartbeat.
   heartbeat.unref();
 
-  // The handler returns its promise so @fastify/websocket can catch a
-  // rejection; returning undefined would turn one bad socket into an
-  // unhandled rejection that takes the whole process down.
-  // Fastify's own span for an upgrade never ends: the socket takes the reply
-  // over. world.socket.open is the trace instead.
-  app.get(
-    SOCKET_PATH,
-    { websocket: true, config: { otel: false } },
-    async (socket, request) => {
-      const attempt: Attempt = {};
-      await traced(
-        'world.socket.open',
-        async () => {
-          try {
-            await openConnection(
-              socket,
-              {
-                origin: request.headers.origin,
-                cookie: request.headers.cookie,
-                authorization: request.headers.authorization,
-              },
-              cohortIdFrom(request.query),
-              attempt,
-            );
-          } catch (err) {
-            // Thrown before any outcome was counted: world's own failure.
-            if (attempt.outcome === undefined) {
-              attempt.outcome = 'failed';
-              metrics.failed();
-              annotate({ 'world.outcome': 'failed' });
-            }
-            throw err;
-          }
-        },
-        { root: true },
-      );
-    },
-  );
-
-  async function openConnection(
-    ws: WebSocket,
-    headers: { origin?: string; cookie?: string; authorization?: string },
-    cohortId: string | undefined,
-    attempt: Attempt,
-  ): Promise<void> {
-    // Authentication is asynchronous, and a client can be gone before it
-    // finishes. Watching for that now means a socket that dies in the
-    // meantime is never registered, rather than registered and never removed.
-    // Nothing is read off the socket until there is something to read it
-    // with. ws parses frames as they arrive and emits them whether or not a
-    // listener exists, so a client that sends the moment it is open would
-    // otherwise lose those frames while authentication is still in flight.
-    ws.pause();
-
-    let registered: Connection | undefined;
-    let closed = false;
-    const onClose = (code: number): void => {
-      metrics.closed(code);
-      closed = true;
-      if (registered) {
-        drop(registered);
-        app.log.info(
-          { connectionId: registered.id, userId: registered.userId },
-          'socket closed',
-        );
-      }
-    };
-    ws.on('close', onClose);
-    ws.on('error', (err: Error) => {
-      app.log.warn({ err }, 'socket errored');
-    });
-
-    let decision;
-    try {
-      decision = await decideUpgrade(env, accounts, headers, cohortId);
-    } catch (err) {
-      app.log.error({ err }, 'could not decide socket upgrade');
-      attempt.outcome = 'failed';
-      metrics.failed();
-      annotate({ 'world.outcome': 'failed' });
-      // Reading has to resume for the closing handshake to complete.
-      ws.resume();
-      sendClose(ws, 'internal_error');
-      return;
-    }
-    // Known before the outcome, so a refusal leads to the person too.
-    annotate({
-      'world.cohort_id': cohortId,
-      'user.id': decision.ok ? decision.claims.userId : decision.userId,
-    });
-
-    // Access taken away — the account suspended, or gone — forgets the
-    // cohort this attempt named, and closes every socket the account holds,
-    // in every cohort, the way the sweep closes them: through drop(), which
-    // forgets each of those cohorts' kept positions too. Taking the player
-    // away underneath an open socket would leave it registered with nobody
-    // standing for it, so nobody would be told they left and its next move
-    // would throw.
-    if (!decision.ok && decision.userId) {
-      const { userId } = decision;
-      if (cohortId !== undefined) {
-        positionWrites.forget({ userId, cohortId });
-      }
-      const open = connections.forUser(userId);
-      for (const connection of open) {
-        app.log.info(
-          {
-            connectionId: connection.id,
-            userId,
-            cohortId: connection.cohortId,
-            reason: decision.refusal,
-          },
-          'closing socket, account no longer welcome',
-        );
-        drop(connection, false);
-        closeFor(connection.socket, decision.refusal);
-      }
-      if (
-        cohortId !== undefined &&
-        !open.some((c) => c.cohortId === cohortId)
-      ) {
-        players.leave({ userId, cohortId }, Date.now(), false);
-      }
-    }
-
-    // Where they stood on an earlier visit to this cohort, read before the
-    // socket is checked again: the read is asynchronous too, and the socket
-    // may go in the meantime. Skipped when this process will resume a
-    // position in this same cohort — another tab, or a reconnect within the
-    // grace. What the account holds in other cohorts has no bearing on it.
-    let saved: SavedPosition | undefined;
-    if (
-      decision.ok &&
-      !players.has(seatOf(decision)) &&
-      !players.isRemembered(seatOf(decision))
-    ) {
-      try {
-        saved = await positions.load(seatOf(decision));
-      } catch (err) {
-        app.log.warn(
-          { err, userId: decision.claims.userId },
-          'could not load saved position, starting at the spawn',
-        );
-      }
-    }
-
-    // Their membership row, for the doors, and the doors themselves on the
-    // first arrival after boot. An admin's row is never read: the door
-    // admits them on their role. A row that cannot be read leaves them in
-    // the corridors until the heartbeat reads it.
-    let membership: CohortMembershipFacts | null = null;
-    // Whether the doors know who this is. An admin needs no row; anybody
-    // else's has to have been read for a refusal to mean anything.
-    let membershipKnown = decision.ok && decision.account.admin;
-    if (decision.ok && !decision.account.admin) {
-      const seat = seatOf(decision);
-      try {
-        membership =
-          (await accounts.memberships([seat])).get(seatKey(seat)) ?? null;
-        membershipKnown = true;
-      } catch (err) {
-        app.log.warn(
-          { err, userId: seat.userId },
-          'could not read membership for the doors, reading it again at the heartbeat',
-        );
-      }
-    }
-    await doors.ready;
-
-    if (closed || ws.readyState !== ws.OPEN) {
-      attempt.outcome = 'abandoned';
-      metrics.abandoned();
-      annotate({ 'world.outcome': 'abandoned' });
-      return;
-    }
-
-    if (!decision.ok) {
-      attempt.outcome = 'refused';
-      refuse(ws, decision.refusal);
-      return;
-    }
-
-    // A tab replacing another in this cohort keeps the status chosen there,
-    // as the avatar keeps its place: nobody saw it leave. Anything else is a
-    // fresh arrival, and starts Available. A status is per cohort, as the
-    // avatar is: what they show in one campus says nothing in another.
-    const replacing = connections.holderOf(seatOf(decision));
-    const connection: Connection = {
-      id: randomUUID(),
-      userId: decision.claims.userId,
-      email: decision.claims.email,
-      cohortId: decision.cohortId,
-      appearance: {
-        displayName: decision.account.displayName,
-        spriteKey: decision.account.spriteKey,
-      },
-      // Where the avatar stands is known once it has joined, below.
-      spaceKey: DEFAULT_SPACE_KEY,
-      systemRole: decision.account.systemRole,
-      membership,
-      nearby: new Set(),
-      availability: new Availability(
-        replacing?.availability.chosen ?? Status.Available,
-        Date.now(),
-      ),
-      expiresAt: decision.claims.expiresAt,
-      sessionId: decision.claims.sessionId,
-      epoch: decision.claims.epoch,
-      socket: ws,
-      openedAt: Date.now(),
-      alive: true,
-    };
-    registered = connection;
-
-    // Joined before anybody is told, and before any frame is read, so a move
-    // can never arrive for a player who is not standing anywhere yet. Another
-    // socket for the same account and cohort — loaded while this one waited
-    // — has already placed the avatar, and this one takes it over.
-    // A saved place inside a space they may no longer enter is not where
-    // they come back to: they start at the spawn, as on a first visit. Only
-    // when their row and the spaces were both read: a read that failed says
-    // nothing about where they may stand, and the place would be lost for
-    // good once the spawn was saved over it.
-    const savedIn = saved && spaceAt(map.spaces, saved);
-    if (
-      saved &&
-      savedIn &&
-      membershipKnown &&
-      doors.hasBeenRead() &&
-      !mayStepInto(connection, savedIn, new Date())
-    ) {
-      app.log.info(
-        {
-          userId: connection.userId,
-          cohortId: connection.cohortId,
-          spaceKey: savedIn,
-          locked: locks.isLocked(connection.cohortId, savedIn),
-        },
-        'saved position is in a space closed to them now, starting at the spawn',
-      );
-      saved = undefined;
-    }
-    const arriving = !players.has(connection);
-    const player = players.join(connection, Date.now(), saved);
-    connection.spaceKey = spaceAt(map.spaces, player);
-    if (arriving) {
-      // Told to everyone already in this cohort; the arrival learns of itself
-      // from the snapshot.
-      broadcast(connection.cohortId, {
-        type: 'joined',
-        player: avatarOf(player, connection),
-      });
-    }
-
-    // Registered before the old socket is closed: drop() decides whether the
-    // avatar goes by asking whether the account still holds this cohort, so
-    // this order is what keeps the replacement from removing it.
-    const displaced = connections.add(connection);
-    if (displaced) {
-      app.log.info(
-        {
-          connectionId: displaced.id,
-          replacedBy: connection.id,
-          userId: connection.userId,
-          cohortId: connection.cohortId,
-        },
-        'socket displaced, account entered this cohort elsewhere',
-      );
-      requests.replaced(displaced);
-      send(displaced.socket, { type: 'replaced' });
-      closeFor(displaced.socket, 'entered_elsewhere');
-      // Only an idle tab replaced by an active one changes what is shown. Not
-      // to the new tab, whose welcome has to come first: its snapshot says.
-      if (displaced.availability.shown !== connection.availability.shown) {
-        broadcast(
-          connection.cohortId,
-          {
-            type: 'statusChanged',
-            userId: connection.userId,
-            status: connection.availability.shown,
-          },
-          connection,
-        );
-      }
-    }
-
-    presenceSync.enter(connection);
-    app.log.info(
-      {
-        connectionId: connection.id,
-        userId: connection.userId,
-        cohortId: connection.cohortId,
-      },
-      'socket opened',
-    );
-    attempt.outcome = 'opened';
-    metrics.opened();
-    annotate({ 'world.outcome': 'opened' });
-
-    ws.on('pong', () => {
-      connection.alive = true;
-    });
-
-    const budget = new FrameBudget(
-      env.WORLD_MAX_MESSAGES_PER_SECOND,
-      Date.now(),
-    );
-    const sayBudget = new SayBudget(Date.now());
-
-    ws.on('message', (raw: Buffer) => {
-      // A socket we have dropped can still deliver frames while its close
-      // handshake finishes. It no longer speaks for anybody — and its player
-      // may be gone, which a move would trip over.
-      if (!connections.has(connection)) {
-        return;
-      }
-      // Before parsing, so an excess frame costs only a counter. Closing
-      // makes the client reconnect to an authoritative snapshot instead of
-      // silently losing a predicted move.
-      const admission = budget.admit(Date.now());
-      if (admission === 'close') {
-        app.log.warn(
-          { connectionId: connection.id, userId: connection.userId },
-          'socket sending too fast, closing',
-        );
-        drop(connection);
-        closeFor(connection.socket, 'rate_limited');
-        return;
-      }
-      // Frames over WORLD_MAX_MESSAGE_BYTES never arrive: ws enforces
-      // maxPayload itself and closes with 1009 before this fires.
-      const result = decode(raw.toString('utf8'));
-      metrics.received(result.ok ? result.message.type : 'invalid');
-      if (!result.ok) {
-        send(ws, {
-          type: 'error',
-          code: ServerErrorCode.BadMessage,
-          message: result.reason,
-        });
-        return;
-      }
-
-      switch (result.message.type) {
-        case 'ping':
-          connection.alive = true;
-          send(ws, { type: 'pong' });
-          return;
-        case 'active':
-          presenceSync.noteActivity(connection);
-          return;
-        case 'setStatus':
-          if (
-            connection.availability.choose(result.message.status, Date.now())
-          ) {
-            presenceSync.statusChanged(connection);
-          }
-          return;
-        case 'setLock':
-          presenceSync.noteActivity(connection);
-          locks.setLock(connection, result.message.locked);
-          return;
-        case 'requestEntry':
-          presenceSync.noteActivity(connection);
-          requests.request(connection, result.message.spaceKey);
-          return;
-        case 'withdrawEntryRequest':
-          presenceSync.noteActivity(connection);
-          requests.withdraw(connection, result.message.requestId);
-          return;
-        case 'answerEntryRequest':
-          presenceSync.noteActivity(connection);
-          requests.answer(
-            connection,
-            result.message.requestId,
-            result.message.admit,
-          );
-          return;
-        case 'say':
-          presenceSync.noteActivity(connection);
-          chat.say(connection, result.message.text, sayBudget);
-          return;
-        case 'mute':
-          presenceSync.noteActivity(connection);
-          void moderation.mute(connection, result.message.userId);
-          return;
-        case 'removeFromSpace':
-          presenceSync.noteActivity(connection);
-          moderation.remove(connection, result.message.userId);
-          return;
-        case 'goTo':
-          presenceSync.noteActivity(connection);
-          walks.goTo(connection, result.message.userId);
-          return;
-        case 'goToSpace':
-          presenceSync.noteActivity(connection);
-          walks.goToSpace(connection, result.message.spaceKey);
-          return;
-        case 'goToTile':
-          presenceSync.noteActivity(connection);
-          walks.goToTile(connection, {
-            x: result.message.x,
-            y: result.message.y,
-          });
-          return;
-        case 'stopWalking':
-          presenceSync.noteActivity(connection);
-          walks.end(connection, 'stopped');
-          return;
-        case 'move': {
-          presenceSync.noteActivity(connection);
-          walks.end(connection, 'stopped');
-          const { direction, seq } = result.message;
-          const now = Date.now();
-          const moved = players.move(
-            connection,
-            direction,
-            now,
-            walks.admitsStep(connection, now),
-          );
-          metrics.moved(moved.outcome);
-          send(ws, {
-            type: 'moveResult',
-            seq,
-            outcome: moved.outcome,
-            player: moved.player,
-          });
-          if (moved.outcome === 'moved') arrivedAt(connection, moved.player);
-          if (moved.changed) noteMoved(connection);
-          return;
-        }
-      }
-    });
-
-    send(ws, {
-      type: 'welcome',
-      userId: connection.userId,
-      connectionId: connection.id,
-      heartbeatSeconds: env.WORLD_HEARTBEAT_SECONDS,
-      stepMs: env.WORLD_STEP_MS,
-      tickMs: env.WORLD_TICK_MS,
-      awayAfterSeconds: env.WORLD_AWAY_AFTER_SECONDS,
-      ...connection.appearance,
-    });
-    send(ws, {
-      type: 'snapshot',
-      map: {
-        id: map.id,
-        version: map.version,
-        width: map.grid.width,
-        height: map.grid.height,
-      },
-      players: appearance.avatarsIn(connection.cohortId),
-      lockableSpaces: [...locks.lockableSpaces()],
-      lockedSpaces: locks.lockedIn(connection.cohortId),
-      spaces: [...doors.names()],
-    });
-    void calls.join(connection);
-    void broadcastRoom.join(connection);
-    requests.review(connection.cohortId, connection.spaceKey);
-
-    // Handlers are on: whatever arrived during authentication is delivered
-    // now, in the order it was sent.
-    ws.resume();
-  }
-
-  function refuse(ws: WebSocket, refusal: Refusal): void {
-    // The upgrade has already completed by the time Fastify hands the socket
-    // over, so a refusal is a close rather than an HTTP status.
-    app.log.info({ refusal }, 'socket refused');
-    metrics.refused(refusal);
-    annotate({ 'world.outcome': 'refused', 'world.refusal': refusal });
-    // Paused during authentication; the closing handshake needs it back.
-    ws.resume();
-    send(ws, {
-      type: 'error',
-      code: ServerErrorCode.Unauthorized,
-      message: refusal,
-    });
-    sendClose(ws, refusal);
-  }
+  const listen = createDispatch(ctx, {
+    presence: presenceSync,
+    locks,
+    requests,
+    chat,
+    moderation,
+    walks,
+    drop,
+    noteMoved,
+    arrivedAt,
+  });
+  registerSocketRoute(ctx, {
+    accounts,
+    positions,
+    positionWrites,
+    doors,
+    locks,
+    appearance,
+    requests,
+    presence: presenceSync,
+    calls,
+    broadcastRoom,
+    mayStepInto,
+    drop,
+    listen,
+  });
 
   return {
     connections,
@@ -849,18 +381,4 @@ export function registerGateway(
       }
     },
   };
-}
-
-/** The seat an accepted upgrade asks for. */
-function seatOf(decision: Extract<UpgradeDecision, { ok: true }>): Seat {
-  return { userId: decision.claims.userId, cohortId: decision.cohortId };
-}
-
-/** A repeated parameter arrives as an array, which reads as none at all. */
-function cohortIdFrom(query: unknown): string | undefined {
-  if (typeof query !== 'object' || query === null) {
-    return undefined;
-  }
-  const value = (query as Record<string, unknown>)[COHORT_QUERY_PARAM];
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

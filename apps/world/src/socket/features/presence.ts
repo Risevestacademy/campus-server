@@ -23,6 +23,8 @@ function presenceOf(connection: Connection): Presence {
   };
 }
 
+export type PresenceSync = ReturnType<typeof createPresence>;
+
 export function createPresence(
   ctx: PresenceContext,
   store: PresenceStore,

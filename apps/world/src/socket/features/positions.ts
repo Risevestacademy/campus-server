@@ -19,6 +19,8 @@ export function positionOf(player: Player, cohortId: string): PositionToSave {
   };
 }
 
+export type PositionWrites = ReturnType<typeof createPositions>;
+
 export function createPositions(ctx: PositionsContext, store: PositionStore) {
   const { app, env, connections, players } = ctx;
 

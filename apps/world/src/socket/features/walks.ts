@@ -61,6 +61,8 @@ export interface WalkDeps {
   arrivedAt(connection: Connection, tile: Tile): void;
 }
 
+export type Walks = ReturnType<typeof createWalks>;
+
 export function createWalks(
   ctx: WalksContext,
   { presence, requests, mayStepInto, noteMoved, arrivedAt }: WalkDeps,

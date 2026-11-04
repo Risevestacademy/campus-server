@@ -32,6 +32,8 @@ export interface ModerationDeps {
   movedOut(target: Connection, player: Player): void;
 }
 
+export type Moderation = ReturnType<typeof createModeration>;
+
 export function createModeration(
   ctx: ModerationContext,
   { doors, requests, media, mayStepInto, movedOut }: ModerationDeps,
