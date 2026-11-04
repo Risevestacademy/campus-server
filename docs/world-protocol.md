@@ -195,16 +195,17 @@ connected to another ends the walk with `elsewhere`.
   else sees an ordinary walk in `moved`, with a `spaceChanged` at each
   crossing, and your call changes as you go.
 - **Each step it takes is a `walking`** (`{ "type": "walking", "userId":
-"…", "player": {…} }`), only to you: you are never in your own `moved`, so
+"…", "toSpaceKey": null, "toTile": null, "player": {…} }`), only to you: you are never in your own `moved`, so
   this is where you are. Draw it as you would a `moveResult` you did not
   predict. Mobile, which draws no map, can ignore the position.
 - **It ends with one `walkEnded`** (`{ "type": "walkEnded", "userId": "…",
-"reason": "…", "player": {…}, "spaceKey": "…" | null, "mayAsk": false }`),
+"toSpaceKey": null, "toTile": null, "reason": "…", "player": {…},
+"spaceKey": "…" | null, "mayAsk": false }`),
   saying where you stopped and why:
 
   | `reason`         | Meaning                                                                                                                             | What to do                                                          |
   | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-  | `arrived`        | You stand next to them, in their space, never on their tile                                                                         | Nothing                                                             |
+  | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                       | Nothing                                                             |
   | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
   | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
   | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
@@ -220,6 +221,27 @@ connected to another ends the walk with `elsewhere`.
   the socket ends it with no `walkEnded`, so a walk on mobile lasts as long
   as the app keeps its socket.
 - Asking to walk to yourself is an `error` with code `NOT_ALLOWED`.
+
+### Going to a space or a tile
+
+The same walk, to a place instead of a person: a room link's page sends
+`goToSpace` once it knows the space, and a tap on the map can send
+`goToTile`.
+
+- **`{ "type": "goToSpace", "spaceKey": "…" }`** walks you into a drawn
+  space, to the free tile nearest its middle, or its middle when every tile
+  is taken. A key not drawn on this map, or `_default`, is an `error` with
+  `NOT_ALLOWED`: the corridors take `goToTile`.
+- **`{ "type": "goToTile", "x": 0, "y": 0 }`** walks you onto that tile. A
+  tile off the map or in a wall is an `error` with `NOT_ALLOWED`.
+- **`walking` and `walkEnded` say what the walk is to**: exactly one of
+  `userId`, `toSpaceKey` and `toTile` is set, the others `null`.
+- **`arrived`** means you stand on the tile the walk aimed at. **`refused`**
+  works as for a person: a closed space in the way, or the space you were
+  walking into or the tile is in, stops you beside it with `spaceKey` and
+  `mayAsk`. `gone` and `elsewhere` only end walks to somebody.
+- **Stopping and replacing** work as for `goTo`: `stopWalking`, a `move`, or
+  any new `goTo`, `goToSpace` or `goToTile` ends the walk going.
 
 ## Everybody else
 

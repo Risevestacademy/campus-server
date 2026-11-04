@@ -4537,6 +4537,153 @@ describe('movement', () => {
       ).resolves.toMatchObject({ code: 'NOT_ALLOWED' });
       await leave(walker);
     });
+
+    describe('to a space or a tile', () => {
+      it('walks them to the middle of a space, naming the space on every step', async () => {
+        const walker = await arrive(person());
+
+        send(walker, { type: 'goToSpace', spaceKey: 'library' });
+
+        const ended = await walkEnded(walker);
+        expect(ended).toMatchObject({
+          userId: null,
+          toSpaceKey: 'library',
+          toTile: null,
+          reason: 'arrived',
+          player: { x: 3, y: 0 },
+          spaceKey: null,
+        });
+        const steps = walker.messages.filter((m) => m.type === 'walking');
+        expect(steps).toHaveLength(3);
+        for (const walking of steps) {
+          expect(walking).toMatchObject({
+            userId: null,
+            toSpaceKey: 'library',
+            toTile: null,
+          });
+        }
+        await leave(walker);
+      });
+
+      it('takes the next free tile when the middle is taken', async () => {
+        const grace = await inTheLibrary();
+        const walker = await arrive(person());
+
+        send(walker, { type: 'goToSpace', spaceKey: 'library' });
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'arrived',
+          player: { x: 4, y: 0 },
+        });
+        await Promise.all([leave(walker), leave(grace.conn)]);
+      });
+
+      it('stops beside a space closed to them', async () => {
+        designateLibrary();
+        await world.gateway.spacesChanged();
+        const walker = await arrive(person());
+
+        send(walker, { type: 'goToSpace', spaceKey: 'library' });
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          toSpaceKey: 'library',
+          reason: 'refused',
+          spaceKey: 'library',
+          player: { x: 2, y: 0 },
+        });
+        await leave(walker);
+      });
+
+      it('walks them onto a tile in the corridors', async () => {
+        const walker = await arrive(person());
+
+        send(walker, { type: 'goToTile', x: 2, y: 4 });
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          userId: null,
+          toSpaceKey: null,
+          toTile: { x: 2, y: 4 },
+          reason: 'arrived',
+          player: { x: 2, y: 4 },
+        });
+        await leave(walker);
+      });
+
+      it('arrives at once, without a step, when already there', async () => {
+        const grace = await inTheLibrary();
+        const walker = await arrive(person());
+
+        send(grace.conn, { type: 'goToSpace', spaceKey: 'library' });
+        send(walker, { type: 'goToTile', x: 0, y: 0 });
+
+        await expect(walkEnded(grace.conn)).resolves.toMatchObject({
+          toSpaceKey: 'library',
+          reason: 'arrived',
+          player: { x: 3, y: 0 },
+        });
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          toTile: { x: 0, y: 0 },
+          reason: 'arrived',
+          player: { x: 0, y: 0 },
+        });
+        for (const conn of [grace.conn, walker]) {
+          expect(conn.messages.some((m) => m.type === 'walking')).toBe(false);
+        }
+        await Promise.all([leave(walker), leave(grace.conn)]);
+      });
+
+      it('stops beside a closed space a tile is in', async () => {
+        designateLibrary();
+        await world.gateway.spacesChanged();
+        const walker = await arrive(person());
+
+        send(walker, { type: 'goToTile', x: 4, y: 1 });
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          toTile: { x: 4, y: 1 },
+          reason: 'refused',
+          spaceKey: 'library',
+        });
+        await leave(walker);
+      });
+
+      it('replaces a walk to somebody, and stops when asked', async () => {
+        const grace = await inTheLibrary();
+        const walker = await arrive(person());
+
+        goTo(walker, grace.userId);
+        send(walker, { type: 'goToTile', x: 1, y: 4 });
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          userId: grace.userId,
+          reason: 'stopped',
+        });
+
+        walker.messages.length = 0;
+        send(walker, { type: 'stopWalking' });
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          toTile: { x: 1, y: 4 },
+          reason: 'stopped',
+        });
+        await Promise.all([leave(walker), leave(grace.conn)]);
+      });
+
+      it.each([
+        ['the corridors', { type: 'goToSpace', spaceKey: '_default' }],
+        ['a space not on the map', { type: 'goToSpace', spaceKey: 'attic' }],
+        ['a wall', { type: 'goToTile', x: 0, y: 2 }],
+        ['a tile off the map', { type: 'goToTile', x: 9, y: 9 }],
+      ])('will not walk them to %s', async (_, message) => {
+        const walker = await arrive(person());
+
+        send(walker, message);
+
+        await expect(
+          waitFor(walker, (m) => m.type === 'error'),
+        ).resolves.toMatchObject({ code: 'NOT_ALLOWED' });
+        expect(walker.messages.some((m) => m.type === 'walking')).toBe(false);
+        await leave(walker);
+      });
+    });
   });
 
   describe('space names', () => {
