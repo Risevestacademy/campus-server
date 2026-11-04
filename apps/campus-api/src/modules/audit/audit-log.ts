@@ -349,6 +349,11 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.RoomLink;
     details: { cohortId: string; code: string; title: string };
   };
+  [AuditAction.CommentCreated]: {
+    subject: AuditSubjectType.Comment;
+    /** The notice only; what the member wrote stays on the comment. */
+    details: { noticeId: string };
+  };
 }
 
 /**

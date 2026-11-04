@@ -12,6 +12,7 @@ import {
   cohortTracks,
   cohorts,
 } from '../../modules/cohorts/schema.js';
+import { CommentTargetType, comments } from '../../modules/comments/schema.js';
 import { InviteStatus, invites } from '../../modules/invites/schema.js';
 import {
   mentorshipGroupStudents,
@@ -40,6 +41,7 @@ const db = drizzle(new PGlite(), {
     invites,
     notices,
     notifications,
+    comments,
   },
 });
 
@@ -82,7 +84,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await db.execute(
-    sql`truncate mentorship_group_students, mentorship_groups, notices, notifications, space_memberships, spaces, maps, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate mentorship_group_students, mentorship_groups, comments, notices, notifications, space_memberships, spaces, maps, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
   );
 
   const [admin] = await db
@@ -868,6 +870,49 @@ describe('notices', () => {
         cohortTrackId: fixtures.otherCohortTrackId,
       }),
       'notices_cohort_track_fk',
+    );
+  });
+});
+
+describe('comments', () => {
+  const comment = (overrides: Partial<typeof comments.$inferInsert> = {}) =>
+    db
+      .insert(comments)
+      .values({
+        authorId: fixtures.adminId,
+        targetType: CommentTargetType.Notice,
+        targetId: '00000000-0000-4000-8000-000000000000',
+        body: 'A comment',
+        ...overrides,
+      })
+      .returning();
+
+  it('refuses an author that does not exist, by name', async () => {
+    await expectViolation(
+      comment({ authorId: '00000000-0000-4000-8000-000000000000' }),
+      'comments_author_id_users_id_fk',
+    );
+  });
+
+  it('keeps target_type to the known values, by name', async () => {
+    await expectViolation(
+      comment({ targetType: 'project' as never }),
+      'comments_target_type_known',
+    );
+  });
+
+  it('accepts a target id that matches no notice: no foreign key by design', async () => {
+    await expect(comment()).resolves.toHaveLength(1);
+  });
+
+  it('refuses blank and over-long bodies, by name', async () => {
+    await expectViolation(
+      comment({ body: ' \t\n\r\f\v ' }),
+      'comments_body_not_blank',
+    );
+    await expectViolation(
+      comment({ body: 'x'.repeat(2001) }),
+      'comments_body_length',
     );
   });
 });

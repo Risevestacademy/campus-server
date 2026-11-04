@@ -2,6 +2,7 @@ export * from '../../../modules/audit/schema.js';
 export * from '../../../modules/calendar/schema.js';
 export * from '../../../modules/calls/schema.js';
 export * from '../../../modules/cohorts/schema.js';
+export * from '../../../modules/comments/schema.js';
 export * from '../../../modules/desks/schema.js';
 export * from '../../../modules/feedback/schema.js';
 export * from '../../../modules/auth/schema.js';

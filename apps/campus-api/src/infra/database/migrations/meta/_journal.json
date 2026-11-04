@@ -197,6 +197,13 @@
       "when": 1793780259152,
       "tag": "0027_desk_claim_access",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1793804471360,
+      "tag": "0028_comments",
+      "breakpoints": true
     }
   ]
 }

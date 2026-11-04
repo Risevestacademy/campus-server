@@ -165,6 +165,11 @@ export enum AuditAction {
   RoomLinkRevoked = 'room_link_revoked',
   /** An admin ended somebody else's claim on a desk. */
   DeskFreed = 'desk_freed',
+  /**
+   * A member commented on a notice. `details` keeps the notice id only; what
+   * the member wrote stays on the comment and never comes here.
+   */
+  CommentCreated = 'comment_created',
 }
 
 export enum AuditSubjectType {
@@ -184,6 +189,8 @@ export enum AuditSubjectType {
   RoomLink = 'room_link',
   /** One row of `desk_claims`: somebody holding a desk in a cohort. */
   DeskClaim = 'desk_claim',
+  /** One row of `comments`, whatever it is attached to. */
+  Comment = 'comment',
 }
 
 /**
