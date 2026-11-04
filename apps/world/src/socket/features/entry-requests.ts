@@ -47,6 +47,8 @@ export interface EntryRequestDeps {
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
 }
 
+export type EntryRequestsFeature = ReturnType<typeof createEntryRequests>;
+
 export function createEntryRequests(
   ctx: EntryRequestsContext,
   { doors, locks, isRemoved, mayStepInto }: EntryRequestDeps,

@@ -1,11 +1,5 @@
-import { microphoneMuter, type MuteResult } from '@campus/media';
-import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
-import {
-  COHORT_ROLES,
-  SPACE_ACCESS,
-  mayEnter,
-  type CohortMembershipFacts,
-} from '@campus/space-access';
+import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { mayEnter, type CohortMembershipFacts } from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -32,8 +26,7 @@ import { Players, type Player } from '../movement/players.js';
 import { floorByMiddle, spaceAt } from '../movement/spaces.js';
 import type { WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
-import { SpaceRemovals, nearestOutside } from '../spaces/removals.js';
-import { besideSpace, takesRequests } from '../spaces/requests.js';
+import { besideSpace } from '../spaces/requests.js';
 import { Availability, Status } from '../status/availability.js';
 import {
   decideUpgrade,
@@ -53,6 +46,7 @@ import { createChat } from './features/chat.js';
 import { createDoors } from './features/doors.js';
 import { createEntryRequests } from './features/entry-requests.js';
 import { createLocks } from './features/locks.js';
+import { createModeration } from './features/moderation.js';
 import { createPositions } from './features/positions.js';
 import {
   ServerErrorCode,
@@ -60,12 +54,6 @@ import {
   encode,
   type WalkEndReason,
 } from './protocol.js';
-
-/** The cohort roles that moderate a designated space whose list names them. */
-const STAFF_ROLES = new Set<string>([
-  COHORT_ROLES.Professor,
-  COHORT_ROLES.Mentor,
-]);
 
 /** How one upgrade ended, counted once, whichever way it ends. */
 interface Attempt {
@@ -131,7 +119,6 @@ export function registerGateway(
   const locks = createLocks(ctx, doors, (cohortId, spaceKey) =>
     requests.review(cohortId, spaceKey),
   );
-  const removals = new SpaceRemovals();
 
   function afterSpacesRead(): void {
     calls.refresh();
@@ -153,7 +140,7 @@ export function registerGateway(
     if (spaceKey === DEFAULT_SPACE_KEY) {
       return true;
     }
-    if (removals.isRemoved(connection, spaceKey, now.getTime())) {
+    if (moderation.isRemoved(connection, spaceKey, now.getTime())) {
       return false;
     }
     const space = doors.factsFor(spaceKey);
@@ -170,7 +157,7 @@ export function registerGateway(
     doors,
     locks,
     isRemoved: (connection, spaceKey, now) =>
-      removals.isRemoved(connection, spaceKey, now),
+      moderation.isRemoved(connection, spaceKey, now),
     mayStepInto,
   });
 
@@ -244,131 +231,20 @@ export function registerGateway(
   }
 
   const media = mediaCredentials(env);
-  const muteMicrophone = media ? microphoneMuter(media) : undefined;
   const chat = createChat(ctx, doors.get);
   const calls = createCalls(ctx, doors, media);
   const broadcastRoom = createBroadcastRoom(ctx, media, calls.removeFromRoom);
-  /**
-   * Admins may act on anybody in their cohort's campus; a professor or
-   * mentor only on somebody in the designated space they stand in, whose
-   * list names them. Never on an admin, nor on themselves.
-   */
-  function mayModerate(
-    actor: Connection,
-    target: Connection,
-    now: Date,
-  ): boolean {
-    if (actor.userId === target.userId || hasAdminPowers(target.systemRole)) {
-      return false;
-    }
-    if (hasAdminPowers(actor.systemRole)) return true;
-    const space = doors.get(actor.spaceKey);
-    return (
-      STAFF_ROLES.has(actor.membership?.role ?? '') &&
-      actor.spaceKey === target.spaceKey &&
-      space?.access === SPACE_ACCESS.Designated &&
-      mayEnter(personOf(actor), { ...space, locked: false }, now)
-    );
-  }
-
-  function staffRefusal(connection: Connection, message: string): void {
-    send(connection.socket, {
-      type: 'error',
-      code: ServerErrorCode.NotAllowed,
-      message,
-    });
-  }
-
-  async function muteSomebody(
-    actor: Connection,
-    userId: string,
-  ): Promise<void> {
-    const target = connections.holderOf({ userId, cohortId: actor.cohortId });
-    if (!target) {
-      staffRefusal(actor, 'they are not here');
-      return;
-    }
-    if (!mayModerate(actor, target, new Date())) {
-      staffRefusal(actor, 'you may not mute them');
-      return;
-    }
-    const call = target.call;
-    if (!muteMicrophone || !call) {
-      staffRefusal(actor, 'they are in no call');
-      return;
-    }
-    let result: MuteResult;
-    try {
-      result = await muteMicrophone(call.room, call.identity);
-    } catch (err) {
-      app.log.warn({ err, userId }, 'could not mute somebody');
-      staffRefusal(actor, 'could not mute them, try again');
-      return;
-    }
-    if (result === 'not_in_room') {
-      staffRefusal(actor, 'they are not in the call');
-      return;
-    }
-    if (result === 'not_on') {
-      staffRefusal(actor, 'their microphone is not on');
-      return;
-    }
-    announceStaffAction('muted', actor, target, target.spaceKey, null, null);
-  }
-
-  function removeSomebody(actor: Connection, userId: string): void {
-    const now = Date.now();
-    const target = connections.holderOf({ userId, cohortId: actor.cohortId });
-    if (!target) {
-      staffRefusal(actor, 'they are not here');
-      return;
-    }
-    if (!mayModerate(actor, target, new Date(now))) {
-      staffRefusal(actor, 'you may not remove them');
-      return;
-    }
-    const spaceKey = target.spaceKey;
-    if (spaceKey === DEFAULT_SPACE_KEY) {
-      staffRefusal(actor, 'they are in no space');
-      return;
-    }
-    // Removed, they may ask to enter: only from a space that takes requests.
-    if (!takesRequests(doors.get(spaceKey), true)) {
-      staffRefusal(actor, 'they cannot be removed from this space');
-      return;
-    }
-    const standing = players.get(target);
-    const outside =
-      standing &&
-      nearestOutside(map.grid, map.spaces, standing, spaceKey, (into) =>
-        mayStepInto(target, into, new Date(now)),
-      );
-    const player = outside && players.place(target, outside);
-    if (!player) {
-      staffRefusal(actor, 'nowhere outside to move them');
-      return;
-    }
-    const until = removals.remove(target, spaceKey, now);
-    requests.dropPass(target);
-    noteMoved(target);
-    arrivedAt(target, player);
-    endWalk(target, 'moved_by_staff');
-    // An open request turns into "may walk in" once the 90 seconds are up;
-    // a millisecond after, as a timer can fire a little early.
-    setTimeout(
-      () => requests.review(target.cohortId, spaceKey),
-      until - Date.now() + 1,
-    ).unref();
-    announceStaffAction(
-      'removed',
-      actor,
-      target,
-      spaceKey,
-      new Date(until).toISOString(),
-      player,
-    );
-  }
-
+  const moderation = createModeration(ctx, {
+    doors,
+    requests,
+    media,
+    mayStepInto,
+    movedOut(target, player) {
+      noteMoved(target);
+      arrivedAt(target, player);
+      endWalk(target, 'moved_by_staff');
+    },
+  });
   const walks = new Map<Connection, Walk>();
   const walkLimit =
     env.WORLD_WALK_MAX_STEPS ?? map.grid.width * map.grid.height;
@@ -752,52 +628,6 @@ export function registerGateway(
   function arrivedAt(connection: Connection, tile: Tile): void {
     recordSpaceCrossing(connection, tile);
     requests.leaveTheDoor(connection, tile);
-  }
-
-  /** To the staff member and to the person it was done to. */
-  function announceStaffAction(
-    action: 'muted' | 'removed',
-    actor: Connection,
-    target: Connection,
-    spaceKey: string,
-    until: string | null,
-    player: Player | null,
-  ): void {
-    recordStaffAction(action, actor, target, spaceKey);
-    const frame = encode({
-      type: 'staffAction',
-      action,
-      userId: target.userId,
-      by: actor.userId,
-      spaceKey,
-      until,
-      player,
-    });
-    for (const connection of new Set([actor, target])) {
-      if (connections.has(connection)) sendFrame(connection.socket, frame);
-    }
-  }
-
-  /**
-   * Belongs in the audit log, which campus-api writes. world cannot ask
-   * campus-api to yet, so until it can, the action is only logged.
-   */
-  function recordStaffAction(
-    action: 'muted' | 'removed',
-    actor: Connection,
-    target: Connection,
-    spaceKey: string,
-  ): void {
-    app.log.info(
-      {
-        action,
-        actorId: actor.userId,
-        targetId: target.userId,
-        cohortId: target.cohortId,
-        spaceKey,
-      },
-      'staff action',
-    );
   }
 
   const tick = setInterval(flushMoves, env.WORLD_TICK_MS);
@@ -1696,11 +1526,11 @@ export function registerGateway(
           return;
         case 'mute':
           noteActivity(connection);
-          void muteSomebody(connection, result.message.userId);
+          void moderation.mute(connection, result.message.userId);
           return;
         case 'removeFromSpace':
           noteActivity(connection);
-          removeSomebody(connection, result.message.userId);
+          moderation.remove(connection, result.message.userId);
           return;
         case 'goTo':
           noteActivity(connection);
