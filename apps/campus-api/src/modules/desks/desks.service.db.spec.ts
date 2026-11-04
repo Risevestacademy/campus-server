@@ -290,6 +290,14 @@ describe('releasing', () => {
     ]);
   });
 
+  it('turns guests away, as claiming does', async () => {
+    expect(
+      await rejection(
+        service.release(guest, cohortA, 'desk_a', { actorUserId: guest.id }),
+      ),
+    ).toBeInstanceOf(DeskForbiddenException);
+  });
+
   it("refuses a member freeing somebody else's desk", async () => {
     await service.claim(ada, cohortA, 'desk_a');
 

@@ -34,9 +34,12 @@ rows. The routes live under `/v1/cohorts/{cohortId}/desks`.
 
 - A claim reads the desk under a share lock, and the map sync takes it for
   update, so a desk is never claimed after the sync retired it.
-- A claim reads the account, and a member's claim their membership, under
-  share locks. Suspending, demoting and ending a membership take those rows
-  for update, so a claim never outlives any of them ending while it ran.
+- A claim reads the membership and then the account under share locks.
+  Suspending, demoting and ending a membership take those rows for update, so
+  a claim never outlives any of them ending while it ran. Membership first,
+  account second, is the order ending a membership and accepting an invite
+  take them too; the other way round, a claim and a membership ending
+  deadlock.
 - Two claims racing for one desk, or one person's two claims racing each
   other, meet on the unique indexes; the loser gets a 409.
 - A release is stamped `greatest(claimed_at, now)` through `endDeskClaims`:

@@ -6,6 +6,9 @@ import {
   unique,
 } from '../../infra/database/testing/real-postgres.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
+import { SessionIssuer } from '../auth/session-issuer.js';
+import { CohortMembersService } from '../cohorts/cohort-members.service.js';
+import { MembershipEndAction } from '../cohorts/dto/end-membership.dto.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import { maps } from '../maps/schema.js';
 import { SystemRole, UserStatus, users } from '../users/schema.js';
@@ -258,6 +261,51 @@ describe.skipIf(!REAL_POSTGRES_URL)('DesksService on real Postgres', () => {
 
     gate.resolve();
     await suspending;
+    expect(await within(racing, 5_000)).toMatchObject({
+      settled: 'rejected',
+      error: expect.any(DeskForbiddenException),
+    });
+    await expect(openClaims(made[0].id)).resolves.toEqual([]);
+  }, 30_000);
+
+  /**
+   * The whole of a membership ending, sessions included: it locks the
+   * membership and then writes the account, the reverse of what a claim
+   * would take if it went for the account first.
+   */
+  it('lets a membership ending, sessions and all, finish while a claim waits', async () => {
+    const { cohortId, first, second, desks: made } = await setting();
+    const issuer = new SessionIssuer(
+      {} as never,
+      pg.db as never,
+      {} as never,
+      {} as never,
+    );
+    const gate = deferred();
+    const locked = deferred();
+    const ending = new CohortMembersService(pg.db as never).endMembership(
+      cohortId,
+      first.id,
+      MembershipEndAction.Remove,
+      undefined,
+      { actorUserId: second.id },
+      async (tx) => {
+        locked.resolve();
+        await gate.promise;
+        await issuer.revokeAllSessions(first.id, new Date(), tx);
+      },
+    );
+
+    await locked.promise;
+    const racing = service.claim(first, cohortId, made[0].key);
+    expect(await within(racing, 1_000)).toMatchObject({
+      settled: 'still waiting',
+    });
+
+    gate.resolve();
+    expect(await within(ending, 5_000)).toMatchObject({
+      settled: 'resolved',
+    });
     expect(await within(racing, 5_000)).toMatchObject({
       settled: 'rejected',
       error: expect.any(DeskForbiddenException),

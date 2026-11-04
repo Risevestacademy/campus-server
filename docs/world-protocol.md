@@ -532,6 +532,9 @@ routes too. world carries no desk state; it only says when to fetch again.
   arrives. It comes after anybody in your cohort claims or lets go of a desk,
   an admin frees one, a membership or account ends, or a map sync adds or
   retires desks (that last one goes to every cohort).
+- **Wait a moment first.** A message for every cohort, from a map sync or
+  world reconnecting to the database, reaches every client at once. Wait a
+  random 0–2 seconds before fetching, so they don't all arrive together.
 - **Your own claim** answers with the desk as it now is, so you need not
   wait for the message to draw it.
 

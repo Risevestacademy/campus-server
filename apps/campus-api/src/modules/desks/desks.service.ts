@@ -213,13 +213,15 @@ export class DesksService {
 
 /**
  * Lets an admin through on their role, once the cohort is known to exist,
- * and anybody else on a live membership of it; claiming also turns guests
- * away. The role and status are read from the account, not the session.
+ * and anybody else on a live membership of it; claiming and releasing also
+ * turn guests away. The role and status are read from the account, not the
+ * session.
  *
- * Claiming reads the account and the membership under share locks, so a
- * suspension, a demotion or a membership ending waits for the claim to
- * commit and then ends it. Releasing reads the account under one too, so an
- * admin demoted meanwhile cannot free a desk on the role they lost.
+ * Claiming reads the membership and then the account under share locks, in
+ * the order ending a membership takes them, so a membership ending, a
+ * suspension or a demotion waits for the claim to commit and then ends it.
+ * Releasing reads the account under one too, so an admin demoted meanwhile
+ * cannot free a desk on the role they lost.
  */
 async function admit(
   db: DbExecutor,
@@ -228,6 +230,19 @@ async function admit(
   purpose: Purpose,
   now: Date,
 ): Promise<{ admin: boolean }> {
+  const membership = db
+    .select({ role: cohortMembers.role })
+    .from(cohortMembers)
+    .where(
+      and(
+        eq(cohortMembers.cohortId, cohortId),
+        eq(cohortMembers.userId, user.id),
+        isLiveMembership(now),
+      ),
+    );
+  const [member] =
+    purpose === 'claim' ? await membership.for('share') : await membership;
+
   const accountQuery = db
     .select({ systemRole: users.systemRole, status: users.status })
     .from(users)
@@ -254,26 +269,14 @@ async function admit(
     return { admin: true };
   }
 
-  const membership = db
-    .select({ role: cohortMembers.role })
-    .from(cohortMembers)
-    .where(
-      and(
-        eq(cohortMembers.cohortId, cohortId),
-        eq(cohortMembers.userId, user.id),
-        isLiveMembership(now),
-      ),
-    );
-  const [member] =
-    purpose === 'claim' ? await membership.for('share') : await membership;
   if (!member) {
     throw new DeskForbiddenException(
       "Only the cohort's live members and admins may use its desks",
       { cohortId },
     );
   }
-  if (purpose === 'claim' && member.role === CohortRole.Guest) {
-    throw new DeskForbiddenException('Guests cannot claim a desk', {
+  if (purpose !== 'view' && member.role === CohortRole.Guest) {
+    throw new DeskForbiddenException('Guests cannot hold a desk', {
       cohortId,
     });
   }
