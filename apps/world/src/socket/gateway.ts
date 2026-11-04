@@ -1,11 +1,4 @@
-import {
-  microphoneMuter,
-  mintRoomToken,
-  participantIdentity,
-  participantRemover,
-  spaceRoomName,
-  type MuteResult,
-} from '@campus/media';
+import { microphoneMuter, type MuteResult } from '@campus/media';
 import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
 import {
   COHORT_ROLES,
@@ -48,18 +41,14 @@ import {
   type Refusal,
   type UpgradeDecision,
 } from './authenticate.js';
-import {
-  Connections,
-  personOf,
-  type CallSpec,
-  type Connection,
-} from './connections.js';
+import { Connections, personOf, type Connection } from './connections.js';
 import { createContext, sendClose } from './context.js';
 import { SayBudget } from './earshot.js';
 import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
 import { FrameBudget } from './frame-budget.js';
 import { avatarOf, createAppearance } from './features/appearance.js';
 import { createBroadcastRoom } from './features/broadcast-room.js';
+import { createCalls } from './features/calls.js';
 import { createChat } from './features/chat.js';
 import { createDoors } from './features/doors.js';
 import { createEntryRequests } from './features/entry-requests.js';
@@ -145,7 +134,7 @@ export function registerGateway(
   const removals = new SpaceRemovals();
 
   function afterSpacesRead(): void {
-    refreshCalls();
+    calls.refresh();
     locks.refreshLockable();
     doors.refreshNames();
     requests.review();
@@ -198,8 +187,7 @@ export function registerGateway(
    * step; per tick it is one frame per socket, however many moved.
    */
   function flushMoves(): void {
-    const touched = new Set(nearbyStale);
-    nearbyStale.clear();
+    const touched = calls.takeStaleNearby();
     for (const { cohortId } of pendingMoves.values()) touched.add(cohortId);
     sendMoves();
     if (!media || touched.size === 0) return;
@@ -210,7 +198,7 @@ export function registerGateway(
       if (inCohort) inCohort.push(connection);
       else byCohort.set(connection.cohortId, [connection]);
     }
-    for (const inCohort of byCohort.values()) updateNearby(inCohort);
+    for (const inCohort of byCohort.values()) calls.updateNearby(inCohort);
   }
 
   function sendMoves(): void {
@@ -256,127 +244,10 @@ export function registerGateway(
   }
 
   const media = mediaCredentials(env);
-  const removeFromCall = media ? participantRemover(media) : undefined;
   const muteMicrophone = media ? microphoneMuter(media) : undefined;
   const chat = createChat(ctx, doors.get);
-  const broadcastRoom = createBroadcastRoom(ctx, media, removeFromRoom);
-  /** Cohorts whose `nearby` lists may be out of date though nobody moved. */
-  const nearbyStale = new Set<string>();
-
-  /** The call the space a socket stands in has, or null where it has none. */
-  function callFor(connection: Connection): CallSpec | null {
-    const space = doors.get(connection.spaceKey);
-    if (!space) return null;
-    let room: string;
-    try {
-      room = spaceRoomName({
-        cohortId: connection.cohortId,
-        spaceId: space.id,
-      });
-    } catch {
-      return null;
-    }
-    return {
-      room,
-      hearing: space.audioMode === 'proximity' ? 'proximity' : 'room',
-      audibleRadius: space.audibleRadius,
-      subscribeRadius: space.subscribeRadius,
-    };
-  }
-
-  function sameCall(a: CallSpec | null, b: CallSpec | undefined): boolean {
-    if (!a || !b) return !a && !b;
-    return (
-      a.room === b.room &&
-      a.hearing === b.hearing &&
-      a.audibleRadius === b.audibleRadius &&
-      a.subscribeRadius === b.subscribeRadius
-    );
-  }
-
-  /**
-   * Removals LiveKit has not yet confirmed, by room and identity: kept until
-   * one succeeds, and tried again at every heartbeat, so somebody who left a
-   * room, or lost the right to speak in one, is never left in it.
-   */
-  const pendingRemovals = new Map<string, { room: string; identity: string }>();
-  const removing = new Set<string>();
-
-  /** Takes an identity out of a room, revoking its tokens; retried until LiveKit confirms. */
-  function removeFromRoom(room: string, identity: string): void {
-    if (!removeFromCall) return;
-    const key = `${room}\u0000${identity}`;
-    pendingRemovals.set(key, { room, identity });
-    if (removing.has(key)) return;
-    removing.add(key);
-    removeFromCall(room, identity)
-      .then(
-        () => pendingRemovals.delete(key),
-        (err: unknown) => {
-          app.log.warn(
-            { err, room },
-            'could not take somebody out of a room, trying again at the heartbeat',
-          );
-        },
-      )
-      .finally(() => removing.delete(key));
-  }
-
-  function retryRemovals(): void {
-    for (const { room, identity } of pendingRemovals.values()) {
-      removeFromRoom(room, identity);
-    }
-  }
-
-  function leaveCall(connection: Connection): void {
-    const call = connection.call;
-    if (!call) return;
-    connection.call = undefined;
-    removeFromRoom(call.room, call.identity);
-  }
-
-  /** Hands the socket the call for the space it stands in, after taking it out of the last one. */
-  async function joinCall(connection: Connection): Promise<void> {
-    if (!media) return;
-    leaveCall(connection);
-    nearbyStale.add(connection.cohortId);
-    const call = callFor(connection);
-    if (!call) {
-      send(connection.socket, { type: 'call', call: null });
-      return;
-    }
-    const identity = participantIdentity(connection.userId);
-    connection.call = { ...call, identity };
-    let token;
-    try {
-      token = await mintRoomToken(media, {
-        room: call.room,
-        identity,
-        name: connection.appearance.displayName ?? undefined,
-        canPublish: true,
-      });
-    } catch (err) {
-      app.log.error(
-        { err, userId: connection.userId, spaceKey: connection.spaceKey },
-        'could not mint a token for a space’s call',
-      );
-      if (connection.call?.identity === identity) {
-        connection.call = undefined;
-        if (connections.has(connection)) {
-          send(connection.socket, { type: 'call', call: null });
-        }
-      }
-      return;
-    }
-    // Walked on, or gone, while the token was minted: that call is stale.
-    if (connection.call?.identity !== identity || !connections.has(connection))
-      return;
-    send(connection.socket, {
-      type: 'call',
-      call: { ...call, url: token.url, token: token.token },
-    });
-  }
-
+  const calls = createCalls(ctx, doors, media);
+  const broadcastRoom = createBroadcastRoom(ctx, media, calls.removeFromRoom);
   /**
    * Admins may act on anybody in their cohort's campus; a professor or
    * mentor only on somebody in the designated space they stand in, whose
@@ -929,61 +800,6 @@ export function registerGateway(
     );
   }
 
-  /** After the spaces are read: a new call for anybody whose space's call is not the one they hold. */
-  function refreshCalls(): void {
-    if (!media || stopping) return;
-    for (const connection of connections.all()) {
-      if (!sameCall(callFor(connection), connection.call)) {
-        void joinCall(connection);
-      }
-    }
-  }
-
-  /**
-   * Who each person in a proximity space can hear: the others in the same
-   * space within its subscribe radius, kept until they are past the radius
-   * times its hysteresis, so standing on the line does not flicker. Leaving
-   * a proximity space empties the list, and says so.
-   */
-  function updateNearby(inCohort: readonly Connection[]): void {
-    const here = inCohort.flatMap((connection) => {
-      const player = players.get(connection);
-      return player ? [{ connection, player }] : [];
-    });
-    for (const { connection, player } of here) {
-      const space = doors.get(connection.spaceKey);
-      let next = new Set<string>();
-      if (space?.audioMode === 'proximity') {
-        for (const other of here) {
-          if (
-            other.connection === connection ||
-            other.connection.spaceKey !== connection.spaceKey
-          )
-            continue;
-          const distance = Math.hypot(
-            other.player.x - player.x,
-            other.player.y - player.y,
-          );
-          const reach = connection.nearby.has(other.connection.userId)
-            ? space.subscribeRadius * space.hysteresisFactor
-            : space.subscribeRadius;
-          if (distance <= reach) next.add(other.connection.userId);
-        }
-      } else if (connection.nearby.size === 0) {
-        continue;
-      } else {
-        next = new Set();
-      }
-      if (
-        next.size !== connection.nearby.size ||
-        [...next].some((userId) => !connection.nearby.has(userId))
-      ) {
-        connection.nearby = next;
-        send(connection.socket, { type: 'nearby', userIds: [...next].sort() });
-      }
-    }
-  }
-
   const tick = setInterval(flushMoves, env.WORLD_TICK_MS);
   tick.unref();
 
@@ -1028,7 +844,7 @@ export function registerGateway(
     locks.unlockIfEmpty(connection.cohortId, left);
     requests.review(connection.cohortId, left);
     requests.review(connection.cohortId, spaceKey);
-    void joinCall(connection);
+    void calls.join(connection);
     presence.changeSpace(presenceOf(connection)).then(
       (held) => {
         if (!held) lostPlace(connection);
@@ -1142,10 +958,10 @@ export function registerGateway(
     // A redeploy closes every socket, but LiveKit keeps running: calls are
     // left to the clients, which reconnect and are handed new ones.
     if (!stopping) {
-      leaveCall(connection);
+      calls.leave(connection);
       broadcastRoom.leave(connection);
     }
-    nearbyStale.add(connection.cohortId);
+    calls.markNearbyStale(connection.cohortId);
     // A connection displaced here no longer holds the account's presence;
     // after shutdown began, everybody has been removed already.
     if (connections.has(connection) && !stopping) {
@@ -1439,7 +1255,7 @@ export function registerGateway(
     sweepUnwelcome();
     sweepSessions();
     void doors.reload();
-    if (!stopping) retryRemovals();
+    if (!stopping) calls.retryRemovals();
     const now = Date.now();
     players.forgetExpired(now);
     for (const connection of connections.all()) {
@@ -1953,7 +1769,7 @@ export function registerGateway(
       lockedSpaces: locks.lockedIn(connection.cohortId),
       spaces: [...doors.names()],
     });
-    void joinCall(connection);
+    void calls.join(connection);
     void broadcastRoom.join(connection);
     requests.review(connection.cohortId, connection.spaceKey);
 
