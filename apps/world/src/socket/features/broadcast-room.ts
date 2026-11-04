@@ -18,6 +18,8 @@ type BroadcastRoomContext = Pick<WorldContext, 'app' | 'connections' | 'send'>;
  */
 const SPEAKING_TOKEN_TTL_SECONDS = 60;
 
+export type BroadcastRoom = ReturnType<typeof createBroadcastRoom>;
+
 export function createBroadcastRoom(
   ctx: BroadcastRoomContext,
   media: ReturnType<typeof mediaCredentials>,

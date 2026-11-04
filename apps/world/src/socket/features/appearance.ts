@@ -18,6 +18,8 @@ export function avatarOf(player: Player, connection: Connection): Avatar {
   };
 }
 
+export type AppearanceFeature = ReturnType<typeof createAppearance>;
+
 export function createAppearance(
   ctx: AppearanceContext,
   accounts: AccountLookup,
