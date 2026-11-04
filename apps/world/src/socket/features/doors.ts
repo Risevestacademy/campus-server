@@ -1,8 +1,17 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
-import { SPACE_ACCESS, type SpaceFacts } from '@campus/space-access';
+import {
+  SPACE_ACCESS,
+  roomLinkOpen,
+  type SpaceFacts,
+} from '@campus/space-access';
 
-import type { AccountLookup, WorldSpace } from '../../infra/accounts.js';
+import type {
+  AccountLookup,
+  RoomLinkPass,
+  WorldSpace,
+} from '../../infra/accounts.js';
 import { traced } from '../../infra/traced.js';
+import type { Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { encode, type SpaceName } from '../protocol.js';
 
@@ -59,6 +68,8 @@ export function createDoors(
   let doors: ReadonlyMap<string, WorldSpace> = new Map();
   /** Whether a read has ever succeeded, so a missing key means no row. */
   let doorsRead = false;
+  /** Who entered through a room link, read with the doors. */
+  let roomLinkPasses: readonly RoomLinkPass[] = [];
   let doorsLoading: Promise<void> | undefined;
   let readDoorsAgain = false;
   let spaceNames = spaceNamesFrom(doors);
@@ -81,6 +92,7 @@ export function createDoors(
             accounts.spacesOn(map.id, new Date()),
           );
           doorsRead = true;
+          await readRoomLinkPasses();
           afterRead();
         } catch (err) {
           app.log.error(
@@ -93,6 +105,34 @@ export function createDoors(
       doorsLoading = undefined;
     });
     return doorsLoading;
+  }
+
+  /** Apart from the doors, so a failed read leaves the doors current. */
+  async function readRoomLinkPasses(): Promise<void> {
+    try {
+      roomLinkPasses = await traced('world.room_link_passes.read', () =>
+        accounts.roomLinkPassesOn(map.id, new Date()),
+      );
+    } catch (err) {
+      app.log.error(
+        { err },
+        'could not read room link passes; they keep what they had',
+      );
+    }
+  }
+
+  function holdsRoomLinkPass(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): boolean {
+    return roomLinkPasses.some(
+      (pass) =>
+        pass.spaceKey === spaceKey &&
+        pass.userId === connection.userId &&
+        pass.cohortId === connection.cohortId &&
+        roomLinkOpen(pass, now),
+    );
   }
 
   const ready = reload().then(() => {
@@ -129,6 +169,8 @@ export function createDoors(
   return {
     reload,
     ready,
+    readRoomLinkPasses,
+    holdsRoomLinkPass,
     refreshNames,
     get: (spaceKey: string): WorldSpace | undefined => doors.get(spaceKey),
     all: (): ReadonlyMap<string, WorldSpace> => doors,

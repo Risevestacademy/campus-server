@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
 import { loadEnv } from '../infra/env.js';
+import type { RoomLinkPass } from '../infra/accounts.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
 import { spaceIndexFrom } from '../movement/spaces.js';
@@ -118,6 +119,8 @@ export const accounts = {
     if (accounts.failSpaces) throw new Error('postgres is down');
     return new Map(accounts.spaces);
   },
+  passes: [] as RoomLinkPass[],
+  roomLinkPassesOn: async () => accounts.passes,
   spaceListeners: [] as (() => void)[],
   onSpacesChanged: async (listener: () => void) => {
     accounts.spaceListeners.push(listener);
@@ -506,6 +509,7 @@ export function useWorld(): void {
     accounts.roles.clear();
     accounts.groups.clear();
     accounts.failSpaces = false;
+    accounts.passes = [];
     accounts.failMemberships = false;
     openLibrary();
     // A test that changed the doors must not leave them changed for the next.

@@ -343,12 +343,31 @@ interface AuditEntryShapes {
   };
   [AuditAction.RoomLinkCreated]: {
     subject: AuditSubjectType.RoomLink;
-    details: { cohortId: string; code: string; title: string };
+    details: {
+      cohortId: string;
+      code: string;
+      title: string;
+    } & RoomLinkWindowDetails;
   };
   [AuditAction.RoomLinkRevoked]: {
     subject: AuditSubjectType.RoomLink;
     details: { cohortId: string; code: string; title: string };
   };
+  [AuditAction.RoomLinkWindowChanged]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      before: RoomLinkWindowDetails;
+      after: RoomLinkWindowDetails;
+    };
+  };
+}
+
+/** When a room link's event runs, as ISO timestamps; both null for none. */
+interface RoomLinkWindowDetails {
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 /**

@@ -30,7 +30,9 @@ import {
   waitFor,
   walkToLibrary,
   world,
+  toTheDoor,
 } from './gateway.testing.js';
+import type { RoomLinkPass } from '../infra/accounts.js';
 
 useWorld();
 
@@ -61,6 +63,109 @@ describe('movement', () => {
         player: { x: 2, y: 0, facing: 'right' },
       });
       await leave(conn);
+    });
+
+    describe('through a room link', () => {
+      const MINUTE = 60_000;
+      const pass = (
+        userId: string,
+        startsInMinutes: number,
+        cohortId = COHORT,
+      ): RoomLinkPass => ({
+        cohortId,
+        spaceKey: 'library',
+        userId,
+        startsAt: new Date(Date.now() + startsInMinutes * MINUTE),
+        endsAt: new Date(Date.now() + (startsInMinutes + 60) * MINUTE),
+      });
+
+      it('lets somebody with a pass into a designated space while the window is open', async () => {
+        const ada = person();
+        designateLibrary();
+        accounts.passes = [pass(ada, 5)];
+        await world.gateway.spacesChanged();
+        const conn = await arrive(ada);
+
+        await expect(walkToLibrary(conn)).resolves.toMatchObject({
+          outcome: 'moved',
+          player: { x: 3, y: 0 },
+        });
+        await leave(conn);
+      });
+
+      it('keeps them out before the window opens, and in another cohort', async () => {
+        const ada = person();
+        const grace = person();
+        designateLibrary();
+        accounts.passes = [pass(ada, 15), pass(grace, 0, 'cohort-2')];
+        await world.gateway.spacesChanged();
+        const first = await arrive(ada);
+        const second = await arrive(grace);
+
+        await expect(walkToLibrary(first)).resolves.toMatchObject({
+          outcome: 'refused',
+        });
+        await expect(walkToLibrary(second)).resolves.toMatchObject({
+          outcome: 'refused',
+        });
+        await Promise.all([leave(first), leave(second)]);
+      });
+
+      it('keeps the rest of the door: a space not yet set up stays admins only', async () => {
+        const ada = person();
+        accounts.spaces.set('library', {
+          kind: null,
+          access: SPACE_ACCESS.Normal,
+          retiredAt: null,
+          locked: false,
+          grants: [],
+        });
+        accounts.passes = [pass(ada, 0)];
+        await world.gateway.spacesChanged();
+        const conn = await arrive(ada);
+
+        await expect(walkToLibrary(conn)).resolves.toMatchObject({
+          outcome: 'refused',
+        });
+        await leave(conn);
+      });
+
+      it('reads the passes again before refusing a walk, for a pass made a moment ago', async () => {
+        const ada = person();
+        designateLibrary();
+        await world.gateway.spacesChanged();
+        const conn = await arrive(ada);
+        await toTheDoor(conn);
+        // In the database, but world has not heard yet.
+        accounts.passes = [pass(ada, 0)];
+
+        conn.ws.send(
+          JSON.stringify({ type: 'goToSpace', spaceKey: 'library' }),
+        );
+
+        await expect(
+          waitFor(conn, (m) => m.type === 'walkEnded'),
+        ).resolves.toMatchObject({ reason: 'arrived', toSpaceKey: 'library' });
+        await leave(conn);
+      });
+
+      it('still lets the doors change when the passes cannot be read', async () => {
+        accounts.roomLinkPassesOn = async () => {
+          throw new Error('no such table');
+        };
+        try {
+          designateLibrary();
+          await world.gateway.spacesChanged();
+          const conn = await arrive(person());
+
+          await expect(walkToLibrary(conn)).resolves.toMatchObject({
+            outcome: 'refused',
+          });
+          await leave(conn);
+        } finally {
+          accounts.roomLinkPassesOn = async () => accounts.passes;
+        }
+      });
     });
 
     it('lets in somebody the list names, by person or by role', async () => {

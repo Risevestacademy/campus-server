@@ -30,5 +30,6 @@ import {
     GoogleCalendarClient,
     { provide: CALENDAR_FETCH, useValue: fetchWithTimeout },
   ],
+  exports: [CalendarEventsService],
 })
 export class CalendarModule {}

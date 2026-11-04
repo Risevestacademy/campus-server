@@ -1,5 +1,5 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
-import { mayEnter } from '@campus/space-access';
+import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 import type { FastifyInstance } from 'fastify';
 
 import { type AccountLookup } from '../infra/accounts.js';
@@ -116,6 +116,14 @@ export function registerGateway(
       return false;
     }
     const space = doors.factsFor(spaceKey);
+    // A pass gets past the list and a lock, never the rest of the door.
+    if (doors.holdsRoomLinkPass(connection, spaceKey, now)) {
+      return mayEnter(
+        personOf(connection),
+        { ...space, access: SPACE_ACCESS.Normal, locked: false },
+        now,
+      );
+    }
     return mayEnter(
       personOf(connection),
       locks.isLocked(connection.cohortId, spaceKey)
@@ -150,6 +158,7 @@ export function registerGateway(
   });
   const walks = createWalks(ctx, {
     presence,
+    readRoomLinkPasses: doors.readRoomLinkPasses,
     requests,
     mayStepInto,
     noteMoved,

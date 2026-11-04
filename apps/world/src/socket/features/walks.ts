@@ -51,10 +51,13 @@ interface Walk {
   taken: number;
   /** Steps refused or blocked in a row. */
   failed: number;
+  /** Whether the passes were read again before a refusal, as they are once. */
+  rechecked: boolean;
 }
 
 export interface WalkDeps {
   presence: Pick<PresenceStore, 'online' | 'instanceId'>;
+  readRoomLinkPasses(): Promise<void>;
   requests: Pick<EntryRequestsFeature, 'hasPass' | 'passFor' | 'mayAsk'>;
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
   noteMoved(connection: Connection): void;
@@ -65,7 +68,14 @@ export type Walks = ReturnType<typeof createWalks>;
 
 export function createWalks(
   ctx: WalksContext,
-  { presence, requests, mayStepInto, noteMoved, arrivedAt }: WalkDeps,
+  {
+    presence,
+    readRoomLinkPasses,
+    requests,
+    mayStepInto,
+    noteMoved,
+    arrivedAt,
+  }: WalkDeps,
 ) {
   const { app, env, map, connections, players, send, isStopping } = ctx;
   const walks = new Map<Connection, Walk>();
@@ -151,6 +161,7 @@ export function createWalks(
       aimedAt: null,
       taken: 0,
       failed: 0,
+      rechecked: false,
       timer: setTimeout(() => walkOn(connection), 0).unref(),
     });
   }
@@ -389,7 +400,8 @@ export function createWalks(
         return;
       }
       if (plan.path.length === 0) {
-        endWalk(connection, plan.closed ? 'refused' : 'arrived', plan.closed);
+        if (plan.closed) refuseWalk(connection, walk, plan.closed);
+        else endWalk(connection, 'arrived');
         return;
       }
       walk.path = plan.path;
@@ -424,7 +436,7 @@ export function createWalks(
       walk.failed += 1;
       if (walk.failed >= 2) {
         const into = spaceAt(map.spaces, step(me, direction));
-        if (moved.outcome === 'refused') endWalk(connection, 'refused', into);
+        if (moved.outcome === 'refused') refuseWalk(connection, walk, into);
         else endWalk(connection, 'no_way');
         return;
       }
@@ -433,6 +445,25 @@ export function createWalks(
       () => walkOn(connection),
       env.WORLD_STEP_MS,
     ).unref();
+  }
+
+  /**
+   * A pass made by entering through a room link reaches world by a read that
+   * may not have finished when the walk began, so a walk about to be refused
+   * reads the passes once more first, and goes on if the door now opens.
+   */
+  function refuseWalk(connection: Connection, walk: Walk, into: string): void {
+    if (walk.rechecked) {
+      endWalk(connection, 'refused', into);
+      return;
+    }
+    walk.rechecked = true;
+    void readRoomLinkPasses().then(() => {
+      if (walks.get(connection) !== walk) return;
+      walk.path = [];
+      walk.failed = 0;
+      walkOn(connection);
+    });
   }
 
   function cancelAll(): void {
