@@ -118,7 +118,7 @@ export class Connections {
 
   /** Every socket the account holds, one per cohort it is in. */
   forUser(userId: string): Connection[] {
-    return [...this.held.ofAccount(userId).values()];
+    return [...this.held.ofAccount(userId)];
   }
 
   all(): Connection[] {

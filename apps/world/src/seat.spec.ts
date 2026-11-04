@@ -22,7 +22,7 @@ describe('SeatMap', () => {
 
     expect(map.get(at('ada', 'frontend'))).toBe(2);
     expect(map.size).toBe(1);
-    expect([...map.ofAccount('ada').values()]).toEqual([2]);
+    expect([...map.ofAccount('ada')]).toEqual([2]);
   });
 
   /** A stored undefined is still an entry, as with Map. */
@@ -46,7 +46,7 @@ describe('SeatMap', () => {
     expect(map.size).toBe(1);
     expect(map.accounts).toBe(1);
     expect([...map.inCohort('frontend')]).toEqual([]);
-    expect([...map.ofAccount('ada')]).toEqual([['backend', 2]]);
+    expect([...map.ofAccount('ada')]).toEqual([2]);
   });
 
   it('lists everybody in one cohort, in the order they came', () => {
@@ -55,10 +55,7 @@ describe('SeatMap', () => {
     map.set(at('bea', 'backend'), 'b');
     map.set(at('cy', 'frontend'), 'c');
 
-    expect([...map.inCohort('frontend')]).toEqual([
-      ['ada', 'a'],
-      ['cy', 'c'],
-    ]);
+    expect([...map.inCohort('frontend')]).toEqual(['a', 'c']);
     expect([...map.inCohort('design')]).toEqual([]);
   });
 
@@ -68,10 +65,7 @@ describe('SeatMap', () => {
     map.set(at('bea', 'frontend'), 'x');
     map.set(at('ada', 'backend'), 'b');
 
-    expect([...map.ofAccount('ada')]).toEqual([
-      ['frontend', 'f'],
-      ['backend', 'b'],
-    ]);
+    expect([...map.ofAccount('ada')]).toEqual(['f', 'b']);
     expect([...map.ofAccount('cy')]).toEqual([]);
   });
 

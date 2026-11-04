@@ -175,9 +175,7 @@ function inSpace<E extends { spaceKey: string }>(
   spaceKey?: string,
 ): E[] {
   const candidates =
-    cohortId === undefined
-      ? entries.values()
-      : entries.inCohort(cohortId).values();
+    cohortId === undefined ? entries.values() : entries.inCohort(cohortId);
   return [...candidates].filter(
     (entry) => spaceKey === undefined || entry.spaceKey === spaceKey,
   );

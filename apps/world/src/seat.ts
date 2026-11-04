@@ -68,14 +68,17 @@ export class SeatMap<T> implements Iterable<[Seat, T]> {
     return this.byAccount.size;
   }
 
-  /** Everybody in one cohort, by account. Live, not a copy. */
-  inCohort(cohortId: string): ReadonlyMap<string, T> {
-    return this.byCohort.get(cohortId) ?? NOBODY;
+  /**
+   * Everybody in one cohort, in the order they came. Values, not the inner
+   * map: a caller holding that could change one index without the other.
+   */
+  inCohort(cohortId: string): IterableIterator<T> {
+    return (this.byCohort.get(cohortId) ?? NOBODY).values();
   }
 
-  /** One account in every cohort it is in, by cohort. Live, not a copy. */
-  ofAccount(userId: string): ReadonlyMap<string, T> {
-    return this.byAccount.get(userId) ?? NOBODY;
+  /** One account in every cohort it is in, in the order it joined them. */
+  ofAccount(userId: string): IterableIterator<T> {
+    return (this.byAccount.get(userId) ?? NOBODY).values();
   }
 
   *entries(): IterableIterator<[Seat, T]> {
@@ -87,7 +90,9 @@ export class SeatMap<T> implements Iterable<[Seat, T]> {
   }
 
   *keys(): IterableIterator<Seat> {
-    for (const [seat] of this.entries()) yield seat;
+    for (const [cohortId, inCohort] of this.byCohort) {
+      for (const userId of inCohort.keys()) yield { userId, cohortId };
+    }
   }
 
   *values(): IterableIterator<T> {

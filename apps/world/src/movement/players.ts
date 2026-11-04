@@ -174,7 +174,7 @@ export class Players {
 
   /** Everybody standing in one cohort's campus. */
   in(cohortId: string): Player[] {
-    return [...this.standing.inCohort(cohortId).values()].map((held) => ({
+    return [...this.standing.inCohort(cohortId)].map((held) => ({
       ...held.player,
     }));
   }
