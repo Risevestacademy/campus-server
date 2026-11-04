@@ -9,6 +9,8 @@ type LocksContext = Pick<
   'connections' | 'send' | 'sendFrame' | 'broadcast' | 'isStopping'
 >;
 
+export type Locks = ReturnType<typeof createLocks>;
+
 export function createLocks(
   ctx: LocksContext,
   doors: Pick<Doors, 'all'>,
