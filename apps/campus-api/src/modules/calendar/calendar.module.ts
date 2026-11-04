@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { fetchWithTimeout } from '../../shared/http/fetch-with-timeout.js';
 import { SessionModule } from '../auth/session.module.js';
+import { RoomLinksModule } from '../room-links/room-links.module.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import { CalendarConnectService } from './calendar-connect.service.js';
 import { CalendarEventsService } from './calendar-events.service.js';
@@ -15,8 +16,9 @@ import {
 } from './google-calendar.client.js';
 
 @Module({
-  // SessionModule for the guard, and for UsersService through it.
-  imports: [SessionModule],
+  // SessionModule for the guard, and for UsersService through it;
+  // RoomLinksModule to say which room an event is held in.
+  imports: [SessionModule, RoomLinksModule],
   controllers: [CalendarController],
   providers: [
     AccessTokenCache,
