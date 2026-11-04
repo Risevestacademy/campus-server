@@ -337,6 +337,14 @@ interface AuditEntryShapes {
       clearedSpaceMembershipIds: string[];
     };
   };
+  [AuditAction.RoomLinkCreated]: {
+    subject: AuditSubjectType.RoomLink;
+    details: { cohortId: string; code: string; title: string };
+  };
+  [AuditAction.RoomLinkRevoked]: {
+    subject: AuditSubjectType.RoomLink;
+    details: { cohortId: string; code: string; title: string };
+  };
 }
 
 /**

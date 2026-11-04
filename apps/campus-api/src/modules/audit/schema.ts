@@ -161,6 +161,8 @@ export enum AuditAction {
    * An admin deleted a group. The row is gone, so `details` keeps what it was.
    */
   MentorshipGroupDeleted = 'mentorship_group_deleted',
+  RoomLinkCreated = 'room_link_created',
+  RoomLinkRevoked = 'room_link_revoked',
 }
 
 export enum AuditSubjectType {
@@ -177,6 +179,7 @@ export enum AuditSubjectType {
   /** One row of `space_memberships`: a grant of access to a space. */
   SpaceMembership = 'space_membership',
   MentorshipGroup = 'mentorship_group',
+  RoomLink = 'room_link',
 }
 
 /**
