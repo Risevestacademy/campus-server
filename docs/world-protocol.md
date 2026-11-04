@@ -522,6 +522,22 @@ own locks.
 - **A step refused while it is locked** looks the same as any other
   `refused`. Use the locked list to tell the person why.
 
+## Desks
+
+Desks, and who holds which in your cohort, come from campus-api:
+`GET /v1/cohorts/{cohortId}/desks`. Claiming and letting go are campus-api
+routes too. world carries no desk state; it only says when to fetch again.
+
+- **When to fetch.** On arriving, and whenever `{ "type": "desksChanged" }`
+  arrives. It comes after anybody in your cohort claims or lets go of a desk,
+  an admin frees one, a membership or account ends, or a map sync adds or
+  retires desks (that last one goes to every cohort).
+- **Wait a moment first.** A message for every cohort, from a map sync or
+  world reconnecting to the database, reaches every client at once. Wait a
+  random 0–2 seconds before fetching, so they don't all arrive together.
+- **Your own claim** answers with the desk as it now is, so you need not
+  wait for the message to draw it.
+
 ## Staff: muting and removing
 
 Staff can act in the moment on somebody misbehaving in a space.

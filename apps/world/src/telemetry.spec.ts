@@ -67,6 +67,7 @@ const lookup = {
   memberships: async () => new Map(),
   spacesOn: async () => new Map(),
   onSpacesChanged: async () => undefined,
+  onDesksChanged: async () => undefined,
   onProfileChanged: async () => undefined,
   close: async () => undefined,
 } as unknown as AccountLookup & { failFind: boolean };

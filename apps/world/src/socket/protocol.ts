@@ -626,6 +626,17 @@ export const ServerMessage = z
       }),
     z
       .object({
+        type: z.literal('desksChanged'),
+      })
+      .meta({
+        id: 'DesksChangedMessage',
+        description:
+          'Who holds a desk in your cohort may have changed, or desks were ' +
+          'added to or taken off the map: fetch ' +
+          '`GET /v1/cohorts/{cohortId}/desks` from campus-api again.',
+      }),
+    z
+      .object({
         type: z.literal('spaces'),
         spaces: z.array(SpaceName),
       })

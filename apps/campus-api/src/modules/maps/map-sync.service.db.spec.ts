@@ -1,4 +1,5 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DESKS_CHANGED_CHANNEL } from '@campus/session';
 import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
@@ -1036,6 +1037,40 @@ describe('telling world the spaces changed', () => {
       );
       await vi.waitFor(() => expect(heard).toContain('marker'));
       expect(heard).toEqual(['marker']);
+    } finally {
+      await stop();
+    }
+  });
+
+  it('tells every cohort when desks are added or retired, and only then', async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(DESKS_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    try {
+      await sync([map('campus', [space('library', 'open')])]);
+      await sync([
+        map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
+      ]);
+      await sync([
+        map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
+      ]);
+      // A held desk leaving: one word to every cohort, not one per holder too.
+      await db.execute(sql`truncate cohorts cascade`);
+      const [cohort] = await db
+        .insert(cohorts)
+        .values({ name: 'Cohort 1', code: 'C1' })
+        .returning();
+      const [desk] = await db.select().from(desks);
+      await db
+        .insert(deskClaims)
+        .values({ deskId: desk.id, cohortId: cohort.id, userId: admin.id });
+      await sync([map('campus', [space('library', 'open')])]);
+      await db.execute(
+        sql`select pg_notify(${DESKS_CHANGED_CHANNEL}, 'marker')`,
+      );
+      await vi.waitFor(() => expect(heard).toContain('marker'));
+      expect(heard).toEqual(['', '', 'marker']);
     } finally {
       await stop();
     }

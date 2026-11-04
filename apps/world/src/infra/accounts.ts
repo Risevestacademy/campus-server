@@ -1,4 +1,5 @@
 import {
+  DESKS_CHANGED_CHANNEL,
   PROFILE_CHANGED_CHANNEL,
   hasAdminPowers,
   spriteKeyOrNone,
@@ -69,6 +70,12 @@ export interface AccountLookup {
    * rejects if it could not start.
    */
   onProfileChanged(listener: (userId: string) => void): Promise<void>;
+  /**
+   * Calls `listener` with a cohort id, or null for every cohort, whenever
+   * campus-api says who holds a desk there may have changed. Resolves once
+   * listening; rejects if it could not start.
+   */
+  onDesksChanged(listener: (cohortId: string | null) => void): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -465,6 +472,15 @@ export function createAccountLookup(env: Env): AccountLookup {
           space.key,
           toWorldSpace(space, lists.get(space.id) ?? []),
         ]),
+      );
+    },
+    async onDesksChanged(listener): Promise<void> {
+      // As for spaces: a change made while the driver was reconnecting told
+      // nobody, so every cohort fetches again once it is back.
+      await sql.listen(
+        DESKS_CHANGED_CHANNEL,
+        (cohortId) => listener(cohortId === '' ? null : cohortId),
+        () => listener(null),
       );
     },
     async onSpacesChanged(listener): Promise<void> {

@@ -163,6 +163,8 @@ export enum AuditAction {
   MentorshipGroupDeleted = 'mentorship_group_deleted',
   RoomLinkCreated = 'room_link_created',
   RoomLinkRevoked = 'room_link_revoked',
+  /** An admin ended somebody else's claim on a desk. */
+  DeskFreed = 'desk_freed',
 }
 
 export enum AuditSubjectType {
@@ -180,6 +182,8 @@ export enum AuditSubjectType {
   SpaceMembership = 'space_membership',
   MentorshipGroup = 'mentorship_group',
   RoomLink = 'room_link',
+  /** One row of `desk_claims`: somebody holding a desk in a cohort. */
+  DeskClaim = 'desk_claim',
 }
 
 /**

@@ -933,6 +933,20 @@
       "additionalProperties": false,
       "description": "Which spaces can be locked changed, because an admin changed a space: replaces the list from `snapshot`."
     },
+    "DesksChangedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "desksChanged"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "Who holds a desk in your cohort may have changed, or desks were added to or taken off the map: fetch `GET /v1/cohorts/{cohortId}/desks` from campus-api again."
+    },
     "SpacesMessage": {
       "type": "object",
       "properties": {
@@ -1316,6 +1330,9 @@
         },
         {
           "$ref": "#/definitions/LockableSpacesMessage"
+        },
+        {
+          "$ref": "#/definitions/DesksChangedMessage"
         },
         {
           "$ref": "#/definitions/SpacesMessage"

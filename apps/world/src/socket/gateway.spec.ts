@@ -139,6 +139,10 @@ const accounts = {
   onSpacesChanged: async (listener: () => void) => {
     accounts.spaceListeners.push(listener);
   },
+  deskListeners: [] as ((cohortId: string | null) => void)[],
+  onDesksChanged: async (listener: (cohortId: string | null) => void) => {
+    accounts.deskListeners.push(listener);
+  },
   /** Who campus-api tells, through Postgres, when a profile changes. */
   profileListeners: [] as ((userId: string) => void)[],
   onProfileChanged: async (listener: (userId: string) => void) => {
@@ -4589,6 +4593,44 @@ describe('movement', () => {
 
       expect(conn.messages.filter((m) => m.type === 'spaces')).toEqual([]);
       await leave(conn);
+    });
+  });
+
+  describe('desks', () => {
+    const desksChanged = (cohortId: string | null) => {
+      for (const listener of accounts.deskListeners) listener(cohortId);
+    };
+
+    it('tells the people in the cohort campus-api names, and nobody else', async () => {
+      const here = await arrive(person());
+      const there = await arrive(person(), 'cohort-backend');
+
+      desksChanged(COHORT);
+
+      await expect(
+        waitFor(here, (m) => m.type === 'desksChanged'),
+      ).resolves.toEqual({ type: 'desksChanged' });
+      there.ws.send(JSON.stringify({ type: 'ping' }));
+      await waitFor(there, (m) => m.type === 'pong');
+      expect(there.messages.filter((m) => m.type === 'desksChanged')).toEqual(
+        [],
+      );
+      await Promise.all([leave(here), leave(there)]);
+    });
+
+    it('tells everybody when no cohort is named', async () => {
+      const here = await arrive(person());
+      const there = await arrive(person(), 'cohort-backend');
+
+      desksChanged(null);
+
+      await expect(
+        waitFor(here, (m) => m.type === 'desksChanged'),
+      ).resolves.toBeDefined();
+      await expect(
+        waitFor(there, (m) => m.type === 'desksChanged'),
+      ).resolves.toBeDefined();
+      await Promise.all([leave(here), leave(there)]);
     });
   });
 
