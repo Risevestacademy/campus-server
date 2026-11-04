@@ -1,3 +1,4 @@
+import { ROOM_LINK_OPENS_EARLY_MS } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 
@@ -5,14 +6,20 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import type { RoomLinkTargetDto } from '../room-links/dto/room-link.dto.js';
-import { RoomLinksService } from '../room-links/room-links.service.js';
+import {
+  RoomLinksService,
+  type RoomLinkWindow,
+} from '../room-links/room-links.service.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import {
   CalendarGrantsService,
   type CalendarGrant,
 } from './calendar-grants.service.js';
 import { CalendarRevocationService } from './calendar-revocation.service.js';
-import { CalendarUnavailableError } from './calendar.exceptions.js';
+import {
+  CalendarNotConfiguredError,
+  CalendarUnavailableError,
+} from './calendar.exceptions.js';
 import type {
   CalendarEventDto,
   CalendarEventsDto,
@@ -35,6 +42,10 @@ const PAGE_SIZE = 250;
 export const MAX_PAGES = 4;
 /** One read, however many requests it takes: the refresh and every page. */
 export const READ_BUDGET_MS = 20_000;
+/** Somebody is waiting to walk in, so a slow Google leaves the window be. */
+export const ENTRY_READ_BUDGET_MS = 3_000;
+const ENTRY_EVENT_FIELDS =
+  'items(status,start,end,location,description,organizer(self))';
 
 const DAY_MS = 86_400_000;
 export const DEFAULT_SPAN_DAYS = 7;
@@ -111,17 +122,122 @@ export class CalendarEventsService {
     }
   }
 
-  /** With a fresh access token once, if Google rejects the cached one. */
-  private async read(
+  /**
+   * The maker's own event carrying this room link that runs now, or starts
+   * within the link's early opening: its times. Null when there is none,
+   * when the maker has not connected a calendar, or when Google does not
+   * answer in time; the link's stored window then stands. Events somebody
+   * else organised are left out, so an invitation cannot move a window.
+   */
+  async runningRoomLinkEvent(
+    makerId: string,
+    code: string,
+    now: Date = new Date(),
+  ): Promise<RoomLinkWindow | null> {
+    let grant: CalendarGrant | null;
+    try {
+      grant = await this.grants.find(makerId);
+    } catch (err) {
+      if (err instanceof CalendarNotConfiguredError) {
+        return null;
+      }
+      throw err;
+    }
+    if (!grant) {
+      return null;
+    }
+    try {
+      const signal = AbortSignal.timeout(ENTRY_READ_BUDGET_MS);
+      const items = await this.withToken(grant, signal, (token) =>
+        this.running(token, now, signal),
+      );
+      for (const item of items) {
+        const startsAt = item.start?.dateTime;
+        const endsAt = item.end?.dateTime;
+        if (
+          item.status === 'cancelled' ||
+          item.organizer?.self !== true ||
+          !startsAt ||
+          !endsAt ||
+          extractRoomLinkCode(
+            this.appUrl,
+            item.location ?? null,
+            item.description ?? null,
+          ) !== code
+        ) {
+          continue;
+        }
+        const window = {
+          startsAt: new Date(startsAt),
+          endsAt: new Date(endsAt),
+        };
+        if (window.endsAt.getTime() > window.startsAt.getTime()) {
+          return window;
+        }
+      }
+      return null;
+    } catch (err) {
+      if (err instanceof GrantWithdrawnError) {
+        this.tokens.evict(makerId);
+        await this.grants.forget(grant);
+        this.logger.info(
+          { userId: makerId },
+          'calendar access withdrawn at google',
+        );
+      } else if (err instanceof CalendarNotConfiguredError) {
+        return null;
+      } else if (err instanceof CalendarUnavailableError) {
+        this.logger.info(
+          { userId: makerId, code },
+          'room link maker’s calendar unread; the window stands',
+        );
+      } else {
+        throw err;
+      }
+      return null;
+    }
+  }
+
+  private async running(
+    token: string,
+    now: Date,
+    signal: AbortSignal,
+  ): Promise<GoogleEvent[]> {
+    const url = new URL(EVENTS_URL);
+    url.search = new URLSearchParams({
+      timeMin: now.toISOString(),
+      timeMax: new Date(
+        now.getTime() + ROOM_LINK_OPENS_EARLY_MS + 1,
+      ).toISOString(),
+      singleEvents: 'true',
+      orderBy: 'startTime',
+      maxResults: String(PAGE_SIZE),
+      fields: ENTRY_EVENT_FIELDS,
+    }).toString();
+    return (await this.get(url, token, signal)).items ?? [];
+  }
+
+  private read(
     grant: CalendarGrant,
     from: Date,
     to: Date,
     signal: AbortSignal,
   ): Promise<EventsRead> {
+    return this.withToken(grant, signal, (token) =>
+      this.list(token, from, to, signal),
+    );
+  }
+
+  /** With a fresh access token once, if Google rejects the cached one. */
+  private async withToken<T>(
+    grant: CalendarGrant,
+    signal: AbortSignal,
+    use: (token: string) => Promise<T>,
+  ): Promise<T> {
     for (let attempt = 1; ; attempt++) {
       try {
         const token = await this.tokens.get(grant, signal);
-        return await this.list(token, from, to, signal);
+        return await use(token);
       } catch (err) {
         if (!(err instanceof AccessTokenRejected)) {
           throw err;

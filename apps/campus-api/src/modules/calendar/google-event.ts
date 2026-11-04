@@ -21,6 +21,7 @@ export interface GoogleEvent {
   start?: GoogleEventTime;
   end?: GoogleEventTime;
   attendees?: { self?: boolean; responseStatus?: string }[];
+  organizer?: { self?: boolean };
 }
 
 export const GOOGLE_EVENT_FIELDS =

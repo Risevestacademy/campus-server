@@ -125,6 +125,20 @@ event, and every event when the lookup fails, carries `room: null`. The
 video-conference link is not looked at: Google only ever puts a Meet link
 there.
 
+### When a room link's event runs
+
+Entering through a room link (`POST /v1/room-links/{code}/enter`) reads the
+calendar of whoever made the link, if they have connected one: one request
+for their events running now or starting within ten minutes. The first of
+those they organised themselves that carries the link sets the link's window
+to its times, so a meeting moved in Google opens its room at the new time.
+Events somebody else organised are left out, so inviting the maker to an
+event cannot move a window. Nothing else is kept.
+
+The read is held to three seconds. No grant, the calendar switched off,
+Google failing or slow, or no such event: the link's stored window stands.
+A grant Google has withdrawn is deleted, as for any read.
+
 ## Talking to Google
 
 Every request the calendar makes to Google, OAuth and Calendar API alike,
