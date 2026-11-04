@@ -25,7 +25,7 @@ import { Redis } from 'ioredis';
 import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
-import { oneAtATime } from './gateway.js';
+import { oneAtATime } from './one-at-a-time.js';
 import { CLOSES } from './protocol.js';
 import { loadEnv } from '../infra/env.js';
 import type { PositionToSave } from '../infra/positions.js';

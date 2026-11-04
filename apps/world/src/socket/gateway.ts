@@ -9,11 +9,7 @@ import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
 import { annotate, traced } from '../infra/traced.js';
 import type { PositionStore, SavedPosition } from '../infra/positions.js';
-import type {
-  Displacement,
-  Presence,
-  PresenceStore,
-} from '../infra/presence.js';
+import type { PresenceStore } from '../infra/presence.js';
 import {
   Direction,
   step,
@@ -48,6 +44,8 @@ import { createEntryRequests } from './features/entry-requests.js';
 import { createLocks } from './features/locks.js';
 import { createModeration } from './features/moderation.js';
 import { createPositions } from './features/positions.js';
+import { createPresence } from './features/presence.js';
+import { oneAtATime } from './one-at-a-time.js';
 import {
   ServerErrorCode,
   decode,
@@ -635,30 +633,10 @@ export function registerGateway(
 
   const positionWrites = createPositions(ctx, positions);
 
-  function presenceOf(connection: Connection): Presence {
-    return {
-      userId: connection.userId,
-      connectionId: connection.id,
-      cohortId: connection.cohortId,
-      spaceKey: connection.spaceKey,
-      since: connection.openedAt,
-      status: connection.availability.shown,
-    };
-  }
-
-  /** A write found a newer connection holding this one's place. */
-  function lostPlace(connection: Connection): void {
-    displacedElsewhere({
-      userId: connection.userId,
-      connectionId: connection.id,
-    });
-  }
-
   /**
    * After a move to `tile`: if it is in another space, tells the cohort and
    * records the new one in presence now, not at the next renewal. Skipped
-   * once shutdown has begun, as the write would undo shutdown's removal. A failed write is put right
-   * by the next renewal, which carries the space too.
+   * once shutdown has begun, as the write would undo shutdown's removal.
    */
   function recordSpaceCrossing(connection: Connection, tile: Tile): void {
     const spaceKey = spaceAt(map.spaces, tile);
@@ -675,100 +653,10 @@ export function registerGateway(
     requests.review(connection.cohortId, left);
     requests.review(connection.cohortId, spaceKey);
     void calls.join(connection);
-    presence.changeSpace(presenceOf(connection)).then(
-      (held) => {
-        if (!held) lostPlace(connection);
-      },
-      (err: unknown) => {
-        app.log.warn(
-          { err, userId: connection.userId },
-          'could not record a change of space, the next renewal will',
-        );
-      },
-    );
+    presenceSync.changeSpace(connection);
   }
 
-  const awayAfterMs = env.WORLD_AWAY_AFTER_SECONDS * 1000;
-
-  /**
-   * For any change to what a connection's cohort sees of its status: sent at
-   * once, like an arrival, since it is as rare, and to them as well, which is
-   * how they learn the server took them for away. Into presence without
-   * holding anybody up; a write that fails is put right by the next renewal,
-   * which carries the status too.
-   */
-  function statusChanged(connection: Connection): void {
-    broadcast(connection.cohortId, {
-      type: 'statusChanged',
-      userId: connection.userId,
-      status: connection.availability.shown,
-    });
-    presence.setStatus(presenceOf(connection)).catch((err: unknown) => {
-      app.log.warn(
-        { err, userId: connection.userId },
-        'could not record status, the next renewal will',
-      );
-    });
-  }
-
-  function noteActivity(connection: Connection): void {
-    if (connection.availability.active(Date.now())) {
-      statusChanged(connection);
-    }
-  }
-
-  /**
-   * Entries this instance stops renewing lapse on their own, so a failure
-   * here only leaves somebody looking online a little longer.
-   */
-  function leavePresence(leaving: readonly Connection[]): void {
-    if (leaving.length === 0) return;
-    presence.leave(leaving.map(presenceOf)).catch((err: unknown) => {
-      app.log.warn({ err }, 'could not remove presence');
-    });
-  }
-
-  /**
-   * The account entered the same cohort on another instance. Closed as a
-   * second tab here would close it, except the avatar leaves this instance
-   * too: it now stands on that one.
-   */
-  function displacedElsewhere({ userId, connectionId }: Displacement): void {
-    const connection = connections
-      .forUser(userId)
-      .find((open) => open.id === connectionId);
-    if (!connection) {
-      return;
-    }
-    app.log.info(
-      { connectionId, userId, cohortId: connection.cohortId },
-      'socket displaced, account entered this cohort on another instance',
-    );
-    drop(connection);
-    send(connection.socket, { type: 'replaced' });
-    closeFor(connection.socket, 'entered_elsewhere');
-  }
-  presence.onDisplaced(displacedElsewhere);
-
-  /**
-   * Also how somebody comes back into presence after Redis was away, and how
-   * a displacement whose message never arrived is caught.
-   */
-  async function renewPresence(): Promise<void> {
-    const open = connections.all();
-    if (open.length === 0) return;
-    for (const displaced of await presence.renew(open.map(presenceOf))) {
-      displacedElsewhere(displaced);
-    }
-  }
-
-  const presenceRenewal = setInterval(
-    oneAtATime(renewPresence, (err) => {
-      app.log.warn({ err }, 'could not renew presence');
-    }),
-    (env.WORLD_PRESENCE_TTL_SECONDS * 1000) / 3,
-  );
-  presenceRenewal.unref();
+  const presenceSync = createPresence(ctx, presence, drop);
 
   /**
    * Every way a socket stops counting goes through here, so a player can
@@ -795,7 +683,7 @@ export function registerGateway(
     // A connection displaced here no longer holds the account's presence;
     // after shutdown began, everybody has been removed already.
     if (connections.has(connection) && !stopping) {
-      leavePresence([connection]);
+      presenceSync.leave([connection]);
     }
     // A replaced socket's request and yes were ended at the swap, and the
     // seat is the new socket's now: a late close must not touch them.
@@ -1121,9 +1009,7 @@ export function registerGateway(
         connection.socket.terminate();
         continue;
       }
-      if (connection.availability.checkIdle(now, awayAfterMs)) {
-        statusChanged(connection);
-      }
+      presenceSync.checkIdle(connection, now);
       connection.alive = false;
       connection.socket.ping();
     }
@@ -1417,19 +1303,7 @@ export function registerGateway(
       }
     }
 
-    // A newer connection to this cohort on another instance may have reached
-    // Redis first; it holds the place, and this one closes as if displaced.
-    presence.enter(presenceOf(connection)).then(
-      (held) => {
-        if (!held) lostPlace(connection);
-      },
-      (err: unknown) => {
-        app.log.warn(
-          { err, userId: connection.userId },
-          'could not record presence, the next renewal will',
-        );
-      },
-    );
+    presenceSync.enter(connection);
     app.log.info(
       {
         connectionId: connection.id,
@@ -1491,29 +1365,29 @@ export function registerGateway(
           send(ws, { type: 'pong' });
           return;
         case 'active':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           return;
         case 'setStatus':
           if (
             connection.availability.choose(result.message.status, Date.now())
           ) {
-            statusChanged(connection);
+            presenceSync.statusChanged(connection);
           }
           return;
         case 'setLock':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           locks.setLock(connection, result.message.locked);
           return;
         case 'requestEntry':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           requests.request(connection, result.message.spaceKey);
           return;
         case 'withdrawEntryRequest':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           requests.withdraw(connection, result.message.requestId);
           return;
         case 'answerEntryRequest':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           requests.answer(
             connection,
             result.message.requestId,
@@ -1521,38 +1395,38 @@ export function registerGateway(
           );
           return;
         case 'say':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           chat.say(connection, result.message.text, sayBudget);
           return;
         case 'mute':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           void moderation.mute(connection, result.message.userId);
           return;
         case 'removeFromSpace':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           moderation.remove(connection, result.message.userId);
           return;
         case 'goTo':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           goTo(connection, result.message.userId);
           return;
         case 'goToSpace':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           goToSpace(connection, result.message.spaceKey);
           return;
         case 'goToTile':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           goToTile(connection, {
             x: result.message.x,
             y: result.message.y,
           });
           return;
         case 'stopWalking':
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           endWalk(connection, 'stopped');
           return;
         case 'move': {
-          noteActivity(connection);
+          presenceSync.noteActivity(connection);
           endWalk(connection, 'stopped');
           const { direction, seq } = result.message;
           const now = Date.now();
@@ -1644,18 +1518,14 @@ export function registerGateway(
     async stop(): Promise<void> {
       clearInterval(heartbeat);
       clearInterval(tick);
-      clearInterval(presenceRenewal);
+      presenceSync.stopRenewing();
       for (const walker of walks.keys()) cancelWalk(walker);
       // Everybody still here, whether or not they moved since the last save:
       // a redeploy should put nobody back at the spawn. Before the sockets
       // close, so the positions written are the ones they stood at.
       stopping = true;
       await positionWrites.stop();
-      try {
-        await presence.leave(connections.all().map(presenceOf));
-      } catch (err) {
-        app.log.warn({ err }, 'could not remove presence on shutdown');
-      }
+      await presenceSync.leaveAll();
       for (const connection of connections.all()) {
         closeFor(connection.socket, 'server shutting down');
       }
@@ -1706,28 +1576,4 @@ function cohortIdFrom(query: unknown): string | undefined {
   }
   const value = (query as Record<string, unknown>)[COHORT_QUERY_PARAM];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-/**
- * Wraps an async task so that calling it while a previous call is still
- * running does nothing. A failure goes to `onError` rather than becoming an
- * unhandled rejection, which would take the process down; the guard is
- * released either way, so one bad run does not stop the next.
- */
-export function oneAtATime(
-  task: () => Promise<void>,
-  onError: (err: unknown) => void,
-): () => void {
-  let running = false;
-  return () => {
-    if (running) {
-      return;
-    }
-    running = true;
-    task()
-      .catch(onError)
-      .finally(() => {
-        running = false;
-      });
-  };
 }
