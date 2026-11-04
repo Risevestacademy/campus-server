@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsISO8601, IsOptional, Matches } from 'class-validator';
 
+import { RoomLinkTargetDto } from '../../room-links/dto/room-link.dto.js';
+
 const DATE_OR_ZONED_INSTANT =
   /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
@@ -93,12 +95,12 @@ export class CalendarEventDto {
   url!: string | null;
 
   /**
-   * The key of the campus space this event is tied to, when the event's
-   * location, video-conference link or description contains a campus room
-   * URL. Null when no live space was matched.
-   * @example meeting-room-1
+   * The campus room the event is held in, when its location or description
+   * holds a room link (`{APP_PUBLIC_URL}/join/{code}`) the member may open.
+   * Null otherwise, or when the link could not be looked up.
    */
-  spaceKey!: string | null;
+  @ApiProperty({ type: RoomLinkTargetDto, nullable: true })
+  room!: RoomLinkTargetDto | null;
 }
 
 export class CalendarEventsDto {

@@ -1,8 +1,10 @@
 import type { PinoLogger } from 'nestjs-pino';
 
 import type { Env } from '../../infra/config/config.module.js';
-import type { Db } from '../../infra/database/database.constants.js';
+import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
+import type { RoomLinksService } from '../room-links/room-links.service.js';
+import { SystemRole } from '../users/schema.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import type {
   CalendarGrant,
@@ -35,12 +37,20 @@ const google = { refresh: vi.fn() };
 const revocations = { sweepIfDue: vi.fn() };
 const fetch = vi.fn();
 const logger = { info: vi.fn(), error: vi.fn(), setContext: vi.fn() };
-const db = {
-  select: vi.fn().mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue([]),
-    }),
-  }),
+const roomLinks = { resolve: vi.fn() };
+const USER: AuthenticatedUser = {
+  id: 'user-1',
+  email: 'ada@campus.test',
+  systemRole: SystemRole.User,
+};
+const CODE = 'k3F9xQ2pLm';
+const ROOM = {
+  code: CODE,
+  cohortId: 'cohort-1',
+  spaceId: 'space-1',
+  spaceKey: 'pod-a',
+  spaceName: 'Pod A',
+  title: 'Design review',
 };
 
 let tokens: AccessTokenCache;
@@ -52,7 +62,7 @@ function calendar(): CalendarEventsService {
     revocations as unknown as CalendarRevocationService,
     fetch,
     { APP_PUBLIC_URL: APP_URL } as Env,
-    db as unknown as Db,
+    roomLinks as unknown as RoomLinksService,
     logger as unknown as PinoLogger,
   );
 }
@@ -89,17 +99,13 @@ beforeEach(() => {
     });
   });
   fetch.mockImplementation(() => Promise.resolve(answer(200, { items: [] })));
-  db.select.mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue([]),
-    }),
-  });
+  roomLinks.resolve.mockResolvedValue([]);
 });
 
 it('reads the member’s primary calendar for the window asked', async () => {
   fetch.mockResolvedValue(answer(200, { items: [standup] }));
 
-  const result = await calendar().events('user-1', {
+  const result = await calendar().events(USER, {
     from: '2026-10-26T00:00:00Z',
     to: '2026-11-02T00:00:00Z',
   });
@@ -119,7 +125,7 @@ it('reads the member’s primary calendar for the window asked', async () => {
         location: null,
         meetingUrl: 'https://meet.google.com/abc-defg-hij',
         url: 'https://www.google.com/calendar/event?eid=abc',
-        spaceKey: null,
+        room: null,
       },
     ],
   });
@@ -134,7 +140,7 @@ it('reads the member’s primary calendar for the window asked', async () => {
 it('defaults to the coming week', async () => {
   vi.useFakeTimers({ now: new Date('2026-10-24T12:00:00Z') });
   try {
-    await calendar().events('user-1', {});
+    await calendar().events(USER, {});
   } finally {
     vi.useRealTimers();
   }
@@ -159,7 +165,7 @@ it('gives all-day events as dates, and leaves cancelled ones out', async () => {
     }),
   );
 
-  const { events } = await calendar().events('user-1', {});
+  const { events } = await calendar().events(USER, {});
 
   expect(events).toEqual([
     expect.objectContaining({
@@ -181,7 +187,7 @@ it('follows the pages Google splits a long answer into', async () => {
       answer(200, { items: [{ ...standup, id: 'standup_20261028' }] }),
     );
 
-  const { events, truncated } = await calendar().events('user-1', {});
+  const { events, truncated } = await calendar().events(USER, {});
 
   expect(events.map((e) => e.id)).toEqual([
     'standup_20261027',
@@ -197,7 +203,7 @@ it('says so when it stops before the end of a long window', async () => {
     Promise.resolve(answer(200, { items: [standup], nextPageToken: 'more' })),
   );
 
-  const { events, truncated } = await calendar().events('user-1', {});
+  const { events, truncated } = await calendar().events(USER, {});
 
   expect(fetch).toHaveBeenCalledTimes(4);
   expect(events).toHaveLength(4);
@@ -211,7 +217,7 @@ it('holds the whole read to one deadline: the refresh and every page', async () 
     )
     .mockResolvedValueOnce(answer(200, { items: [] }));
 
-  await calendar().events('user-1', {});
+  await calendar().events(USER, {});
 
   const [, refreshSignal] = google.refresh.mock.calls[0] as [
     string,
@@ -237,7 +243,7 @@ it('reports Google unavailable once the deadline has passed', async () => {
     .mockReturnValueOnce(AbortSignal.abort());
 
   try {
-    await expect(calendar().events('user-1', {})).rejects.toThrow(
+    await expect(calendar().events(USER, {})).rejects.toThrow(
       CalendarUnavailableError,
     );
     expect(timeout).toHaveBeenCalledWith(READ_BUDGET_MS);
@@ -249,8 +255,8 @@ it('reports Google unavailable once the deadline has passed', async () => {
 it('reuses an access token until it is about to run out', async () => {
   const service = calendar();
 
-  await service.events('user-1', {});
-  await service.events('user-1', {});
+  await service.events(USER, {});
+  await service.events(USER, {});
 
   expect(google.refresh).toHaveBeenCalledTimes(1);
 });
@@ -258,7 +264,7 @@ it('reuses an access token until it is about to run out', async () => {
 it('answers not connected for a member who never connected', async () => {
   grants.find.mockResolvedValue(null);
 
-  await expect(calendar().events('user-1', {})).resolves.toEqual({
+  await expect(calendar().events(USER, {})).resolves.toEqual({
     connected: false,
     events: [],
     truncated: false,
@@ -269,7 +275,7 @@ it('answers not connected for a member who never connected', async () => {
 it('forgets a grant Google has withdrawn', async () => {
   google.refresh.mockRejectedValue(new GrantWithdrawnError());
 
-  await expect(calendar().events('user-1', {})).resolves.toMatchObject({
+  await expect(calendar().events(USER, {})).resolves.toMatchObject({
     connected: false,
   });
   expect(grants.forget).toHaveBeenCalledWith(GRANT);
@@ -282,7 +288,7 @@ it('forgets a grant that no longer covers the calendar', async () => {
     }),
   );
 
-  await expect(calendar().events('user-1', {})).resolves.toMatchObject({
+  await expect(calendar().events(USER, {})).resolves.toMatchObject({
     connected: false,
   });
   expect(grants.forget).toHaveBeenCalledWith(GRANT);
@@ -293,7 +299,7 @@ it('gets a fresh access token once when Google rejects the one it had', async ()
     .mockResolvedValueOnce(answer(401, {}))
     .mockResolvedValueOnce(answer(200, { items: [standup] }));
 
-  const { events } = await calendar().events('user-1', {});
+  const { events } = await calendar().events(USER, {});
 
   expect(events).toHaveLength(1);
   expect(google.refresh).toHaveBeenCalledTimes(2);
@@ -304,7 +310,7 @@ it('gets a fresh access token once when Google rejects the one it had', async ()
 it('gives up when Google rejects the fresh one too', async () => {
   fetch.mockImplementation(() => Promise.resolve(answer(401, {})));
 
-  await expect(calendar().events('user-1', {})).rejects.toThrow(
+  await expect(calendar().events(USER, {})).rejects.toThrow(
     CalendarUnavailableError,
   );
   expect(google.refresh).toHaveBeenCalledTimes(2);
@@ -314,7 +320,7 @@ it('gives up when Google rejects the fresh one too', async () => {
 it('reports Google unavailable, and keeps the grant, when it fails', async () => {
   fetch.mockResolvedValue(answer(503, 'backend error'));
 
-  await expect(calendar().events('user-1', {})).rejects.toThrow(
+  await expect(calendar().events(USER, {})).rejects.toThrow(
     CalendarUnavailableError,
   );
   expect(grants.forget).not.toHaveBeenCalled();
@@ -323,7 +329,7 @@ it('reports Google unavailable, and keeps the grant, when it fails', async () =>
 it('reports Google unavailable when it cannot be reached', async () => {
   fetch.mockRejectedValue(new TypeError('fetch failed'));
 
-  await expect(calendar().events('user-1', {})).rejects.toThrow(
+  await expect(calendar().events(USER, {})).rejects.toThrow(
     CalendarUnavailableError,
   );
 });
@@ -333,7 +339,7 @@ it.each([
   [{ from: '2026-10-26T00:00:00Z', to: '2026-10-26T00:00:00Z' }],
   [{ from: '2026-10-01T00:00:00Z', to: '2026-12-31T00:00:00Z' }],
 ])('refuses a window that is backwards, empty or too long: %o', async (q) => {
-  await expect(calendar().events('user-1', q)).rejects.toThrow(
+  await expect(calendar().events(USER, q)).rejects.toThrow(
     InvalidArgumentException,
   );
 });
@@ -342,53 +348,95 @@ it('is not there while the calendar is switched off, but still sweeps', async ()
   grants.find.mockRejectedValue(new CalendarNotConfiguredError());
 
   await expect(
-    calendar().events('user-1', { from: 'not checked first' }),
+    calendar().events(USER, { from: 'not checked first' }),
   ).rejects.toThrow(CalendarNotConfiguredError);
   expect(revocations.sweepIfDue).toHaveBeenCalled();
 });
 
-it('sets spaceKey when the location contains a campus room link for a live space', async () => {
-  const event = {
-    ...standup,
-    location: `${APP_URL}/space/pod-a`,
-  };
-  fetch.mockResolvedValue(answer(200, { items: [event] }));
-  db.select.mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue([{ key: 'pod-a' }]),
+it('puts an event in the room its location links to', async () => {
+  fetch.mockResolvedValue(
+    answer(200, {
+      items: [{ ...standup, location: `${APP_URL}/join/${CODE}` }],
     }),
-  });
+  );
+  roomLinks.resolve.mockResolvedValue([ROOM]);
 
-  const { events } = await calendar().events('user-1', {});
+  const { events } = await calendar().events(USER, {});
 
-  expect(events[0].spaceKey).toBe('pod-a');
+  expect(roomLinks.resolve).toHaveBeenCalledWith(USER, [CODE]);
+  expect(events[0].room).toEqual(ROOM);
 });
 
-it('nulls the space key when the space is retired or has no kind', async () => {
-  const event = {
-    ...standup,
-    location: `${APP_URL}/space/gone-room`,
-  };
-  fetch.mockResolvedValue(answer(200, { items: [event] }));
+it('reads the description when the location holds no link', async () => {
+  fetch.mockResolvedValue(
+    answer(200, {
+      items: [
+        {
+          ...standup,
+          location: 'Room 2',
+          description: `Join us at ${APP_URL}/join/${CODE} for class`,
+        },
+      ],
+    }),
+  );
+  roomLinks.resolve.mockResolvedValue([ROOM]);
 
-  const { events } = await calendar().events('user-1', {});
+  const { events } = await calendar().events(USER, {});
 
-  expect(events[0].spaceKey).toBeNull();
+  expect(events[0].room).toEqual(ROOM);
 });
 
-it('extracts the space key from the event description', async () => {
-  const event = {
-    ...standup,
-    description: `Join us at ${APP_URL}/space/classroom-b for class`,
-  };
-  fetch.mockResolvedValue(answer(200, { items: [event] }));
-  db.select.mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue([{ key: 'classroom-b' }]),
+it('leaves room null for a link the member may not open', async () => {
+  fetch.mockResolvedValue(
+    answer(200, {
+      items: [{ ...standup, location: `${APP_URL}/join/${CODE}` }],
     }),
-  });
+  );
 
-  const { events } = await calendar().events('user-1', {});
+  const { events } = await calendar().events(USER, {});
 
-  expect(events[0].spaceKey).toBe('classroom-b');
+  expect(events[0].room).toBeNull();
+});
+
+it('looks every code up at once, after the read', async () => {
+  const other = 'Zz9Yy8Xx7W';
+  fetch.mockResolvedValue(
+    answer(200, {
+      items: [
+        { ...standup, id: 'a', location: `${APP_URL}/join/${CODE}` },
+        { ...standup, id: 'b' },
+        { ...standup, id: 'c', description: `${APP_URL}/join/${other}` },
+      ],
+    }),
+  );
+  roomLinks.resolve.mockResolvedValue([ROOM]);
+
+  const { events } = await calendar().events(USER, {});
+
+  expect(roomLinks.resolve).toHaveBeenCalledTimes(1);
+  expect(roomLinks.resolve).toHaveBeenCalledWith(USER, [CODE, other]);
+  expect(events.map((e) => e.room)).toEqual([ROOM, null, null]);
+});
+
+it('does not look anything up when no event holds a link', async () => {
+  fetch.mockResolvedValue(answer(200, { items: [standup] }));
+
+  await calendar().events(USER, {});
+
+  expect(roomLinks.resolve).not.toHaveBeenCalled();
+});
+
+it('still answers, without rooms, when the lookup fails', async () => {
+  fetch.mockResolvedValue(
+    answer(200, {
+      items: [{ ...standup, location: `${APP_URL}/join/${CODE}` }],
+    }),
+  );
+  roomLinks.resolve.mockRejectedValue(new Error('database down'));
+
+  const result = await calendar().events(USER, {});
+
+  expect(result.connected).toBe(true);
+  expect(result.events[0].room).toBeNull();
+  expect(logger.error).toHaveBeenCalled();
 });

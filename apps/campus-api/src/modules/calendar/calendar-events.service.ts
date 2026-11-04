@@ -1,11 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, inArray, isNotNull, isNull } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
-import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
-import { spaces } from '../maps/schema.js';
+import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
+import type { RoomLinkTargetDto } from '../room-links/dto/room-link.dto.js';
+import { RoomLinksService } from '../room-links/room-links.service.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import {
   CalendarGrantsService,
@@ -27,6 +27,7 @@ import {
   toCalendarEvent,
   type GoogleEvent,
 } from './google-event.js';
+import { extractRoomLinkCode } from './room-link.js';
 
 const EVENTS_URL =
   'https://www.googleapis.com/calendar/v3/calendars/primary/events';
@@ -44,6 +45,13 @@ const NOT_CONNECTED: CalendarEventsDto = {
   events: [],
   truncated: false,
 };
+
+interface EventsRead {
+  events: CalendarEventDto[];
+  /** The room link code found in each event, by index. */
+  codes: (string | null)[];
+  truncated: boolean;
+}
 
 interface GoogleEventList {
   items?: GoogleEvent[];
@@ -63,7 +71,7 @@ export class CalendarEventsService {
     private readonly revocations: CalendarRevocationService,
     @Inject(CALENDAR_FETCH) private readonly fetch: typeof globalThis.fetch,
     @Inject(CONFIG) config: Env,
-    @Inject(DRIZZLE) private readonly db: Db,
+    private readonly roomLinks: RoomLinksService,
     private readonly logger: PinoLogger,
   ) {
     this.logger.setContext(CalendarEventsService.name);
@@ -71,9 +79,10 @@ export class CalendarEventsService {
   }
 
   async events(
-    userId: string,
+    user: AuthenticatedUser,
     query: CalendarEventsQueryDto,
   ): Promise<CalendarEventsDto> {
+    const userId = user.id;
     // First, so the sweep's timing does not depend on who is asking.
     this.revocations.sweepIfDue();
     const grant = await this.grants.find(userId);
@@ -83,9 +92,14 @@ export class CalendarEventsService {
     }
     try {
       const signal = AbortSignal.timeout(READ_BUDGET_MS);
-      const result = await this.read(grant, from, to, signal);
-      await this.resolveSpaceKeys(result.events);
-      return { connected: true, ...result };
+      const { events, codes, truncated } = await this.read(
+        grant,
+        from,
+        to,
+        signal,
+      );
+      await this.placeInRooms(user, events, codes);
+      return { connected: true, events, truncated };
     } catch (err) {
       if (!(err instanceof GrantWithdrawnError)) {
         throw err;
@@ -103,7 +117,7 @@ export class CalendarEventsService {
     from: Date,
     to: Date,
     signal: AbortSignal,
-  ): Promise<{ events: CalendarEventDto[]; truncated: boolean }> {
+  ): Promise<EventsRead> {
     for (let attempt = 1; ; attempt++) {
       try {
         const token = await this.tokens.get(grant, signal);
@@ -129,8 +143,9 @@ export class CalendarEventsService {
     from: Date,
     to: Date,
     signal: AbortSignal,
-  ): Promise<{ events: CalendarEventDto[]; truncated: boolean }> {
+  ): Promise<EventsRead> {
     const events: CalendarEventDto[] = [];
+    const codes: (string | null)[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
       const url = new URL(EVENTS_URL);
@@ -144,15 +159,24 @@ export class CalendarEventsService {
         ...(pageToken ? { pageToken } : {}),
       }).toString();
       const body = await this.get(url, token, signal);
-      events.push(
-        ...(body.items ?? []).flatMap((e) => toCalendarEvent(e, this.appUrl)),
-      );
+      for (const item of body.items ?? []) {
+        for (const event of toCalendarEvent(item)) {
+          events.push(event);
+          codes.push(
+            extractRoomLinkCode(
+              this.appUrl,
+              item.location ?? null,
+              item.description ?? null,
+            ),
+          );
+        }
+      }
       pageToken = body.nextPageToken;
       if (!pageToken) {
         break;
       }
     }
-    return { events, truncated: pageToken !== undefined };
+    return { events, codes, truncated: pageToken !== undefined };
   }
 
   private async get(
@@ -197,33 +221,34 @@ export class CalendarEventsService {
   }
 
   /**
-   * Checks every extracted space key against live spaces in the database.
-   * Keys that do not match a live, set-up space are nulled out so the
-   * client never sees a dangling reference.
+   * Sets `room` on the events whose links the member may open, in one lookup
+   * after the read. The events are worth more than the rooms, so a failed
+   * lookup leaves every `room` null rather than failing the answer.
    */
-  private async resolveSpaceKeys(events: CalendarEventDto[]): Promise<void> {
-    const candidates = [
-      ...new Set(events.map((e) => e.spaceKey).filter(Boolean)),
-    ] as string[];
-    if (candidates.length === 0) return;
-
-    const rows = await this.db
-      .select({ key: spaces.key })
-      .from(spaces)
-      .where(
-        and(
-          inArray(spaces.key, candidates),
-          isNull(spaces.retiredAt),
-          isNotNull(spaces.kind),
-        ),
-      );
-    const live = new Set(rows.map((r) => r.key));
-
-    for (const event of events) {
-      if (event.spaceKey && !live.has(event.spaceKey)) {
-        event.spaceKey = null;
-      }
+  private async placeInRooms(
+    user: AuthenticatedUser,
+    events: CalendarEventDto[],
+    codes: (string | null)[],
+  ): Promise<void> {
+    const found = codes.filter((c): c is string => c !== null);
+    if (found.length === 0) {
+      return;
     }
+    let rooms: Map<string, RoomLinkTargetDto>;
+    try {
+      const links = await this.roomLinks.resolve(user, found);
+      rooms = new Map(links.map((link) => [link.code, link]));
+    } catch (err) {
+      this.logger.error(
+        { err, userId: user.id },
+        'room links lookup failed; events go without rooms',
+      );
+      return;
+    }
+    events.forEach((event, i) => {
+      const code = codes[i];
+      event.room = (code && rooms.get(code)) || null;
+    });
   }
 }
 

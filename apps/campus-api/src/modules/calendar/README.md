@@ -107,22 +107,23 @@ more answers with the first 1,000 and `truncated: true`.
 - Google failing any other way, or taking longer than its timeout: `503`,
   and the grant is kept.
 
-## Campus room links
+## Rooms
 
-A calendar event can name a campus space. Staff paste a campus room URL
-into the Google Calendar event's **location**, **video-conference link** or
-**description**:
+Staff make a room link for an event in the room-links module and paste it
+into the Google Calendar event's **location** or **description**:
 
 ```
-{APP_PUBLIC_URL}/space/{spaceKey}
+{APP_PUBLIC_URL}/join/{code}
 ```
 
-For example, `https://campus.example.com/space/meeting-room-1`.
-
-When the events endpoint returns, it scans each event's location, meeting
-URL and description — in that order — for the first match. If the space
-key names a live, set-up space (not retired, and with a kind assigned), the
-event carries it as `spaceKey`; otherwise `spaceKey` is `null`.
+The events endpoint looks in the location, then the description, for the
+first such link, and resolves every code it found in one lookup through
+`RoomLinksService.resolve`, which applies the same rules as opening a link.
+An event whose link the member may open carries
+`room: { code, cohortId, spaceId, spaceKey, spaceName, title }`; any other
+event, and every event when the lookup fails, carries `room: null`. The
+video-conference link is not looked at: Google only ever puts a Meet link
+there.
 
 ## Talking to Google
 

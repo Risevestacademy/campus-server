@@ -11,5 +11,6 @@ import { RoomLinksService } from './room-links.service.js';
   imports: [SessionModule],
   controllers: [SpaceRoomLinksController, RoomLinksController],
   providers: [RoomLinksService],
+  exports: [RoomLinksService],
 })
 export class RoomLinksModule {}

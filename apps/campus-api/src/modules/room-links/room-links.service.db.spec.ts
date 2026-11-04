@@ -375,4 +375,54 @@ describe('RoomLinksService', () => {
     ]);
     expect(entries).toHaveLength(2);
   }, 30_000);
+
+  it('resolves many codes at once, to only the links the caller may open', async () => {
+    const { cohortId, mentor, guest, outsider, admin, pod } = await setting();
+    const audit = { actorUserId: mentor.id };
+    const kept = await service.create(mentor, cohortId, pod.id, 'Kept', audit);
+    const dropped = await service.create(
+      mentor,
+      cohortId,
+      pod.id,
+      'Dropped',
+      audit,
+    );
+    await service.revoke(mentor, dropped.code, audit);
+    const retired = await space('retired', SpaceKind.MeetingRoom);
+    const gone = await service.create(
+      mentor,
+      cohortId,
+      retired.id,
+      'Gone',
+      audit,
+    );
+    await db
+      .update(spaces)
+      .set({ retiredAt: new Date() })
+      .where(eq(spaces.id, retired.id));
+    const codes = [kept.code, dropped.code, gone.code, 'nOsUcHc0de', 'bad'];
+    const target = {
+      code: kept.code,
+      cohortId,
+      spaceId: pod.id,
+      spaceKey: pod.key,
+      spaceName: pod.name,
+      title: 'Kept',
+    };
+
+    expect(await service.resolve(guest, codes)).toEqual([target]);
+    expect(await service.resolve(admin, codes)).toEqual([target]);
+    expect(await service.resolve(outsider, codes)).toEqual([]);
+    expect(await service.resolve(guest, [])).toEqual([]);
+  }, 30_000);
+
+  it('resolves nothing for a member whose place has lapsed', async () => {
+    const { cohortId, mentor, guest, pod } = await setting();
+    const made = await service.create(mentor, cohortId, pod.id, 'Later', {
+      actorUserId: mentor.id,
+    });
+    const afterExpiry = new Date(Date.now() + 2 * 86_400_000);
+
+    expect(await service.resolve(guest, [made.code], afterExpiry)).toEqual([]);
+  }, 30_000);
 });

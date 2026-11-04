@@ -87,7 +87,7 @@ export class CalendarController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: CalendarEventsQueryDto,
   ): Promise<CalendarEventsDto> {
-    return this.calendar.events(user.id, query);
+    return this.calendar.events(user, query);
   }
 
   @Delete()

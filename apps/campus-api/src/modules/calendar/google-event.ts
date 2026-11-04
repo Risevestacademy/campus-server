@@ -3,7 +3,6 @@ import {
   type CalendarEventDto,
   type EventResponse,
 } from './dto/calendar-events.dto.js';
-import { extractSpaceKey } from './space-link.js';
 
 interface GoogleEventTime {
   dateTime?: string;
@@ -28,18 +27,13 @@ export const GOOGLE_EVENT_FIELDS =
   'nextPageToken,items(id,status,summary,description,location,htmlLink,hangoutLink,start,end,attendees(self,responseStatus))';
 
 /** None for a cancelled event, or one missing what campus shows. */
-export function toCalendarEvent(
-  item: GoogleEvent,
-  appUrl: string,
-): CalendarEventDto[] {
+export function toCalendarEvent(item: GoogleEvent): CalendarEventDto[] {
   const start = item.start?.dateTime ?? item.start?.date;
   const end = item.end?.dateTime ?? item.end?.date;
   if (item.status === 'cancelled' || !item.id || !start || !end) {
     return [];
   }
   const response = item.attendees?.find((a) => a.self)?.responseStatus;
-  const location = item.location ?? null;
-  const meetingUrl = item.hangoutLink ?? null;
   return [
     {
       id: item.id,
@@ -49,15 +43,10 @@ export function toCalendarEvent(
       allDay: !item.start?.dateTime,
       status: item.status === 'tentative' ? 'tentative' : 'confirmed',
       response: isEventResponse(response) ? response : null,
-      location,
-      meetingUrl,
+      location: item.location ?? null,
+      meetingUrl: item.hangoutLink ?? null,
       url: item.htmlLink ?? null,
-      spaceKey: extractSpaceKey(
-        appUrl,
-        location,
-        meetingUrl,
-        item.description ?? null,
-      ),
+      room: null,
     },
   ];
 }
