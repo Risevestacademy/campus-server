@@ -196,6 +196,7 @@ describe('POST /v1/maps/sync (e2e)', () => {
             retired: [],
             needsKind: ['nook'],
           },
+          desks: { added: [], restored: [], retired: [] },
         },
       ],
     });

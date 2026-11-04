@@ -18,19 +18,16 @@ import {
   type Tx,
 } from '../../infra/database/database.constants.js';
 import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
+import { timestamptz } from '../../infra/database/timestamptz.js';
 import {
   CallWebhookUnverifiedException,
   CallWebhooksNotConfiguredException,
 } from './calls.exceptions.js';
 import { sessionParticipants, sessions } from './schema.js';
 
-function stamp(at: Date): SQL {
-  return sql`${at.toISOString()}::timestamptz`;
-}
-
 /** `at`, or the row's join if that is later: a row never leaves before it joined. */
 function leftAtNoEarlierThanJoin(at: Date): SQL {
-  return sql`greatest(${stamp(at)}, ${sessionParticipants.joinedAt})`;
+  return sql`greatest(${timestamptz(at)}, ${sessionParticipants.joinedAt})`;
 }
 
 interface Run {
@@ -218,7 +215,9 @@ export class CallsService {
   private async closeRun(tx: Tx, sessionId: string, at: Date): Promise<void> {
     await tx
       .update(sessions)
-      .set({ closedAt: sql`greatest(${stamp(at)}, ${sessions.openedAt})` })
+      .set({
+        closedAt: sql`greatest(${timestamptz(at)}, ${sessions.openedAt})`,
+      })
       .where(and(eq(sessions.id, sessionId), isNull(sessions.closedAt)));
     await tx
       .update(sessionParticipants)

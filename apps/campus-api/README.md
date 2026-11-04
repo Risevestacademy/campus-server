@@ -23,6 +23,7 @@ NestJS backend for the campus application.
 - [Logging](#logging)
 - [Telemetry (OpenTelemetry tracing)](#telemetry-opentelemetry-tracing)
 - [Integration guide](#integration-guide)
+- [Documenting DTOs](#documenting-dtos)
 - [Run tests](#run-tests)
 - [License](#license)
 
@@ -95,6 +96,7 @@ a clear error.
 | `FF_OTEL_ENABLED`                 | `true`                                                 | Master switch for OpenTelemetry                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `FF_OTEL_METRICS_ENABLED`         | `true`                                                 | Enable Node.js runtime metrics export                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `FF_POSTHOG_ENABLED`              | `false`                                                | Master switch for PostHog error tracking. When `true`, `POSTHOG_PROJECT_TOKEN` is required and the app refuses to boot without it                                                                                                                                                                                                                                                                                                          |
+| `FF_ANALYTICS_ENABLED`            | `false`                                                | Master switch for product events to PostHog. When `true`, `POSTHOG_PROJECT_TOKEN` is required and the app refuses to boot without it                                                                                                                                                                                                                                                                                                       |
 | `POSTHOG_PROJECT_TOKEN`           | _(unset)_                                              | PostHog project API key (`phc_…`). Use the project matching this environment, so frontend and backend events land together                                                                                                                                                                                                                                                                                                                 |
 | `POSTHOG_HOST`                    | `https://eu.i.posthog.com`                             | PostHog ingestion host; must be `https`                                                                                                                                                                                                                                                                                                                                                                                                    |
 
@@ -232,11 +234,11 @@ Key behaviors:
 
 - **Structured JSON** by default; pretty single-line output when `FF_LOG_PRETTY=true`.
 - **Correlation IDs**: every request gets an `x-correlation-id`. If the caller
-  provides one of up to 64 characters, it is honored and echoed back on the
-  response; otherwise — none sent, or one longer than that — a UUID is
-  generated and returned instead. All log lines for that request carry it
-  under `req.id`, and audit entries written by the request carry the same
-  value.
+  sends a UUID, it is honored and echoed back on the response; otherwise — none
+  sent, or anything else — a UUID is generated and returned instead, so free
+  text never reaches the logs, error reports, analytics or the audit log. All
+  log lines for that request carry it under `req.id`, and audit entries written
+  by the request carry the same value.
 - **Trace correlation**: when OpenTelemetry is enabled, every log line also
   carries `trace_id` and `span_id` extracted from the active span, so logs and
   traces can be joined in an observability backend.
@@ -363,6 +365,44 @@ pnpm run start:prod
 On `SIGTERM` the SDK's `shutdown()` is awaited, so spans and log lines still
 buffered are sent before the process exits. It gives up after 3 seconds, so an
 endpoint that does not answer cannot hold the exit up.
+
+## Documenting DTOs
+
+The `@nestjs/swagger` CLI plugin (`nest-cli.json`) documents every class in a
+`*.dto.ts` file. It reads each field's type, whether it is optional or
+nullable, and the limits in its `class-validator` decorators. Descriptions and
+examples come from JSDoc:
+
+```ts
+/**
+ * Null for an event with no title.
+ * @example "Backend standup"
+ */
+title!: string | null;
+```
+
+Add `@ApiProperty` only for what the plugin cannot work out:
+
+- `enum` with `enumName`, so that a generated client gets a named type.
+- `format` on a response field, such as `date-time` on a `string`.
+- `required` when it differs from the TypeScript type.
+- `additionalProperties`, and `default`.
+- A limit set by a custom validator, such as `maxLength` with `@IsCatalogCode`.
+- A description or example built from code, such as `MAX_PAGE` or
+  `SystemRole.User`, and `example: null`.
+- A class made at runtime, such as `PaginatedPage`.
+
+Three things drop a value without any error:
+
+- An `@example` string with a space in it has to be in double quotes.
+- An `@example` string with an apostrophe has to stay in the decorator.
+- JSDoc under a `//` comment is not read, so put the `//` comment below it.
+
+Routes are still documented by hand in each module's `docs/*.docs.ts`.
+
+The plugin runs in `nest build` and, through `test/swagger-plugin.vite.ts`, in
+the e2e suite. Unit tests do not run it, so assert on the OpenAPI document in an
+e2e test.
 
 ## Run tests
 

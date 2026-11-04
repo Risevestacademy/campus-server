@@ -35,18 +35,18 @@ export enum SpaceMembershipSubjectType {
 }
 
 export class SpaceIdParamDto {
-  @ApiProperty({ example: '55555555-5555-4555-8555-555555555555' })
+  /** @example 55555555-5555-4555-8555-555555555555 */
   @IsUUID()
   id: string;
 }
 
 /** The `:id` and `:membershipId` of the route that ends one grant. */
 export class SpaceMembershipParamDto {
-  @ApiProperty({ example: '55555555-5555-4555-8555-555555555555' })
+  /** @example 55555555-5555-4555-8555-555555555555 */
   @IsUUID()
   id: string;
 
-  @ApiProperty({ example: '66666666-6666-4666-8666-666666666666' })
+  /** @example 66666666-6666-4666-8666-666666666666 */
   @IsUUID()
   membershipId: string;
 }
@@ -61,72 +61,60 @@ export class SpaceMembershipParamDto {
  * rather than two.
  */
 export class GrantSpaceMembershipDto {
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '22222222-2222-4222-8222-222222222222',
-    description:
-      'Give access to this one person. Exactly one of `userId`, ' +
-      '`cohortTrackId`, `cohortRole`, `systemRole` and `mentorshipGroupId` ' +
-      'is required: an entry names one subject, never two and never none.',
-  })
+  /**
+   * Give access to this one person. Exactly one of `userId`, `cohortTrackId`,
+   * `cohortRole`, `systemRole` and `mentorshipGroupId` is required: an entry
+   * names one subject, never two and never none.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
   @IsOptional()
   @IsUUID()
   userId?: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '33333333-3333-4333-8333-333333333333',
-    description:
-      'Give access to everybody on this cohort track — a track a cohort ' +
-      'runs, as named by `cohort_tracks.id`. Exactly one subject is ' +
-      'required.',
-  })
+  /**
+   * Give access to everybody on this cohort track — a track a cohort runs, as
+   * named by `cohort_tracks.id`. Exactly one subject is required.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
   @IsOptional()
   @IsUUID()
   cohortTrackId?: string;
 
-  @ApiPropertyOptional({
-    enum: CohortRole,
-    enumName: 'CohortRole',
-    description:
-      'Give access to everybody holding this role, in whichever cohort ' +
-      'they walk the campus as. Exactly one subject is required.',
-  })
+  /**
+   * Give access to everybody holding this role, in whichever cohort they walk
+   * the campus as. Exactly one subject is required.
+   */
+  @ApiPropertyOptional({ enum: CohortRole, enumName: 'CohortRole' })
   @IsOptional()
   @IsEnum(CohortRole)
   cohortRole?: CohortRole;
 
-  @ApiPropertyOptional({
-    enum: SystemRole,
-    enumName: 'SystemRole',
-    description:
-      'Give access to everybody holding this system role. Admins enter ' +
-      'every space anyway, so this matters for any other role. Exactly ' +
-      'one subject is required.',
-  })
+  /**
+   * Give access to everybody holding this system role. Admins enter every space
+   * anyway, so this matters for any other role. Exactly one subject is
+   * required.
+   */
+  @ApiPropertyOptional({ enum: SystemRole, enumName: 'SystemRole' })
   @IsOptional()
   @IsEnum(SystemRole)
   systemRole?: SystemRole;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '77777777-7777-4777-8777-777777777777',
-    description:
-      'Give access to this mentorship group: its students and its mentor, ' +
-      'in the group’s own cohort. Exactly one subject is required.',
-  })
+  /**
+   * Give access to this mentorship group: its students and its mentor, in the
+   * group’s own cohort. Exactly one subject is required.
+   * @example 77777777-7777-4777-8777-777777777777
+   */
   @IsOptional()
   @IsUUID()
   mentorshipGroupId?: string;
 
-  @ApiPropertyOptional({
-    format: 'date-time',
-    example: '2026-12-01T00:00:00.000Z',
-    description:
-      'When access ends, which has to be in the future. A bare date ' +
-      '(`2026-12-01`) is midnight UTC; a timestamp must carry its zone. ' +
-      'Left out, access has no end until an admin ends it.',
-  })
+  /**
+   * When access ends, which has to be in the future. A bare date (`2026-12-01`)
+   * is midnight UTC; a timestamp must carry its zone. Left out, access has no
+   * end until an admin ends it.
+   * @example 2026-12-01T00:00:00.000Z
+   */
+  @ApiPropertyOptional({ format: 'date-time' })
   @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(DATE_OR_ZONED_INSTANT, {
@@ -143,148 +131,113 @@ export class SpaceMembershipSubjectDto {
   })
   type: SpaceMembershipSubjectType;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '22222222-2222-4222-8222-222222222222',
-    description: 'Present when the grant is to a person.',
-  })
+  /**
+   * Present when the grant is to a person.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
+  @ApiPropertyOptional({ format: 'uuid' })
   userId?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    format: 'email',
-    example: 'ada@campus.local',
-    description: 'Present when the grant is to a person.',
-  })
+  /**
+   * Present when the grant is to a person.
+   * @example ada@campus.local
+   */
+  @ApiPropertyOptional({ format: 'email' })
   email?: string | null;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    example: 'Ada L.',
-    description: 'What they go by, or null if they have not chosen one.',
-  })
+  /**
+   * What they go by, or null if they have not chosen one.
+   * @example "Ada L."
+   */
   displayName?: string | null;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '33333333-3333-4333-8333-333333333333',
-    description: 'Present when the grant is to a track.',
-  })
+  /**
+   * Present when the grant is to a track.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
+  @ApiPropertyOptional({ format: 'uuid' })
   cohortTrackId?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    example: 'Frontend',
-    description: 'Present when the grant is to a track.',
-  })
+  /**
+   * Present when the grant is to a track.
+   * @example Frontend
+   */
   trackName?: string | null;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    example: 'FE',
-    description: 'Present when the grant is to a track.',
-  })
+  /**
+   * Present when the grant is to a track.
+   * @example FE
+   */
   trackCode?: string | null;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '44444444-4444-4444-8444-444444444444',
-    description:
-      'The cohort behind it: the one whose track runs it, or the one the ' +
-      'mentorship group belongs to.',
-  })
+  /**
+   * The cohort behind it: the one whose track runs it, or the one the
+   * mentorship group belongs to.
+   * @example 44444444-4444-4444-8444-444444444444
+   */
+  @ApiPropertyOptional({ format: 'uuid' })
   cohortId?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    nullable: true,
-    example: 'Cohort 1',
-    description:
-      'The cohort behind it: the one whose track runs it, or the one the ' +
-      'mentorship group belongs to.',
-  })
+  /**
+   * The cohort behind it: the one whose track runs it, or the one the
+   * mentorship group belongs to.
+   * @example "Cohort 1"
+   */
   cohortName?: string | null;
 
-  @ApiPropertyOptional({
-    enum: CohortRole,
-    enumName: 'CohortRole',
-    description: 'Present when the entry names a cohort role.',
-  })
+  /** Present when the entry names a cohort role. */
+  @ApiPropertyOptional({ enum: CohortRole, enumName: 'CohortRole' })
   cohortRole?: CohortRole;
 
-  @ApiPropertyOptional({
-    enum: SystemRole,
-    enumName: 'SystemRole',
-    description: 'Present when the entry names a system role.',
-  })
+  /** Present when the entry names a system role. */
+  @ApiPropertyOptional({ enum: SystemRole, enumName: 'SystemRole' })
   systemRole?: SystemRole;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '77777777-7777-4777-8777-777777777777',
-    description: 'Present when the grant is to a mentorship group.',
-  })
+  /**
+   * Present when the grant is to a mentorship group.
+   * @example 77777777-7777-4777-8777-777777777777
+   */
+  @ApiPropertyOptional({ format: 'uuid' })
   mentorshipGroupId?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    example: 'The Ravens',
-    description: 'Present when the grant is to a mentorship group.',
-  })
+  /**
+   * Present when the grant is to a mentorship group.
+   * @example "The Ravens"
+   */
   groupName?: string;
 }
 
 export class SpaceMembershipResponseDto {
-  @ApiProperty({
-    format: 'uuid',
-    example: '66666666-6666-4666-8666-666666666666',
-    description:
-      'The grant’s own row. Ending access keeps the row, so this is what a ' +
-      'grant is known by for good.',
-  })
+  /**
+   * The grant’s own row. Ending access keeps the row, so this is what a grant
+   * is known by for good.
+   * @example 66666666-6666-4666-8666-666666666666
+   */
+  @ApiProperty({ format: 'uuid' })
   id: string;
 
-  @ApiProperty({
-    format: 'uuid',
-    example: '55555555-5555-4555-8555-555555555555',
-  })
+  /** @example 55555555-5555-4555-8555-555555555555 */
+  @ApiProperty({ format: 'uuid' })
   spaceId: string;
 
-  @ApiProperty({ type: SpaceMembershipSubjectDto })
   subject: SpaceMembershipSubjectDto;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    description:
-      'The admin who granted it. Null only for a grant written without one: ' +
-      'a seed, a sync.',
-  })
+  /**
+   * The admin who granted it. Null only for a grant written without one: a
+   * seed, a sync.
+   */
+  @ApiProperty({ format: 'uuid' })
   grantedBy: string | null;
 
-  @ApiProperty({
-    format: 'date-time',
-    description: 'When the grant started counting.',
-  })
+  /** When the grant started counting. */
   validFrom: Date;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    description: 'When it stopped, or null while it has no end.',
-  })
+  /** When it stopped, or null while it has no end. */
   validTo: Date | null;
 
-  @ApiProperty({
-    description:
-      'Whether it counts right now: started, and not yet ended. Read at ' +
-      'the moment of the request, not stored.',
-  })
+  /**
+   * Whether it counts right now: started, and not yet ended. Read at the moment
+   * of the request, not stored.
+   */
   live: boolean;
 }

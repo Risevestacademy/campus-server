@@ -26,14 +26,15 @@ export enum RosterScope {
  * Pagination plus the filters, every one optional and all combined with AND.
  */
 export class ListRosterQueryDto extends PaginationQueryDto {
+  /**
+   * `live` (the default) for the people in the cohort now; `ended` for those
+   * who left, were dismissed, withdrew, deferred, graduated, or whose guest
+   * visit is over; `all` for both.
+   */
   @ApiPropertyOptional({
     enum: RosterScope,
     enumName: 'RosterScope',
     default: RosterScope.Live,
-    description:
-      '`live` (the default) for the people in the cohort now; `ended` for ' +
-      'those who left, were dismissed, withdrew, deferred, graduated, or ' +
-      'whose guest visit is over; `all` for both.',
   })
   @IsOptional()
   @IsEnum(RosterScope)
@@ -44,133 +45,106 @@ export class ListRosterQueryDto extends PaginationQueryDto {
   @IsEnum(CohortRole)
   role?: CohortRole;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '33333333-3333-4333-8333-333333333333',
-    description:
-      'Members on this track: its students, and any staff or guest who ' +
-      'was placed on it. Add `role=student` for the students alone.',
-  })
+  /**
+   * Members on this track: its students, and any staff or guest who was placed
+   * on it. Add `role=student` for the students alone.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
   @IsOptional()
   @IsUUID()
   trackId?: string;
 
-  @ApiPropertyOptional({
-    enum: StudentStatus,
-    enumName: 'StudentStatus',
-    description:
-      'Students with this status. Anything but `active` is an ended ' +
-      'membership, so combine it with `state=ended` or `state=all`.',
-  })
+  /**
+   * Students with this status. Anything but `active` is an ended membership, so
+   * combine it with `state=ended` or `state=all`.
+   */
+  @ApiPropertyOptional({ enum: StudentStatus, enumName: 'StudentStatus' })
   @IsOptional()
   @IsEnum(StudentStatus)
   status?: StudentStatus;
 }
 
 export class RosterUserDto {
-  @ApiProperty({ example: '22222222-2222-4222-8222-222222222222' })
+  /** @example 22222222-2222-4222-8222-222222222222 */
   id: string;
 
-  @ApiProperty({ example: 'ada@campus.local' })
+  /** @example ada@campus.local */
   email: string;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada' })
+  /** @example Ada */
   firstName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Lovelace' })
+  /** @example Lovelace */
   lastName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: 'Ada L.' })
+  /** @example "Ada L." */
   displayName: string | null;
 
-  @ApiProperty({ type: String, nullable: true, example: null })
+  @ApiProperty({ example: null })
   avatarUrl: string | null;
 
-  @ApiProperty({
-    enum: UserStatus,
-    enumName: 'UserStatus',
-    description:
-      'The account’s own status. A suspended account keeps its place on ' +
-      'the roster but cannot sign in.',
-  })
+  /**
+   * The account’s own status. A suspended account keeps its place on the roster
+   * but cannot sign in.
+   */
+  @ApiProperty({ enum: UserStatus, enumName: 'UserStatus' })
   status: UserStatus;
 }
 
 export class RosterTrackDto {
-  @ApiProperty({ example: '33333333-3333-4333-8333-333333333333' })
+  /** @example 33333333-3333-4333-8333-333333333333 */
   id: string;
 
-  @ApiProperty({ example: 'Software Engineering' })
+  /** @example "Software Engineering" */
   name: string;
 
-  @ApiProperty({ example: 'SE' })
+  /** @example SE */
   code: string;
 }
 
 /** One membership of the cohort, with the person who holds it. */
 export class RosterMemberDto {
-  @ApiProperty({
-    example: '77777777-7777-4777-8777-777777777777',
-    description: 'The membership, not the person: one per person per cohort.',
-  })
+  /**
+   * The membership, not the person: one per person per cohort.
+   * @example 77777777-7777-4777-8777-777777777777
+   */
   id: string;
 
-  @ApiProperty({ type: () => RosterUserDto })
   user: RosterUserDto;
 
   @ApiProperty({ enum: CohortRole, enumName: 'CohortRole' })
   role: CohortRole;
 
-  @ApiProperty({
-    type: () => RosterTrackDto,
-    nullable: true,
-    description:
-      'Always set for a student. Staff and guests have one only when they ' +
-      'were placed on a track; otherwise null.',
-  })
+  /**
+   * Always set for a student. Staff and guests have one only when they were
+   * placed on a track; otherwise null.
+   */
   track: RosterTrackDto | null;
 
+  /** Students only; null for every other role. */
   @ApiProperty({
     enum: StudentStatus,
     enumName: 'StudentStatus',
     nullable: true,
-    description: 'Students only; null for every other role.',
   })
   status: StudentStatus | null;
 
-  @ApiProperty({
-    enum: MembershipState,
-    enumName: 'MembershipState',
-    description:
-      'Whether the membership counts now, read against the clock rather ' +
-      'than off a column: a guest whose visit ended a minute ago is ' +
-      '`ended` here.',
-  })
+  /**
+   * Whether the membership counts now, read against the clock rather than off a
+   * column: a guest whose visit ended a minute ago is `ended` here.
+   */
+  @ApiProperty({ enum: MembershipState, enumName: 'MembershipState' })
   state: MembershipState;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: null,
-    description: 'Why a dismissed student was dismissed. Null otherwise.',
-  })
+  /** Why a dismissed student was dismissed. Null otherwise. */
+  @ApiProperty({ example: null })
   dismissalReason: string | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    example: '2026-09-22T12:00:00.000Z',
-  })
+  /** @example 2026-09-22T12:00:00.000Z */
   joinedAt: Date;
 
-  @ApiProperty({ type: String, format: 'date-time', nullable: true })
   leftAt: Date | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    description: 'Guests only: when the visit ends.',
-  })
+  /** Guests only: when the visit ends. */
   accessExpiresAt: Date | null;
 }

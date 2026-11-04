@@ -217,11 +217,18 @@ interface AuditEntryShapes {
       spacesAdded: string[];
       spacesRestored: string[];
       spacesRetired: string[];
+      desksAdded: string[];
+      desksRestored: string[];
+      desksRetired: string[];
     };
   };
   [AuditAction.MapRetired]: {
     subject: AuditSubjectType.Map;
-    details: { key: string; spacesRetired: string[] };
+    details: {
+      key: string;
+      spacesRetired: string[];
+      desksRetired: string[];
+    };
   };
   [AuditAction.FeedbackResolved]: {
     subject: AuditSubjectType.Feedback;
@@ -364,6 +371,14 @@ interface AuditEntryShapes {
       cohortId: string | null;
       title: string;
     };
+  };
+  [AuditAction.RoomLinkCreated]: {
+    subject: AuditSubjectType.RoomLink;
+    details: { cohortId: string; code: string; title: string };
+  };
+  [AuditAction.RoomLinkRevoked]: {
+    subject: AuditSubjectType.RoomLink;
+    details: { cohortId: string; code: string; title: string };
   };
 }
 

@@ -29,7 +29,7 @@ const trim = ({ value }: { value: unknown }) =>
  * The dates are optional at create, so null is how one is cleared.
  */
 export class UpdateCohortDto {
-  @ApiPropertyOptional({ example: 'Cohort 1', maxLength: 128 })
+  /** @example "Cohort 1" */
   @IsOptionalNotNull()
   @Transform(trim)
   @IsString()
@@ -37,43 +37,36 @@ export class UpdateCohortDto {
   @MaxLength(128)
   name?: string;
 
-  @ApiPropertyOptional({
-    example: 'C1',
-    maxLength: 32,
-    description: 'Unique across cohorts. Stored uppercase.',
-  })
+  /**
+   * Unique across cohorts. Stored uppercase.
+   * @example C1
+   */
+  @ApiPropertyOptional({ maxLength: 32 })
   @IsOptionalNotNull()
   @IsCatalogCode()
   code?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    format: 'date',
-    nullable: true,
-    example: '2026-09-01',
-    description: 'Null clears it.',
-  })
+  /**
+   * Null clears it.
+   * @example 2026-09-01
+   */
+  @ApiPropertyOptional({ format: 'date' })
   @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(CALENDAR_DATE, { message: 'startDate must be YYYY-MM-DD' })
   startDate?: string | null;
 
-  @ApiPropertyOptional({
-    type: String,
-    format: 'date',
-    nullable: true,
-    example: '2027-06-30',
-    description: 'On or after startDate. Null clears it.',
-  })
+  /**
+   * On or after startDate. Null clears it.
+   * @example 2027-06-30
+   */
+  @ApiPropertyOptional({ format: 'date' })
   @IsOptional()
   @IsISO8601({ strict: true })
   @Matches(CALENDAR_DATE, { message: 'endDate must be YYYY-MM-DD' })
   endDate?: string | null;
 
-  @ApiPropertyOptional({
-    enum: CohortStatus,
-    enumName: 'CohortStatus',
-  })
+  @ApiPropertyOptional({ enum: CohortStatus, enumName: 'CohortStatus' })
   @IsOptionalNotNull()
   @IsEnum(CohortStatus)
   status?: CohortStatus;

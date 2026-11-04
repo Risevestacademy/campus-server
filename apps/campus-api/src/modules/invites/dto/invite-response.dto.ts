@@ -12,51 +12,37 @@ export enum InviteEmailStatus {
 }
 
 export class InviteResponseDto {
-  @ApiProperty({ example: '44444444-4444-4444-8444-444444444444' })
+  /** @example 44444444-4444-4444-8444-444444444444 */
   id: string;
 
-  @ApiProperty({ example: 'new.student@campus.local' })
+  /** @example new.student@campus.local */
   email: string;
 
-  // The four below are always sent, as null when the invite has none. The
-  // type is spelt out because the generator cannot read it off `T | null`:
-  // left to itself it documents a bare object, and a client generated from
-  // that cannot use the value.
+  // The four below are always sent, as null when the invite has none.
   @ApiProperty({
-    type: String,
     format: 'uuid',
-    nullable: true,
     example: '11111111-1111-4111-8111-111111111111',
     description: 'Null for an invite that grants a system role only.',
   })
   cohortId: string | null;
 
-  @ApiProperty({
-    enum: CohortRole,
-    enumName: 'CohortRole',
-    nullable: true,
-    description: 'Null for an invite that grants a system role only.',
-  })
+  /** Null for an invite that grants a system role only. */
+  @ApiProperty({ enum: CohortRole, enumName: 'CohortRole', nullable: true })
   cohortRole: CohortRole | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    example: '22222222-2222-4222-8222-222222222222',
-    description:
-      'The cohort’s own link to a track, not the catalogue track. Null ' +
-      'when the invite places nobody on a track.',
-  })
+  /**
+   * The cohort’s own link to a track, not the catalogue track. Null when the
+   * invite places nobody on a track.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
+  @ApiProperty({ format: 'uuid' })
   cohortTrackId: string | null;
 
-  @ApiProperty({
-    type: String,
-    format: 'uuid',
-    nullable: true,
-    example: '33333333-3333-4333-8333-333333333333',
-    description: 'Null when the invite assigns no mentorship group.',
-  })
+  /**
+   * Null when the invite assigns no mentorship group.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
+  @ApiProperty({ format: 'uuid' })
   mentorshipGroupId: string | null;
 
   @ApiProperty({ enum: SystemRole, enumName: 'SystemRole' })
@@ -65,27 +51,23 @@ export class InviteResponseDto {
   @ApiProperty({ enum: InviteStatus, enumName: 'InviteStatus' })
   status: InviteStatus;
 
-  @ApiProperty({ example: '2026-09-29T12:00:00.000Z' })
+  /** @example 2026-09-29T12:00:00.000Z */
   expiresAt: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    example: '2026-10-05T17:00:00.000Z',
-    description:
-      'Guest invites only; null otherwise. When the visit itself ends, which ' +
-      'is not expiresAt above — that is how long the link stays redeemable, ' +
-      'and it is clamped to never outlast this.',
-  })
+  /**
+   * Guest invites only; null otherwise. When the visit itself ends, which is
+   * not expiresAt above — that is how long the link stays redeemable, and it is
+   * clamped to never outlast this.
+   * @example 2026-10-05T17:00:00.000Z
+   */
+  @ApiProperty({ format: 'date-time' })
   guestAccessExpiresAt: string | null;
 
-  @ApiProperty({
-    example: 'http://localhost:3000/invitation?token=abc123',
-    description:
-      'Shareable link embedding the RAW unhashed token. Shown exactly once — ' +
-      'only the SHA-256 hash is stored in INVITES.token_hash.',
-  })
+  /**
+   * Shareable link embedding the RAW unhashed token. Shown exactly once — only
+   * the SHA-256 hash is stored in INVITES.token_hash.
+   * @example http://localhost:3000/invitation?token=abc123
+   */
   inviteLink: string;
 
   /**
@@ -98,17 +80,18 @@ export class InviteResponseDto {
   })
   token: string;
 
-  @ApiProperty({ example: '2026-09-22T12:00:00.000Z' })
+  /** @example 2026-09-22T12:00:00.000Z */
   createdAt: string;
 
+  /**
+   * `sent`: Resend accepted the email. `failed`: it was not confirmed sent —
+   * share inviteLink by hand; the invite exists either way. `disabled`: this
+   * deployment sends no email (FF_EMAIL_ENABLED off).
+   */
   @ApiProperty({
     enum: InviteEmailStatus,
     enumName: 'InviteEmailStatus',
     example: InviteEmailStatus.Sent,
-    description:
-      '`sent`: Resend accepted the email. `failed`: it was not confirmed ' +
-      'sent — share inviteLink by hand; the invite exists either way. ' +
-      '`disabled`: this deployment sends no email (FF_EMAIL_ENABLED off).',
   })
   emailStatus: InviteEmailStatus;
 }

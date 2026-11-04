@@ -166,6 +166,8 @@ export enum AuditAction {
   NoticePinned = 'notice_pinned',
   NoticeUnpinned = 'notice_unpinned',
   NoticeRemoved = 'notice_removed',
+  RoomLinkCreated = 'room_link_created',
+  RoomLinkRevoked = 'room_link_revoked',
 }
 
 export enum AuditSubjectType {
@@ -183,6 +185,7 @@ export enum AuditSubjectType {
   SpaceMembership = 'space_membership',
   MentorshipGroup = 'mentorship_group',
   Notice = 'notice',
+  RoomLink = 'room_link',
 }
 
 /**
