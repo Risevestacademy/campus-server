@@ -58,8 +58,11 @@ the person to `spaceKey` with world's `goToSpace`.
   it starts until it ends (`roomLinkOpen` in `@campus/space-access`), the
   caller gets a row in `room_link_passes`, and `admitted: true`. World lets
   anybody holding a pass into the link's space, in the link's cohort, while
-  the window is open, whatever the space's list or a lock says. A removal by
-  staff still keeps them out. Somebody inside when the window ends stays
+  the window is open, whatever the space's list or a lock says. The rest of
+  the door still holds: a removal by staff, a space not yet set up, and a
+  place in the cohort that has lapsed all keep them out. A walk about to be
+  refused reads the passes once more first, in case one was made a moment
+  ago and world has not read it yet. Somebody inside when the window ends stays
   until they leave, as at any door.
 - **A pass follows its link.** Moving the window moves every pass with it,
   and revoking the link ends them. Every change tells world to read again.

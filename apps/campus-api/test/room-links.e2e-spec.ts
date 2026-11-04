@@ -291,6 +291,13 @@ describe('room links (e2e)', () => {
     expect(set.body).toMatchObject({ startsAt, endsAt });
     await window(mentorCookie, {}).expect(200);
     await window(mentorCookie, { startsAt }).expect(400);
+    await window(mentorCookie, { startsAt: null, endsAt }).expect(400);
+    await window(mentorCookie, { startsAt: null, endsAt: null }).expect(400);
+    await request(app.getHttpServer())
+      .post(linksPath())
+      .set('Cookie', mentorCookie)
+      .send({ title: 'Null start', startsAt: null, endsAt })
+      .expect(400);
     await window(mentorCookie, { startsAt: endsAt, endsAt: startsAt }).expect(
       400,
     );

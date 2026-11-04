@@ -302,11 +302,13 @@ export function registerGateway(
     }
     const space =
       doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ);
-    if (
-      space.retiredAt === null &&
-      holdsRoomLinkPass(connection, spaceKey, now)
-    ) {
-      return true;
+    // A pass gets past the list and a lock, never the rest of the door.
+    if (holdsRoomLinkPass(connection, spaceKey, now)) {
+      return mayEnter(
+        personOf(connection),
+        { ...space, access: SPACE_ACCESS.Normal, locked: false },
+        now,
+      );
     }
     return mayEnter(
       personOf(connection),
@@ -1188,6 +1190,7 @@ export function registerGateway(
       aimedAt: null,
       taken: 0,
       failed: 0,
+      rechecked: false,
       timer: setTimeout(() => walkOn(connection), 0).unref(),
     });
   }
@@ -1427,7 +1430,8 @@ export function registerGateway(
         return;
       }
       if (plan.path.length === 0) {
-        endWalk(connection, plan.closed ? 'refused' : 'arrived', plan.closed);
+        if (plan.closed) refuseWalk(connection, walk, plan.closed);
+        else endWalk(connection, 'arrived');
         return;
       }
       walk.path = plan.path;
@@ -1462,7 +1466,7 @@ export function registerGateway(
       walk.failed += 1;
       if (walk.failed >= 2) {
         const into = spaceAt(map.spaces, step(me, direction));
-        if (moved.outcome === 'refused') endWalk(connection, 'refused', into);
+        if (moved.outcome === 'refused') refuseWalk(connection, walk, into);
         else endWalk(connection, 'no_way');
         return;
       }
@@ -1471,6 +1475,25 @@ export function registerGateway(
       () => walkOn(connection),
       env.WORLD_STEP_MS,
     ).unref();
+  }
+
+  /**
+   * A pass made by entering through a room link reaches world by a read that
+   * may not have finished when the walk began, so a walk about to be refused
+   * reads the passes once more first, and goes on if the door now opens.
+   */
+  function refuseWalk(connection: Connection, walk: Walk, into: string): void {
+    if (walk.rechecked) {
+      endWalk(connection, 'refused', into);
+      return;
+    }
+    walk.rechecked = true;
+    void readRoomLinkPasses().then(() => {
+      if (walks.get(connection) !== walk) return;
+      walk.path = [];
+      walk.failed = 0;
+      walkOn(connection);
+    });
   }
 
   /** Turned or moved: the next tick sends it, and the next save keeps it. */
@@ -2822,6 +2845,8 @@ interface Walk {
   taken: number;
   /** Steps refused or blocked in a row. */
   failed: number;
+  /** Whether the passes were read again before a refusal, as they are once. */
+  rechecked: boolean;
 }
 
 function personOf(connection: Connection): PersonFacts {

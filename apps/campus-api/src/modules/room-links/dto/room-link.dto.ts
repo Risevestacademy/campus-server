@@ -3,17 +3,20 @@ import { Transform } from 'class-transformer';
 import {
   IsISO8601,
   IsNotEmpty,
-  IsOptional,
   IsString,
   IsUUID,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 
 import { ROOM_LINK_CODE } from '../room-link-code.js';
 
 const ZONED_INSTANT =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** Left out is fine; null is not a time, so it is checked and refused. */
+const present = (_: object, value: unknown) => value !== undefined;
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -41,7 +44,7 @@ export class RoomLinkCodeParamDto {
 export class RoomLinkWindowDto {
   /** @example 2026-11-05T10:00:00.000Z */
   @ApiPropertyOptional({ format: 'date-time' })
-  @IsOptional()
+  @ValidateIf(present)
   @IsISO8601({ strict: true })
   @Matches(ZONED_INSTANT, {
     message: 'startsAt must be a timestamp with a zone',
@@ -50,7 +53,7 @@ export class RoomLinkWindowDto {
 
   /** @example 2026-11-05T11:00:00.000Z */
   @ApiPropertyOptional({ format: 'date-time' })
-  @IsOptional()
+  @ValidateIf(present)
   @IsISO8601({ strict: true })
   @Matches(ZONED_INSTANT, { message: 'endsAt must be a timestamp with a zone' })
   endsAt?: string;
