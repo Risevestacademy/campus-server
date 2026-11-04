@@ -76,6 +76,12 @@ export interface MentorshipGroupSnapshot {
   description: string | null;
 }
 
+/** What an admin can change on a notice: title and body only. */
+export interface NoticeSnapshot {
+  title: string;
+  body: string;
+}
+
 /** A mentorship group as a whole: the editable fields plus its people. */
 export interface MentorshipGroupRecordSnapshot extends MentorshipGroupSnapshot {
   cohortId: string;
@@ -339,6 +345,35 @@ interface AuditEntryShapes {
        * own.
        */
       clearedSpaceMembershipIds: string[];
+    };
+  };
+  [AuditAction.NoticeCreated]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      cohortTrackId: string | null;
+      title: string;
+    };
+  };
+  [AuditAction.NoticeUpdated]: {
+    subject: AuditSubjectType.Notice;
+    details: { changes: FieldChanges<NoticeSnapshot> };
+  };
+  [AuditAction.NoticePinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeUnpinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeRemoved]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      title: string;
     };
   };
   [AuditAction.RoomLinkCreated]: {
