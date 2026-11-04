@@ -12,6 +12,7 @@ import {
   COHORT_ROLES,
   SPACE_ACCESS,
   mayEnter,
+  roomLinkOpen,
   type CohortMembershipFacts,
   type PersonFacts,
   type SpaceFacts,
@@ -25,6 +26,7 @@ import {
   type Account,
   type AccountLookup,
   type Appearance,
+  type RoomLinkPass,
   type WorldSpace,
 } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
@@ -194,6 +196,8 @@ export function registerGateway(
   let doors: ReadonlyMap<string, WorldSpace> = new Map();
   /** Whether a read has ever succeeded, so a missing key means no row. */
   let doorsRead = false;
+  /** Who entered through a room link, read with the doors. */
+  let roomLinkPasses: readonly RoomLinkPass[] = [];
   let doorsLoading: Promise<void> | undefined;
   let readDoorsAgain = false;
 
@@ -221,6 +225,7 @@ export function registerGateway(
             accounts.spacesOn(map.id, new Date()),
           );
           doorsRead = true;
+          await readRoomLinkPasses();
           refreshCalls();
           refreshLockable();
           refreshSpaceNames();
@@ -256,6 +261,34 @@ export function registerGateway(
    * default space is the way to everywhere else and the database keeps it
    * normal, so it is never asked about.
    */
+  /** Apart from the doors, so a failed read leaves the doors current. */
+  async function readRoomLinkPasses(): Promise<void> {
+    try {
+      roomLinkPasses = await traced('world.room_link_passes.read', () =>
+        accounts.roomLinkPassesOn(map.id, new Date()),
+      );
+    } catch (err) {
+      app.log.error(
+        { err },
+        'could not read room link passes; they keep what they had',
+      );
+    }
+  }
+
+  function holdsRoomLinkPass(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): boolean {
+    return roomLinkPasses.some(
+      (pass) =>
+        pass.spaceKey === spaceKey &&
+        pass.userId === connection.userId &&
+        pass.cohortId === connection.cohortId &&
+        roomLinkOpen(pass, now),
+    );
+  }
+
   function mayStepInto(
     connection: Connection,
     spaceKey: string,
@@ -269,6 +302,12 @@ export function registerGateway(
     }
     const space =
       doors.get(spaceKey) ?? (doorsRead ? NOT_YET_SYNCED : NOT_YET_READ);
+    if (
+      space.retiredAt === null &&
+      holdsRoomLinkPass(connection, spaceKey, now)
+    ) {
+      return true;
+    }
     return mayEnter(
       personOf(connection),
       locks.isLocked(connection.cohortId, spaceKey)

@@ -7,11 +7,14 @@ the person to the space.
 
 Routes:
 
-- `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/links` with `{ title }` makes
-  one.
+- `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/links` with `{ title }`, and
+  optionally `{ startsAt, endsAt }`, makes one.
 - `GET /v1/cohorts/{cohortId}/spaces/{spaceId}/links` lists a space's live
   links in the cohort, newest first.
-- `GET /v1/room-links/{code}` opens one: its cohort, space and title.
+- `GET /v1/room-links/{code}` opens one: its cohort, space, title and window.
+- `POST /v1/room-links/{code}/enter` enters through one: see below.
+- `PUT /v1/room-links/{code}/window` with `{ startsAt, endsAt }`, or `{}` for
+  none, sets when its event runs.
 - `DELETE /v1/room-links/{code}` revokes one.
 
 ## Decisions
@@ -38,3 +41,28 @@ Routes:
   `room_link_revoked`, with `space_id` set; opening a link writes nothing.
 - **Links do not expire.** They last until revoked or until the space leaves
   the map.
+
+## Entering
+
+The `/join/{code}` page calls `POST /v1/room-links/{code}/enter`, then walks
+the person to `spaceKey` with world's `goToSpace`.
+
+- **A window is when the event runs.** Staff give one when they make the
+  link, or later through `PUT .../window`. A link without one only shows the
+  way.
+- **The maker's calendar moves it.** Entering first reads the calendar of
+  whoever made the link (see the calendar module's README). An event of
+  theirs carrying the link that runs now moves the window to its times.
+  Otherwise the stored window stands.
+- **Entering while the window is open gives a pass.** From ten minutes before
+  it starts until it ends (`roomLinkOpen` in `@campus/space-access`), the
+  caller gets a row in `room_link_passes`, and `admitted: true`. World lets
+  anybody holding a pass into the link's space, in the link's cohort, while
+  the window is open, whatever the space's list or a lock says. A removal by
+  staff still keeps them out. Somebody inside when the window ends stays
+  until they leave, as at any door.
+- **A pass follows its link.** Moving the window moves every pass with it,
+  and revoking the link ends them. Every change tells world to read again.
+- **Admins are always admitted**, and need no pass.
+- **Changing a window is audited** as `room_link_window_changed`; a move read
+  from the calendar is not, since nobody made it.

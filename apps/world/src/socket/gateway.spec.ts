@@ -28,6 +28,7 @@ import { buildWorld, type World } from '../app.js';
 import { oneAtATime } from './gateway.js';
 import { CLOSES } from './protocol.js';
 import { loadEnv } from '../infra/env.js';
+import type { RoomLinkPass } from '../infra/accounts.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
 import { STEP_BURST } from '../movement/players.js';
@@ -135,6 +136,8 @@ const accounts = {
     if (accounts.failSpaces) throw new Error('postgres is down');
     return new Map(accounts.spaces);
   },
+  passes: [] as RoomLinkPass[],
+  roomLinkPassesOn: async () => accounts.passes,
   spaceListeners: [] as (() => void)[],
   onSpacesChanged: async (listener: () => void) => {
     accounts.spaceListeners.push(listener);
@@ -457,6 +460,7 @@ beforeEach(async () => {
   accounts.roles.clear();
   accounts.groups.clear();
   accounts.failSpaces = false;
+  accounts.passes = [];
   accounts.failMemberships = false;
   openLibrary();
   // A test that changed the doors must not leave them changed for the next.
@@ -3397,6 +3401,71 @@ describe('movement', () => {
         player: { x: 2, y: 0, facing: 'right' },
       });
       await leave(conn);
+    });
+
+    describe('through a room link', () => {
+      const MINUTE = 60_000;
+      const pass = (
+        userId: string,
+        startsInMinutes: number,
+        cohortId = COHORT,
+      ): RoomLinkPass => ({
+        cohortId,
+        spaceKey: 'library',
+        userId,
+        startsAt: new Date(Date.now() + startsInMinutes * MINUTE),
+        endsAt: new Date(Date.now() + (startsInMinutes + 60) * MINUTE),
+      });
+
+      it('lets somebody with a pass into a designated space while the window is open', async () => {
+        const ada = person();
+        designateLibrary();
+        accounts.passes = [pass(ada, 5)];
+        await world.gateway.spacesChanged();
+        const conn = await arrive(ada);
+
+        await expect(walkToLibrary(conn)).resolves.toMatchObject({
+          outcome: 'moved',
+          player: { x: 3, y: 0 },
+        });
+        await leave(conn);
+      });
+
+      it('keeps them out before the window opens, and in another cohort', async () => {
+        const ada = person();
+        const grace = person();
+        designateLibrary();
+        accounts.passes = [pass(ada, 15), pass(grace, 0, 'cohort-2')];
+        await world.gateway.spacesChanged();
+        const first = await arrive(ada);
+        const second = await arrive(grace);
+
+        await expect(walkToLibrary(first)).resolves.toMatchObject({
+          outcome: 'refused',
+        });
+        await expect(walkToLibrary(second)).resolves.toMatchObject({
+          outcome: 'refused',
+        });
+        await Promise.all([leave(first), leave(second)]);
+      });
+
+      it('still lets the doors change when the passes cannot be read', async () => {
+        accounts.roomLinkPassesOn = async () => {
+          throw new Error('no such table');
+        };
+        try {
+          designateLibrary();
+          await world.gateway.spacesChanged();
+          const conn = await arrive(person());
+
+          await expect(walkToLibrary(conn)).resolves.toMatchObject({
+            outcome: 'refused',
+          });
+          await leave(conn);
+        } finally {
+          accounts.roomLinkPassesOn = async () => accounts.passes;
+        }
+      });
     });
 
     it('lets in somebody the list names, by person or by role', async () => {

@@ -11,6 +11,7 @@ import {
   LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
   MEMBERSHIP_ROWS_QUERY,
+  ROOM_LINK_PASSES_QUERY,
   SPACES_QUERY,
   SPACE_LISTS_QUERY,
   looksLikeId,
@@ -789,5 +790,91 @@ describe('reading a space row', () => {
     expect(toWorldSpace({ ...row, audio_mode: 'spatial' }, []).audioMode).toBe(
       'boundary',
     );
+  });
+});
+
+describe("world's room link passes, against campus-api's schema", () => {
+  const NOW = new Date('2026-11-05T10:00:00.000Z');
+  const HOUR = 3_600_000;
+  const COHORT = 'fffffff1-0000-4000-8000-000000000001';
+  const ADA = 'fffffff4-0000-4000-8000-000000000001';
+  const GRACE = 'fffffff4-0000-4000-8000-000000000002';
+
+  it('reads the passes on this map whose window has not ended, revoked links left out', async () => {
+    for (const id of [ADA, GRACE]) {
+      await db.query(`insert into users (id, email) values ($1, $2)`, [
+        id,
+        `${id}@campus.local`,
+      ]);
+    }
+    await db.query(
+      `insert into cohorts (id, name, code) values ($1, 'Cohort L', 'CL')`,
+      [COHORT],
+    );
+    const here = await db.query<{ id: string }>(
+      `insert into maps (key, name) values ('links', 'Links') returning id`,
+    );
+    const there = await db.query<{ id: string }>(
+      `insert into maps (key, name) values ('links-annex', 'Annex') returning id`,
+    );
+    const space = async (mapId: string, key: string) =>
+      (
+        await db.query<{ id: string }>(
+          `insert into spaces (map_id, key, name, kind, audio_mode, access)
+           values ($1, $2, $2, 'meeting_room', 'boundary', 'designated') returning id`,
+          [mapId, key],
+        )
+      ).rows[0].id;
+    const room = await space(here.rows[0].id, 'room');
+    const annex = await space(there.rows[0].id, 'annex-room');
+    const link = async (
+      code: string,
+      spaceId: string,
+      endsInHours: number,
+      revoked = false,
+    ) => {
+      const id = (
+        await db.query<{ id: string }>(
+          `insert into room_links (code, cohort_id, space_id, title, created_by, created_at, starts_at, ends_at, revoked_at)
+           values ($1, $2, $3, $1, $4, $5, $6, $7, $8) returning id`,
+          [
+            code,
+            COHORT,
+            spaceId,
+            ADA,
+            new Date(NOW.getTime() - 3 * HOUR),
+            new Date(NOW.getTime() + (endsInHours - 1) * HOUR),
+            new Date(NOW.getTime() + endsInHours * HOUR),
+            revoked ? new Date(NOW.getTime() - HOUR) : null,
+          ],
+        )
+      ).rows[0].id;
+      await db.query(
+        `insert into room_link_passes (room_link_id, user_id) values ($1, $2), ($1, $3)`,
+        [id, ADA, GRACE],
+      );
+    };
+    await link('LiveL1nk00', room, 1);
+    await link('EndedL1nk0', room, -1);
+    await link('Rev0kedL1n', room, 1, true);
+    await link('AnnexL1nk0', annex, 1);
+
+    const rows = (
+      await db.query<{
+        cohort_id: string;
+        space_key: string;
+        user_id: string;
+        starts_at: Date;
+        ends_at: Date;
+      }>(ROOM_LINK_PASSES_QUERY, ['links', NOW])
+    ).rows;
+
+    expect(rows.map((row) => row.user_id).sort()).toEqual([ADA, GRACE].sort());
+    expect(rows[0]).toMatchObject({
+      cohort_id: COHORT,
+      space_key: 'room',
+      starts_at: NOW,
+      ends_at: new Date(NOW.getTime() + HOUR),
+    });
   });
 });

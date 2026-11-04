@@ -126,7 +126,9 @@ it by the client but mean nothing to the server yet.
 **Spaces have doors.** Most spaces admit anybody in the campus unless the
 people inside have locked them (see [Locks](#locks)). A _designated_ space
 admits only the people its list names (an admin keeps the list in
-campus-api). A step into a space you may not enter is answered `refused`,
+campus-api). Entering through a room link while its event runs (campus-api's
+`POST /v1/room-links/{code}/enter`) lets you into that link's space, locked or
+designated, until the event ends. A step into a space you may not enter is answered `refused`,
 like a wall you cannot see. The corridors and grounds (every tile
 in no drawn space) are always open. Only the step _into_ a space is asked
 about: somebody already inside stays until they step out, whatever changes
