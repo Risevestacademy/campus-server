@@ -1059,16 +1059,27 @@ export function registerGateway(
   const walkLimit =
     env.WORLD_WALK_MAX_STEPS ?? map.grid.width * map.grid.height;
 
-  function admitsStep(connection: Connection, now: number) {
-    // Asked only on a step into another space: somebody already inside
-    // stays until they leave, whatever has changed since they came in.
+  function admitsStep(
+    connection: Connection,
+    now: number,
+  ): (target: Tile) => true | 'refused' | 'full' {
     return (target: Tile) => {
       const into = spaceAt(map.spaces, target);
-      return (
-        into === connection.spaceKey ||
-        mayStepInto(connection, into, new Date(now)) ||
-        hasPass(connection, into)
-      );
+      if (into === connection.spaceKey) return true;
+      if (
+        !mayStepInto(connection, into, new Date(now)) &&
+        !hasPass(connection, into)
+      ) {
+        return 'refused';
+      }
+      const door = doors.get(into);
+      if (
+        door?.capacity != null &&
+        connections.occupancy(connection.cohortId, into) >= door.capacity
+      ) {
+        return 'full';
+      }
+      return true;
     };
   }
 
@@ -1080,7 +1091,7 @@ export function registerGateway(
       const into = spaceAt(map.spaces, tile);
       let answer = answers.get(into);
       if (answer === undefined) {
-        answer = admits(tile);
+        answer = admits(tile) === true;
         answers.set(into, answer);
       }
       return answer;
@@ -1267,7 +1278,16 @@ export function registerGateway(
         return;
       }
       if (plan.path.length === 0) {
-        endWalk(connection, plan.closed ? 'refused' : 'arrived', plan.closed);
+        if (!plan.closed) {
+          endWalk(connection, 'arrived');
+        } else {
+          const admission = admitsStep(connection, now)(them);
+          endWalk(
+            connection,
+            admission === 'full' ? 'full' : 'refused',
+            plan.closed,
+          );
+        }
         return;
       }
       walk.path = plan.path;
@@ -1297,12 +1317,13 @@ export function registerGateway(
       });
       arrivedAt(connection, moved.player);
     } else if (moved.outcome !== 'too_fast') {
-      // A door locked, or a list changed, since the path was found.
+      // A door locked, a list changed, or a space filled since the path was found.
       walk.path = [];
       walk.failed += 1;
       if (walk.failed >= 2) {
         const into = spaceAt(map.spaces, step(me, direction));
-        if (moved.outcome === 'refused') endWalk(connection, 'refused', into);
+        if (moved.outcome === 'refused' || moved.outcome === 'full')
+          endWalk(connection, moved.outcome, into);
         else endWalk(connection, 'no_way');
         return;
       }

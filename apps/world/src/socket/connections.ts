@@ -149,4 +149,14 @@ export class Connections {
   get users(): number {
     return this.byUser.size;
   }
+
+  /** How many sockets in one cohort stand in one space. */
+  occupancy(cohortId: string, spaceKey: string): number {
+    let count = 0;
+    for (const held of this.byUser.values()) {
+      const connection = held.get(cohortId);
+      if (connection && connection.spaceKey === spaceKey) count += 1;
+    }
+    return count;
+  }
 }

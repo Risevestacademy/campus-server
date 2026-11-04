@@ -170,7 +170,7 @@ export const BroadcastCall = z
   });
 
 export const MoveOutcome = z
-  .enum(['moved', 'blocked', 'refused', 'too_fast'])
+  .enum(['moved', 'blocked', 'refused', 'full', 'too_fast'])
   .meta({
     id: 'MoveOutcome',
     description:
@@ -178,7 +178,8 @@ export const MoveOutcome = z
       'walkable; they turn to face it without moving. refused: the tile is ' +
       'floor, but in a space they may not enter (designated and not on its ' +
       'list, or locked); they turn to face it without moving, and may ask with ' +
-      '`requestEntry`. too_fast: over walking ' +
+      '`requestEntry`. full: the tile is floor, in a space they could enter ' +
+      'but it is at capacity; they turn to face it without moving. too_fast: over walking ' +
       'speed; nothing happens, not even the turn.',
   });
 
@@ -195,6 +196,7 @@ export const WalkEndReason = z
     'arrived',
     'stopped',
     'refused',
+    'full',
     'gone',
     'elsewhere',
     'no_way',
@@ -207,7 +209,8 @@ export const WalkEndReason = z
       'tile. stopped: you sent ' +
       '`stopWalking` or a `move`. refused: a space you may not enter is in ' +
       'the way, theirs or another, and you stopped beside the first one; ' +
-      '`mayAsk` says whether asking to enter it would be taken. gone: they ' +
+      '`mayAsk` says whether asking to enter it would be taken. full: a ' +
+      'space is at capacity; you stopped beside it. gone: they ' +
       'left, or were not here. elsewhere: they are online, but connected to ' +
       'another world server, which a walk cannot reach. no_way: no path ' +
       'reaches a tile beside them in their space: walls, a space with no ' +
