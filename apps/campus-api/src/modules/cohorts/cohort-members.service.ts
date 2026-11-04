@@ -8,6 +8,8 @@ import {
 } from '../../infra/database/database.constants.js';
 import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { endDeskClaims } from '../desks/end-claims.js';
+import { DeskReleaseReason, deskClaims } from '../desks/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
@@ -293,7 +295,8 @@ export class CohortMembersService {
    * committed.
    *
    * An end is not a revive. The row stays, `left_at` is set, and the roster
-   * files it under `state=ended` with the status and reason.
+   * files it under `state=ended` with the status and reason. A desk they
+   * hold in the cohort is let go (`enrolment_ended`).
    *
    * The member's sessions are ended in the same transaction, through
    * `endSessions` (the session issuer, which this module cannot import
@@ -398,6 +401,12 @@ export class CohortMembersService {
           .delete(mentorshipGroupStudents)
           .where(eq(mentorshipGroupStudents.cohortMemberId, existing.id));
       }
+      await endDeskClaims(
+        tx,
+        and(eq(deskClaims.cohortId, cohortId), eq(deskClaims.userId, userId)),
+        DeskReleaseReason.EnrolmentEnded,
+        now,
+      );
 
       await writeAuditEntry(tx, {
         ...audit,

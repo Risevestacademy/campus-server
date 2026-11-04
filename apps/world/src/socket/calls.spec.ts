@@ -82,6 +82,7 @@ const accounts = {
   spacesOn: async () => new Map(spaces),
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
+  onDesksChanged: async () => undefined,
   close: async () => undefined,
 };
 
