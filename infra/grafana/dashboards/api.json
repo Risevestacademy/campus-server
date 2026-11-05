@@ -662,8 +662,8 @@
     },
     {
       "type": "table",
-      "title": "Slowest requests",
-      "description": "Requests over 500 ms. Open one to see where its time went.",
+      "title": "Requests over 500 ms",
+      "description": "Up to 20 requests over 500 ms in the period, sorted by duration on the page. Tempo doesn't rank a search by duration, so these are not necessarily the slowest. Open one to see where its time went.",
       "datasource": {
         "type": "tempo",
         "uid": "${traces}"
@@ -690,7 +690,13 @@
       },
       "options": {
         "showHeader": true,
-        "cellHeight": "sm"
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Duration",
+            "desc": true
+          }
+        ]
       },
       "id": 12,
       "gridPos": {

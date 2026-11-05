@@ -196,8 +196,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Heap used and limit",
-      "description": "Both services cap the old space on their start command, so the limit is what they can use.",
+      "title": "Heap used and allocated",
+      "description": "Used against what V8 has allocated for the heap. Nothing exports the heap's limit: the old space is capped on each start command, at 128 MB for campus-api and 96 MB for world, so used nearing that is the warning.",
       "datasource": {
         "type": "prometheus",
         "uid": "${metrics}"
@@ -220,8 +220,8 @@
             "uid": "${metrics}"
           },
           "refId": "B",
-          "expr": "sum by (job) (v8js_memory_heap_limit_bytes{job=~\"$job\"})",
-          "legendFormat": "{{job}} limit",
+          "expr": "sum by (job) (v8js_memory_heap_space_size_bytes{job=~\"$job\"})",
+          "legendFormat": "{{job}} allocated",
           "range": true,
           "instant": false
         }

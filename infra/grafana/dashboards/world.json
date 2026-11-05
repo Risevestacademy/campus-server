@@ -130,7 +130,7 @@
     {
       "type": "stat",
       "title": "Connect success",
-      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. Until issue #118 is fixed, a refused tab that closes during world's first read of the spaces after a boot counts as abandoned, so this can read a little low just after a deploy.",
+      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. A period with only failures reads 0%; one with no attempts shows nothing. Until issue #118 is fixed, a refused tab that closes during world's first read of the spaces after a boot counts as abandoned, so this can read a little low just after a deploy.",
       "datasource": {
         "type": "prometheus",
         "uid": "${metrics}"
@@ -142,7 +142,7 @@
             "uid": "${metrics}"
           },
           "refId": "A",
-          "expr": "sum(increase(world_connections_opened_total{job=\"world\"}[$__range])) / (sum(increase(world_connections_opened_total{job=\"world\"}[$__range])) + (sum(increase(world_connections_failed_total{job=\"world\"}[$__range])) or vector(0)) + (sum(increase(world_connections_abandoned_total{job=\"world\"}[$__range])) or vector(0)))",
+          "expr": "((sum(increase(world_connections_opened_total{job=\"world\"}[$__range])) or vector(0)) / ((sum(increase(world_connections_opened_total{job=\"world\"}[$__range])) or vector(0)) + (sum(increase(world_connections_failed_total{job=\"world\"}[$__range])) or vector(0)) + (sum(increase(world_connections_abandoned_total{job=\"world\"}[$__range])) or vector(0)))) >= 0",
           "legendFormat": "__auto",
           "range": false,
           "instant": true
@@ -164,7 +164,8 @@
               }
             ]
           },
-          "decimals": 2
+          "decimals": 2,
+          "noValue": "No connection attempts"
         },
         "overrides": []
       },
@@ -367,7 +368,7 @@
     {
       "type": "timeseries",
       "title": "Connect success, rolling hour",
-      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. Until issue #118 is fixed, a refused tab that closes during world's first read of the spaces after a boot counts as abandoned, so this can read a little low just after a deploy.",
+      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. A period with only failures reads 0%; one with no attempts shows nothing. Until issue #118 is fixed, a refused tab that closes during world's first read of the spaces after a boot counts as abandoned, so this can read a little low just after a deploy.",
       "datasource": {
         "type": "prometheus",
         "uid": "${metrics}"
@@ -379,7 +380,7 @@
             "uid": "${metrics}"
           },
           "refId": "A",
-          "expr": "sum(increase(world_connections_opened_total{job=\"world\"}[1h])) / (sum(increase(world_connections_opened_total{job=\"world\"}[1h])) + (sum(increase(world_connections_failed_total{job=\"world\"}[1h])) or vector(0)) + (sum(increase(world_connections_abandoned_total{job=\"world\"}[1h])) or vector(0)))",
+          "expr": "((sum(increase(world_connections_opened_total{job=\"world\"}[1h])) or vector(0)) / ((sum(increase(world_connections_opened_total{job=\"world\"}[1h])) or vector(0)) + (sum(increase(world_connections_failed_total{job=\"world\"}[1h])) or vector(0)) + (sum(increase(world_connections_abandoned_total{job=\"world\"}[1h])) or vector(0)))) >= 0",
           "legendFormat": "connect success",
           "range": true,
           "instant": false
@@ -398,7 +399,8 @@
               "mode": "none",
               "group": "A"
             }
-          }
+          },
+          "noValue": "No connection attempts"
         },
         "overrides": []
       },

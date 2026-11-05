@@ -9,6 +9,7 @@
     "build": "pnpm -r build",
     "dev": "pnpm --filter campus-api^... --filter world... build && pnpm --parallel --filter campus-api --filter world run \"/^(dev|start:dev)$/\"",
     "lint": "pnpm -r lint",
+    "grafana:check": "node infra/grafana/check-dashboards.mjs",
     "test": "pnpm -r test",
     "dev:api": "pnpm --filter campus-api^... build && pnpm --filter campus-api start:dev",
     "dev:world": "pnpm --filter world... build && pnpm --filter world run \"/^(dev|start:dev)$/\"",

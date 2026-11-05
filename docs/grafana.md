@@ -63,10 +63,11 @@ Abandoned counts against world: a client that gives up while world is still
 deciding is most often waiting on a slow world. Refusals are left out: a
 signed-out tab or a wrong origin is not world failing.
 
-Every deploy closes each open socket with `server shutting down`, so
-`world.connections.closed_by_server{reason="server shutting down"}` rises in
-a burst at each release. That marks deploys; an alert on sockets world closes
-should leave that reason out.
+Every deploy closes each open socket with `server shutting down`. Those
+closes are counted while the old process shuts down, so they reach Grafana in
+its final export at best, and a rate needs two samples: don't expect
+`world.connections.closed_by_server` to show deploys. An alert on sockets
+world closes should still leave that reason out.
 
 ## Setting up an environment
 
@@ -137,6 +138,14 @@ importing a newer file over it replaces it. Change a dashboard by editing it
 in Grafana, then Export → Export as JSON with "Export the dashboard to use in
 another instance" off, and commit the file in place of the old one, so the
 repository stays the copy that counts.
+
+`pnpm grafana:check`, which CI runs, checks the files without Grafana: every
+metric a query names must be one that world or the runtime instrumentation
+exports, under the name Grafana Cloud gives it; every data source and variable
+a query uses must be defined; ids and uids must be unique and panels must not
+overlap. It reads the instruments from `apps/world/src/infra/metrics.ts` and
+the installed `@opentelemetry/instrumentation-runtime-node`, so a renamed
+instrument or an upgrade fails it until the dashboards follow.
 
 Connect success on the world dashboard can read slightly low just after a
 deploy: a refused tab that closes during world's first read of the spaces
