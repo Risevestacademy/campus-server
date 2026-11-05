@@ -14,16 +14,18 @@ export interface GoogleEvent {
   id?: string;
   status?: string;
   summary?: string;
+  description?: string;
   location?: string;
   htmlLink?: string;
   hangoutLink?: string;
   start?: GoogleEventTime;
   end?: GoogleEventTime;
   attendees?: { self?: boolean; responseStatus?: string }[];
+  organizer?: { self?: boolean };
 }
 
 export const GOOGLE_EVENT_FIELDS =
-  'nextPageToken,items(id,status,summary,location,htmlLink,hangoutLink,start,end,attendees(self,responseStatus))';
+  'nextPageToken,items(id,status,summary,description,location,htmlLink,hangoutLink,start,end,attendees(self,responseStatus))';
 
 /** None for a cancelled event, or one missing what campus shows. */
 export function toCalendarEvent(item: GoogleEvent): CalendarEventDto[] {
@@ -45,6 +47,7 @@ export function toCalendarEvent(item: GoogleEvent): CalendarEventDto[] {
       location: item.location ?? null,
       meetingUrl: item.hangoutLink ?? null,
       url: item.htmlLink ?? null,
+      room: null,
     },
   ];
 }

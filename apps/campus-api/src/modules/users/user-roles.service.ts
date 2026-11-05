@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, notExists } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
@@ -7,6 +7,10 @@ import { AccessDeniedException } from '../../shared/exceptions/index.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { SessionIssuer } from '../auth/session-issuer.js';
+import { isLiveMembership } from '../cohorts/cohort-members.service.js';
+import { CohortRole, cohortMembers } from '../cohorts/schema.js';
+import { endDeskClaims } from '../desks/end-claims.js';
+import { DeskReleaseReason, deskClaims } from '../desks/schema.js';
 import type { UserSystemRoleDto } from './dto/system-role.dto.js';
 import { hasAdminPowers, SystemRole, users } from './schema.js';
 import {
@@ -125,8 +129,32 @@ export class UserRolesService {
         details: { from: target.systemRole, to: role, source: 'admin' },
       });
       if (role === SystemRole.User) {
+        const now = new Date();
         // In this transaction, so the role and the sessions go together.
-        await this.sessions.revokeAllSessions(targetId, new Date(), tx);
+        await this.sessions.revokeAllSessions(targetId, now, tx);
+        // A desk they held on their role alone, where they have no place a
+        // member could claim with.
+        await endDeskClaims(
+          tx,
+          and(
+            eq(deskClaims.userId, targetId),
+            notExists(
+              tx
+                .select({ id: cohortMembers.id })
+                .from(cohortMembers)
+                .where(
+                  and(
+                    eq(cohortMembers.cohortId, deskClaims.cohortId),
+                    eq(cohortMembers.userId, targetId),
+                    ne(cohortMembers.role, CohortRole.Guest),
+                    isLiveMembership(now),
+                  ),
+                ),
+            ),
+          ),
+          DeskReleaseReason.AdminRoleRemoved,
+          now,
+        );
       }
       return row;
     });

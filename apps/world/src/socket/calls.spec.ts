@@ -80,8 +80,10 @@ const accounts = {
       ]),
     ),
   spacesOn: async () => new Map(spaces),
+  roomLinkPassesOn: async () => [],
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
+  onDesksChanged: async () => undefined,
   close: async () => undefined,
 };
 

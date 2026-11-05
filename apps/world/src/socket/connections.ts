@@ -1,4 +1,4 @@
-import type { CohortMembershipFacts } from '@campus/space-access';
+import type { CohortMembershipFacts, PersonFacts } from '@campus/space-access';
 import type { WebSocket } from 'ws';
 
 import type { Appearance } from '../infra/accounts.js';
@@ -149,4 +149,13 @@ export class Connections {
   get users(): number {
     return this.byUser.size;
   }
+}
+
+export function personOf(connection: Connection): PersonFacts {
+  return {
+    userId: connection.userId,
+    systemRole: connection.systemRole,
+    cohortId: connection.cohortId,
+    membership: connection.membership,
+  };
 }

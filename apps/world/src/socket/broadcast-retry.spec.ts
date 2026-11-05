@@ -50,8 +50,10 @@ const accounts = {
   ) => new Set(seats.map(seatKey)),
   memberships: async () => new Map(),
   spacesOn: async () => new Map(),
+  roomLinkPassesOn: async () => [],
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
+  onDesksChanged: async () => undefined,
   close: async () => undefined,
 };
 

@@ -76,6 +76,12 @@ export interface MentorshipGroupSnapshot {
   description: string | null;
 }
 
+/** What an admin can change on a notice: title and body only. */
+export interface NoticeSnapshot {
+  title: string;
+  body: string;
+}
+
 /** A mentorship group as a whole: the editable fields plus its people. */
 export interface MentorshipGroupRecordSnapshot extends MentorshipGroupSnapshot {
   cohortId: string;
@@ -326,6 +332,10 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.MentorshipGroup;
     details: { cohortId: string; cohortMemberId: string };
   };
+  [AuditAction.DeskFreed]: {
+    subject: AuditSubjectType.DeskClaim;
+    details: { cohortId: string; deskKey: string; holderId: string };
+  };
   [AuditAction.MentorshipGroupDeleted]: {
     subject: AuditSubjectType.MentorshipGroup;
     details: MentorshipGroupRecordSnapshot & {
@@ -337,6 +347,62 @@ interface AuditEntryShapes {
       clearedSpaceMembershipIds: string[];
     };
   };
+  [AuditAction.NoticeCreated]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      cohortTrackId: string | null;
+      title: string;
+    };
+  };
+  [AuditAction.NoticeUpdated]: {
+    subject: AuditSubjectType.Notice;
+    details: { changes: FieldChanges<NoticeSnapshot> };
+  };
+  [AuditAction.NoticePinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeUnpinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeRemoved]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      title: string;
+    };
+  };
+  [AuditAction.RoomLinkCreated]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      title: string;
+    } & RoomLinkWindowDetails;
+  };
+  [AuditAction.RoomLinkRevoked]: {
+    subject: AuditSubjectType.RoomLink;
+    details: { cohortId: string; code: string; title: string };
+  };
+  [AuditAction.RoomLinkWindowChanged]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      before: RoomLinkWindowDetails;
+      after: RoomLinkWindowDetails;
+    };
+  };
+}
+
+/** When a room link's event runs, as ISO timestamps; both null for none. */
+interface RoomLinkWindowDetails {
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 /**

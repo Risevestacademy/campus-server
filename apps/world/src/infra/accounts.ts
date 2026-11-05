@@ -1,4 +1,5 @@
 import {
+  DESKS_CHANGED_CHANNEL,
   PROFILE_CHANGED_CHANNEL,
   hasAdminPowers,
   spriteKeyOrNone,
@@ -57,6 +58,12 @@ export interface AccountLookup {
    */
   spacesOn(mapKey: string, now: Date): Promise<Map<string, WorldSpace>>;
   /**
+   * The passes of people who entered through a room link to a space on this
+   * map whose window has not ended by `now`. The door decides whether each
+   * window is open yet.
+   */
+  roomLinkPassesOn(mapKey: string, now: Date): Promise<RoomLinkPass[]>;
+  /**
    * Calls `listener` whenever campus-api says something a space's door reads
    * has changed, and whenever listening (re)starts, since a change made while
    * it was not listening reached nobody. Resolves once listening; rejects if
@@ -69,6 +76,12 @@ export interface AccountLookup {
    * rejects if it could not start.
    */
   onProfileChanged(listener: (userId: string) => void): Promise<void>;
+  /**
+   * Calls `listener` with a cohort id, or null for every cohort, whenever
+   * campus-api says who holds a desk there may have changed. Resolves once
+   * listening; rejects if it could not start.
+   */
+  onDesksChanged(listener: (cohortId: string | null) => void): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -200,6 +213,26 @@ export interface WorldSpace extends SpaceFacts {
   subscribeRadius: number;
   hysteresisFactor: number;
 }
+
+/** Somebody who entered through a room link, and when the link's event runs. */
+export interface RoomLinkPass {
+  cohortId: string;
+  spaceKey: string;
+  userId: string;
+  startsAt: Date;
+  endsAt: Date;
+}
+
+/** $1 the map's key, $2 now. */
+export const ROOM_LINK_PASSES_QUERY = `select room_links.cohort_id, spaces.key as space_key, room_link_passes.user_id,
+    room_links.starts_at, room_links.ends_at
+  from room_link_passes
+  join room_links on room_links.id = room_link_passes.room_link_id
+  join spaces on spaces.id = room_links.space_id
+  join maps on maps.id = spaces.map_id
+  where maps.key = $1
+    and room_links.revoked_at is null
+    and room_links.ends_at > $2`;
 
 /** A `spaces` row as `SPACES_QUERY` reads it, before world decides what it means. */
 export interface SpaceRow {
@@ -465,6 +498,33 @@ export function createAccountLookup(env: Env): AccountLookup {
           space.key,
           toWorldSpace(space, lists.get(space.id) ?? []),
         ]),
+      );
+    },
+    async roomLinkPassesOn(mapKey, now): Promise<RoomLinkPass[]> {
+      const rows = await sql.unsafe<
+        {
+          cohort_id: string;
+          space_key: string;
+          user_id: string;
+          starts_at: Date;
+          ends_at: Date;
+        }[]
+      >(ROOM_LINK_PASSES_QUERY, [mapKey, now]);
+      return rows.map((row) => ({
+        cohortId: row.cohort_id,
+        spaceKey: row.space_key,
+        userId: row.user_id,
+        startsAt: row.starts_at,
+        endsAt: row.ends_at,
+      }));
+    },
+    async onDesksChanged(listener): Promise<void> {
+      // As for spaces: a change made while the driver was reconnecting told
+      // nobody, so every cohort fetches again once it is back.
+      await sql.listen(
+        DESKS_CHANGED_CHANNEL,
+        (cohortId) => listener(cohortId === '' ? null : cohortId),
+        () => listener(null),
       );
     },
     async onSpacesChanged(listener): Promise<void> {

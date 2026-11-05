@@ -7,6 +7,8 @@ import { AccessDeniedException } from '../../shared/exceptions/index.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { SessionIssuer } from '../auth/session-issuer.js';
+import { endDeskClaims } from '../desks/end-claims.js';
+import { DeskReleaseReason, deskClaims } from '../desks/schema.js';
 import type { UserStatusDto } from './dto/user-status.dto.js';
 import { hasAdminPowers, SystemRole, UserStatus, users } from './schema.js';
 import {
@@ -220,7 +222,14 @@ export class UserStatusService {
         });
         // In this transaction, so the suspension and the sessions go
         // together: neither may commit without the other.
-        await this.sessions.revokeAllSessions(targetId, new Date(), tx);
+        const now = new Date();
+        await this.sessions.revokeAllSessions(targetId, now, tx);
+        await endDeskClaims(
+          tx,
+          eq(deskClaims.userId, targetId),
+          DeskReleaseReason.AccountSuspended,
+          now,
+        );
       } else {
         await writeAuditEntry(tx, {
           actorUserId: actor.id,
