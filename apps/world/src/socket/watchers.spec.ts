@@ -16,6 +16,7 @@ import {
   leave,
   map,
   person,
+  positionKey,
   presence,
   presenceKeyOf,
   quiet,
@@ -328,6 +329,33 @@ describe('what a watcher sees and does', () => {
       closeReason: 'account_suspended',
     });
     await web.settled;
+  });
+
+  it('forgets the avatar kept for a reconnect, and the saved position, when the account is suspended while only a watcher is open', async () => {
+    const ada = person();
+    const web = await arrive(ada);
+    const phone = await ifFree(ada);
+    await step(web, 'right', 1);
+    await leave(web);
+    await waitFor(phone, (m) => m.type === 'left' && m.userId === ada);
+    await expect
+      .poll(() => store.positions.get(positionKey({ userId: ada })))
+      .toMatchObject({ x: 1, y: 0 });
+    expect(
+      world.gateway.players.isRemembered({ userId: ada, cohortId: COHORT }),
+    ).toBe(true);
+
+    accounts.suspended.add(ada);
+
+    await expect(phone.settled).resolves.toMatchObject({
+      closeReason: 'account_suspended',
+    });
+    await expect
+      .poll(() => store.positions.has(positionKey({ userId: ada })))
+      .toBe(false);
+    expect(
+      world.gateway.players.isRemembered({ userId: ada, cohortId: COHORT }),
+    ).toBe(false);
   });
 
   it('is closed when its own session ends, and the avatar stays', async () => {

@@ -231,6 +231,13 @@ export function registerGateway(
     if (connection.mode === 'watcher') {
       connections.removeWatcher(connection);
       chat.forget(connection);
+      // Access taken away reaches the avatar kept for a reconnect, and the
+      // saved position, through whichever socket is still open: here, only
+      // a watcher. A live avatar is its own socket's to drop.
+      if (!remember && !connections.holderOf(connection)) {
+        players.leave(connection, Date.now(), false);
+        positionWrites.forget(connection);
+      }
       return;
     }
     walks.cancel(connection);
