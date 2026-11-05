@@ -131,13 +131,34 @@ exported metrics, so they work while `FF_OTEL_METRICS_ENABLED` is off, as it
 is for campus-api on staging. The runtime dashboard shows only services that
 export metrics, so on staging only world.
 
-**Import or update one:** Dashboards → New → Import, and upload the file. The
-data source pickers at the top of each dashboard choose the stack's `…-prom`,
-`…-traces` and `…-logs` by name. Each dashboard has a fixed uid, so
-importing a newer file over it replaces it. Change a dashboard by editing it
-in Grafana, then Export → Export as JSON with "Export the dashboard to use in
-another instance" off, and commit the file in place of the old one, so the
-repository stays the copy that counts.
+**Deploying them:** the
+[Grafana dashboards workflow](../.github/workflows/grafana.yml) writes every
+file to the stack when a change under `infra/grafana` reaches `dev` (the
+`staging` GitHub environment) or `main` (`production`), and can be run by
+hand from the Actions tab. Each dashboard has a fixed uid, so a deploy
+replaces the one in Grafana, including any edit made there since. The data
+source pickers at the top of each dashboard choose the stack's `…-prom`,
+`…-traces` and `…-logs` by name.
+
+To set up an environment for it, create a service account in the stack
+(Administration → Users and access → Service accounts) with the Editor role,
+add a token, and set these on the GitHub environment:
+
+| Name                 | Kind     | Value                                                             |
+| -------------------- | -------- | ----------------------------------------------------------------- |
+| `GRAFANA_URL`        | variable | The stack's address, such as `https://campus-staging.grafana.net` |
+| `GRAFANA_TOKEN`      | secret   | The service account's token                                       |
+| `GRAFANA_FOLDER_UID` | variable | Optional: the uid of the folder to put them in                    |
+
+Until both `GRAFANA_URL` and `GRAFANA_TOKEN` are set, the workflow warns and
+deploys nothing. `pnpm grafana:deploy` does the same from a machine, with the
+three set in the shell. To import one by hand instead: Dashboards → New →
+Import, and upload the file.
+
+Change a dashboard by editing it in Grafana, then Export → Export as JSON
+with "Export the dashboard to use in another instance" off, and commit the
+file in place of the old one, so the repository stays the copy that counts:
+the next deploy overwrites anything that isn't committed.
 
 `pnpm grafana:check`, which CI runs, checks the files without Grafana: every
 metric a query names must be one that world or the runtime instrumentation
