@@ -9,10 +9,15 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import {
   CohortRole,
+  StudentStatus,
   cohortMembers,
   cohortTracks,
   cohorts,
 } from '../cohorts/schema.js';
+import {
+  mentorshipGroupStudents,
+  mentorshipGroups,
+} from '../mentorship-groups/schema.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { notifications } from '../notifications/schema.js';
 import { tracks } from '../tracks/schema.js';
@@ -106,11 +111,12 @@ beforeEach(async () => {
     .returning();
   cohortTrackId = ct.id;
 
-  // Professor is a professor of the cohort.
+  // Professor is a professor of the cohort, on its track.
   await pglite.insert(cohortMembers).values({
     cohortId,
     userId: professorUserId,
     role: CohortRole.Professor,
+    cohortTrackId,
   });
 
   // Mentor is a mentor of the cohort.
@@ -189,8 +195,8 @@ describe('create', () => {
         scope: NoticeScope.Cohort,
         cohortId,
       },
-      professorUser,
-      { ...audit, actorUserId: professorUser.id },
+      adminUser,
+      { ...audit, actorUserId: adminUser.id },
     );
 
     const sent = await pglite
@@ -216,7 +222,7 @@ describe('create', () => {
     expect(await pglite.select().from(notifications)).toEqual([]);
   });
 
-  it('mentor is refused', async () => {
+  it('mentor cannot post cohort-wide', async () => {
     await expect(
       service.create(
         {
@@ -243,6 +249,158 @@ describe('create', () => {
         { ...audit, actorUserId: professorUser.id },
       ),
     ).rejects.toThrow(NoticeForbiddenException);
+  });
+
+  it('professor cannot post cohort-wide', async () => {
+    await expect(
+      service.create(
+        { title: 'Nope', body: 'Nope.', scope: NoticeScope.Cohort, cohortId },
+        professorUser,
+        { ...audit, actorUserId: professorUser.id },
+      ),
+    ).rejects.toThrow(NoticeForbiddenException);
+  });
+
+  it('professor cannot post to a track their membership does not name', async () => {
+    const [design] = await pglite
+      .insert(tracks)
+      .values({ name: 'Design', code: 'DESIGN' })
+      .returning();
+    const [otherTrack] = await pglite
+      .insert(cohortTracks)
+      .values({ cohortId, trackId: design.id })
+      .returning();
+
+    await expect(
+      service.create(
+        {
+          title: 'Nope',
+          body: 'Nope.',
+          scope: NoticeScope.CohortTrack,
+          cohortId,
+          cohortTrackId: otherTrack.id,
+        },
+        professorUser,
+        { ...audit, actorUserId: professorUser.id },
+      ),
+    ).rejects.toThrow(NoticeForbiddenException);
+  });
+
+  describe('mentorship-group scope', () => {
+    /** A pod led by `mentorId`, holding one active student. */
+    async function podOf(mentorId: string) {
+      const [mentorMember] = await pglite
+        .select({ id: cohortMembers.id })
+        .from(cohortMembers)
+        .where(eq(cohortMembers.userId, mentorId));
+      const [student] = await pglite
+        .insert(users)
+        .values({ email: `student-${mentorId}@campus.local` })
+        .returning();
+      const [studentMember] = await pglite
+        .insert(cohortMembers)
+        .values({
+          cohortId,
+          userId: student.id,
+          role: CohortRole.Student,
+          status: StudentStatus.Active,
+          cohortTrackId,
+        })
+        .returning();
+      const [group] = await pglite
+        .insert(mentorshipGroups)
+        .values({ cohortId, mentorMemberId: mentorMember.id, name: 'Pod' })
+        .returning();
+      await pglite.insert(mentorshipGroupStudents).values({
+        mentorshipGroupId: group.id,
+        cohortId,
+        cohortMemberId: studentMember.id,
+      });
+      return { groupId: group.id, studentId: student.id };
+    }
+
+    const groupNotice = (mentorshipGroupId: string, cohort = cohortId) => ({
+      title: 'Pod news',
+      body: 'Standup moved.',
+      scope: NoticeScope.MentorshipGroup,
+      cohortId: cohort,
+      mentorshipGroupId,
+    });
+
+    it("lets a mentor post to their pod, reaching the pod's mentor and students", async () => {
+      const { groupId, studentId } = await podOf(mentorUserId);
+
+      const notice = await service.create(groupNotice(groupId), mentorUser, {
+        ...audit,
+        actorUserId: mentorUser.id,
+      });
+
+      expect(notice).toMatchObject({
+        scope: NoticeScope.MentorshipGroup,
+        cohortId,
+        cohortTrackId: null,
+        mentorshipGroupId: groupId,
+      });
+      const sent = await pglite
+        .select({ recipientId: notifications.recipientId })
+        .from(notifications)
+        .where(eq(notifications.referenceId, notice.id));
+      expect(sent.map((row) => row.recipientId).sort()).toEqual(
+        [mentorUserId, studentId].sort(),
+      );
+    });
+
+    it("refuses a mentor posting to another mentor's pod, and a professor", async () => {
+      const [other] = await pglite
+        .insert(users)
+        .values({ email: 'other-mentor@campus.local' })
+        .returning();
+      await pglite
+        .insert(cohortMembers)
+        .values({ cohortId, userId: other.id, role: CohortRole.Mentor });
+      const { groupId } = await podOf(other.id);
+
+      for (const actor of [mentorUser, professorUser]) {
+        await expect(
+          service.create(groupNotice(groupId), actor, {
+            ...audit,
+            actorUserId: actor.id,
+          }),
+        ).rejects.toThrow(NoticeForbiddenException);
+      }
+    });
+
+    it('lets an admin post to any pod', async () => {
+      const { groupId } = await podOf(mentorUserId);
+
+      const notice = await service.create(groupNotice(groupId), adminUser, {
+        ...audit,
+        actorUserId: adminUser.id,
+      });
+
+      expect(notice.mentorshipGroupId).toBe(groupId);
+    });
+
+    it('rejects a pod from another cohort, and the wrong references for the scope', async () => {
+      const { groupId } = await podOf(mentorUserId);
+      const [otherCohort] = await pglite
+        .insert(cohorts)
+        .values({ name: 'Cohort 2', code: 'C2' })
+        .returning();
+
+      for (const dto of [
+        groupNotice(groupId, otherCohort.id),
+        { ...groupNotice(groupId), mentorshipGroupId: undefined },
+        { ...groupNotice(groupId), scope: NoticeScope.Cohort },
+      ]) {
+        await expect(
+          service.create(dto, adminUser, {
+            ...audit,
+            actorUserId: adminUser.id,
+          }),
+        ).rejects.toThrow(NoticeInvalidArgumentException);
+      }
+    });
   });
 
   it('rejects campus notice that names a cohort', async () => {

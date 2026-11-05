@@ -211,6 +211,13 @@
       "when": 1793832827390,
       "tag": "0029_notices_removed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793887512170,
+      "tag": "0030_notices_mentorship_group",
+      "breakpoints": true
     }
   ]
 }

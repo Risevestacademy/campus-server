@@ -9,7 +9,13 @@ import {
   unique,
 } from '../../infra/database/testing/real-postgres.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
-import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
+import {
+  CohortRole,
+  cohortMembers,
+  cohortTracks,
+  cohorts,
+} from '../cohorts/schema.js';
+import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { NoticeConflictException } from './notices.exceptions.js';
@@ -21,14 +27,26 @@ const audit = { actorUserId: null };
 
 type Pg = ReturnType<typeof connectRealPostgres>;
 
-/** A cohort of its own, with a professor of it. */
-async function professorsCohort(
-  pg: Pg,
-): Promise<{ cohortId: string; professor: AuthenticatedUser }> {
+interface ProfessorsTrack {
+  cohortId: string;
+  cohortTrackId: string;
+  professor: AuthenticatedUser;
+}
+
+/** A cohort and track of their own, with a professor on that track. */
+async function professorsTrack(pg: Pg): Promise<ProfessorsTrack> {
   const tag = unique();
   const [cohort] = await pg.db
     .insert(cohorts)
     .values({ name: `Notices ${tag}`, code: `N${tag}`.toUpperCase() })
+    .returning();
+  const [track] = await pg.db
+    .insert(tracks)
+    .values({ name: `Track ${tag}`, code: `T${tag}`.toUpperCase() })
+    .returning();
+  const [cohortTrack] = await pg.db
+    .insert(cohortTracks)
+    .values({ cohortId: cohort.id, trackId: track.id })
     .returning();
   const [user] = await pg.db
     .insert(users)
@@ -38,25 +56,27 @@ async function professorsCohort(
     cohortId: cohort.id,
     userId: user.id,
     role: CohortRole.Professor,
+    cohortTrackId: cohortTrack.id,
   });
   return {
     cohortId: cohort.id,
+    cohortTrackId: cohortTrack.id,
     professor: { id: user.id, email: user.email, systemRole: user.systemRole },
   };
 }
 
 async function notice(
   pg: Pg,
-  authorId: string,
-  cohortId: string,
+  { cohortId, cohortTrackId, professor }: ProfessorsTrack,
   pinned: boolean,
 ): Promise<string> {
   const [row] = await pg.db
     .insert(notices)
     .values({
-      authorId,
-      scope: NoticeScope.Cohort,
+      authorId: professor.id,
+      scope: NoticeScope.CohortTrack,
       cohortId,
+      cohortTrackId,
       title: 'Notice',
       body: 'Body',
       pinned,
@@ -94,11 +114,12 @@ describe.skipIf(!REAL_POSTGRES_URL)('NoticesService, two pins at once', () => {
     const over: number[] = [];
 
     for (let round = 0; round < ROUNDS; round += 1) {
-      const { cohortId, professor } = await professorsCohort(pg);
-      await notice(pg, professor.id, cohortId, true);
-      await notice(pg, professor.id, cohortId, true);
-      const a = await notice(pg, professor.id, cohortId, false);
-      const b = await notice(pg, professor.id, cohortId, false);
+      const track = await professorsTrack(pg);
+      const { cohortId, professor } = track;
+      await notice(pg, track, true);
+      await notice(pg, track, true);
+      const a = await notice(pg, track, false);
+      const b = await notice(pg, track, false);
 
       const results = await Promise.allSettled([
         service.pin(a, true, professor, audit),
@@ -159,8 +180,9 @@ describe.skipIf(!REAL_POSTGRES_URL)(
     });
 
     it('lets a professor update, pin and remove without a second connection', async () => {
-      const { cohortId, professor } = await professorsCohort(pg);
-      const id = await notice(pg, professor.id, cohortId, false);
+      const track = await professorsTrack(pg);
+      const { professor } = track;
+      const id = await notice(pg, track, false);
 
       await service.update(id, { title: 'Edited' }, professor, audit);
       await service.pin(id, true, professor, audit);

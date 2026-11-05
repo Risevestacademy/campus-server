@@ -353,6 +353,7 @@ interface AuditEntryShapes {
       scope: string;
       cohortId: string | null;
       cohortTrackId: string | null;
+      mentorshipGroupId: string | null;
       title: string;
     };
   };

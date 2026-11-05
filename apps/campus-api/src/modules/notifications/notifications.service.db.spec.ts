@@ -13,9 +13,13 @@ import {
   cohortTracks,
   cohorts,
 } from '../cohorts/schema.js';
+import {
+  mentorshipGroupStudents,
+  mentorshipGroups,
+} from '../mentorship-groups/schema.js';
 import { NoticeScope } from '../notices/schema.js';
 import { tracks } from '../tracks/schema.js';
-import { users } from '../users/schema.js';
+import { SystemRole, UserStatus, users } from '../users/schema.js';
 import { NotificationsService } from './notifications.service.js';
 import {
   NotificationKind,
@@ -44,24 +48,58 @@ let c1se: string;
 let c1pd: string;
 let c2se: string;
 
-const person = async (email: string) => {
-  const [row] = await db.insert(users).values({ email }).returning();
+const person = async (
+  email: string,
+  overrides: Partial<typeof users.$inferInsert> = {},
+) => {
+  const [row] = await db
+    .insert(users)
+    .values({ email, ...overrides })
+    .returning();
   return row.id;
 };
 
-const join = (
+/** Resolves to the membership's id. */
+const join = async (
   userId: string,
   cohortId: string,
   role: CohortRole,
   overrides: Partial<typeof cohortMembers.$inferInsert> = {},
-) =>
-  db.insert(cohortMembers).values({
-    userId,
-    cohortId,
-    role,
-    ...(role === CohortRole.Student ? { status: StudentStatus.Active } : {}),
-    ...overrides,
-  });
+) => {
+  const [row] = await db
+    .insert(cohortMembers)
+    .values({
+      userId,
+      cohortId,
+      role,
+      ...(role === CohortRole.Student ? { status: StudentStatus.Active } : {}),
+      ...overrides,
+    })
+    .returning();
+  return row.id;
+};
+
+/** A pod in `cohortId` led by the mentor membership `mentorMemberId`. */
+const pod = async (
+  cohortId: string,
+  mentorMemberId: string,
+  studentMemberIds: string[],
+) => {
+  const [group] = await db
+    .insert(mentorshipGroups)
+    .values({ cohortId, mentorMemberId, name: `Pod ${randomUUID()}` })
+    .returning();
+  if (studentMemberIds.length > 0) {
+    await db.insert(mentorshipGroupStudents).values(
+      studentMemberIds.map((cohortMemberId) => ({
+        mentorshipGroupId: group.id,
+        cohortId,
+        cohortMemberId,
+      })),
+    );
+  }
+  return group.id;
+};
 
 const recipientsOf = async (referenceId: string) => {
   const rows = await db
@@ -77,7 +115,8 @@ const notice = (
   scope: NoticeScope,
   cohortId: string | null = null,
   cohortTrackId: string | null = null,
-) => ({ id: randomUUID(), scope, cohortId, cohortTrackId });
+  mentorshipGroupId: string | null = null,
+) => ({ id: randomUUID(), scope, cohortId, cohortTrackId, mentorshipGroupId });
 
 beforeAll(async () => {
   await migrate(db, { migrationsFolder: MIGRATIONS });
@@ -245,20 +284,92 @@ describe('NotificationsService.notifyNoticePosted', () => {
     expect(await recipientsOf(posted.id)).toEqual(['ada@campus.local']);
   });
 
-  it("reaches only the track's members within the cohort for a cohort-track notice", async () => {
+  it("reaches a cohort-track notice's students and staff, within the cohort", async () => {
     const se1 = await person('se1@campus.local');
     const pd1 = await person('pd1@campus.local');
     const se2 = await person('se2@campus.local');
-    const staff = await person('staff@campus.local');
-    await join(se1, c1, CohortRole.Student, { cohortTrackId: c1se });
-    await join(pd1, c1, CohortRole.Student, { cohortTrackId: c1pd });
+    const namedProf = await person('named-prof@campus.local');
+    const otherProf = await person('other-prof@campus.local');
+    const seMentor = await person('se-mentor@campus.local');
+    const pdMentor = await person('pd-mentor@campus.local');
+    const podless = await person('podless@campus.local');
+    const se1Member = await join(se1, c1, CohortRole.Student, {
+      cohortTrackId: c1se,
+    });
+    const pd1Member = await join(pd1, c1, CohortRole.Student, {
+      cohortTrackId: c1pd,
+    });
     await join(se2, c2, CohortRole.Student, { cohortTrackId: c2se });
-    await join(staff, c1, CohortRole.Mentor);
+    await join(namedProf, c1, CohortRole.Professor, { cohortTrackId: c1se });
+    await join(otherProf, c1, CohortRole.Professor);
+    await pod(c1, await join(seMentor, c1, CohortRole.Mentor), [se1Member]);
+    await pod(c1, await join(pdMentor, c1, CohortRole.Mentor), [pd1Member]);
+    await join(podless, c1, CohortRole.Mentor);
     const posted = notice(NoticeScope.CohortTrack, c1, c1se);
 
     await service.notifyNoticePosted(posted);
 
-    expect(await recipientsOf(posted.id)).toEqual(['se1@campus.local']);
+    expect(await recipientsOf(posted.id)).toEqual([
+      'named-prof@campus.local',
+      'se-mentor@campus.local',
+      'se1@campus.local',
+    ]);
+  });
+
+  it("reaches a mentorship-group notice's mentor and students only", async () => {
+    const mentor = await person('mentor@campus.local');
+    const inPod = await person('in-pod@campus.local');
+    const leftPod = await person('left-pod@campus.local');
+    const otherPod = await person('other-pod@campus.local');
+    const group = await pod(c1, await join(mentor, c1, CohortRole.Mentor), [
+      await join(inPod, c1, CohortRole.Student, { cohortTrackId: c1se }),
+      await join(leftPod, c1, CohortRole.Student, {
+        cohortTrackId: c1se,
+        leftAt: new Date(),
+      }),
+    ]);
+    const otherMentor = await person('other-mentor@campus.local');
+    await pod(c1, await join(otherMentor, c1, CohortRole.Mentor), [
+      await join(otherPod, c1, CohortRole.Student, { cohortTrackId: c1se }),
+    ]);
+    const posted = notice(NoticeScope.MentorshipGroup, c1, null, group);
+
+    await service.notifyNoticePosted(posted);
+
+    expect(await recipientsOf(posted.id)).toEqual([
+      'in-pod@campus.local',
+      'mentor@campus.local',
+    ]);
+  });
+
+  it('reaches admins with no cohort for a campus notice, and nobody else without one', async () => {
+    await person('admin@campus.local', { systemRole: SystemRole.Admin });
+    await person('super@campus.local', { systemRole: SystemRole.SuperAdmin });
+    await person('nobody@campus.local');
+    const posted = notice(NoticeScope.Campus);
+
+    await service.notifyNoticePosted(posted);
+
+    expect(await recipientsOf(posted.id)).toEqual([
+      'admin@campus.local',
+      'super@campus.local',
+    ]);
+  });
+
+  it('leaves out suspended accounts, members and admins alike', async () => {
+    const member = await person('member@campus.local', {
+      status: UserStatus.Suspended,
+    });
+    await join(member, c1, CohortRole.Mentor);
+    await person('admin@campus.local', {
+      systemRole: SystemRole.Admin,
+      status: UserStatus.Suspended,
+    });
+    const posted = notice(NoticeScope.Campus);
+
+    await service.notifyNoticePosted(posted);
+
+    expect(await recipientsOf(posted.id)).toEqual([]);
   });
 
   it('skips members already notified and still notifies the rest', async () => {

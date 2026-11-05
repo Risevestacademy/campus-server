@@ -17,8 +17,9 @@ import { seatKey, type Seat } from '../seat.js';
 import type { Env } from './env.js';
 
 /**
- * What the socket layer needs to know about the person behind a token, and
- * nothing else. An interface so the gateway can be tested without a database
+ * What the socket layer needs from the database: who is behind a token, the
+ * spaces they move through, and the one row world writes, the asker's
+ * notification. An interface so the gateway can be tested without a database
  * and so the lookup can move behind Redis later without touching callers.
  */
 export interface AccountLookup {
@@ -340,15 +341,16 @@ export function looksLikeId(value: string): boolean {
  * the same answer — otherwise a ban takes effect whenever the token happens
  * to expire, which is up to AUTH_SESSION_TTL_MINUTES later.
  *
- * Raw SQL rather than drizzle: one query against two columns, of a table
- * campus-api owns. When world needs maps and spaces, the schema should move
- * to a shared package and this can move with it.
+ * Raw SQL rather than drizzle: every statement here is against tables
+ * campus-api owns, and each is exported and run against its migrations in
+ * accounts.spec.ts. If the schema moves to a shared package, these can move
+ * to drizzle with it.
  */
 export function createAccountLookup(env: Env): AccountLookup {
   const sql = postgres(env.DATABASE_URL, {
     max: env.WORLD_DB_POOL,
-    // Read-only lookups on the hot path: fail fast rather than hold a socket
-    // waiting on a database that is not answering.
+    // Lookups on the hot path, and one write nobody waits for: fail fast
+    // rather than hold a socket waiting on a database that is not answering.
     connect_timeout: 5,
   });
   if (env.FF_OTEL_ENABLED) {
