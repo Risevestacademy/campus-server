@@ -81,6 +81,7 @@ const accounts = {
     ),
   spacesOn: async () => new Map(spaces),
   roomLinkPassesOn: async () => [],
+  publishedEntryMapKey: async () => null,
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
   onDesksChanged: async () => undefined,

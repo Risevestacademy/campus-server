@@ -517,6 +517,24 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 export type EntryRequestOutcome = z.infer<typeof EntryRequestOutcome>;
 export type WalkEndReason = z.infer<typeof WalkEndReason>;
 
+const mapMetadata = {
+  id: z
+    .string()
+    .describe(
+      'Which published map this is. With `version`, what to load: the ' +
+        'server enforces exactly that one.',
+    ),
+  version: z
+    .string()
+    .describe(
+      'The published version the server loaded. Load this version, not ' +
+        'the current one: a map published since would have walls the ' +
+        'server does not.',
+    ),
+  width: z.number().int().describe('In tiles.'),
+  height: z.number().int().describe('In tiles.'),
+};
+
 export const ServerMessage = z
   .discriminatedUnion('type', [
     z
@@ -565,23 +583,7 @@ export const ServerMessage = z
     z
       .object({
         type: z.literal('snapshot'),
-        map: z.object({
-          id: z
-            .string()
-            .describe(
-              'Which published map this is. With `version`, what to load: the ' +
-                'server enforces exactly that one.',
-            ),
-          version: z
-            .string()
-            .describe(
-              'The published version the server loaded. Load this version, not ' +
-                'the current one: a map published since would have walls the ' +
-                'server does not.',
-            ),
-          width: z.number().int().describe('In tiles.'),
-          height: z.number().int().describe('In tiles.'),
-        }),
+        map: z.object(mapMetadata),
         players: z.array(Avatar),
         lockableSpaces: z
           .array(z.string())
@@ -603,6 +605,20 @@ export const ServerMessage = z
         description:
           'Sent once, right after `welcome`: the map, and everybody in your cohort ' +
           'on it, you included. Nobody from another cohort is ever in it.',
+      }),
+    z
+      .object({
+        type: z.literal('mapChanged'),
+        map: z.object(mapMetadata),
+      })
+      .meta({
+        id: 'MapChangedMessage',
+        description:
+          'An admin published a new version of the map while you were here. ' +
+          'Stop enforcing the one from `snapshot`, load `map.version`, and ' +
+          'replace everything you draw from the map with it. Sent to ' +
+          'everybody; a connection made afterwards gets it in `snapshot` ' +
+          'instead.',
       }),
     z.object({ type: z.literal('joined'), player: Avatar }).meta({
       id: 'JoinedMessage',
@@ -882,8 +898,21 @@ export const ServerMessage = z
         'now: two steps inside one tick arrive as the second, so an entry can be more ' +
         'than one tile from where they were. Sent once per tick, and not at all when ' +
         'nobody moved. You are never in your own `moved` frame — your `moveResult` ' +
-        'already says where you ended up.',
+        'already says where you ended up. A map reload can also send one at once, ' +
+        'carrying somebody the new walls moved.',
     }),
+    z
+      .object({
+        type: z.literal('positionCorrected'),
+        player: Player,
+      })
+      .meta({
+        id: 'PositionCorrectedMessage',
+        description:
+          'A new map put the tile you stood on inside a wall, so the server ' +
+          'moved you to the nearest walkable one. Snap to `player`. Only you ' +
+          'get this; the rest of your cohort sees the move in `moved`.',
+      }),
     z
       .object({
         type: z.literal('moveResult'),

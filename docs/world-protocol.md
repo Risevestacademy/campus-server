@@ -114,11 +114,32 @@ starts. `snapshot.map` says which:
 ```
 
 Load **that version**, with `fetchWorldMapManifest({ mapId: id, version })`
-from `campus-world-map`, not the current one. A map published since the server
-started has walls the server does not enforce, and every step into one would
-come back `moved` while you drew it `blocked`, or the other way round. The
-server picks up a new version only when it restarts, which closes every socket;
-the `snapshot` after you reconnect carries the new version.
+from `campus-world-map`, not the current one. Until the server says otherwise,
+that is the map it enforces: loading another one would make your steps disagree
+with it.
+
+When an admin publishes a new version while you are connected, everybody gets
+a `mapChanged` with the same four fields:
+
+```json
+{
+  "type": "mapChanged",
+  "map": { "id": "campus", "version": "…", "width": 60, "height": 40 }
+}
+```
+
+Stop using the old map, load `map.version`, and replace the tilemap and
+everything you derive from it. It arrives before the server sends any corrected
+positions for that reload. A connection made afterwards gets the new map in its
+`snapshot` instead, so both paths reach the same state.
+
+**If a wall appears under you.** After a reload the server checks every
+connected player. Anybody standing on a tile that is now a wall is moved to the
+nearest walkable tile. You are told with `positionCorrected`
+(`{ "type": "positionCorrected", "player": {…} }`): snap to it. The rest of your
+cohort sees the same move in `moved`. If the move puts you in another space, a
+`spaceChanged` follows as usual, with the calls and presence that go with it.
+A player whose tile and space did not change receives neither.
 
 A tile is a wall when a collision shape covers its middle: `blocked(layout,
 tile)` from the same package gives the answer the server uses, so predict with
@@ -256,14 +277,16 @@ campus: the cohort named when the socket opened decides whose avatars you are
 told about, and nobody in another cohort appears in your `snapshot`, `joined`,
 `left`, `moved`, `statusChanged` or `spaceChanged`, or you in theirs.
 
-| Message         | When                                              | What to do                                         |
-| --------------- | ------------------------------------------------- | -------------------------------------------------- |
-| `joined`        | Somebody arrived                                  | Add their avatar, with its sprite, name and status |
-| `appearance`    | Somebody changed their sprite or name             | Redraw them with it                                |
-| `statusChanged` | Somebody's status changed, yours included         | Show their new status                              |
-| `spaceChanged`  | Somebody stepped into another space, you included | Move them to that space in your sidebar            |
-| `left`          | Somebody's socket in this cohort closed           | Remove their avatar                                |
-| `moved`         | Once per tick, if anybody moved or turned         | Move each listed player                            |
+| Message             | When                                              | What to do                                         |
+| ------------------- | ------------------------------------------------- | -------------------------------------------------- |
+| `joined`            | Somebody arrived                                  | Add their avatar, with its sprite, name and status |
+| `appearance`        | Somebody changed their sprite or name             | Redraw them with it                                |
+| `statusChanged`     | Somebody's status changed, yours included         | Show their new status                              |
+| `spaceChanged`      | Somebody stepped into another space, you included | Move them to that space in your sidebar            |
+| `left`              | Somebody's socket in this cohort closed           | Remove their avatar                                |
+| `moved`             | Once per tick, if anybody moved or turned         | Move each listed player                            |
+| `mapChanged`        | An admin published a new map                      | Load the new version and replace the tilemap       |
+| `positionCorrected` | A new map put you inside a wall                   | Snap yourself to the tile it names                 |
 
 About `moved`:
 
@@ -273,7 +296,8 @@ About `moved`:
   diagonally — a diagonal slide cuts corners that will be walls once real
   maps exist.
 - **You are never in your own `moved` frame** — your `moveResult` already says
-  where you ended up.
+  where you ended up. A map reload can send one outside the tick, for somebody
+  the new walls moved.
 
 ### Drawing each person
 

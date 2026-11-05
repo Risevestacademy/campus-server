@@ -9,6 +9,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { spaceIndexFrom } from '../movement/spaces.js';
 import {
   PLACEHOLDER_MAP,
+  assertWorldMap,
   gridFrom,
   type WorldMap,
 } from '../movement/world-map.js';
@@ -43,6 +44,11 @@ export function withTimeout(
 export async function fetchEntryMap(
   env: Pick<Env, 'SANITY_PROJECT_ID' | 'SANITY_DATASET'>,
   fetcher: typeof fetch = withTimeout(),
+  /**
+   * The published entry map's key, when the database names one. Left out,
+   * the map with a spawn is the entry map, as it always was.
+   */
+  mapKey?: string,
 ): Promise<WorldMap> {
   if (!env.SANITY_PROJECT_ID) {
     throw new MapUnavailableError('SANITY_PROJECT_ID is not set');
@@ -72,24 +78,39 @@ export async function fetchEntryMap(
       dataset: env.SANITY_DATASET,
       fetch: reaching,
     });
-    const entries = manifests.filter((manifest) => manifest.isEntry);
-    if (entries.length !== 1) {
-      throw new Error(
-        `exactly one published map must be the entry map; found ${entries.length} among ${manifests.map((manifest) => manifest.mapId).join(', ')}`,
+    const chosen =
+      mapKey === undefined
+        ? manifests.filter((manifest) => manifest.isEntry)
+        : manifests.filter((manifest) => manifest.mapId === mapKey);
+    if (chosen.length !== 1) {
+      if (mapKey === undefined) {
+        throw new Error(
+          `exactly one published map must be the entry map; found ${chosen.length} among ${manifests.map((manifest) => manifest.mapId).join(', ')}`,
+        );
+      }
+      throw new MapUnavailableError(
+        `the published entry map "${mapKey}" was not found among ${manifests.map((manifest) => manifest.mapId).join(', ')}`,
       );
     }
-    const [manifest] = entries;
+    const [manifest] = chosen;
+    if (mapKey !== undefined && !manifest.isEntry) {
+      throw new Error(
+        `the published map "${mapKey}" is not the entry map any more`,
+      );
+    }
     // Only the layout is read, but the published loader is what checks the
     // map is whole, and it is the one campus-web loads the same version
     // through.
     const map = await loadPublishedMap(manifest, { fetch: reaching });
     const layout = readMapLayout(map as TiledMap);
-    return {
+    const world = {
       id: manifest.mapId,
       version: manifest.version,
       grid: gridFrom(layout),
       spaces: spaceIndexFrom(layout),
     };
+    assertWorldMap(world);
+    return world;
   } catch (err) {
     if (unreachable !== undefined) {
       throw new MapUnavailableError('Sanity could not be reached', {
@@ -129,9 +150,16 @@ export async function loadWorldMap(
   >,
   log: FastifyBaseLogger,
   fetcher?: typeof fetch,
+  /** The published entry map's key, when the database names one. */
+  mapKey?: string,
+  /**
+   * A reload must never swap in the development placeholder: it has to fail
+   * and leave the old map running. Startup keeps the fallback it always had.
+   */
+  allowPlaceholder = true,
 ): Promise<WorldMap> {
   try {
-    const map = await fetchEntryMap(env, fetcher);
+    const map = await fetchEntryMap(env, fetcher, mapKey);
     log.info(
       {
         mapId: map.id,
@@ -152,7 +180,11 @@ export async function loadWorldMap(
     );
     return map;
   } catch (err) {
-    if (!isDevelopment(env) || !(err instanceof MapUnavailableError)) {
+    if (
+      !allowPlaceholder ||
+      !isDevelopment(env) ||
+      !(err instanceof MapUnavailableError)
+    ) {
       throw new Error('could not load the published map', { cause: err });
     }
     log.warn(
