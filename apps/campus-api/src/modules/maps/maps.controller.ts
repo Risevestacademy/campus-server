@@ -2,6 +2,7 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Query,
   UseGuards,
@@ -14,8 +15,13 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
-import { ApiSyncMaps } from './docs/maps.docs.js';
+import { ApiPublishMap, ApiSyncMaps } from './docs/maps.docs.js';
+import {
+  MapIdParamDto,
+  MapPublishedResponseDto,
+} from './dto/map-publish.dto.js';
 import { MapSyncQueryDto, MapSyncResultDto } from './dto/map-sync.dto.js';
+import { MapPublishService } from './map-publish.service.js';
 import { MapSyncService } from './map-sync.service.js';
 
 @ApiTags('maps')
@@ -25,7 +31,10 @@ import { MapSyncService } from './map-sync.service.js';
 @UseGuards(SessionGuard, AdminGuard)
 @Controller('maps')
 export class MapsController {
-  constructor(private readonly mapSync: MapSyncService) {}
+  constructor(
+    private readonly mapSync: MapSyncService,
+    private readonly mapPublish: MapPublishService,
+  ) {}
 
   @Post('sync')
   // 200, not POST's default 201: it answers with what it changed, and on
@@ -41,5 +50,19 @@ export class MapsController {
     @CorrelationId() correlationId: string | undefined,
   ): Promise<MapSyncResultDto> {
     return this.mapSync.sync(admin, { dryRun: query.dryRun, correlationId });
+  }
+
+  @Post(':id/publish')
+  @HttpCode(HttpStatus.OK)
+  @ApiPublishMap()
+  publish(
+    @Param() params: MapIdParamDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<MapPublishedResponseDto> {
+    return this.mapPublish.publish(params.id, {
+      actorUserId: admin.id,
+      correlationId,
+    });
   }
 }

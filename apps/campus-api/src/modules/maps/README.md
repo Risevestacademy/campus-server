@@ -164,6 +164,34 @@ tested with two syncs on separate connections to a real PostgreSQL, in
 audit entry, and each one retired a `map_retired`; a sync that changes
 nothing writes none.
 
+## Publishing
+
+`POST /v1/maps/{id}/publish`, admins only. A sync says what the database knows;
+this says what world should serve. They are separate on purpose.
+
+An admin publishes the row for the map people enter on. The row is locked,
+checked and given this moment as `published_at` in one transaction, with a
+`map_published` audit entry naming the admin, the map and the timestamp before
+and after. Publishing an already-published map moves the timestamp and writes
+another entry; a sync never writes or clears `published_at`.
+
+Only the entry map can be published. World serves one map, and a different one
+would leave clients with no spawn: publishing another is a `409 CONFLICT`
+(`MapNotEntryException`). A retired map is also `409` (`MapRetiredException`);
+an unknown id is `404` (`MapNotFoundException`).
+
+After the commit, campus-api sends the map's key on the same `pg_notify`
+channel a space edit uses. It does not wait for world. A notification that
+fails is logged, not returned and not rolled back: the publish stands.
+
+**What this does not do.** The database stores no map geometry and no published
+version. World reads the current map from Sanity by key. So a re-sync after a
+CMS edit leaves `published_at` at the old timestamp while Sanity already holds
+the new version: a world restart between the re-sync and the publish serves
+the new geometry even though it was not published yet. Sync and publish are
+expected back to back. Fixing that needs a published version or snapshot,
+which is deliberately not part of this schema.
+
 ## Granting access
 
 `POST`, `GET` and `DELETE /v1/spaces/{id}/memberships`, admins only. This is
@@ -254,8 +282,9 @@ the row, with the admin, the space and each changed field's `from` and `to`.
   designated one. Both are live state for world to hold, not rows here.
 - **Mentorship groups on a list.** An entry naming a group comes once the
   groups exist.
-- **Which version of a map is live.** Today `world` loads the latest
-  published version. Whether the database should name it is undecided, so
-  the sync reports the version it read and stores none.
-- **The sync does not reach `world`.** It loads its map at startup, so a new
-  publish is live there after a restart, whether or not this has run.
+- **Which version of a map is live.** The database stores when a map was
+  published, not which Sanity version. World reads the current version by map
+  key, and a re-sync before publish has the limitation described under
+  [Publishing](#publishing).
+- **The sync does not reach `world`.** A publish does: campus-api sends the
+  map key, and world reloads the map and its spaces without a restart.

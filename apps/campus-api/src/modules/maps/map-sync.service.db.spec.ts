@@ -808,6 +808,60 @@ describe('the default space', () => {
   });
 });
 
+/**
+ * A sync owns the rows, not whether the map is live. `published_at` is the
+ * admin's, so neither a new map nor a re-sync may write it; a map published
+ * before a CMS edit keeps the moment it went live.
+ */
+describe('what a sync never does to publication', () => {
+  const publishedAt = new Date('2026-09-01T09:00:00Z');
+
+  const publishedOf = async (key: string) =>
+    (
+      await db
+        .select({ publishedAt: maps.publishedAt })
+        .from(maps)
+        .where(eq(maps.key, key))
+    )[0]?.publishedAt;
+
+  it('leaves a new map unpublished', async () => {
+    await sync([map('campus')]);
+
+    await expect(publishedOf('campus')).resolves.toBeNull();
+  });
+
+  it('leaves a re-synced unpublished map unpublished', async () => {
+    await sync([map('campus', [space('library')])]);
+
+    await sync([map('campus', [space('library'), space('lab')])]);
+
+    await expect(publishedOf('campus')).resolves.toBeNull();
+  });
+
+  it('does not overwrite the publication of an already-published map', async () => {
+    await sync([map('campus', [space('library')])]);
+    await db.update(maps).set({ publishedAt }).where(eq(maps.key, 'campus'));
+
+    await sync([
+      map('campus', [space('library'), space('lab')], {
+        version: 'campus-v2',
+      }),
+    ]);
+
+    await expect(publishedOf('campus')).resolves.toEqual(publishedAt);
+  });
+
+  it('does not write it when a retired map is restored', async () => {
+    await sync([map('campus')]);
+    await db.update(maps).set({ publishedAt }).where(eq(maps.key, 'campus'));
+    await sync([]);
+
+    await sync([map('campus')]);
+
+    await expect(publishedOf('campus')).resolves.toEqual(publishedAt);
+  });
+});
+
 describe('a map no longer published', () => {
   const both = [
     map('campus', [space('library', 'open')]),
