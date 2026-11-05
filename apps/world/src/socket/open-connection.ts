@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 
 import type { AccountLookup } from '../infra/accounts.js';
+import type { PresenceStore } from '../infra/presence.js';
 import type { PositionStore, SavedPosition } from '../infra/positions.js';
 import { annotate, traced } from '../infra/traced.js';
 import { spaceAt } from '../movement/spaces.js';
@@ -14,9 +15,14 @@ import {
   type Refusal,
   type UpgradeDecision,
 } from './authenticate.js';
-import type { Connection } from './connections.js';
+import type { Connection, EnterMode } from './connections.js';
 import { sendClose, type WorldContext } from './context.js';
-import { COHORT_QUERY_PARAM, SOCKET_PATH } from './endpoint.js';
+import {
+  COHORT_QUERY_PARAM,
+  ENTER_QUERY_PARAM,
+  RESUME_QUERY_PARAM,
+  SOCKET_PATH,
+} from './endpoint.js';
 import { avatarOf, type AppearanceFeature } from './features/appearance.js';
 import type { BroadcastRoom } from './features/broadcast-room.js';
 import type { Calls } from './features/calls.js';
@@ -24,7 +30,7 @@ import type { Doors } from './features/doors.js';
 import type { EntryRequestsFeature } from './features/entry-requests.js';
 import type { Locks } from './features/locks.js';
 import type { PositionWrites } from './features/positions.js';
-import type { PresenceSync } from './features/presence.js';
+import { statusChangedOf, type PresenceSync } from './features/presence.js';
 import { ServerErrorCode } from './protocol.js';
 
 type OpenContext = Pick<
@@ -55,11 +61,14 @@ export interface OpenDeps {
   locks: Pick<Locks, 'isLocked' | 'lockableSpaces' | 'lockedIn'>;
   appearance: Pick<AppearanceFeature, 'avatarsIn'>;
   requests: Pick<EntryRequestsFeature, 'replaced' | 'review'>;
-  presence: Pick<PresenceSync, 'enter'>;
+  presence: Pick<PresenceSync, 'enter' | 'timeStatus'>;
+  presenceStore: Pick<PresenceStore, 'instanceId' | 'online'>;
   calls: Pick<Calls, 'join'>;
   broadcastRoom: Pick<BroadcastRoom, 'join'>;
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
   drop(connection: Connection, remember?: boolean): void;
+  /** Keeps a displaced ifFree socket open as a watcher. */
+  demote(connection: Connection): void;
   /** Starts reading what the socket sends. */
   listen(connection: Connection): void;
 }
@@ -86,10 +95,12 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     appearance,
     requests,
     presence,
+    presenceStore,
     calls,
     broadcastRoom,
     mayStepInto,
     drop,
+    demote,
     listen,
   } = deps;
 
@@ -115,6 +126,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
                 authorization: request.headers.authorization,
               },
               cohortIdFrom(request.query),
+              entryFrom(request.query),
               attempt,
             );
           } catch (err) {
@@ -134,6 +146,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     ws: WebSocket,
     headers: { origin?: string; cookie?: string; authorization?: string },
     cohortId: string | undefined,
+    entry: Entry,
     attempt: Attempt,
   ): Promise<void> {
     // Authentication is asynchronous, and a client can be gone before it
@@ -193,7 +206,10 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
         positionWrites.forget({ userId, cohortId });
       }
       const open = connections.forUser(userId);
-      for (const connection of open) {
+      for (const connection of [
+        ...open,
+        ...connections.watchersForUser(userId),
+      ]) {
         app.log.info(
           {
             connectionId: connection.id,
@@ -264,10 +280,22 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     }
     await doors.ready;
 
+    const elsewhere =
+      entry.enter === 'ifFree' &&
+      (await heldOnAnotherInstance(seatOf(decision)));
+
     if (closed || ws.readyState !== ws.OPEN) {
       record(attempt, 'abandoned');
       return;
     }
+
+    const seat = seatOf(decision);
+    const hold = players.holdOf(seat, Date.now());
+    const watching =
+      entry.enter === 'ifFree' &&
+      (connections.holderOf(seat) !== undefined ||
+        (hold !== undefined && hold.by !== entry.resume) ||
+        elsewhere);
 
     // A tab replacing another in this cohort keeps the status chosen there,
     // as the avatar keeps its place: nobody saw it leave. Anything else is a
@@ -279,6 +307,8 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       userId: decision.claims.userId,
       email: decision.claims.email,
       cohortId: decision.cohortId,
+      mode: watching ? 'watcher' : 'avatar',
+      enter: entry.enter,
       appearance: {
         displayName: decision.account.displayName,
         spriteKey: decision.account.spriteKey,
@@ -288,10 +318,9 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       systemRole: decision.account.systemRole,
       membership,
       nearby: new Set(),
-      availability: new Availability(
-        replacing?.availability.chosen ?? Status.Available,
-        Date.now(),
-      ),
+      availability:
+        replacing?.availability.handOver(Date.now()) ??
+        new Availability(Status.Available, Date.now()),
       expiresAt: decision.claims.expiresAt,
       sessionId: decision.claims.sessionId,
       epoch: decision.claims.epoch,
@@ -300,6 +329,26 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       alive: true,
     };
     registered = connection;
+
+    if (watching) {
+      connections.addWatcher(connection);
+      app.log.info(
+        {
+          connectionId: connection.id,
+          userId: connection.userId,
+          cohortId: connection.cohortId,
+        },
+        'socket opened, watching',
+      );
+      record(attempt, 'opened');
+      ws.on('pong', () => {
+        connection.alive = true;
+      });
+      listen(connection);
+      greet(connection);
+      ws.resume();
+      return;
+    }
 
     // Joined before anybody is told, and before any frame is read, so a move
     // can never arrive for a player who is not standing anywhere yet. Another
@@ -356,24 +405,24 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
         'socket displaced, account entered this cohort elsewhere',
       );
       requests.replaced(displaced);
-      send(displaced.socket, { type: 'replaced' });
-      closeFor(displaced.socket, 'entered_elsewhere');
+      if (displaced.enter === 'ifFree') {
+        demote(displaced);
+      } else {
+        send(displaced.socket, { type: 'replaced' });
+        closeFor(displaced.socket, 'entered_elsewhere');
+      }
       // Only an idle tab replaced by an active one changes what is shown. Not
       // to the new tab, whose welcome has to come first: its snapshot says.
-      if (displaced.availability.shown !== connection.availability.shown) {
-        broadcast(
-          connection.cohortId,
-          {
-            type: 'statusChanged',
-            userId: connection.userId,
-            status: connection.availability.shown,
-          },
-          connection,
-        );
+      if (
+        displaced.availability.shown !== connection.availability.shown ||
+        displaced.availability.shownUntil !== connection.availability.shownUntil
+      ) {
+        broadcast(connection.cohortId, statusChangedOf(connection), connection);
       }
     }
 
     presence.enter(connection);
+    presence.timeStatus(connection);
     app.log.info(
       {
         connectionId: connection.id,
@@ -389,7 +438,18 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     });
     listen(connection);
 
-    send(ws, {
+    greet(connection);
+    void calls.join(connection);
+    void broadcastRoom.join(connection);
+    requests.review(connection.cohortId, connection.spaceKey);
+
+    // Handlers are on: whatever arrived during authentication is delivered
+    // now, in the order it was sent.
+    ws.resume();
+  }
+
+  function greet(connection: Connection): void {
+    send(connection.socket, {
       type: 'welcome',
       userId: connection.userId,
       connectionId: connection.id,
@@ -397,9 +457,10 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       stepMs: env.WORLD_STEP_MS,
       tickMs: env.WORLD_TICK_MS,
       awayAfterSeconds: env.WORLD_AWAY_AFTER_SECONDS,
+      mode: connection.mode,
       ...connection.appearance,
     });
-    send(ws, {
+    send(connection.socket, {
       type: 'snapshot',
       map: {
         id: map.id,
@@ -412,13 +473,26 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       lockedSpaces: locks.lockedIn(connection.cohortId),
       spaces: [...doors.names()],
     });
-    void calls.join(connection);
-    void broadcastRoom.join(connection);
-    requests.review(connection.cohortId, connection.spaceKey);
+  }
 
-    // Handlers are on: whatever arrived during authentication is delivered
-    // now, in the order it was sent.
-    ws.resume();
+  /**
+   * Another instance holds the account's place in this cohort. Redis that
+   * cannot be read says nobody does, as entering would have assumed anyway.
+   */
+  async function heldOnAnotherInstance(seat: Seat): Promise<boolean> {
+    try {
+      return (await presenceStore.online(seat.cohortId)).some(
+        (entry) =>
+          entry.userId === seat.userId &&
+          entry.instanceId !== presenceStore.instanceId,
+      );
+    } catch (err) {
+      app.log.warn(
+        { err, userId: seat.userId },
+        'could not read presence to decide whether to watch, entering',
+      );
+      return false;
+    }
   }
 
   /** Counts the outcome and puts it on the span, together. */
@@ -455,6 +529,25 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
 /** The seat an accepted upgrade asks for. */
 function seatOf(decision: Extract<UpgradeDecision, { ok: true }>): Seat {
   return { userId: decision.claims.userId, cohortId: decision.cohortId };
+}
+
+interface Entry {
+  enter: EnterMode;
+  resume: string | undefined;
+}
+
+/** Anything but ifFree takes the avatar, as every client did before watching. */
+function entryFrom(query: unknown): Entry {
+  const params =
+    typeof query === 'object' && query !== null
+      ? (query as Record<string, unknown>)
+      : {};
+  const resume = params[RESUME_QUERY_PARAM];
+  return {
+    enter: params[ENTER_QUERY_PARAM] === 'ifFree' ? 'ifFree' : 'take',
+    resume:
+      typeof resume === 'string' && resume.length > 0 ? resume : undefined,
+  };
 }
 
 /** A repeated parameter arrives as an array, which reads as none at all. */

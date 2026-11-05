@@ -10,10 +10,12 @@ type AppearanceContext = Pick<
 >;
 
 export function avatarOf(player: Player, connection: Connection): Avatar {
+  const until = connection.availability.shownUntil;
   return {
     ...player,
     ...connection.appearance,
     status: connection.availability.shown,
+    statusUntil: until === null ? null : new Date(until).toISOString(),
     spaceKey: connection.spaceKey,
   };
 }

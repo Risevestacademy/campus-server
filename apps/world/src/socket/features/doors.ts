@@ -161,7 +161,7 @@ export function createDoors(
     if (next.every(({ name }, i) => name === spaceNames[i]?.name)) return;
     spaceNames = next;
     const frame = encode({ type: 'spaces', spaces: next });
-    for (const connection of connections.all()) {
+    for (const connection of connections.everyone()) {
       sendFrame(connection.socket, frame);
     }
   }

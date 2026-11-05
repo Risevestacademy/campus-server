@@ -78,7 +78,7 @@ export function createContext(
     except?: Connection,
   ): void {
     const frame = encode(message);
-    for (const connection of connections.all()) {
+    for (const connection of connections.everyone()) {
       if (connection.cohortId === cohortId && connection !== except) {
         sendFrame(connection.socket, frame);
       }

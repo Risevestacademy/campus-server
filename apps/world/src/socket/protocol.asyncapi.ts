@@ -1,4 +1,10 @@
-import { COHORT_QUERY_PARAM, SESSION_COOKIE, SOCKET_PATH } from './endpoint.js';
+import {
+  COHORT_QUERY_PARAM,
+  ENTER_QUERY_PARAM,
+  RESUME_QUERY_PARAM,
+  SESSION_COOKIE,
+  SOCKET_PATH,
+} from './endpoint.js';
 import { protocolJsonSchema } from './protocol.schema.js';
 
 /** Where the instance answering is reached, as the request that asked saw it. */
@@ -91,6 +97,24 @@ export function protocolAsyncApi(server: AsyncApiServer): JsonObject {
                 [COHORT_QUERY_PARAM]: {
                   type: 'string',
                   description: 'The cohort being entered. Required.',
+                },
+                [ENTER_QUERY_PARAM]: {
+                  type: 'string',
+                  enum: ['take', 'ifFree'],
+                  description:
+                    'take, the default: stand for the account here, displacing ' +
+                    'whoever did. ifFree: only when nobody does, the account ' +
+                    'holding no avatar in this cohort, nor one kept for a ' +
+                    'reconnect; otherwise enter as a watcher. A socket that ' +
+                    'entered ifFree is demoted to a watcher when displaced, ' +
+                    'rather than closed.',
+                },
+                [RESUME_QUERY_PARAM]: {
+                  type: 'string',
+                  description:
+                    'With ifFree: the `welcome.connectionId` of your last ' +
+                    'socket here. An avatar kept for that socket to reconnect ' +
+                    'to is yours, and you resume it rather than watch.',
                 },
               },
             },
