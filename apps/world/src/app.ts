@@ -121,6 +121,12 @@ export async function buildWorld({
     .catch((err: unknown) =>
       app.log.error({ err }, 'could not listen for profile changes'),
     );
+  // Desks are not kept here: clients fetch them from campus-api when told.
+  accounts
+    .onDesksChanged((cohortId) => gateway.desksChanged(cohortId))
+    .catch((err: unknown) =>
+      app.log.error({ err }, 'could not listen for desk changes'),
+    );
   // The same for the spaces: the heartbeat reads them again too.
   accounts
     .onSpacesChanged(() => void gateway.spacesChanged())

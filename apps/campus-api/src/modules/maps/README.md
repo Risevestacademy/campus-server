@@ -254,8 +254,6 @@ the row, with the admin, the space and each changed field's `from` and `to`.
   designated one. Both are live state for world to hold, not rows here.
 - **Mentorship groups on a list.** An entry naming a group comes once the
   groups exist.
-- **Claiming a desk.** The sync keeps a row for every desk drawn, and ends
-  the claims on one that leaves its map, but nothing claims a desk yet.
 - **Which version of a map is live.** Today `world` loads the latest
   published version. Whether the database should name it is undecided, so
   the sync reports the version it read and stores none.

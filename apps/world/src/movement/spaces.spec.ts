@@ -2,7 +2,13 @@ import { DEFAULT_SPACE_KEY } from '@campus/session';
 import type { MapLayout } from 'campus-world-map';
 import { describe, expect, it } from 'vitest';
 
-import { emptySpaceIndex, spaceAt, spaceIndexFrom } from './spaces.js';
+import { tileIndex } from './grid.js';
+import {
+  emptySpaceIndex,
+  floorByMiddle,
+  spaceAt,
+  spaceIndexFrom,
+} from './spaces.js';
 
 type Drawn = MapLayout['spaces'][number];
 
@@ -131,5 +137,61 @@ describe('spaceAt', () => {
       expect(spaceAt(index, { x: 3, y: 3 })).toBe(DEFAULT_SPACE_KEY);
       expect(index.keys).toEqual([]);
     }
+  });
+});
+
+describe('floorByMiddle', () => {
+  const grid = (walls: { x: number; y: number }[] = []) => {
+    const cells = new Uint8Array(10 * 6);
+    for (const wall of walls) cells[tileIndex({ width: 10 }, wall)] = 1;
+    return { width: 10, height: 6, spawn: { x: 0, y: 0 }, walls: cells };
+  };
+
+  it('starts at the middle of a room and works outwards', () => {
+    const index = spaceIndexFrom(layout([rect('hall', 2, 1, 5, 3)]));
+
+    const floor = floorByMiddle(grid(), index, 'hall');
+
+    expect(floor).toHaveLength(15);
+    expect(floor[0]).toEqual({ x: 4, y: 2 });
+    expect(floor.slice(1, 5)).toEqual([
+      { x: 4, y: 1 },
+      { x: 3, y: 2 },
+      { x: 5, y: 2 },
+      { x: 4, y: 3 },
+    ]);
+  });
+
+  it('breaks a tie by the upper row, then the left', () => {
+    const index = spaceIndexFrom(layout([rect('pod', 3, 0, 2, 2)]));
+
+    expect(floorByMiddle(grid(), index, 'pod')[0]).toEqual({ x: 3, y: 0 });
+  });
+
+  it('leaves walls out, and is empty for a space with no floor', () => {
+    const index = spaceIndexFrom(
+      layout([rect('hall', 2, 1, 3, 1), rect('cupboard', 8, 4, 1, 1)]),
+    );
+    const walled = grid([
+      { x: 3, y: 1 },
+      { x: 8, y: 4 },
+    ]);
+
+    expect(floorByMiddle(walled, index, 'hall')).toEqual([
+      { x: 2, y: 1 },
+      { x: 4, y: 1 },
+    ]);
+    expect(floorByMiddle(walled, index, 'cupboard')).toEqual([]);
+  });
+
+  it('does not count tiles of a smaller space drawn inside', () => {
+    const index = spaceIndexFrom(
+      layout([rect('hall', 0, 0, 5, 1), rect('booth', 2, 0, 1, 1)]),
+    );
+
+    expect(floorByMiddle(grid(), index, 'hall')).not.toContainEqual({
+      x: 2,
+      y: 0,
+    });
   });
 });

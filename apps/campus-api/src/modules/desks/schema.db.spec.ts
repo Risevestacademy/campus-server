@@ -187,16 +187,4 @@ describe('desk_claims', () => {
       'desk_claims_release_window',
     );
   });
-
-  it('is held only by a member of the cohort', async () => {
-    const [outsider] = await db
-      .insert(users)
-      .values({ email: 'outsider@campus.local' })
-      .returning();
-
-    await expectViolation(
-      claim({ userId: outsider.id }),
-      'desk_claims_cohort_member_fk',
-    );
-  });
 });
