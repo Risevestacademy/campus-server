@@ -13,6 +13,8 @@ import {
   cohortTracks,
   cohorts,
 } from '../cohorts/schema.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
+import { notifications } from '../notifications/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { NoticeScope, notices } from './schema.js';
@@ -31,7 +33,10 @@ const MIGRATIONS = fileURLToPath(
 const pglite = drizzle(new PGlite(), {
   schema: { users, tracks, cohorts, cohortTracks, notices, auditLog },
 });
-const service = new NoticesService(pglite as unknown as Db);
+const service = new NoticesService(
+  pglite as unknown as Db,
+  new NotificationsService(pglite as unknown as Db),
+);
 
 let adminUser: AuthenticatedUser;
 let professorUser: AuthenticatedUser;
@@ -160,6 +165,55 @@ describe('create', () => {
     expect(notice.scope).toBe(NoticeScope.CohortTrack);
     expect(notice.cohortId).toBe(cohortId);
     expect(notice.cohortTrackId).toBe(cohortTrackId);
+  });
+
+  it("notifies every live member in the notice's scope, auditing only the notice", async () => {
+    const [outsider] = await pglite
+      .insert(users)
+      .values({ email: 'outsider@campus.local' })
+      .returning();
+    const [otherCohort] = await pglite
+      .insert(cohorts)
+      .values({ name: 'Cohort 2', code: 'C2' })
+      .returning();
+    await pglite.insert(cohortMembers).values({
+      cohortId: otherCohort.id,
+      userId: outsider.id,
+      role: CohortRole.Mentor,
+    });
+
+    const notice = await service.create(
+      {
+        title: 'Heads up',
+        body: 'Read this.',
+        scope: NoticeScope.Cohort,
+        cohortId,
+      },
+      professorUser,
+      { ...audit, actorUserId: professorUser.id },
+    );
+
+    const sent = await pglite
+      .select()
+      .from(notifications)
+      .where(eq(notifications.referenceId, notice.id));
+    expect(sent.map((row) => row.recipientId).sort()).toEqual(
+      [professorUserId, mentorUserId].sort(),
+    );
+    expect(sent.every((row) => row.kind === 'notice_posted')).toBe(true);
+    expect(await pglite.select().from(auditLog)).toHaveLength(1);
+  });
+
+  it('notifies nobody when the notice is refused', async () => {
+    await expect(
+      service.create(
+        { title: 'No', body: 'No.', scope: NoticeScope.Cohort, cohortId },
+        mentorUser,
+        { ...audit, actorUserId: mentorUser.id },
+      ),
+    ).rejects.toBeInstanceOf(NoticeForbiddenException);
+
+    expect(await pglite.select().from(notifications)).toEqual([]);
   });
 
   it('mentor is refused', async () => {

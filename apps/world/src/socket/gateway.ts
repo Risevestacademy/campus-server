@@ -141,6 +141,7 @@ export function registerGateway(
     isRemoved: (connection, spaceKey, now) =>
       moderation.isRemoved(connection, spaceKey, now),
     mayStepInto,
+    accounts,
   });
 
   const media = mediaCredentials(env);

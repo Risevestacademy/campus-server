@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
 import { loadEnv } from '../infra/env.js';
-import type { RoomLinkPass } from '../infra/accounts.js';
+import type { EntryRequestAnswer, RoomLinkPass } from '../infra/accounts.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
 import { spaceIndexFrom } from '../movement/spaces.js';
@@ -133,6 +133,10 @@ export const accounts = {
   profileListeners: [] as ((userId: string) => void)[],
   onProfileChanged: async (listener: (userId: string) => void) => {
     accounts.profileListeners.push(listener);
+  },
+  answered: [] as EntryRequestAnswer[],
+  notifyEntryRequestAnswered: async (answer: EntryRequestAnswer) => {
+    accounts.answered.push(answer);
   },
   /** campus-api saving a new sprite or name: the row, then the notification. */
   changeLooks: (

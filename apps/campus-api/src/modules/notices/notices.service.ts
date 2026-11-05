@@ -14,6 +14,7 @@ import {
 } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { CohortRole, cohortMembers, cohortTracks } from '../cohorts/schema.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { hasAdminPowers } from '../users/schema.js';
 import type { CreateNoticeDto } from './dto/create-notice.dto.js';
 import type { UpdateNoticeDto } from './dto/update-notice.dto.js';
@@ -30,7 +31,10 @@ const NOTICE_AUDITED_FIELDS = ['title', 'body'] as const;
 
 @Injectable()
 export class NoticesService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async create(
     dto: CreateNoticeDto,
@@ -78,6 +82,7 @@ export class NoticesService {
           title: row.title,
         },
       });
+      await this.notifications.notifyNoticePosted(row, tx);
 
       return row;
     });

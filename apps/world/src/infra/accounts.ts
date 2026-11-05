@@ -82,7 +82,15 @@ export interface AccountLookup {
    * listening; rejects if it could not start.
    */
   onDesksChanged(listener: (cohortId: string | null) => void): Promise<void>;
+  /** world's one write: the asker's notification. A repeat is a no-op. */
+  notifyEntryRequestAnswered(answer: EntryRequestAnswer): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface EntryRequestAnswer {
+  requestId: string;
+  askerId: string;
+  admitted: boolean;
 }
 
 /**
@@ -196,6 +204,20 @@ export const MEMBERSHIP_ROWS_QUERY = `select members.user_id, members.cohort_id,
     select seat.user_id, seat.cohort_id
     from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
   )`;
+
+/** campus-api's `NotificationKind` values, which its listing reads back. */
+export const ENTRY_REQUEST_ADMITTED_KIND = 'entry_request_admitted';
+export const ENTRY_REQUEST_DECLINED_KIND = 'entry_request_declined';
+
+/**
+ * $1 the asker, $2 the kind, $3 the request's id. Requests have no row, so
+ * the reference is world's own id for one. The conflict target is
+ * campus-api's notifications_recipient_kind_reference_unique.
+ */
+export const ENTRY_REQUEST_NOTIFICATION_QUERY = `insert into notifications
+    (recipient_id, kind, reference_type, reference_id)
+  values ($1, $2, 'entry_request', $3)
+  on conflict (recipient_id, kind, reference_type, reference_id) do nothing`;
 
 /** What hearing defaults to in a proximity space with no radius set, in tiles. */
 export const DEFAULT_AUDIBLE_RADIUS = 5;
@@ -536,6 +558,15 @@ export function createAccountLookup(env: Env): AccountLookup {
         () => listener(),
         () => listener(),
       );
+    },
+    async notifyEntryRequestAnswered(answer): Promise<void> {
+      await sql.unsafe(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+        answer.askerId,
+        answer.admitted
+          ? ENTRY_REQUEST_ADMITTED_KIND
+          : ENTRY_REQUEST_DECLINED_KIND,
+        answer.requestId,
+      ]);
     },
     async close(): Promise<void> {
       await sql.end();
