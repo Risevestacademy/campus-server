@@ -9,6 +9,10 @@ import { registerOnlineCount } from './admin/online-count.js';
 import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
+import {
+  createNotificationFeed,
+  type NotificationFeed,
+} from './infra/notifications.js';
 import { createPresenceStore, type PresenceStore } from './infra/presence.js';
 import { loadWorldMap } from './infra/world-map.js';
 import { registerConnectionCheck } from './media/connection-check.js';
@@ -32,6 +36,7 @@ export interface World {
   accounts: AccountLookup;
   positions: PositionStore;
   presence: PresenceStore;
+  notifications: NotificationFeed;
   reporter: ErrorReporter;
 }
 
@@ -45,6 +50,8 @@ export interface BuildWorldOptions {
   positions?: PositionStore;
   /** Redis when REDIS_URL is set, memory if not. */
   presence?: PresenceStore;
+  /** Redis when REDIS_URL is set, this instance alone if not. */
+  notifications?: NotificationFeed;
   /** The published entry map when left out, which is a call to Sanity. */
   map?: WorldMap;
   /** Where errors are reported. Built from `env` when left out. */
@@ -56,6 +63,7 @@ export async function buildWorld({
   accounts = createAccountLookup(env),
   positions,
   presence,
+  notifications,
   map,
   reporter = createErrorReporter({
     enabled: env.FF_POSTHOG_ENABLED,
@@ -112,7 +120,17 @@ export async function buildWorld({
   const worldMap = map ?? (await loadWorldMap(env, app.log));
   const store = positions ?? createPositionStore(env, app.log, worldMap.id);
   const present = presence ?? createPresenceStore(env, app.log);
-  const gateway = registerGateway(app, env, accounts, store, present, worldMap);
+  const feed = notifications ?? createNotificationFeed(env, app.log);
+  const gateway = registerGateway(
+    app,
+    env,
+    accounts,
+    store,
+    present,
+    worldMap,
+    feed,
+  );
+  feed.onNotification((created) => gateway.notify(created));
   // Not awaited: a database that will not take the listen must not stop the
   // campus opening. The heartbeat re-reads every account, so a change still
   // shows, a heartbeat late.
@@ -192,6 +210,7 @@ export async function buildWorld({
     accounts,
     positions: store,
     presence: present,
+    notifications: feed,
     reporter,
   };
 }

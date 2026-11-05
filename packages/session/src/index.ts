@@ -16,3 +16,5 @@ export * from './profile.js';
 export * from './spaces.js';
 // And where a change to who holds a desk is announced.
 export * from './desks.js';
+// And where a new notification is announced, for world to push.
+export * from './notifications.js';

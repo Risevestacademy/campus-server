@@ -14,6 +14,7 @@ import {
 } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { CohortRole, cohortMembers, cohortTracks } from '../cohorts/schema.js';
+import { NotificationPush } from '../notifications/notification-push.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { hasAdminPowers } from '../users/schema.js';
 import type { CreateNoticeDto } from './dto/create-notice.dto.js';
@@ -34,6 +35,7 @@ export class NoticesService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
     private readonly notifications: NotificationsService,
+    private readonly push: NotificationPush,
   ) {}
 
   async create(
@@ -49,7 +51,7 @@ export class NoticesService {
       dto.cohortId ?? null,
     );
 
-    return this.db.transaction(async (tx) => {
+    const { row, created } = await this.db.transaction(async (tx) => {
       if (dto.cohortTrackId) {
         await this.assertCohortTrackExists(
           tx,
@@ -82,10 +84,12 @@ export class NoticesService {
           title: row.title,
         },
       });
-      await this.notifications.notifyNoticePosted(row, tx);
+      const created = await this.notifications.notifyNoticePosted(row, tx);
 
-      return row;
+      return { row, created };
     });
+    void this.push.send(created);
+    return row;
   }
 
   async update(

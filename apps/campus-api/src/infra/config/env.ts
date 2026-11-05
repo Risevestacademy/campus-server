@@ -138,6 +138,16 @@ export class Env {
   DATABASE_URL: string = 'postgresql://postgres:postgres@localhost:5432/campus';
 
   /**
+   * The Redis world subscribes to, where each new notification is published
+   * so world can push it to the recipient's open sockets. Unset, nothing is
+   * pushed: notifications are still written, and the list still has them.
+   */
+  @IsOptional()
+  @Transform(blankAsUnset)
+  @IsString()
+  REDIS_URL?: string;
+
+  /**
    * The admins `db:seed` creates or promotes: one address, or several
    * separated by commas. The API itself never reads it.
    */

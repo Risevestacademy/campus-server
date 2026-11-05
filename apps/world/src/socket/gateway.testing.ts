@@ -1,4 +1,8 @@
-import { signSessionToken, SessionScope } from '@campus/session';
+import {
+  signSessionToken,
+  SessionScope,
+  type NotificationCreated,
+} from '@campus/session';
 import {
   SPACE_ACCESS,
   type CohortMembershipFacts,
@@ -135,8 +139,18 @@ export const accounts = {
     accounts.profileListeners.push(listener);
   },
   answered: [] as EntryRequestAnswer[],
+  /** Written as the real query writes it: once per answer, then nothing. */
   notifyEntryRequestAnswered: async (answer: EntryRequestAnswer) => {
     accounts.answered.push(answer);
+    return {
+      id: `notification-${accounts.answered.length}`,
+      kind: answer.admitted
+        ? 'entry_request_admitted'
+        : 'entry_request_declined',
+      referenceType: 'entry_request',
+      referenceId: answer.requestId,
+      createdAt: new Date(),
+    };
   },
   /** campus-api saving a new sprite or name: the row, then the notification. */
   changeLooks: (
@@ -259,6 +273,27 @@ export const presence = {
   displace: (displaced: Displacement) => {
     for (const listener of presence.listeners) listener(displaced);
   },
+};
+
+/**
+ * Stands in for the notifications channel in Redis: what world published,
+ * each handed back as Redis would, and campus-api's own sent with `deliver`.
+ */
+export const notifications = {
+  published: [] as NotificationCreated[],
+  listeners: [] as ((created: NotificationCreated) => void)[],
+  onNotification: (listener: (created: NotificationCreated) => void) => {
+    notifications.listeners.push(listener);
+  },
+  publish: async (created: NotificationCreated) => {
+    notifications.published.push(created);
+    notifications.deliver(created);
+  },
+  /** A message on the channel, as from campus-api. */
+  deliver: (created: NotificationCreated) => {
+    for (const listener of notifications.listeners) listener(created);
+  },
+  close: async () => undefined,
 };
 
 export const env = loadEnv({
@@ -526,6 +561,7 @@ export function useWorld(): void {
     presence.entries.clear();
     presence.heldElsewhere.clear();
     presence.failing = false;
+    notifications.published.length = 0;
   });
 
   /**
@@ -553,6 +589,7 @@ export function useWorld(): void {
       accounts,
       positions: store,
       presence,
+      notifications,
       map,
     });
     await world.app.listen({ port: 0, host: '127.0.0.1' });

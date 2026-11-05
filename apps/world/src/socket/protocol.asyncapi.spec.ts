@@ -95,6 +95,7 @@ describe('the AsyncAPI document', () => {
       'LockableSpacesMessage',
       'DesksChangedMessage',
       'SpacesMessage',
+      'NotificationMessage',
       'EntryRequestedMessage',
       'EntryRequestEndedMessage',
       'SaidMessage',

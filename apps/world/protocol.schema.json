@@ -1021,6 +1021,45 @@
       "additionalProperties": false,
       "description": "A space was renamed, or campus-api gained or lost a row for one: replaces `snapshot.spaces`. Sent to everybody."
     },
+    "NotificationMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "notification"
+        },
+        "id": {
+          "type": "string",
+          "description": "The notification, as `GET /v1/notifications` lists it on campus-api; mark it read with `PATCH /v1/notifications/{id}/read`."
+        },
+        "kind": {
+          "type": "string",
+          "description": "What happened: `notice_posted`, `entry_request_admitted` or `entry_request_declined`. More will be added: show a plain alert for one you do not know."
+        },
+        "referenceType": {
+          "type": "string",
+          "description": "What `referenceId` names: `notice` or `entry_request`. Grows with `kind`."
+        },
+        "referenceId": {
+          "type": "string",
+          "description": "The notice's id, to fetch from campus-api for its text; for an entry request, the `requestId` its `entryRequestEnded` carried."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "When it was written, as an ISO timestamp."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "kind",
+        "referenceType",
+        "referenceId",
+        "createdAt"
+      ],
+      "additionalProperties": false,
+      "description": "Something happened that you are told about: enough to show a badge or a toast without asking campus-api. One about a cohort comes only on that cohort’s socket; one about no cohort, as a campus-wide notice, on every socket you have open. Best effort: one sent while you had no socket open, or that world missed, is in the list all the same, so fetch it on arriving."
+    },
     "EntryRequestedMessage": {
       "type": "object",
       "properties": {
@@ -1469,6 +1508,9 @@
         },
         {
           "$ref": "#/definitions/SpacesMessage"
+        },
+        {
+          "$ref": "#/definitions/NotificationMessage"
         },
         {
           "$ref": "#/definitions/EntryRequestedMessage"

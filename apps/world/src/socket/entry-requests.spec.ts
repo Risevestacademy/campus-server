@@ -132,6 +132,20 @@ describe('movement', () => {
       expect(accounts.answered.filter((a) => a.askerId === grace)).toEqual([
         { requestId: sent.requestId, askerId: grace, admitted: true },
       ]);
+      // Written, then pushed to the asker on this cohort's socket alone.
+      await expect(
+        waitFor(outside, (m) => m.type === 'notification'),
+      ).resolves.toEqual({
+        type: 'notification',
+        id: expect.any(String),
+        kind: 'entry_request_admitted',
+        referenceType: 'entry_request',
+        referenceId: sent.requestId,
+        createdAt: expect.any(String),
+      });
+      expect(inside.messages.some((m) => m.type === 'notification')).toBe(
+        false,
+      );
       await expect(step(outside, 'right', 3)).resolves.toMatchObject({
         outcome: 'moved',
       });
