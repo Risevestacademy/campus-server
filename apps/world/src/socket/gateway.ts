@@ -52,8 +52,10 @@ export interface Gateway {
   desksChanged(cohortId: string | null): void;
   stop(): Promise<void>;
   /**
-   * Stops the gauges reading the sockets. Not part of stop(), so the final
-   * flush after it still reads the last counts.
+   * Stops the gauges reading the sockets, for a test that builds world more
+   * than once in a process. Not part of stop(), so the final flush still
+   * reads the last counts; a deployed world exits after that flush, so it
+   * never needs this.
    */
   dispose(): void;
 }

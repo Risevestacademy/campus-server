@@ -2,7 +2,11 @@ import { pino } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ErrorReporter } from './error-reporter.js';
-import { reportLoggedError, reportingHooks } from './logged-error.js';
+import {
+  loggedError,
+  reportLoggedError,
+  reportingHooks,
+} from './logged-error.js';
 import { captureLines } from './testing.js';
 
 const ERROR = 50;
@@ -12,6 +16,32 @@ const FATAL = 60;
 function fakeReporter() {
   return { report: vi.fn(), shutdown: vi.fn() } satisfies ErrorReporter;
 }
+
+describe('loggedError', () => {
+  const err = new Error('boom');
+
+  it.each([
+    ['the line itself', ERROR, [err, 'failed']],
+    ['the line itself, at fatal', FATAL, [err]],
+    ["the line's err", ERROR, [{ err, userId: 'u-1' }, 'failed']],
+  ])('takes an error passed as %s', (_, level, args) => {
+    expect(loggedError(level, args)).toBe(err);
+  });
+
+  it.each([
+    ['a warning', WARN, [err, 'degraded']],
+    ['a warning with an err', WARN, [{ err }, 'degraded']],
+    ['a line with no err', ERROR, [{ userId: 'u-1' }, 'no error here']],
+    ['a message alone', ERROR, ['just a message']],
+    ['nothing', ERROR, []],
+  ])('finds nothing in %s', (_, level, args) => {
+    expect(loggedError(level, args)).toBeUndefined();
+  });
+
+  it('passes on an err that is not an Error, as logged', () => {
+    expect(loggedError(ERROR, [{ err: 'timed out' }])).toBe('timed out');
+  });
+});
 
 describe('reportLoggedError', () => {
   it('reports an error line that carries an error', () => {

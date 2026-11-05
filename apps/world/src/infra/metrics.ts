@@ -24,9 +24,13 @@ export type ServerClose = CloseReason | 'heartbeat_missed' | 'not_reading';
 export interface WorldMetrics {
   opened(): void;
   refused(reason: Refusal): void;
-  /** The upgrade could not be decided: world's fault, not the client's. */
+  /**
+   * World's fault, not the client's: the upgrade could not be decided and was
+   * closed with `internal_error`, or something threw after the decision and
+   * the socket was terminated without a reason.
+   */
   failed(): void;
-  /** The client went before its upgrade was decided. */
+  /** An accepted client was gone before world let it in. */
   abandoned(): void;
   closedByServer(reason: ServerClose): void;
   closed(code: number): void;

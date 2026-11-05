@@ -40,9 +40,11 @@ type OpenContext = Pick<
   | 'closeFor'
 >;
 
+type Outcome = 'opened' | 'refused' | 'failed' | 'abandoned';
+
 /** How one upgrade ended, counted once, whichever way it ends. */
 interface Attempt {
-  outcome?: 'opened' | 'refused' | 'failed' | 'abandoned';
+  outcome?: Outcome;
 }
 
 export interface OpenDeps {
@@ -118,9 +120,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
           } catch (err) {
             // Thrown before any outcome was counted: world's own failure.
             if (attempt.outcome === undefined) {
-              attempt.outcome = 'failed';
-              metrics.failed();
-              annotate({ 'world.outcome': 'failed' });
+              record(attempt, 'failed');
             }
             throw err;
           }
@@ -168,9 +168,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       decision = await decideUpgrade(env, accounts, headers, cohortId);
     } catch (err) {
       app.log.error({ err }, 'could not decide socket upgrade');
-      attempt.outcome = 'failed';
-      metrics.failed();
-      annotate({ 'world.outcome': 'failed' });
+      record(attempt, 'failed');
       // Reading has to resume for the closing handshake to complete.
       ws.resume();
       sendClose(ws, 'internal_error');
@@ -218,8 +216,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
 
     // Decided, so counted as refused even if the client has already gone.
     if (!decision.ok) {
-      attempt.outcome = 'refused';
-      refuse(ws, decision.refusal);
+      refuse(ws, attempt, decision.refusal);
       return;
     }
 
@@ -268,9 +265,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     await doors.ready;
 
     if (closed || ws.readyState !== ws.OPEN) {
-      attempt.outcome = 'abandoned';
-      metrics.abandoned();
-      annotate({ 'world.outcome': 'abandoned' });
+      record(attempt, 'abandoned');
       return;
     }
 
@@ -387,9 +382,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       },
       'socket opened',
     );
-    attempt.outcome = 'opened';
-    metrics.opened();
-    annotate({ 'world.outcome': 'opened' });
+    record(attempt, 'opened');
 
     ws.on('pong', () => {
       connection.alive = true;
@@ -428,12 +421,26 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     ws.resume();
   }
 
-  function refuse(ws: WebSocket, refusal: Refusal): void {
+  /** Counts the outcome and puts it on the span, together. */
+  function record(
+    attempt: Attempt,
+    ...[outcome, refusal]: [Exclude<Outcome, 'refused'>] | ['refused', Refusal]
+  ): void {
+    attempt.outcome = outcome;
+    if (outcome === 'refused') {
+      metrics.refused(refusal);
+      annotate({ 'world.outcome': outcome, 'world.refusal': refusal });
+      return;
+    }
+    metrics[outcome]();
+    annotate({ 'world.outcome': outcome });
+  }
+
+  function refuse(ws: WebSocket, attempt: Attempt, refusal: Refusal): void {
     // The upgrade has already completed by the time Fastify hands the socket
     // over, so a refusal is a close rather than an HTTP status.
     app.log.info({ refusal }, 'socket refused');
-    metrics.refused(refusal);
-    annotate({ 'world.outcome': 'refused', 'world.refusal': refusal });
+    record(attempt, 'refused', refusal);
     // Paused during authentication; the closing handshake needs it back.
     ws.resume();
     send(ws, {

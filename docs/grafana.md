@@ -44,23 +44,23 @@ sweeps although they carry on.
 
 With metrics on, world also sends:
 
-| Metric                               | Labels      | What it counts                                                                         |
-| ------------------------------------ | ----------- | -------------------------------------------------------------------------------------- |
-| `world.connections`                  | `cohort_id` | Open sockets, read at each export.                                                     |
-| `world.connections.opened`           |             | Sockets authenticated and joined.                                                      |
-| `world.connections.refused`          | `reason`    | Upgrades refused, by the close reason sent: the client's to fix, not world's.          |
-| `world.connections.failed`           |             | Upgrades world could not decide, closed with `internal_error`.                         |
-| `world.connections.abandoned`        |             | Clients gone before their upgrade was decided.                                         |
-| `world.connections.closed_by_server` | `reason`    | Open sockets world closed or cut off, including `heartbeat_missed` and `not_reading`.  |
-| `world.connections.closed`           | `code`      | Every close, by code. Codes other than world's own and the standard ones read `other`. |
-| `world.messages.received`            | `type`      | Frames received, by message type, or `invalid`.                                        |
-| `world.moves`                        | `outcome`   | Moves, by outcome.                                                                     |
-| `world.frames.sent`                  |             | Frames sent.                                                                           |
-| `world.socket.buffered`              |             | The most any one socket has waiting unsent, in bytes.                                  |
+| Metric                               | Labels      | What it counts                                                                                                                                           |
+| ------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `world.connections`                  | `cohort_id` | Open sockets, read at each export.                                                                                                                       |
+| `world.connections.opened`           |             | Sockets authenticated and joined.                                                                                                                        |
+| `world.connections.refused`          | `reason`    | Upgrades refused, by the close reason sent: the client's to fix, not world's.                                                                            |
+| `world.connections.failed`           |             | Upgrades world could not decide, closed with `internal_error`, and upgrades where something threw after the decision, terminated without a close reason. |
+| `world.connections.abandoned`        |             | Accepted clients gone before world let them in.                                                                                                          |
+| `world.connections.closed_by_server` | `reason`    | Open sockets world closed or cut off, including `heartbeat_missed` and `not_reading`.                                                                    |
+| `world.connections.closed`           | `code`      | Every close, by code. Codes other than world's own and the standard ones read `other`.                                                                   |
+| `world.messages.received`            | `type`      | Frames received, by message type, or `invalid`.                                                                                                          |
+| `world.moves`                        | `outcome`   | Moves, by outcome.                                                                                                                                       |
+| `world.frames.sent`                  |             | Frames sent.                                                                                                                                             |
+| `world.socket.buffered`              |             | The most any one socket has waiting unsent, in bytes.                                                                                                    |
 
 Connect success, an SLO, is `opened ÷ (opened + failed + abandoned)`.
-Abandoned counts against world: a client that gives up while world is still
-deciding is most often waiting on a slow world. Refusals are left out: a
+Abandoned counts against world: an accepted client that gives up before world
+lets it in is most often waiting on a slow world. Refusals are left out: a
 signed-out tab or a wrong origin is not world failing.
 
 Every deploy closes each open socket with `server shutting down`. Those
