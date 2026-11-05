@@ -11,10 +11,13 @@ import {
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import { SystemRole, users } from '../users/schema.js';
+import type { NotificationPush } from '../notifications/notification-push.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { NoticeConflictException } from './notices.exceptions.js';
 import { NoticesService } from './notices.service.js';
 import { NoticeScope, notices } from './schema.js';
 
+const noPush = { send: async () => undefined } as unknown as NotificationPush;
 const ROUNDS = 20;
 const audit = { actorUserId: null };
 
@@ -79,7 +82,11 @@ describe.skipIf(!REAL_POSTGRES_URL)('NoticesService, two pins at once', () => {
 
   beforeAll(() => {
     pg = connectRealPostgres();
-    service = new NoticesService(pg.db as never);
+    service = new NoticesService(
+      pg.db as never,
+      new NotificationsService(pg.db as never),
+      noPush,
+    );
   });
 
   afterAll(async () => {
@@ -145,7 +152,8 @@ describe.skipIf(!REAL_POSTGRES_URL)(
         max: 1,
         onnotice: () => undefined,
       });
-      service = new NoticesService(drizzle(single, { schema }) as never);
+      const db = drizzle(single, { schema }) as never;
+      service = new NoticesService(db, new NotificationsService(db), noPush);
     });
 
     afterAll(async () => {

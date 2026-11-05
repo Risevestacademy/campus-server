@@ -1,10 +1,11 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY, type NotificationCreated } from '@campus/session';
 import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 import type { FastifyInstance } from 'fastify';
 
 import { type AccountLookup } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
+import type { NotificationFeed } from '../infra/notifications.js';
 import type { PositionStore } from '../infra/positions.js';
 import type { PresenceStore } from '../infra/presence.js';
 import { type Tile } from '../movement/grid.js';
@@ -50,6 +51,12 @@ export interface Gateway {
    * null, in every cohort: tell the people there to fetch the desks again.
    */
   desksChanged(cohortId: string | null): void;
+  /**
+   * A notification was written: tell the recipient on the sockets this
+   * instance holds for them. Only the named cohort's socket, or every one of
+   * theirs when it names none. Nobody here, nothing sent.
+   */
+  notify(created: NotificationCreated): void;
   stop(): Promise<void>;
   /**
    * Stops the gauges reading the sockets, for a test that builds world more
@@ -67,6 +74,7 @@ export function registerGateway(
   positions: PositionStore,
   presence: PresenceStore,
   map: WorldMap,
+  notifications: Pick<NotificationFeed, 'publish'>,
 ): Gateway {
   const connections = new Connections();
   const metrics = worldMetrics(connections);
@@ -141,6 +149,8 @@ export function registerGateway(
     isRemoved: (connection, spaceKey, now) =>
       moderation.isRemoved(connection, spaceKey, now),
     mayStepInto,
+    accounts,
+    notifications,
   });
 
   const media = mediaCredentials(env);
@@ -406,6 +416,17 @@ export function registerGateway(
       const frame = encode({ type: 'desksChanged' });
       for (const connection of connections.everyone()) {
         sendFrame(connection.socket, frame);
+      }
+    },
+    notify({ recipientId, cohortId, ...notification }): void {
+      if (stopping) return;
+      const held =
+        cohortId === null
+          ? connections.forUser(recipientId)
+          : [connections.holderOf({ userId: recipientId, cohortId })];
+      const frame = encode({ type: 'notification', ...notification });
+      for (const connection of held) {
+        if (connection) sendFrame(connection.socket, frame);
       }
     },
     dispose: metrics.dispose,

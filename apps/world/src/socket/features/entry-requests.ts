@@ -1,6 +1,8 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 
+import type { AccountLookup } from '../../infra/accounts.js';
+import type { NotificationFeed } from '../../infra/notifications.js';
 import type { Tile } from '../../movement/grid.js';
 import type { Seat } from '../../seat.js';
 import {
@@ -24,7 +26,13 @@ import type { Locks } from './locks.js';
 
 type EntryRequestsContext = Pick<
   WorldContext,
-  'map' | 'connections' | 'players' | 'send' | 'sendFrame' | 'isStopping'
+  | 'app'
+  | 'map'
+  | 'connections'
+  | 'players'
+  | 'send'
+  | 'sendFrame'
+  | 'isStopping'
 >;
 
 const REFUSALS: Record<Obstacle, string> = {
@@ -45,15 +53,24 @@ export interface EntryRequestDeps {
   locks: Pick<Locks, 'isLocked'>;
   isRemoved(connection: Connection, spaceKey: string, now: number): boolean;
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
+  accounts: Pick<AccountLookup, 'notifyEntryRequestAnswered'>;
+  notifications: Pick<NotificationFeed, 'publish'>;
 }
 
 export type EntryRequestsFeature = ReturnType<typeof createEntryRequests>;
 
 export function createEntryRequests(
   ctx: EntryRequestsContext,
-  { doors, locks, isRemoved, mayStepInto }: EntryRequestDeps,
+  {
+    doors,
+    locks,
+    isRemoved,
+    mayStepInto,
+    accounts,
+    notifications,
+  }: EntryRequestDeps,
 ) {
-  const { map, connections, players, send, sendFrame, isStopping } = ctx;
+  const { app, map, connections, players, send, sendFrame, isStopping } = ctx;
   const requests = new EntryRequests<Connection>();
 
   /** Somebody staff removed from a normal space finds it locked to them alone, so they may ask. */
@@ -194,6 +211,64 @@ export function createEntryRequests(
     if (admit) requests.admit(found);
     else requests.decline(found, now.getTime());
     announceEnded(found, admit ? 'admitted' : 'declined', connection.userId);
+    recordAnswer(found, admit, connection.userId);
+  }
+
+  /** Logged rather than audited, for the reason moderation's recordStaffAction gives. */
+  function recordAnswer(
+    request: EntryRequest<Connection>,
+    admitted: boolean,
+    answeredBy: string,
+  ): void {
+    app.log.info(
+      {
+        requestId: request.id,
+        askerId: request.userId,
+        answeredBy,
+        cohortId: request.cohortId,
+        spaceKey: request.spaceKey,
+        admitted,
+      },
+      'entry request answered',
+    );
+    void notifyAsker(request, admitted);
+  }
+
+  /** Never rejects: the answer stands whatever becomes of the notification. */
+  async function notifyAsker(
+    request: EntryRequest<Connection>,
+    admitted: boolean,
+  ): Promise<void> {
+    const context = { requestId: request.id, askerId: request.userId };
+    let written;
+    try {
+      written = await accounts.notifyEntryRequestAnswered({
+        requestId: request.id,
+        askerId: request.userId,
+        admitted,
+      });
+    } catch (err) {
+      app.log.warn(
+        { err, ...context },
+        'could not notify asker of entry answer',
+      );
+      return;
+    }
+    if (!written) return;
+    try {
+      await notifications.publish({
+        recipientId: request.userId,
+        cohortId: request.cohortId,
+        ...written,
+        createdAt: written.createdAt.toISOString(),
+      });
+    } catch (err) {
+      // Still in their list: only the toast is lost.
+      app.log.warn(
+        { err, ...context },
+        'could not push entry answer notification',
+      );
+    }
   }
 
   function withdraw(connection: Connection, requestId: string): void {

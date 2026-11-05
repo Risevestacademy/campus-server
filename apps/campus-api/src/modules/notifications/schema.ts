@@ -10,13 +10,30 @@ import {
 import { users } from '../users/schema.js';
 
 /**
+ * What happened. world writes the entry-request kinds itself
+ * (`ENTRY_REQUEST_NOTIFICATION_QUERY` in world's accounts.ts), so a rename
+ * here must be made there too.
+ */
+export enum NotificationKind {
+  NoticePosted = 'notice_posted',
+  EntryRequestAdmitted = 'entry_request_admitted',
+  EntryRequestDeclined = 'entry_request_declined',
+}
+
+/** Where `reference_id` points. */
+export enum NotificationReferenceType {
+  Notice = 'notice',
+  /** world's in-memory request id: there is no row behind it. */
+  EntryRequest = 'entry_request',
+}
+
+/**
  * One alert for one person.
  *
  * `kind` and the reference pair are plain strings on purpose. Kinds are
- * added as the events they report are — `notice_posted`,
- * `entry_request_answered`, `meeting_starting` — so a new one needs a code
- * change and no migration, and the reference points at whatever row
- * triggered this: a notice, an entry request, a calendar event.
+ * added as the events they report are (see `NotificationKind`), so a new one
+ * needs a code change and no migration, and the reference points at
+ * whatever triggered this: a notice, an entry request, a calendar event.
  *
  * There is no foreign key on the reference, for the same reason: the
  * referenced row may be in any table, and a notification is the record that

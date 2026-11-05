@@ -57,6 +57,7 @@ export function routeAccounts() {
     onProfileChanged: async () => undefined,
     onSpacesChanged: async () => undefined,
     onDesksChanged: async () => undefined,
+    notifyEntryRequestAnswered: async () => undefined,
     close: async () => undefined,
   };
 }

@@ -102,6 +102,12 @@ change to either reaches both apps:
   sent with, by id or alias; optional, unset sends the email built into the
   API).
   `PORT` is injected by Railway, not set manually.
+  `REDIS_URL` (the Redis service's internal URL, the same one world reads):
+  each new notification is published there for world to push to the
+  recipient's open sockets. Optional: unset, notifications are still written
+  and listed, and simply not pushed. The connection is made for a publish and
+  closed once idle, as the database pool's are, so it never keeps the API
+  awake.
   `SANITY_PROJECT_ID` and `SANITY_DATASET` (`production` unless set; staging
   reads `staging`) are what the map sync, `POST /v1/maps/sync`, reads the
   published maps from, with no token. Both are optional: the API starts
@@ -245,12 +251,15 @@ redirect URIs) and `CORS_ORIGINS` to the new host together.
 
 ## redis
 
-- One instance per environment, like Postgres. Only `world` connects, over
-  the **internal** URL.
+- One instance per environment, like Postgres. `world` connects, and
+  `campus-api` too, only to publish new notifications; both over the
+  **internal** URL.
 - It holds state that is cheap to lose but should not vanish on every
   restart: each player's last position between visits, who is online where
   (presence, which the admin dashboard's online count also reads), and the
-  messages between world instances.
+  messages between world instances. Notifications pass through it as
+  pub/sub messages only (`notifications:created`), so nothing about them is
+  stored; the rows are in Postgres.
 - **Persistence on.** A restart that empties Redis sends everyone back to
   the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
 - **Eviction `noeviction` (Redis's default).** Any other policy would drop
@@ -292,7 +301,8 @@ PRESENCE_UNAVAILABLE` until Redis is back.
   world re-checks that the account behind a token still exists and is not
   suspended, so a ban reaches open sockets instead of waiting out the token).
   `PORT` is injected by Railway. `REDIS_URL` (the Redis service's internal
-  URL) keeps where each player last stood between visits, and presence.
+  URL) keeps where each player last stood between visits, and presence, and
+  carries new notifications to push to open sockets.
   `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST`, the
   same project as campus-api (see [posthog.md](./posthog.md)).
   `FF_OTEL_ENABLED`, `FF_OTEL_METRICS_ENABLED`, `OTEL_SERVICE_NAME=world`,
@@ -409,7 +419,8 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 - `world` has no public domain — add one once something actually calls it.
 - Production is not described in `.railway/railway.ts`. It has no Redis, no
   variables on campus-api or world, and older build settings; bring it in
-  line before the file is taught about it.
+  line before the file is taught about it. Without Redis there, notifications
+  are listed but never pushed to open sockets.
 - Node version isn't pinned on Railway. Railpack takes it from `engines.node`
   in the root `package.json`, which says `>=20`, so it builds on Node 20
   while CI runs 24. Pin it (for example `"node": "24.x"`) to match.

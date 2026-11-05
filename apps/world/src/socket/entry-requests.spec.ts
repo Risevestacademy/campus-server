@@ -129,6 +129,23 @@ describe('movement', () => {
       };
       await expect(ended(outside)).resolves.toEqual(admitted);
       await expect(ended(inside)).resolves.toEqual(admitted);
+      expect(accounts.answered.filter((a) => a.askerId === grace)).toEqual([
+        { requestId: sent.requestId, askerId: grace, admitted: true },
+      ]);
+      // Written, then pushed to the asker on this cohort's socket alone.
+      await expect(
+        waitFor(outside, (m) => m.type === 'notification'),
+      ).resolves.toEqual({
+        type: 'notification',
+        id: expect.any(String),
+        kind: 'entry_request_admitted',
+        referenceType: 'entry_request',
+        referenceId: sent.requestId,
+        createdAt: expect.any(String),
+      });
+      expect(inside.messages.some((m) => m.type === 'notification')).toBe(
+        false,
+      );
       await expect(step(outside, 'right', 3)).resolves.toMatchObject({
         outcome: 'moved',
       });
@@ -172,6 +189,10 @@ describe('movement', () => {
           (m) => m.type === 'entryRequestEnded' && m.requestId === second,
         ),
       ).resolves.toMatchObject({ outcome: 'declined' });
+      // The withdrawn request and the refused late answer notify nobody.
+      expect(accounts.answered.filter((a) => a.askerId === ada)).toEqual([
+        { requestId: second, askerId: ada, admitted: false },
+      ]);
       await Promise.all([leave(inside), leave(outside)]);
     });
 

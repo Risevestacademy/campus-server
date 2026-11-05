@@ -736,6 +736,49 @@ export const ServerMessage = z
       }),
     z
       .object({
+        type: z.literal('notification'),
+        id: z
+          .string()
+          .describe(
+            'The notification, as `GET /v1/notifications` lists it on ' +
+              'campus-api; mark it read with ' +
+              '`PATCH /v1/notifications/{id}/read`.',
+          ),
+        kind: z
+          .string()
+          .describe(
+            'What happened: `notice_posted`, `entry_request_admitted` or ' +
+              '`entry_request_declined`. More will be added: show a plain ' +
+              'alert for one you do not know.',
+          ),
+        referenceType: z
+          .string()
+          .describe(
+            'What `referenceId` names: `notice` or `entry_request`. Grows ' +
+              'with `kind`.',
+          ),
+        referenceId: z
+          .string()
+          .describe(
+            "The notice's id, to fetch from campus-api for its text; for an " +
+              'entry request, the `requestId` its `entryRequestEnded` carried.',
+          ),
+        createdAt: z
+          .string()
+          .describe('When it was written, as an ISO timestamp.'),
+      })
+      .meta({
+        id: 'NotificationMessage',
+        description:
+          'Something happened that you are told about: enough to show a ' +
+          'badge or a toast without asking campus-api. One about a cohort ' +
+          'comes only on that cohort’s socket; one about no cohort, as a ' +
+          'campus-wide notice, on every socket you have open. Best effort: ' +
+          'one sent while you had no socket open, or that world missed, is ' +
+          'in the list all the same, so fetch it on arriving.',
+      }),
+    z
+      .object({
         type: z.literal('entryRequested'),
         requestId,
         userId: z.string().describe('Who is asking.'),

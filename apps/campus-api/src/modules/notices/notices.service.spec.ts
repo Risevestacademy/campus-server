@@ -1,3 +1,4 @@
+import type { NotificationCreated } from '@campus/session';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -13,6 +14,9 @@ import {
   cohortTracks,
   cohorts,
 } from '../cohorts/schema.js';
+import type { NotificationPush } from '../notifications/notification-push.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
+import { notifications } from '../notifications/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { NoticeScope, notices } from './schema.js';
@@ -31,7 +35,18 @@ const MIGRATIONS = fileURLToPath(
 const pglite = drizzle(new PGlite(), {
   schema: { users, tracks, cohorts, cohortTracks, notices, auditLog },
 });
-const service = new NoticesService(pglite as unknown as Db);
+/** What would have gone to world, in place of Redis. */
+const pushed: NotificationCreated[] = [];
+const push = {
+  send: async (created: readonly NotificationCreated[]) => {
+    pushed.push(...created);
+  },
+} as unknown as NotificationPush;
+const service = new NoticesService(
+  pglite as unknown as Db,
+  new NotificationsService(pglite as unknown as Db),
+  push,
+);
 
 let adminUser: AuthenticatedUser;
 let professorUser: AuthenticatedUser;
@@ -48,6 +63,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  pushed.length = 0;
   await pglite.execute(
     sql`truncate audit_log, notices, cohort_tracks, cohorts, tracks, users cascade`,
   );
@@ -160,6 +176,83 @@ describe('create', () => {
     expect(notice.scope).toBe(NoticeScope.CohortTrack);
     expect(notice.cohortId).toBe(cohortId);
     expect(notice.cohortTrackId).toBe(cohortTrackId);
+  });
+
+  it("notifies every live member in the notice's scope, auditing only the notice", async () => {
+    const [outsider] = await pglite
+      .insert(users)
+      .values({ email: 'outsider@campus.local' })
+      .returning();
+    const [otherCohort] = await pglite
+      .insert(cohorts)
+      .values({ name: 'Cohort 2', code: 'C2' })
+      .returning();
+    await pglite.insert(cohortMembers).values({
+      cohortId: otherCohort.id,
+      userId: outsider.id,
+      role: CohortRole.Mentor,
+    });
+
+    const notice = await service.create(
+      {
+        title: 'Heads up',
+        body: 'Read this.',
+        scope: NoticeScope.Cohort,
+        cohortId,
+      },
+      professorUser,
+      { ...audit, actorUserId: professorUser.id },
+    );
+
+    const sent = await pglite
+      .select()
+      .from(notifications)
+      .where(eq(notifications.referenceId, notice.id));
+    expect(sent.map((row) => row.recipientId).sort()).toEqual(
+      [professorUserId, mentorUserId].sort(),
+    );
+    expect(sent.every((row) => row.kind === 'notice_posted')).toBe(true);
+    expect(await pglite.select().from(auditLog)).toHaveLength(1);
+    // Each row, once committed, goes to world for that cohort's sockets.
+    expect(
+      [...pushed].sort((a, b) => a.recipientId.localeCompare(b.recipientId)),
+    ).toEqual(
+      [...sent]
+        .sort((a, b) => a.recipientId.localeCompare(b.recipientId))
+        .map((row) => ({
+          recipientId: row.recipientId,
+          cohortId,
+          id: row.id,
+          kind: 'notice_posted',
+          referenceType: 'notice',
+          referenceId: notice.id,
+          createdAt: row.createdAt.toISOString(),
+        })),
+    );
+  });
+
+  it('pushes a campus notice to every socket, naming no cohort', async () => {
+    await service.create(
+      { title: 'All', body: 'Everybody.', scope: NoticeScope.Campus },
+      adminUser,
+      { ...audit, actorUserId: adminUser.id },
+    );
+
+    expect(pushed).toHaveLength(2);
+    expect(pushed.every((message) => message.cohortId === null)).toBe(true);
+  });
+
+  it('notifies nobody when the notice is refused', async () => {
+    await expect(
+      service.create(
+        { title: 'No', body: 'No.', scope: NoticeScope.Cohort, cohortId },
+        mentorUser,
+        { ...audit, actorUserId: mentorUser.id },
+      ),
+    ).rejects.toBeInstanceOf(NoticeForbiddenException);
+
+    expect(await pglite.select().from(notifications)).toEqual([]);
+    expect(pushed).toEqual([]);
   });
 
   it('mentor is refused', async () => {

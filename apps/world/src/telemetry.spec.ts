@@ -89,6 +89,7 @@ const lookup = {
   roomLinkPassesOn: async () => [],
   onSpacesChanged: async () => undefined,
   onDesksChanged: async () => undefined,
+  notifyEntryRequestAnswered: async () => undefined,
   onProfileChanged: async () => undefined,
   close: async () => undefined,
 } as unknown as AccountLookup & {
