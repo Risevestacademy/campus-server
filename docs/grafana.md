@@ -63,10 +63,11 @@ Abandoned counts against world: a client that gives up while world is still
 deciding is most often waiting on a slow world. Refusals are left out: a
 signed-out tab or a wrong origin is not world failing.
 
-Every deploy closes each open socket with `server shutting down`, so
-`world.connections.closed_by_server{reason="server shutting down"}` rises in
-a burst at each release. That marks deploys; an alert on sockets world closes
-should leave that reason out.
+Every deploy closes each open socket with `server shutting down`. Those
+closes are counted while the old process shuts down, so they reach Grafana in
+its final export at best, and a rate needs two samples: don't expect
+`world.connections.closed_by_server` to show deploys. An alert on sockets
+world closes should still leave that reason out.
 
 ## Setting up an environment
 
@@ -112,6 +113,45 @@ Do this once for staging and once for production.
    - **Loki:** pick `service_name` = `campus-api`. A log line's `trace_id`
      opens its trace.
    - **Metrics:** names start `nodejs_` and `v8js_`.
+
+## Dashboards
+
+Four dashboards live in [`infra/grafana/dashboards`](../infra/grafana/dashboards),
+tagged `campus` and linked to each other:
+
+| File            | Shows                                                                                        | Reads           |
+| --------------- | -------------------------------------------------------------------------------------------- | --------------- |
+| `api.json`      | campus-api's requests, latency and errors by route, outgoing calls by host, error log lines  | traces, logs    |
+| `world.json`    | open sockets, connect success, upgrades by outcome, closes, traffic, the work behind sockets | metrics, traces |
+| `database.json` | Postgres queries by operation, latency, failures by code, queries over 100 ms                | traces          |
+| `runtime.json`  | event loop delay and utilization, heap, GC pauses, active resources                          | metrics         |
+
+The API and database dashboards read TraceQL metrics from the spans, not
+exported metrics, so they work while `FF_OTEL_METRICS_ENABLED` is off, as it
+is for campus-api on staging. The runtime dashboard shows only services that
+export metrics, so on staging only world.
+
+**Import or update one:** Dashboards → New → Import, and upload the file. The
+data source pickers at the top of each dashboard choose the stack's `…-prom`,
+`…-traces` and `…-logs` by name. Each dashboard has a fixed uid, so
+importing a newer file over it replaces it. Change a dashboard by editing it
+in Grafana, then Export → Export as JSON with "Export the dashboard to use in
+another instance" off, and commit the file in place of the old one, so the
+repository stays the copy that counts.
+
+`pnpm grafana:check`, which CI runs, checks the files without Grafana: every
+metric a query names must be one that world or the runtime instrumentation
+exports, under the name Grafana Cloud gives it; every data source and variable
+a query uses must be defined; ids and uids must be unique and panels must not
+overlap. It reads the instruments from `apps/world/src/infra/metrics.ts` and
+the installed `@opentelemetry/instrumentation-runtime-node`, so a renamed
+instrument or an upgrade fails it until the dashboards follow.
+
+Connect success on the world dashboard can read slightly low just after a
+deploy: a refused tab that closes during world's first read of the spaces
+after a boot is counted as abandoned (issue #118). A counter's first increase
+after a restart can also be missed, which matters only at staging's low
+volume.
 
 ## When nothing arrives
 
