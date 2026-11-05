@@ -42,7 +42,7 @@ export function createSweeps(
   async function dropUnwelcome(): Promise<void> {
     const now = new Date();
     const byAccount = new Map<string, Connection[]>();
-    for (const connection of connections.all()) {
+    for (const connection of connections.everyone()) {
       const open = byAccount.get(connection.userId);
       if (open) open.push(connection);
       else byAccount.set(connection.userId, [connection]);
@@ -112,9 +112,10 @@ export function createSweeps(
           // Made or unmade an admin: a new token, to speak or only listen.
           // Or the last one could not be minted: try again.
           if (
-            broadcastRoom.isMissing(connection) ||
-            (connection.broadcast &&
-              connection.broadcast.canSpeak !== account.admin)
+            connection.mode === 'avatar' &&
+            (broadcastRoom.isMissing(connection) ||
+              (connection.broadcast &&
+                connection.broadcast.canSpeak !== account.admin))
           ) {
             void broadcastRoom.join(connection);
           }
@@ -169,7 +170,7 @@ export function createSweeps(
    * `replaced` and closed already, and has nothing left to drop.
    */
   function dropIfRevoked(connection: Connection, sessionEpoch: number): void {
-    if (connection.epoch === sessionEpoch || !connections.has(connection)) {
+    if (connection.epoch === sessionEpoch || !connections.isOpen(connection)) {
       return;
     }
     app.log.info(
@@ -194,7 +195,7 @@ export function createSweeps(
    * already, with nothing left to drop.
    */
   function dropIfNotMember(connection: Connection, live: boolean): void {
-    if (live || !connections.has(connection)) {
+    if (live || !connections.isOpen(connection)) {
       return;
     }
 
@@ -223,7 +224,7 @@ export function createSweeps(
    */
   async function dropEndedSessions(): Promise<void> {
     const following = connections
-      .all()
+      .everyone()
       .filter((c) => c.sessionId !== undefined);
     if (following.length === 0) {
       return;

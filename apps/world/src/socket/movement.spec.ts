@@ -70,6 +70,7 @@ describe('movement', () => {
         displayName: null,
         spriteKey: null,
         status: 'available',
+        statusUntil: null,
         spaceKey: DEFAULT_SPACE_KEY,
       },
     });
