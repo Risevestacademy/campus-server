@@ -1,0 +1,33 @@
+name: Factory PR Review
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  checks: write
+  pull-requests: read
+
+concurrency:
+  group: factory-pr-review-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    name: review
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: Risevestacademy/campus-software-factory/.github/actions/factory-pr-review@e5dbc4e193a6b0bba766aeef43cc910a6dc1d76a
+        with:
+          repository: ${{ github.repository }}
+          workflow-run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}

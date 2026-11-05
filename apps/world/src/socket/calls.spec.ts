@@ -217,8 +217,11 @@ beforeEach(async () => {
   await world.gateway.spacesChanged();
 });
 
-async function arrive({ admin = false } = {}) {
-  const userId = randomUUID();
+async function arrive({
+  admin = false,
+  userId = randomUUID(),
+  enter,
+}: { admin?: boolean; userId?: string; enter?: 'ifFree' } = {}) {
   if (admin) admins.add(userId);
   const { token } = await signSessionToken(
     {
@@ -229,7 +232,7 @@ async function arrive({ admin = false } = {}) {
     },
     { secret: SECRET, ttlMinutes: 30 },
   );
-  const ws = new WebSocket(url, {
+  const ws = new WebSocket(enter ? `${url}&enter=${enter}` : url, {
     headers: { origin: ORIGIN, cookie: `campus_session=${token}` },
   });
   const messages: Record<string, unknown>[] = [];
@@ -396,6 +399,29 @@ describe('the call for the space you stand in', () => {
       call: null,
     });
     await leave(ada);
+  });
+
+  it('takes a socket demoted to watching out of its call and the broadcast room, and hands it no other', async () => {
+    const phone = await arrive({ enter: 'ifFree' });
+    const message = await waitFor(phone, (m) => m.type === 'call');
+    await waitFor(phone, (m) => m.type === 'broadcast');
+
+    const web = await arrive({ userId: phone.userId });
+    await waitFor(phone, (m) => m.type === 'watching');
+
+    await expect
+      .poll(() => removedFor(phone))
+      .toEqual([(message.call as { room: string }).room]);
+    await expect
+      .poll(() => removedFor(phone, 'broadcast'))
+      .toEqual([`broadcast:${COHORT}`]);
+    await waitFor(web, (m) => m.type === 'call');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(calls(phone)).toHaveLength(1);
+    expect(phone.messages.filter((m) => m.type === 'broadcast')).toHaveLength(
+      1,
+    );
+    await leave(phone, web);
   });
 
   it('takes you out of the call when your socket closes', async () => {

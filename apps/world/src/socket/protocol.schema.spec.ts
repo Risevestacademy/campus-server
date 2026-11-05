@@ -93,6 +93,7 @@ describe('protocol.schema.json', () => {
         'WalkingMessage',
         'WalkEndedMessage',
         'ReplacedMessage',
+        'WatchingMessage',
         'MovedMessage',
         'MoveResultMessage',
         'ErrorMessage',

@@ -1,7 +1,6 @@
 import type { Tile } from '../movement/grid.js';
 import type { Connection } from './connections.js';
 import type { WorldContext } from './context.js';
-import { SayBudget } from './earshot.js';
 import type { Chat } from './features/chat.js';
 import type { EntryRequestsFeature } from './features/entry-requests.js';
 import type { Locks } from './features/locks.js';
@@ -9,7 +8,7 @@ import type { Moderation } from './features/moderation.js';
 import type { PresenceSync } from './features/presence.js';
 import type { Walks } from './features/walks.js';
 import { FrameBudget } from './frame-budget.js';
-import { ServerErrorCode, decode } from './protocol.js';
+import { ServerErrorCode, decode, type ClientMessage } from './protocol.js';
 
 type DispatchContext = Pick<
   WorldContext,
@@ -43,19 +42,65 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
     arrivedAt,
   } = deps;
 
+  /** What a watcher may do: set the avatar's status, and speak as it. */
+  function watch(connection: Connection, message: ClientMessage): void {
+    switch (message.type) {
+      case 'ping':
+        connection.alive = true;
+        send(connection.socket, { type: 'pong' });
+        return;
+      case 'active':
+        return;
+      case 'setStatus': {
+        const holder = connections.holderOf(connection);
+        if (!holder) {
+          notOnCampus(connection);
+          return;
+        }
+        const { status, forSeconds } = message;
+        if (
+          holder.availability.choose(
+            status,
+            Date.now(),
+            forSeconds === undefined ? undefined : forSeconds * 1000,
+          )
+        ) {
+          presence.statusChanged(holder);
+        }
+        return;
+      }
+      case 'say':
+        chat.say(connection, message.text);
+        return;
+      default:
+        send(connection.socket, {
+          type: 'error',
+          code: ServerErrorCode.NotAllowed,
+          message: 'watching: enter the campus here to do that',
+        });
+    }
+  }
+
+  function notOnCampus(connection: Connection): void {
+    send(connection.socket, {
+      type: 'error',
+      code: ServerErrorCode.NotAllowed,
+      message: 'not on campus: enter it to do that',
+    });
+  }
+
   return function listen(connection: Connection): void {
     const ws = connection.socket;
     const budget = new FrameBudget(
       env.WORLD_MAX_MESSAGES_PER_SECOND,
       Date.now(),
     );
-    const sayBudget = new SayBudget(Date.now());
 
     ws.on('message', (raw: Buffer) => {
       // A socket we have dropped can still deliver frames while its close
       // handshake finishes. It no longer speaks for anybody — and its player
       // may be gone, which a move would trip over.
-      if (!connections.has(connection)) {
+      if (!connections.isOpen(connection)) {
         return;
       }
       // Before parsing, so an excess frame costs only a counter. Closing
@@ -84,6 +129,11 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
         return;
       }
 
+      if (connection.mode === 'watcher') {
+        watch(connection, result.message);
+        return;
+      }
+
       switch (result.message.type) {
         case 'ping':
           connection.alive = true;
@@ -92,13 +142,19 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
         case 'active':
           presence.noteActivity(connection);
           return;
-        case 'setStatus':
+        case 'setStatus': {
+          const { status, forSeconds } = result.message;
           if (
-            connection.availability.choose(result.message.status, Date.now())
+            connection.availability.choose(
+              status,
+              Date.now(),
+              forSeconds === undefined ? undefined : forSeconds * 1000,
+            )
           ) {
             presence.statusChanged(connection);
           }
           return;
+        }
         case 'setLock':
           presence.noteActivity(connection);
           locks.setLock(connection, result.message.locked);
@@ -121,7 +177,7 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
           return;
         case 'say':
           presence.noteActivity(connection);
-          chat.say(connection, result.message.text, sayBudget);
+          chat.say(connection, result.message.text);
           return;
         case 'mute':
           presence.noteActivity(connection);

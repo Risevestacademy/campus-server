@@ -150,6 +150,11 @@ export const ACCOUNT_QUERY =
  * "minted recently" is campus-api vouching for the session again. Signing out
  * revokes the family outright.
  *
+ * `revoked_at is null and expires_at > $3` is @campus/session's
+ * `isRefreshTokenLive`, written in SQL; the two must agree, or world holds a
+ * socket on a token campus-api will no longer refresh. `created_at >= $2` is
+ * world's own rule on top.
+ *
  * $1 uuid[] of families, $2 refreshed-since, $3 now. Same reason to export it
  * as ACCOUNT_QUERY: refresh_tokens belongs to campus-api.
  */

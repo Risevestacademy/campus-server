@@ -107,6 +107,13 @@
         "status": {
           "$ref": "#/definitions/Status"
         },
+        "statusUntil": {
+          "description": "When a status chosen for a while ends, as an ISO timestamp, and goes back to the one chosen before it. Null for a status that lasts, and while they show away for being idle.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "spaceKey": {
           "type": "string",
           "description": "The space they are standing in: a drawn space's key, or `_default` for the corridors and grounds."
@@ -120,6 +127,7 @@
         "displayName",
         "spriteKey",
         "status",
+        "statusUntil",
         "spaceKey"
       ],
       "additionalProperties": false,
@@ -303,6 +311,12 @@
         },
         "status": {
           "$ref": "#/definitions/Status"
+        },
+        "forSeconds": {
+          "description": "Choose it for this long only: then it goes back to the last status chosen without a time. Leave it out for a status that lasts. Choosing again, with or without one, replaces the timer.",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 43200
         }
       },
       "required": [
@@ -628,6 +642,14 @@
           "maximum": 9007199254740991,
           "description": "How long you may do nothing before the server shows you away. Send `active` well within it while the person is there. 0 when this deployment never does."
         },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "avatar",
+            "watcher"
+          ],
+          "description": "avatar: you stand for this account on the map. watcher: another connection does, or nobody does; you see the cohort, may set the status and use the chat of whoever stands for you, and are never sent a call."
+        },
         "displayName": {
           "description": "The name to show beside them. Null when they have set none.",
           "type": [
@@ -651,6 +673,7 @@
         "stepMs",
         "tickMs",
         "awayAfterSeconds",
+        "mode",
         "displayName",
         "spriteKey"
       ],
@@ -831,15 +854,23 @@
         },
         "status": {
           "$ref": "#/definitions/Status"
+        },
+        "until": {
+          "description": "When a status chosen for a while ends, as an ISO timestamp, and goes back to the one chosen before it. Null for a status that lasts, and while they show away for being idle.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "type",
         "userId",
-        "status"
+        "status",
+        "until"
       ],
       "additionalProperties": false,
-      "description": "Somebody in your cohort's status changed: chosen, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
+      "description": "Somebody in your cohort's status changed: chosen, chosen for a while and that time ended, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
     },
     "SpaceChangedMessage": {
       "type": "object",
@@ -1384,7 +1415,21 @@
         "type"
       ],
       "additionalProperties": false,
-      "description": "This account opened this cohort's campus somewhere else — another device or tab — and that connection has taken its place. Being in another cohort never causes this. The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections would replace each other for as long as both stayed open. Show that they are in this campus elsewhere, and reconnect only when they ask to come back here."
+      "description": "This account opened this cohort's campus somewhere else — another device or tab — and that connection has taken its place. Being in another cohort never causes this. The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections would replace each other for as long as both stayed open. Show that they are in this campus elsewhere, and reconnect only when they ask to come back here. A socket that entered with `enter=ifFree` is sent `watching` instead, and stays open."
+    },
+    "WatchingMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watching"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "This socket entered with `enter=ifFree`, and the account has entered this cohort's campus somewhere else with `enter=take`. It is a watcher from now on, as if `welcome.mode` had said so: leave the call and the broadcast room, stop drawing yourself as walking, and offer to enter here, which is reconnecting with `enter=take`. The socket stays open."
     },
     "MovedMessage": {
       "type": "object",
@@ -1532,6 +1577,9 @@
         },
         {
           "$ref": "#/definitions/ReplacedMessage"
+        },
+        {
+          "$ref": "#/definitions/WatchingMessage"
         },
         {
           "$ref": "#/definitions/MovedMessage"

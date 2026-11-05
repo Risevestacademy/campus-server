@@ -46,7 +46,8 @@ With metrics on, world also sends:
 
 | Metric                               | Labels      | What it counts                                                                                                                                           |
 | ------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `world.connections`                  | `cohort_id` | Open sockets, read at each export.                                                                                                                       |
+| `world.connections`                  | `cohort_id` | Open sockets standing for an account, read at each export.                                                                                               |
+| `world.watchers`                     | `cohort_id` | Open sockets watching a cohort without an avatar, as a phone does while the account is on campus elsewhere.                                              |
 | `world.connections.opened`           |             | Sockets authenticated and joined.                                                                                                                        |
 | `world.connections.refused`          | `reason`    | Upgrades refused, by the close reason sent: the client's to fix, not world's.                                                                            |
 | `world.connections.failed`           |             | Upgrades world could not decide, closed with `internal_error`, and upgrades where something threw after the decision, terminated without a close reason. |

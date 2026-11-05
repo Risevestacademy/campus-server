@@ -461,6 +461,7 @@ export function positionsIn(snapshot: Record<string, unknown>) {
       displayName: _name,
       spriteKey: _sprite,
       status: _status,
+      statusUntil: _statusUntil,
       spaceKey: _space,
       ...player
     }) => player,
@@ -573,11 +574,11 @@ export function useWorld(): void {
    */
   afterEach(async () => {
     const deadline = Date.now() + 5_000;
-    while (world.gateway.connections.size > 0) {
+    const open = () =>
+      world.gateway.connections.size + world.gateway.connections.watcherCount;
+    while (open() > 0) {
       if (Date.now() > deadline) {
-        throw new Error(
-          `test left ${world.gateway.connections.size} socket(s) open`,
-        );
+        throw new Error(`test left ${open()} socket(s) open`);
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
