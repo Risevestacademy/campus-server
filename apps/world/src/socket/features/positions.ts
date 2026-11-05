@@ -1,6 +1,6 @@
 import type { PositionStore, PositionToSave } from '../../infra/positions.js';
 import type { Player } from '../../movement/players.js';
-import { seatKey, type Seat } from '../../seat.js';
+import { SeatMap, type Seat } from '../../seat.js';
 import type { WorldContext } from '../context.js';
 
 type PositionsContext = Pick<
@@ -29,7 +29,7 @@ export function createPositions(ctx: PositionsContext, store: PositionStore) {
    * account and cohort. Not a position: the save reads where they stand when
    * it runs.
    */
-  const unsaved = new Map<string, Seat>();
+  const unsaved = new SeatMap<Seat>();
 
   /**
    * Writes positions without holding anybody up. A failure only means the
@@ -45,26 +45,27 @@ export function createPositions(ctx: PositionsContext, store: PositionStore) {
       for (const { userId, cohortId } of entries) {
         // Retried only while the account is still in that cohort.
         if (connections.holderOf({ userId, cohortId })) {
-          unsaved.set(seatKey({ userId, cohortId }), { userId, cohortId });
+          const seat = { userId, cohortId };
+          unsaved.set(seat, seat);
         }
       }
     });
   }
 
   function moved(seat: Seat): void {
-    unsaved.set(seatKey(seat), seat);
+    unsaved.set(seat, seat);
   }
 
   /** Written as they leave, so the periodic save has nothing left to do for them. */
   function left(player: Player, cohortId: string): void {
-    unsaved.delete(seatKey({ userId: player.userId, cohortId }));
+    unsaved.delete({ userId: player.userId, cohortId });
     persist([positionOf(player, cohortId)]);
   }
 
   /** Forgets one cohort's kept position, for access taken away. */
   function forget(seat: Seat): void {
     const { userId, cohortId } = seat;
-    unsaved.delete(seatKey(seat));
+    unsaved.delete(seat);
     store.forget(seat).catch((err: unknown) => {
       app.log.warn(
         { err, userId, cohortId },

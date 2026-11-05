@@ -13,7 +13,7 @@ import {
 import { installPostgresTracing } from '@campus/telemetry/sql';
 import postgres from 'postgres';
 
-import { seatKey, type Seat } from '../seat.js';
+import { SeatMap, seatKey, type Seat } from '../seat.js';
 import type { Env } from './env.js';
 
 /**
@@ -390,16 +390,13 @@ export function createAccountLookup(env: Env): AccountLookup {
       // would fail it for every socket at once. Dropped here, user and cohort
       // alike, where holding nothing is what a non-id could only have meant
       // anyway.
-      const named = [
-        ...new Map(
-          seats
-            .filter(
-              ({ userId, cohortId }) =>
-                looksLikeId(userId) && looksLikeId(cohortId),
-            )
-            .map((seat) => [seatKey(seat), seat]),
-        ).values(),
-      ];
+      const unique = new SeatMap<Seat>();
+      for (const seat of seats) {
+        if (looksLikeId(seat.userId) && looksLikeId(seat.cohortId)) {
+          unique.set(seat, seat);
+        }
+      }
+      const named = [...unique.values()];
       if (named.length === 0) {
         return new Set();
       }
@@ -420,16 +417,13 @@ export function createAccountLookup(env: Env): AccountLookup {
     async memberships(seats): Promise<Map<string, CohortMembershipFacts>> {
       // As in liveMemberships: a pair the database cannot cast would fail
       // the query for every socket, so it is dropped here.
-      const named = [
-        ...new Map(
-          seats
-            .filter(
-              ({ userId, cohortId }) =>
-                looksLikeId(userId) && looksLikeId(cohortId),
-            )
-            .map((seat) => [seatKey(seat), seat]),
-        ).values(),
-      ];
+      const unique = new SeatMap<Seat>();
+      for (const seat of seats) {
+        if (looksLikeId(seat.userId) && looksLikeId(seat.cohortId)) {
+          unique.set(seat, seat);
+        }
+      }
+      const named = [...unique.values()];
       if (named.length === 0) {
         return new Map();
       }

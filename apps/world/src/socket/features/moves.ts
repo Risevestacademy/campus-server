@@ -1,5 +1,5 @@
 import type { Player } from '../../movement/players.js';
-import { seatKey, type Seat } from '../../seat.js';
+import { SeatMap, type Seat } from '../../seat.js';
 import type { Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { encode } from '../protocol.js';
@@ -22,7 +22,7 @@ export function createMoves(
    * positions: the tick reads where each person stands when it runs, so
    * several steps in one tick collapse into the last.
    */
-  const pendingMoves = new Map<string, Seat>();
+  const pendingMoves = new SeatMap<Seat>();
 
   /**
    * Sends once per tick rather than once per step. Per step, every move is a
@@ -91,11 +91,11 @@ export function createMoves(
 
   return {
     moved(seat: Seat): void {
-      pendingMoves.set(seatKey(seat), seat);
+      pendingMoves.set(seat, seat);
     },
     /** Any step of theirs the tick has not sent yet goes with them. */
-    forget(key: string): void {
-      pendingMoves.delete(key);
+    forget(seat: Seat): void {
+      pendingMoves.delete(seat);
     },
     stop(): void {
       clearInterval(tick);
