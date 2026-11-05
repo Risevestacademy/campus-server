@@ -25,3 +25,22 @@ export const SESSION_REFRESH_SLACK_SECONDS = 120;
  */
 export const MIN_SESSION_REFRESH_WINDOW_SECONDS =
   MAX_ACCESS_TOKEN_TTL_MINUTES * 60 + SESSION_REFRESH_SLACK_SECONDS;
+
+/** The two columns of a `refresh_tokens` row that decide whether it is live. */
+export interface RefreshTokenLiveness {
+  revokedAt: Date | null;
+  expiresAt: Date;
+}
+
+/**
+ * Not revoked, and expiring strictly after `now`: a token expiring at `now`
+ * is already dead. campus-api asks this before a refresh; world cannot call
+ * it from SQL, so LIVE_SESSIONS_QUERY spells out the same two clauses and
+ * must stay in step with them.
+ */
+export function isRefreshTokenLive(
+  token: RefreshTokenLiveness,
+  now: Date,
+): boolean {
+  return token.revokedAt === null && token.expiresAt.getTime() > now.getTime();
+}

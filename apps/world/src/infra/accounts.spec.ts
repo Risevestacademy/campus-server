@@ -1,9 +1,11 @@
 import { PGlite } from '@electric-sql/pglite';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { seatKey } from '../seat.js';
 import { mayEnter } from '@campus/space-access';
+import { isRefreshTokenLive, type RefreshTokenLiveness } from '@campus/session';
 
 import {
   ACCOUNT_QUERY,
@@ -237,6 +239,49 @@ describe("world's live-session check, against campus-api's schema", () => {
       ]),
     ).toEqual([LIVE, ROTATED].sort());
   });
+
+  const at = (offsetMs: number) => new Date(NOW.getTime() + offsetMs);
+  const DAY = 86_400_000;
+
+  it.each<[string, RefreshTokenLiveness, boolean]>([
+    ['expired', { revokedAt: null, expiresAt: at(-60_000) }, false],
+    [
+      'revoked and expired',
+      { revokedAt: at(-120_000), expiresAt: at(-60_000) },
+      false,
+    ],
+    [
+      'valid with time to spare',
+      { revokedAt: null, expiresAt: at(30 * DAY) },
+      true,
+    ],
+    ['expiring at exactly now', { revokedAt: null, expiresAt: at(0) }, false],
+    [
+      'expiring a millisecond after now',
+      { revokedAt: null, expiresAt: at(1) },
+      true,
+    ],
+    [
+      'revoked but not yet expired',
+      { revokedAt: at(-1_000), expiresAt: at(DAY) },
+      false,
+    ],
+    ['revoked at exactly now', { revokedAt: at(0), expiresAt: at(DAY) }, false],
+  ])(
+    "agrees with @campus/session's isRefreshTokenLive on a token %s",
+    async (_, row, expected) => {
+      const family = randomUUID();
+      await token(family, {
+        expiresAt: row.expiresAt,
+        revokedAt: row.revokedAt ?? undefined,
+      });
+
+      const sqlLive = (await live([family])).length === 1;
+
+      expect(isRefreshTokenLive(row, NOW)).toBe(expected);
+      expect(sqlLive).toBe(expected);
+    },
+  );
 });
 
 /**
