@@ -58,6 +58,10 @@ frame, both ways, is one JSON object with a `type`.
   covered by CORS, so world checks `Origin` itself and refuses anything not on
   its list.
 - **Not a browser?** Send `Authorization: Bearer <token>` and no cookie.
+- **Entering to look, not to stand.** Add `enter=ifFree` to stand for the
+  account only when nobody does; otherwise you watch. See
+  [Watching](#watching). Leaving it off, or `enter=take`, takes the avatar as
+  every client always has.
 
 > **World on its own hostname.** Browsers cannot put an `Authorization`
 > header on a WebSocket, so the cookie is the only way in, and by default it
@@ -347,9 +351,19 @@ cohort sees which: `Avatar.status` says what it is when they appear, and a
 
 - **Choosing.** Send `{ "type": "setStatus", "status": "busy" }`. When that
   changes what the cohort sees, everybody in it gets
-  `{ "type": "statusChanged", "userId": "…", "status": "busy" }` — you too,
-  which is your confirmation. Choosing what you already show sends nothing
-  back, so draw your own choice at once rather than waiting for an answer.
+  `{ "type": "statusChanged", "userId": "…", "status": "busy", "until": null }`
+  — you too, which is your confirmation. Choosing what you already show sends
+  nothing back, so draw your own choice at once rather than waiting for an
+  answer.
+- **For a while.** Add `forSeconds`, from 60 to 43200 (twelve hours):
+  `{ "type": "setStatus", "status": "busy", "forSeconds": 300 }` is busy for
+  five minutes. `statusChanged.until` and `Avatar.statusUntil` say when it
+  ends, as an ISO timestamp, so you can show "Busy · 4 min". When the time is
+  up it goes back to the last status chosen without a time, and everybody gets
+  the `statusChanged`. Choosing again, with or without a time, replaces the
+  timer; the same status with a new time is a change too. While somebody is
+  away for being idle, `until` is null and the time runs on underneath. A tab
+  that replaces another in the same cohort keeps the timer.
 - **Away while idle.** Somebody who does nothing for
   `welcome.awayAfterSeconds` (600, ten minutes, by default) is shown as away,
   and is sent the `statusChanged` saying so like everybody else. The first
@@ -455,8 +469,11 @@ Text goes where voice goes: a line reaches whoever can hear you.
   somebody who arrives later, or reconnects, does not see it. Clear a
   meeting's lines when you leave its space, if you like: world will not
   send them again.
-- **Limit:** five lines at once, then one a second. Past that, an `error`
-  with code `NOT_ALLOWED` and the line is dropped; the socket stays open.
+- **Limit:** five lines at once, then one a second, for the account in the
+  cohort, however many sockets it speaks from. Past that, an `error` with code
+  `NOT_ALLOWED` and the line is dropped; the socket stays open.
+- **On a watching socket**, you hear and speak as the avatar, wherever it
+  stands: see [Watching](#watching).
 
 ## One connection per cohort
 
@@ -481,6 +498,48 @@ screen hold no socket, so they keep working in as many tabs as you like.
 > would replace each other for as long as both stayed open, and neither would
 > be usable. Show **"You opened this campus somewhere else"** with an
 > **"Enter here"** button, and reconnect only when the person presses it.
+
+### Watching
+
+A phone can follow the campus while the account stands somewhere else, say in
+a web tab, without taking its place. Connect with `enter=ifFree`:
+
+- **Nobody stands for the account in this cohort:** you do, as with any other
+  entry. `welcome.mode` is `"avatar"`.
+- **Somebody does, in another tab or device, or on another world instance,
+  or an avatar is kept for a connection that dropped and may come back
+  within the grace:** you watch. `welcome.mode` is `"watcher"`, nobody is
+  displaced, and nobody is told anything.
+- **Coming back after a drop.** Send the `connectionId` from your last
+  `welcome` as `resume`. If the avatar is being kept for that connection, it
+  is yours and you stand again; if somebody else took it meanwhile, you watch.
+- **Displaced while standing.** Somebody who enters with `enter=take` (a web
+  tab, or "Enter here") takes the avatar as usual. A socket that entered
+  `ifFree` is sent `{ "type": "watching" }` instead of `replaced`, and stays
+  open as a watcher: leave the call and the broadcast room. Displaced from
+  another world instance, it is still `replaced` and closed: what a watcher
+  mirrors lives on the instance that holds the avatar.
+- **Enter here.** Reconnect with `enter=take`. The other socket is displaced
+  in its turn. A watcher is never made the avatar on its own, not even when
+  the avatar leaves.
+
+What a watcher gets: the `snapshot` and everything sent to the whole cohort —
+`joined`, `left`, `statusChanged`, `spaceChanged`, `appearance`, locks, desks
+and spaces — and every `said` that reaches the avatar. Never `moved`, `call`,
+`nearby`, `broadcast`, walks or requests to enter. Find yourself in the
+players by `welcome.userId`: there means you are on campus elsewhere, absent
+means nobody stands for you.
+
+What a watcher may send: `ping`; `setStatus`, which sets the avatar's status
+for the whole cohort, timer and all; and `say`, sent as the avatar, from
+where it stands, to whoever can hear it. Both are a NOT_ALLOWED error while
+nobody stands for the account. `active` is ignored: looking at a phone does
+not keep the avatar from going away. Anything else is a NOT_ALLOWED error.
+The chat budget belongs to the account in the cohort, shared by the avatar
+and every watcher. Several watchers may be open at once.
+
+A watcher is closed as any socket is, for a session that ends, an account
+suspended, a membership gone, or a missed heartbeat, and the avatar stays.
 
 ## Limits
 

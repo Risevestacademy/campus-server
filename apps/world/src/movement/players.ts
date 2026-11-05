@@ -61,7 +61,7 @@ export class Players {
   /** Left recently, and may come back to where they stood until `until`. */
   private readonly departed = new Map<
     string,
-    Map<string, { held: Held; until: number }>
+    Map<string, { held: Held; until: number; by?: string }>
   >();
 
   constructor(
@@ -123,7 +123,7 @@ export class Players {
    * this cohort entirely — for access being taken away, where there is
    * nothing to come back to.
    */
-  leave(seat: Seat, now: number, remember: boolean): boolean {
+  leave(seat: Seat, now: number, remember: boolean, by?: string): boolean {
     const held = getIn(this.standing, seat);
     if (!remember) {
       deleteIn(this.departed, seat);
@@ -133,7 +133,7 @@ export class Players {
     }
     deleteIn(this.standing, seat);
     if (remember && this.graceMs > 0) {
-      setIn(this.departed, seat, { held, until: now + this.graceMs });
+      setIn(this.departed, seat, { held, until: now + this.graceMs, by });
     }
     return true;
   }
@@ -161,6 +161,14 @@ export class Players {
    */
   isRemembered(seat: Seat): boolean {
     return getIn(this.departed, seat) !== undefined;
+  }
+
+  /** A position held for somebody who left, and the connection that left. */
+  holdOf(seat: Seat, now: number): { by: string | undefined } | undefined {
+    const remembered = getIn(this.departed, seat);
+    return remembered && remembered.until > now
+      ? { by: remembered.by }
+      : undefined;
   }
 
   /**

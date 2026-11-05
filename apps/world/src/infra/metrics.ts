@@ -14,8 +14,20 @@ import {
 } from '../socket/protocol.js';
 
 /** What the gauges read at each collection. */
+type OpenSocket = { cohortId: string; socket: { bufferedAmount: number } };
+
 export interface OpenSockets {
-  all(): readonly { cohortId: string; socket: { bufferedAmount: number } }[];
+  /** Those standing for an account. */
+  all(): readonly OpenSocket[];
+  allWatchers(): readonly OpenSocket[];
+}
+
+function countByCohort(sockets: readonly OpenSocket[]): Map<string, number> {
+  const byCohort = new Map<string, number>();
+  for (const { cohortId } of sockets) {
+    byCohort.set(cohortId, (byCohort.get(cohortId) ?? 0) + 1);
+  }
+  return byCohort;
 }
 
 /** Why world closed or cut off a socket. */
@@ -73,11 +85,18 @@ export function worldMetrics(
       description: 'Open sockets, by cohort',
     }),
     (result) => {
-      const byCohort = new Map<string, number>();
-      for (const { cohortId } of sockets.all()) {
-        byCohort.set(cohortId, (byCohort.get(cohortId) ?? 0) + 1);
+      for (const [cohortId, count] of countByCohort(sockets.all())) {
+        result.observe(count, { cohort_id: cohortId });
       }
-      for (const [cohortId, count] of byCohort) {
+    },
+  );
+  observe(
+    meter.createObservableGauge('world.watchers', {
+      description:
+        'Open sockets watching a cohort without an avatar, by cohort',
+    }),
+    (result) => {
+      for (const [cohortId, count] of countByCohort(sockets.allWatchers())) {
         result.observe(count, { cohort_id: cohortId });
       }
     },
@@ -89,7 +108,7 @@ export function worldMetrics(
     }),
     (result) => {
       let most = 0;
-      for (const { socket } of sockets.all()) {
+      for (const { socket } of [...sockets.all(), ...sockets.allWatchers()]) {
         most = Math.max(most, socket.bufferedAmount);
       }
       result.observe(most);

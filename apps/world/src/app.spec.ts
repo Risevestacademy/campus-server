@@ -272,6 +272,7 @@ describe('with the position store failing', () => {
         displayName: null,
         spriteKey: null,
         status: 'available',
+        statusUntil: null,
         spaceKey: '_default',
       },
     ]);

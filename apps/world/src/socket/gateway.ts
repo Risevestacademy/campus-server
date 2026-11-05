@@ -228,7 +228,20 @@ export function registerGateway(
    * return is worse than a flicker for somebody who does.
    */
   function drop(connection: Connection, remember = true): void {
+    if (connection.mode === 'watcher') {
+      connections.removeWatcher(connection);
+      chat.forget(connection);
+      // Access taken away reaches the avatar kept for a reconnect, and the
+      // saved position, through whichever socket is still open: here, only
+      // a watcher. A live avatar is its own socket's to drop.
+      if (!remember && !connections.holderOf(connection)) {
+        players.leave(connection, Date.now(), false);
+        positionWrites.forget(connection);
+      }
+      return;
+    }
     walks.cancel(connection);
+    presenceSync.forgetStatusTimer(connection);
     // A redeploy closes every socket, but LiveKit keeps running: calls are
     // left to the clients, which reconnect and are handed new ones.
     if (!stopping) {
@@ -259,7 +272,7 @@ export function registerGateway(
     }
     const seat = seatKey(connection);
     const standing = players.get(connection);
-    if (players.leave(connection, Date.now(), remember)) {
+    if (players.leave(connection, Date.now(), remember, connection.id)) {
       // With them goes any step of theirs the tick has not sent yet: should
       // they be back before it runs, `joined` already says where they stand.
       moves.forget(seat);
@@ -276,6 +289,24 @@ export function registerGateway(
     } else if (standing && !stopping) {
       positionWrites.left(standing, connection.cohortId);
     }
+    chat.forget(connection);
+  }
+
+  /**
+   * A socket that entered ifFree, displaced by one that took its place: it
+   * keeps watching rather than closing. Its request and pass were ended at
+   * the swap, as for any socket replaced.
+   */
+  function demote(connection: Connection): void {
+    walks.cancel(connection);
+    presenceSync.forgetStatusTimer(connection);
+    calls.leave(connection);
+    broadcastRoom.leave(connection);
+    connection.nearby = new Set();
+    calls.markNearbyStale(connection.cohortId);
+    connection.mode = 'watcher';
+    connections.addWatcher(connection);
+    ctx.send(connection.socket, { type: 'watching' });
   }
 
   const sweeps = createSweeps(ctx, accounts, {
@@ -291,7 +322,7 @@ export function registerGateway(
     if (!stopping) calls.retryRemovals();
     const now = Date.now();
     players.forgetExpired(now);
-    for (const connection of connections.all()) {
+    for (const connection of connections.everyone()) {
       // A socket that names no login has only its access token to go on, so
       // it lasts exactly as long as that token does — otherwise signing out,
       // or simply waiting, would leave the campus open with nothing to end
@@ -324,7 +355,7 @@ export function registerGateway(
         connection.socket.terminate();
         continue;
       }
-      presenceSync.checkIdle(connection, now);
+      if (connection.mode === 'avatar') presenceSync.checkIdle(connection, now);
       connection.alive = false;
       connection.socket.ping();
     }
@@ -352,10 +383,12 @@ export function registerGateway(
     appearance,
     requests,
     presence: presenceSync,
+    presenceStore: presence,
     calls,
     broadcastRoom,
     mayStepInto,
     drop,
+    demote,
     listen,
   });
 
@@ -371,7 +404,7 @@ export function registerGateway(
         return;
       }
       const frame = encode({ type: 'desksChanged' });
-      for (const connection of connections.all()) {
+      for (const connection of connections.everyone()) {
         sendFrame(connection.socket, frame);
       }
     },
@@ -387,7 +420,7 @@ export function registerGateway(
       stopping = true;
       await positionWrites.stop();
       await presenceSync.leaveAll();
-      for (const connection of connections.all()) {
+      for (const connection of connections.everyone()) {
         closeFor(connection.socket, 'server shutting down');
       }
     },

@@ -2,7 +2,7 @@ import { DEFAULT_SPACE_KEY, SessionScope } from '@campus/session';
 import {} from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Redis } from 'ioredis';
 import WebSocket from 'ws';
 
@@ -339,7 +339,12 @@ describe('movement', () => {
 
       setStatus(inFrontend, 'busy');
 
-      const changed = { type: 'statusChanged', userId: ada, status: 'busy' };
+      const changed = {
+        type: 'statusChanged',
+        userId: ada,
+        status: 'busy',
+        until: null,
+      };
       await expect(
         waitFor(sameCohort, (m) => m.type === 'statusChanged'),
       ).resolves.toEqual(changed);
@@ -461,6 +466,184 @@ describe('movement', () => {
 
       await leave(second);
       await leave(watcher);
+    });
+
+    describe('for a while', () => {
+      const setFor = (
+        conn: { ws: WebSocket },
+        status: string,
+        forSeconds: number,
+      ) =>
+        conn.ws.send(JSON.stringify({ type: 'setStatus', status, forSeconds }));
+      const lastStatusOf = (conn: { messages: Record<string, unknown>[] }) =>
+        statusesIn(conn).at(-1);
+      const realSetTimeout = globalThis.setTimeout;
+      const settle = (ms = 150) =>
+        new Promise((resolve) => realSetTimeout(resolve, ms));
+      async function until<T>(read: () => T, done: (value: T) => boolean) {
+        const deadline = performance.now() + 2_000;
+        while (performance.now() < deadline) {
+          const value = read();
+          if (done(value)) return value;
+          await settle(10);
+        }
+        throw new Error('nothing matching arrived');
+      }
+      const fakeTimers = () =>
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+
+      it('tells when it ends, to the cohort and to a later arrival', async () => {
+        const ada = person();
+        const conn = await arrive(ada);
+        const watcher = await arrive(person());
+        const sent = Date.now();
+
+        setFor(conn, 'busy', 300);
+
+        const changed = await waitFor(
+          watcher,
+          (m) => m.type === 'statusChanged',
+        );
+        expect(changed).toMatchObject({ userId: ada, status: 'busy' });
+        const until = Date.parse(changed.until as string);
+        expect(until).toBeGreaterThanOrEqual(sent + 300_000);
+        expect(until).toBeLessThan(Date.now() + 300_000 + 1_000);
+
+        const later = await arrive(person());
+        const snapshot = await waitFor(later, (m) => m.type === 'snapshot');
+        expect(snapshot.players).toContainEqual(
+          expect.objectContaining({
+            userId: ada,
+            status: 'busy',
+            statusUntil: changed.until,
+          }),
+        );
+        await leave(conn);
+        await leave(watcher);
+        await leave(later);
+      });
+
+      it('goes back to the status chosen before once the time is up', async () => {
+        const ada = person();
+        const conn = await arrive(ada);
+        const watcher = await arrive(person());
+        setStatus(conn, 'away');
+        await waitFor(watcher, (m) => m.type === 'statusChanged');
+
+        fakeTimers();
+        try {
+          setFor(conn, 'busy', 60);
+          await until(
+            () => lastStatusOf(watcher),
+            (m) => m?.status === 'busy',
+          );
+
+          vi.advanceTimersByTime(59_000);
+          await settle();
+          expect(lastStatusOf(watcher)).toMatchObject({ status: 'busy' });
+
+          vi.advanceTimersByTime(1_000);
+          await until(
+            () => lastStatusOf(watcher),
+            (m) => m?.status === 'away',
+          );
+          expect(lastStatusOf(watcher)).toEqual({
+            type: 'statusChanged',
+            userId: ada,
+            status: 'away',
+            until: null,
+          });
+        } finally {
+          vi.useRealTimers();
+        }
+        await expect
+          .poll(
+            () => presence.entries.get(presenceKeyOf({ userId: ada }))?.status,
+          )
+          .toBe('away');
+        await leave(conn);
+        await leave(watcher);
+      });
+
+      it('stops the timer when a status is chosen without one', async () => {
+        const conn = await arrive(person());
+        const watcher = await arrive(person());
+
+        fakeTimers();
+        try {
+          setFor(conn, 'busy', 60);
+          await until(
+            () => statusesIn(watcher),
+            (all) => all.length === 1,
+          );
+          setStatus(conn, 'busy');
+          await until(
+            () => lastStatusOf(watcher),
+            (m) => m?.until === null,
+          );
+
+          vi.advanceTimersByTime(120_000);
+          await settle();
+        } finally {
+          vi.useRealTimers();
+        }
+        expect(statusesIn(watcher)).toHaveLength(2);
+        await leave(conn);
+        await leave(watcher);
+      });
+
+      it('keeps the timer running in a tab that replaces another', async () => {
+        const ada = person();
+        const watcher = await arrive(person());
+        const first = await arrive(ada);
+
+        const cookie = `campus_session=${await token(SessionScope.FullAccess, SECRET, ada)}`;
+        let second: ReturnType<typeof connect> | undefined;
+        fakeTimers();
+        try {
+          setFor(first, 'busy', 60);
+          await until(
+            () => statusesIn(watcher),
+            (all) => all.length === 1,
+          );
+          const ends = lastStatusOf(watcher)?.until;
+          second = connect({ origin: ORIGIN, cookie }, COHORT);
+          const opened = second;
+
+          const snapshot = await until(
+            () => opened.messages.find((m) => m.type === 'snapshot'),
+            (m) => m !== undefined,
+          );
+          expect(snapshot?.players).toContainEqual(
+            expect.objectContaining({ userId: ada, statusUntil: ends }),
+          );
+
+          vi.advanceTimersByTime(60_000);
+          await until(
+            () => lastStatusOf(watcher),
+            (m) => m?.status === 'available',
+          );
+          expect(lastStatusOf(watcher)).toMatchObject({ until: null });
+        } finally {
+          vi.useRealTimers();
+        }
+        await first.settled;
+        if (second) await leave(second);
+        await leave(watcher);
+      });
+
+      it('rejects a time under a minute or over twelve hours', async () => {
+        const conn = await arrive(person());
+
+        for (const forSeconds of [59, 12 * 60 * 60 + 1, 1.5]) {
+          conn.messages.length = 0;
+          setFor(conn, 'busy', forSeconds);
+          await expect(
+            waitFor(conn, (m) => m.type === 'error'),
+          ).resolves.toMatchObject({ code: 'BAD_MESSAGE' });
+        }
+        await leave(conn);
+      });
     });
 
     it('rejects a status that is not one of the three', async () => {

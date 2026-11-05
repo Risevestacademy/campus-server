@@ -34,7 +34,7 @@ export function createLocks(
     ) {
       lockable = next;
       const frame = encode({ type: 'lockableSpaces', spaceKeys: next });
-      for (const connection of connections.all()) {
+      for (const connection of connections.everyone()) {
         sendFrame(connection.socket, frame);
       }
     }
