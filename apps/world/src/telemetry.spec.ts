@@ -11,7 +11,7 @@ import {
   SimpleSpanProcessor,
   TracerProvider,
 } from '@opentelemetry/sdk-trace';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import {
   afterAll,
   beforeAll,
@@ -49,11 +49,17 @@ const exporter = new InMemorySpanExporter();
 
 const lookup = {
   failFind: false,
+  suspended: false,
+  /** While set, the account read waits for it: the client can leave meanwhile. */
+  hold: undefined as Promise<void> | undefined,
+  reading: undefined as (() => void) | undefined,
   find: async (userId: string) => {
+    lookup.reading?.();
+    await lookup.hold;
     if (lookup.failFind) throw new Error('postgres is down');
     return {
       id: userId,
-      suspended: false,
+      suspended: lookup.suspended,
       admin: false,
       systemRole: 'user',
       sessionEpoch: 0,
@@ -71,7 +77,12 @@ const lookup = {
   onDesksChanged: async () => undefined,
   onProfileChanged: async () => undefined,
   close: async () => undefined,
-} as unknown as AccountLookup & { failFind: boolean };
+} as unknown as AccountLookup & {
+  failFind: boolean;
+  suspended: boolean;
+  hold: Promise<void> | undefined;
+  reading: (() => void) | undefined;
+};
 
 /** A saved place that cannot be read: joining the avatar to it throws. */
 const unreadable = {
@@ -155,6 +166,9 @@ afterAll(async () => {
 beforeEach(() => {
   exporter.reset();
   lookup.failFind = false;
+  lookup.suspended = false;
+  lookup.hold = undefined;
+  lookup.reading = undefined;
   positions.next = undefined;
 });
 
@@ -176,6 +190,7 @@ async function counts() {
     opened: await count('world.connections.opened'),
     refused: await count('world.connections.refused'),
     failed: await count('world.connections.failed'),
+    abandoned: await count('world.connections.abandoned'),
   };
 }
 
@@ -195,6 +210,28 @@ async function attempt(cookie?: string): Promise<{ closeCode?: number }> {
   });
   ws.close();
   return outcome;
+}
+
+/**
+ * Opens a socket and resets the connection while world is still reading the
+ * account, then lets the read finish once world has seen it go. world reads
+ * nothing while it decides, so only a reset tells it, as when a tab is killed.
+ */
+async function leaveWhileDeciding(cookie: string): Promise<void> {
+  let release!: () => void;
+  lookup.hold = new Promise((resolve) => (release = resolve));
+  const reading = new Promise<void>((resolve) => (lookup.reading = resolve));
+  const closedBefore = await count('world.connections.closed');
+  const ws = new WebSocket(url, { headers: { origin: ORIGIN, cookie } });
+  ws.on('error', () => undefined);
+  await reading;
+  (ws as unknown as { _socket: Socket })._socket.resetAndDestroy();
+  await vi.waitFor(async () => {
+    if ((await count('world.connections.closed')) === closedBefore) {
+      throw new Error('world has not seen it go');
+    }
+  });
+  release();
 }
 
 async function session(userId: string): Promise<string> {
@@ -280,6 +317,35 @@ describe('an upgrade is counted once, by how it ends', () => {
     const span = await socketSpan();
     expect(span.attributes['world.outcome']).toBe('failed');
     expect(span.status.code).toBe(SpanStatusCode.ERROR);
+  });
+
+  it('refused: the account was refused, though the client left while world decided', async () => {
+    lookup.suspended = true;
+    const before = await counts();
+
+    await leaveWhileDeciding(await session('margaret'));
+
+    const span = await socketSpan();
+    const after = await counts();
+    expect(span.attributes).toMatchObject({
+      'world.outcome': 'refused',
+      'world.refusal': 'account_suspended',
+    });
+    expect(after.refused - before.refused).toBe(1);
+    expect(after.abandoned - before.abandoned).toBe(0);
+  });
+
+  it('abandoned: the client left before world let it in', async () => {
+    const before = await counts();
+
+    await leaveWhileDeciding(await session('barbara'));
+
+    const span = await socketSpan();
+    const after = await counts();
+    expect(span.attributes['world.outcome']).toBe('abandoned');
+    expect(after.abandoned - before.abandoned).toBe(1);
+    expect(after.opened - before.opened).toBe(0);
+    expect(after.refused - before.refused).toBe(0);
   });
 });
 

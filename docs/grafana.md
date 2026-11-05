@@ -147,10 +147,8 @@ overlap. It reads the instruments from `apps/world/src/infra/metrics.ts` and
 the installed `@opentelemetry/instrumentation-runtime-node`, so a renamed
 instrument or an upgrade fails it until the dashboards follow.
 
-Connect success on the world dashboard can read slightly low just after a
-deploy: a refused tab that closes during world's first read of the spaces
-after a boot is counted as abandoned (issue #118). A counter's first increase
-after a restart can also be missed, which matters only at staging's low
+A counter's first increase after a restart can be missed, so connect success
+can be slightly off just after a deploy. That matters only at staging's low
 volume.
 
 ## When nothing arrives

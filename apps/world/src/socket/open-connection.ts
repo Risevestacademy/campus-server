@@ -216,6 +216,13 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       }
     }
 
+    // Decided, so counted as refused even if the client has already gone.
+    if (!decision.ok) {
+      attempt.outcome = 'refused';
+      refuse(ws, decision.refusal);
+      return;
+    }
+
     // Where they stood on an earlier visit to this cohort, read before the
     // socket is checked again: the read is asynchronous too, and the socket
     // may go in the meantime. Skipped when this process will resume a
@@ -264,12 +271,6 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       attempt.outcome = 'abandoned';
       metrics.abandoned();
       annotate({ 'world.outcome': 'abandoned' });
-      return;
-    }
-
-    if (!decision.ok) {
-      attempt.outcome = 'refused';
-      refuse(ws, decision.refusal);
       return;
     }
 

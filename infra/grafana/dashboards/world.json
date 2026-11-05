@@ -130,7 +130,7 @@
     {
       "type": "stat",
       "title": "Connect success",
-      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. A period with only failures reads 0%; one with no attempts shows nothing. Until issue #118 is fixed, a refused tab that closes during world's first read of the spaces after a boot counts as abandoned, so this can read a little low just after a deploy.",
+      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. A period with only failures reads 0%; one with no attempts shows nothing.",
       "datasource": {
         "type": "prometheus",
         "uid": "${metrics}"
@@ -368,7 +368,7 @@
     {
       "type": "timeseries",
       "title": "Connect success, rolling hour",
-      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. A period with only failures reads 0%; one with no attempts shows nothing. Until issue #118 is fixed, a refused tab that closes during world's first read of the spaces after a boot counts as abandoned, so this can read a little low just after a deploy.",
+      "description": "opened ÷ (opened + failed + abandoned); refusals are left out. The SLO is 99%. A period with only failures reads 0%; one with no attempts shows nothing.",
       "datasource": {
         "type": "prometheus",
         "uid": "${metrics}"
