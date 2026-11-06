@@ -260,7 +260,7 @@ export function registerGateway(
         height: map.grid.height,
       },
     });
-    for (const connection of connections.all()) {
+    for (const connection of connections.everyone()) {
       sendFrame(connection.socket, mapChanged);
     }
 
@@ -315,12 +315,18 @@ export function registerGateway(
         }
         at = placed;
         send(connection.socket, { type: 'positionCorrected', player: at });
-        broadcast(
-          connection.cohortId,
-          { type: 'moved', players: [at] },
-          connection,
-        );
+        // Watchers see the map change, but not moves: the tick sends those to
+        // avatar holders only, and a correction is a move.
+        const moved = encode({ type: 'moved', players: [at] });
+        for (const other of connections.all()) {
+          if (other.cohortId === connection.cohortId && other !== connection) {
+            sendFrame(other.socket, moved);
+          }
+        }
         positionWrites.moved(connection);
+        // The nudge changed where somebody stands without a step, so the tick
+        // has no move of theirs to notice. Say the cohort's lists are stale.
+        calls.markNearbyStale(connection.cohortId);
       }
 
       const spaceKey = spaceAt(map.spaces, at);

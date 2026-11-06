@@ -138,7 +138,7 @@ export async function buildWorld({
     }
   }
   const worldMap = map ?? (await loader(publishedKey ?? undefined));
-  const store = positions ?? createPositionStore(env, app.log, worldMap.id);
+  const store = positions ?? createPositionStore(env, app.log, worldMap);
   const present = presence ?? createPresenceStore(env, app.log);
   const gateway = registerGateway(
     app,

@@ -1,13 +1,14 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY, SessionScope } from '@campus/session';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { WorldMap } from '../movement/world-map.js';
 import { spaceAt, spaceIndexFrom } from '../movement/spaces.js';
 import { tileIndex, walkable } from '../movement/grid.js';
-import { COHORT } from './gateway.testing.js';
+import { COHORT, ORIGIN, SECRET } from './gateway.testing.js';
 import {
   accounts,
   arrive,
+  connect,
   deferred,
   leave,
   map,
@@ -17,6 +18,8 @@ import {
   presence,
   quiet,
   step,
+  token,
+  url,
   useWorld,
   waitFor,
   world,
@@ -76,6 +79,20 @@ const messagesOf = (
   conn: { messages: Record<string, unknown>[] },
   type: string,
 ) => conn.messages.filter((message) => message.type === type);
+
+/** The phone's way in: the avatar only if nobody holds it, else a watcher. */
+async function watching(userId: string) {
+  const conn = connect(
+    {
+      origin: ORIGIN,
+      cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
+    },
+    '',
+    `${url}?cohortId=${encodeURIComponent(COHORT)}&enter=ifFree`,
+  );
+  await waitFor(conn, (message) => message.type === 'snapshot');
+  return conn;
+}
 
 describe('publishing a map', () => {
   it('swaps in the new walls and space index without a restart', async () => {
@@ -207,6 +224,48 @@ describe('publishing a map', () => {
       map: { id: 'campus', version: 'v2', width: 5, height: 5 },
     });
     await Promise.all([leave(ada), leave(linus), leave(late)]);
+  });
+
+  it('sends mapChanged to a watcher', async () => {
+    const adaId = person();
+    const ada = await arrive(adaId);
+    const phone = await watching(adaId);
+    try {
+      expect(
+        (await waitFor(phone, (message) => message.type === 'welcome')).mode,
+      ).toBe('watcher');
+
+      publish(nextMap('v2'));
+
+      await expect(
+        waitFor(phone, (message) => message.type === 'mapChanged'),
+      ).resolves.toMatchObject({
+        map: { id: 'campus', version: 'v2', width: 5, height: 5 },
+      });
+    } finally {
+      await leave(phone);
+      await leave(ada);
+    }
+  });
+
+  it('sends a watcher no correction frames for its avatar', async () => {
+    const adaId = person();
+    const ada = await arrive(adaId);
+    const phone = await watching(adaId);
+    try {
+      await step(ada, 'right', 1);
+      await step(ada, 'right', 2);
+
+      publish(nextMap('v2', { walls: [{ x: 2, y: 0 }] }));
+      await waitForMap('v2');
+      await quiet();
+
+      expect(messagesOf(phone, 'positionCorrected')).toEqual([]);
+      expect(messagesOf(phone, 'moved')).toEqual([]);
+    } finally {
+      await leave(phone);
+      await leave(ada);
+    }
   });
 
   it('processes a move that arrives during the read, then corrects it against the new map', async () => {
