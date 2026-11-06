@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { seatKey } from '../seat.js';
 import { mayEnter } from '@campus/space-access';
+import { isRefreshTokenLive, type RefreshTokenLiveness } from '@campus/session';
 
 import {
   ACCOUNT_QUERY,
@@ -15,6 +16,7 @@ import {
   LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
   MEMBERSHIP_ROWS_QUERY,
+  PUBLISHED_ENTRY_MAP_QUERY,
   ROOM_LINK_PASSES_QUERY,
   SPACES_QUERY,
   SPACE_LISTS_QUERY,
@@ -241,6 +243,49 @@ describe("world's live-session check, against campus-api's schema", () => {
       ]),
     ).toEqual([LIVE, ROTATED].sort());
   });
+
+  const at = (offsetMs: number) => new Date(NOW.getTime() + offsetMs);
+  const DAY = 86_400_000;
+
+  it.each<[string, RefreshTokenLiveness, boolean]>([
+    ['expired', { revokedAt: null, expiresAt: at(-60_000) }, false],
+    [
+      'revoked and expired',
+      { revokedAt: at(-120_000), expiresAt: at(-60_000) },
+      false,
+    ],
+    [
+      'valid with time to spare',
+      { revokedAt: null, expiresAt: at(30 * DAY) },
+      true,
+    ],
+    ['expiring at exactly now', { revokedAt: null, expiresAt: at(0) }, false],
+    [
+      'expiring a millisecond after now',
+      { revokedAt: null, expiresAt: at(1) },
+      true,
+    ],
+    [
+      'revoked but not yet expired',
+      { revokedAt: at(-1_000), expiresAt: at(DAY) },
+      false,
+    ],
+    ['revoked at exactly now', { revokedAt: at(0), expiresAt: at(DAY) }, false],
+  ])(
+    "agrees with @campus/session's isRefreshTokenLive on a token %s",
+    async (_, row, expected) => {
+      const family = randomUUID();
+      await token(family, {
+        expiresAt: row.expiresAt,
+        revokedAt: row.revokedAt ?? undefined,
+      });
+
+      const sqlLive = (await live([family])).length === 1;
+
+      expect(isRefreshTokenLive(row, NOW)).toBe(expected);
+      expect(sqlLive).toBe(expected);
+    },
+  );
 });
 
 /**
@@ -814,6 +859,33 @@ describe("world's entry-request notification, against campus-api's schema", () =
  * does not. It is settled once, here, rather than carried around as a string
  * every comparison downstream reads as "not proximity".
  */
+describe("world's published map lookup, against campus-api's schema", () => {
+  it('answers only a live entry map an admin published', async () => {
+    const suffix = `${Date.now().toString(36)}${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const key = `campus-${suffix}`;
+    const annex = `annex-${suffix}`;
+    await db.query(
+      `insert into maps (key, name, is_entry) values ('${key}', 'Campus', true), ('${annex}', 'Annex', false)`,
+    );
+    const read = async () =>
+      (await db.query<{ key: string }>(PUBLISHED_ENTRY_MAP_QUERY)).rows.filter(
+        (row) => row.key.endsWith(suffix),
+      );
+
+    expect(await read()).toEqual([]);
+
+    await db.query(
+      `update maps set published_at = now() where key in ('${key}', '${annex}')`,
+    );
+    expect(await read()).toEqual([{ key }]);
+
+    await db.query(`update maps set retired_at = now() where key = '${key}'`);
+    expect(await read()).toEqual([]);
+  });
+});
+
 describe('reading a space row', () => {
   const row = {
     id: '11111111-1111-4111-8111-111111111111',

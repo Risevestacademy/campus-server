@@ -64,3 +64,35 @@ export function walkable(grid: Grid, tile: Tile): boolean {
   }
   return !grid.walls?.[tileIndex(grid, tile)];
 }
+
+/**
+ * The walkable tile nearest `start`, by steps, or undefined when none can be
+ * reached. The tile itself wins when it is walkable. Ties go to the first
+ * found in Direction order (up, down, left, right), which is the order a
+ * staff removal searches in, so every instance picks the same tile for the
+ * same map.
+ */
+export function nearestWalkable(grid: Grid, start: Tile): Tile | undefined {
+  const queue: Tile[] = [{ x: start.x, y: start.y }];
+  const seen = new Set([`${start.x},${start.y}`]);
+  for (let i = 0; i < queue.length; i += 1) {
+    const tile = queue[i] as Tile;
+    if (walkable(grid, tile)) return tile;
+    for (const direction of Object.values(Direction)) {
+      const next = step(tile, direction);
+      if (
+        next.x < 0 ||
+        next.y < 0 ||
+        next.x >= grid.width ||
+        next.y >= grid.height
+      ) {
+        continue;
+      }
+      const key = `${next.x},${next.y}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      queue.push(next);
+    }
+  }
+  return undefined;
+}

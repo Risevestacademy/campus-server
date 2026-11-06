@@ -107,6 +107,13 @@
         "status": {
           "$ref": "#/definitions/Status"
         },
+        "statusUntil": {
+          "description": "When a status chosen for a while ends, as an ISO timestamp, and goes back to the one chosen before it. Null for a status that lasts, and while they show away for being idle.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "spaceKey": {
           "type": "string",
           "description": "The space they are standing in: a drawn space's key, or `_default` for the corridors and grounds."
@@ -120,6 +127,7 @@
         "displayName",
         "spriteKey",
         "status",
+        "statusUntil",
         "spaceKey"
       ],
       "additionalProperties": false,
@@ -303,6 +311,12 @@
         },
         "status": {
           "$ref": "#/definitions/Status"
+        },
+        "forSeconds": {
+          "description": "Choose it for this long only: then it goes back to the last status chosen without a time. Leave it out for a status that lasts. Choosing again, with or without one, replaces the timer.",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 43200
         }
       },
       "required": [
@@ -628,6 +642,14 @@
           "maximum": 9007199254740991,
           "description": "How long you may do nothing before the server shows you away. Send `active` well within it while the person is there. 0 when this deployment never does."
         },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "avatar",
+            "watcher"
+          ],
+          "description": "avatar: you stand for this account on the map. watcher: another connection does, or nobody does; you see the cohort, may set the status and use the chat of whoever stands for you, and are never sent a call."
+        },
         "displayName": {
           "description": "The name to show beside them. Null when they have set none.",
           "type": [
@@ -651,6 +673,7 @@
         "stepMs",
         "tickMs",
         "awayAfterSeconds",
+        "mode",
         "displayName",
         "spriteKey"
       ],
@@ -749,6 +772,53 @@
       "additionalProperties": false,
       "description": "Sent once, right after `welcome`: the map, and everybody in your cohort on it, you included. Nobody from another cohort is ever in it."
     },
+    "MapChangedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "mapChanged"
+        },
+        "map": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Which published map this is. With `version`, what to load: the server enforces exactly that one."
+            },
+            "version": {
+              "type": "string",
+              "description": "The published version the server loaded. Load this version, not the current one: a map published since would have walls the server does not."
+            },
+            "width": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "description": "In tiles."
+            },
+            "height": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "description": "In tiles."
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "map"
+      ],
+      "additionalProperties": false,
+      "description": "An admin published a new version of the map while you were here. Stop enforcing the one from `snapshot`, load `map.version`, and replace everything you draw from the map with it. Sent to everybody; a connection made afterwards gets it in `snapshot` instead."
+    },
     "JoinedMessage": {
       "type": "object",
       "properties": {
@@ -831,15 +901,23 @@
         },
         "status": {
           "$ref": "#/definitions/Status"
+        },
+        "until": {
+          "description": "When a status chosen for a while ends, as an ISO timestamp, and goes back to the one chosen before it. Null for a status that lasts, and while they show away for being idle.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "type",
         "userId",
-        "status"
+        "status",
+        "until"
       ],
       "additionalProperties": false,
-      "description": "Somebody in your cohort's status changed: chosen, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
+      "description": "Somebody in your cohort's status changed: chosen, chosen for a while and that time ended, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
     },
     "SpaceChangedMessage": {
       "type": "object",
@@ -1345,7 +1423,21 @@
         "type"
       ],
       "additionalProperties": false,
-      "description": "This account opened this cohort's campus somewhere else — another device or tab — and that connection has taken its place. Being in another cohort never causes this. The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections would replace each other for as long as both stayed open. Show that they are in this campus elsewhere, and reconnect only when they ask to come back here."
+      "description": "This account opened this cohort's campus somewhere else — another device or tab — and that connection has taken its place. Being in another cohort never causes this. The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections would replace each other for as long as both stayed open. Show that they are in this campus elsewhere, and reconnect only when they ask to come back here. A socket that entered with `enter=ifFree` is sent `watching` instead, and stays open."
+    },
+    "WatchingMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watching"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "This socket entered with `enter=ifFree`, and the account has entered this cohort's campus somewhere else with `enter=take`. It is a watcher from now on, as if `welcome.mode` had said so: leave the call and the broadcast room, stop drawing yourself as walking, and offer to enter here, which is reconnecting with `enter=take`. The socket stays open."
     },
     "MovedMessage": {
       "type": "object",
@@ -1366,7 +1458,25 @@
         "players"
       ],
       "additionalProperties": false,
-      "description": "Everybody in your cohort who moved or turned since the last tick, once each, as they stand now: two steps inside one tick arrive as the second, so an entry can be more than one tile from where they were. Sent once per tick, and not at all when nobody moved. You are never in your own `moved` frame — your `moveResult` already says where you ended up."
+      "description": "Everybody in your cohort who moved or turned since the last tick, once each, as they stand now: two steps inside one tick arrive as the second, so an entry can be more than one tile from where they were. Sent once per tick, and not at all when nobody moved. You are never in your own `moved` frame — your `moveResult` already says where you ended up. A map reload can also send one at once, carrying somebody the new walls moved."
+    },
+    "PositionCorrectedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "positionCorrected"
+        },
+        "player": {
+          "$ref": "#/definitions/Player"
+        }
+      },
+      "required": [
+        "type",
+        "player"
+      ],
+      "additionalProperties": false,
+      "description": "A new map put the tile you stood on inside a wall, so the server moved you to the nearest walkable one. Snap to `player`. Only you get this; the rest of your cohort sees the move in `moved`."
     },
     "MoveResultMessage": {
       "type": "object",
@@ -1435,6 +1545,9 @@
           "$ref": "#/definitions/SnapshotMessage"
         },
         {
+          "$ref": "#/definitions/MapChangedMessage"
+        },
+        {
           "$ref": "#/definitions/JoinedMessage"
         },
         {
@@ -1492,7 +1605,13 @@
           "$ref": "#/definitions/ReplacedMessage"
         },
         {
+          "$ref": "#/definitions/WatchingMessage"
+        },
+        {
           "$ref": "#/definitions/MovedMessage"
+        },
+        {
+          "$ref": "#/definitions/PositionCorrectedMessage"
         },
         {
           "$ref": "#/definitions/MoveResultMessage"

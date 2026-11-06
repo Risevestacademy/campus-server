@@ -188,8 +188,10 @@ are in [src/modules/audit/README.md](src/modules/audit/README.md).
 The campus maps are drawn and published elsewhere, in Sanity. The database
 holds a row per map and per space, with each space's settings, and an admin
 brings those rows level with what is published by calling
-`POST /v1/maps/sync`. What lives where, and what the sync does and refuses,
-are in [src/modules/maps/README.md](src/modules/maps/README.md).
+`POST /v1/maps/sync`. An admin then makes the entry map live for world with
+`POST /v1/maps/{id}/publish`, which tells world to reload it without a
+restart. What lives where, and what the sync and publish do and refuse, are in
+[src/modules/maps/README.md](src/modules/maps/README.md).
 
 ## Feedback
 

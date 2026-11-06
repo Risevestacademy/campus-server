@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
 
 import { Direction } from '../movement/grid.js';
+import type { WorldMap } from '../movement/world-map.js';
 import type { Seat } from '../seat.js';
 import type { Env } from './env.js';
 import {
@@ -79,11 +80,11 @@ export function createPositionStore(
   env: Env,
   log: FastifyBaseLogger,
   /**
-   * The map this process runs. Saved with every position and checked on the
-   * way back, so a position from another map — the placeholder, once a real
-   * map loads — is not somewhere to stand on this one.
+   * The map this process runs, not a copy of its id: world swaps the map in
+   * place when one is published, so every write after that is tagged with the
+   * new map and every read is checked against it.
    */
-  mapId: string,
+  map: Pick<WorldMap, 'id'>,
   connect: ConnectRedis = connectRedis,
 ): PositionStore {
   if (!env.REDIS_URL) {
@@ -100,7 +101,7 @@ export function createPositionStore(
     'positions will not be kept until it is back',
   );
 
-  return new RedisPositionStore(redis, mapId, env.WORLD_POSITION_TTL_DAYS);
+  return new RedisPositionStore(redis, map, env.WORLD_POSITION_TTL_DAYS);
 }
 
 /** The subset of the ioredis client the store uses. */
@@ -124,7 +125,7 @@ export class RedisPositionStore implements PositionStore {
 
   constructor(
     private readonly redis: RedisLike,
-    private readonly mapId: string,
+    private readonly map: Pick<WorldMap, 'id'>,
     ttlDays: number,
   ) {
     this.ttlSeconds = ttlDays * 86_400;
@@ -144,7 +145,7 @@ export class RedisPositionStore implements PositionStore {
     const parsed = stored.safeParse(value);
     // Something written by another version, or for a map that is not this
     // one, is the same as nothing: the spawn is always a safe answer.
-    if (!parsed.success || parsed.data.mapId !== this.mapId) {
+    if (!parsed.success || parsed.data.mapId !== this.map.id) {
       return undefined;
     }
     const { x, y, facing } = parsed.data;
@@ -162,7 +163,7 @@ export class RedisPositionStore implements PositionStore {
       batch.set(
         positionKey(position),
         JSON.stringify({
-          mapId: this.mapId,
+          mapId: this.map.id,
           x: position.x,
           y: position.y,
           facing: position.facing,

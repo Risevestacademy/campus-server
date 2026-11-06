@@ -47,9 +47,13 @@ server decides every position.
     suspension — or the end of a guest's visit — reaches an open socket
     within one heartbeat
 - **Movement on a tile grid:**
-  - the map is the published entry map, loaded from Sanity once at startup
-    through `campus-world-map`; its collision shapes become blocked tiles, and
-    the `snapshot` tells clients which map and version that is
+  - the map is the published entry map, loaded from Sanity through
+    `campus-world-map`; the database only says which map key an admin
+    published. Its collision shapes become blocked tiles, and the `snapshot`
+    tells clients which map and version that is. A publish notification
+    reloads it without a restart, after building and validating the new map
+    off to the side; connected players on new walls are nudged, crossed into
+    their new spaces, and sent `positionCorrected`
   - every tile is known to be in one space: the drawn space covering its
     middle (the smaller, where two overlap, then the key that sorts first),
     or the map's default space, `_default`, for the corridors and grounds.
@@ -104,9 +108,11 @@ server decides every position.
   process, per cohort. See
   [the protocol doc](../../docs/world-protocol.md#locks).
 
-Not yet: more than one map, portals, or live positions shared across
+Not yet: more than one served map, portals, or live positions shared across
 instances (a player who moves to another instance starts from their last
-saved position).
+saved position). A re-sync and a publish are expected back to back: world
+reads the current version from Sanity, so a restart between the two serves
+the re-synced geometry even though `published_at` still names the old version.
 
 ## Running it
 

@@ -470,6 +470,20 @@ export function createWalks(
     for (const walker of walks.keys()) cancelWalk(walker);
   }
 
+  /**
+   * The map changed: a path found against the old walls may cross a new one.
+   * It is dropped, not the walk, so the same target is walked to again from
+   * where the person now stands.
+   */
+  function replanAll(): void {
+    for (const walk of walks.values()) {
+      walk.path = [];
+      walk.failed = 0;
+      walk.rechecked = false;
+      walk.aimedAt = null;
+    }
+  }
+
   return {
     admitsStep,
     goTo,
@@ -478,5 +492,6 @@ export function createWalks(
     end: endWalk,
     cancel: cancelWalk,
     cancelAll,
+    replanAll,
   };
 }

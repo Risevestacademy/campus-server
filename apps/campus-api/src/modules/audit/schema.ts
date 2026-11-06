@@ -104,6 +104,12 @@ export enum AuditAction {
    */
   MapRetired = 'map_retired',
   /**
+   * An admin made a synced map live for world. `details` keeps the map's key
+   * and the publication timestamp before and after; a republish writes
+   * another entry, so the history of when each version went live is kept.
+   */
+  MapPublished = 'map_published',
+  /**
    * An admin ended a membership: dismissed, withdrew, deferred or graduated
    * a student, or removed any member. `details` keeps the role, the student
    * status it was given (null for a removal, which carries none) and the

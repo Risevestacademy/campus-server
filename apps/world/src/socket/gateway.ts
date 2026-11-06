@@ -7,10 +7,10 @@ import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
 import type { PositionStore } from '../infra/positions.js';
 import type { PresenceStore } from '../infra/presence.js';
-import { type Tile } from '../movement/grid.js';
+import { nearestWalkable, walkable, type Tile } from '../movement/grid.js';
 import { Players } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
-import type { WorldMap } from '../movement/world-map.js';
+import { assertWorldMap, type WorldMap } from '../movement/world-map.js';
 import { seatKey, type Seat } from '../seat.js';
 import {} from './authenticate.js';
 import { Connections, personOf, type Connection } from './connections.js';
@@ -46,6 +46,18 @@ export interface Gateway {
    */
   spacesChanged(): Promise<void>;
   /**
+   * campus-api says this map key was published. Reloads the map if it is
+   * still the entry map the database names; a key world does not serve is
+   * logged and ignored.
+   */
+  mapPublished(mapKey: string): Promise<void>;
+  /**
+   * Re-reads which entry map is published and reloads it when it differs
+   * from what is running. Called when the database notification channel
+   * (re)subscribes, so a publish missed while world was down is caught.
+   */
+  publishedMapChanged(): Promise<void>;
+  /**
    * campus-api says who holds a desk may have changed, in one cohort or, with
    * null, in every cohort: tell the people there to fetch the desks again.
    */
@@ -67,6 +79,8 @@ export function registerGateway(
   positions: PositionStore,
   presence: PresenceStore,
   map: WorldMap,
+  /** The same startup loading path, for a publish that happens later. */
+  loadMap: (mapKey: string) => Promise<WorldMap>,
 ): Gateway {
   const connections = new Connections();
   const metrics = worldMetrics(connections);
@@ -86,7 +100,7 @@ export function registerGateway(
     metrics,
     isStopping: () => stopping,
   });
-  const { sendFrame, broadcast, closeFor } = ctx;
+  const { send, sendFrame, broadcast, closeFor } = ctx;
   const appearance = createAppearance(ctx, accounts);
 
   const doors = createDoors(ctx, accounts, afterSpacesRead);
@@ -216,6 +230,185 @@ export function registerGateway(
   const presenceSync = createPresence(ctx, presence, drop);
 
   /**
+   * A reload in flight, and the latest key asked for while it runs. One at a
+   * time, as the doors read: two quick publishes end with the later map
+   * served, and a notification during a reload is not lost.
+   */
+  let reloading: Promise<void> | undefined;
+  let reloadAgain = false;
+  let pendingKey: string | undefined;
+
+  /**
+   * The map is built and validated before this runs. Everything here is
+   * synchronous: no socket handler can run between the swap and the end of
+   * the player fix-up, so nobody steps onto a tile being reassigned.
+   */
+  function applyWorldMap(next: WorldMap): void {
+    if (next.id === map.id && next.version === map.version) return;
+
+    map.id = next.id;
+    map.version = next.version;
+    map.grid = next.grid;
+    map.spaces = next.spaces;
+    players.setGrid(next.grid);
+
+    const mapChanged = encode({
+      type: 'mapChanged',
+      map: {
+        id: map.id,
+        version: map.version,
+        width: map.grid.width,
+        height: map.grid.height,
+      },
+    });
+    for (const connection of connections.everyone()) {
+      sendFrame(connection.socket, mapChanged);
+    }
+
+    // Paths were found against the old walls. The walks keep their targets
+    // and find the way again from where the people now stand.
+    walks.replanAll();
+    fixPlayers();
+
+    // Derived from the map: names, lockable spaces and calls. A read of the
+    // spaces themselves is started too, for a map whose key moved.
+    calls.refresh();
+    locks.refreshLockable();
+    doors.refreshNames();
+    requests.review();
+    void doors.reload();
+  }
+
+  /**
+   * Everybody still connected, against the new map: off a tile that became a
+   * wall, then into the space that tile is in now. A nudge is sent to the
+   * person it happened to and, as ordinary news, to the rest of the cohort.
+   */
+  function fixPlayers(): void {
+    for (const connection of connections.all()) {
+      const player = players.get(connection);
+      if (!player) continue;
+
+      let at = player;
+      if (!walkable(map.grid, at)) {
+        const nearest =
+          nearestWalkable(map.grid, at) ??
+          (walkable(map.grid, map.grid.spawn) ? map.grid.spawn : undefined);
+        if (!nearest) {
+          app.log.error(
+            {
+              userId: connection.userId,
+              cohortId: connection.cohortId,
+              x: at.x,
+              y: at.y,
+            },
+            'new map leaves a player with no walkable tile; leaving them where they stand',
+          );
+          continue;
+        }
+        const placed = players.place(connection, nearest);
+        if (!placed) {
+          app.log.error(
+            { userId: connection.userId, cohortId: connection.cohortId },
+            'could not move a player off a wall on the new map',
+          );
+          continue;
+        }
+        at = placed;
+        send(connection.socket, { type: 'positionCorrected', player: at });
+        // Watchers see the map change, but not moves: the tick sends those to
+        // avatar holders only, and a correction is a move.
+        const moved = encode({ type: 'moved', players: [at] });
+        for (const other of connections.all()) {
+          if (other.cohortId === connection.cohortId && other !== connection) {
+            sendFrame(other.socket, moved);
+          }
+        }
+        positionWrites.moved(connection);
+        // The nudge changed where somebody stands without a step, so the tick
+        // has no move of theirs to notice. Say the cohort's lists are stale.
+        calls.markNearbyStale(connection.cohortId);
+      }
+
+      const spaceKey = spaceAt(map.spaces, at);
+      if (spaceKey !== connection.spaceKey) {
+        arrivedAt(connection, at);
+      }
+    }
+  }
+
+  /**
+   * Reads and builds the map before anything live is touched. A failure of
+   * any kind leaves the old map serving and is logged; world does not crash
+   * for a bad publish.
+   */
+  async function reloadMap(mapKey: string): Promise<void> {
+    try {
+      const next = await loadMap(mapKey);
+      assertWorldMap(next);
+      applyWorldMap(next);
+    } catch (err) {
+      app.log.error(
+        { err, mapKey },
+        'could not reload the published map; keeping the one running',
+      );
+    }
+  }
+
+  function requestReload(mapKey: string): Promise<void> {
+    pendingKey = mapKey;
+    if (reloading) {
+      reloadAgain = true;
+      return reloading;
+    }
+    reloading = (async () => {
+      do {
+        reloadAgain = false;
+        const key = pendingKey;
+        pendingKey = undefined;
+        if (key !== undefined) await reloadMap(key);
+      } while (reloadAgain);
+    })().finally(() => {
+      reloading = undefined;
+    });
+    return reloading;
+  }
+
+  async function mapPublished(mapKey: string): Promise<void> {
+    if (typeof mapKey !== 'string' || mapKey.length === 0) return;
+    try {
+      const published = await accounts.publishedEntryMapKey();
+      if (published !== mapKey) {
+        app.log.warn(
+          { mapKey, published },
+          'ignoring a map notification for a key world does not serve',
+        );
+        return;
+      }
+    } catch (err) {
+      app.log.error(
+        { err, mapKey },
+        'could not check which map is published; keeping the one running',
+      );
+      return;
+    }
+    await requestReload(mapKey);
+  }
+
+  async function publishedMapChanged(): Promise<void> {
+    try {
+      const published = await accounts.publishedEntryMapKey();
+      if (published === null) return;
+      await requestReload(published);
+    } catch (err) {
+      app.log.error(
+        { err },
+        'could not check which map is published; keeping the one running',
+      );
+    }
+  }
+
+  /**
    * Every way a socket stops counting goes through here, so a player can
    * never outlive the socket standing for them. Idempotent: a socket dropped
    * by the heartbeat comes back through here from its close event, and a
@@ -229,7 +422,20 @@ export function registerGateway(
    * return is worse than a flicker for somebody who does.
    */
   function drop(connection: Connection, remember = true): void {
+    if (connection.mode === 'watcher') {
+      connections.removeWatcher(connection);
+      chat.forget(connection);
+      // Access taken away reaches the avatar kept for a reconnect, and the
+      // saved position, through whichever socket is still open: here, only
+      // a watcher. A live avatar is its own socket's to drop.
+      if (!remember && !connections.holderOf(connection)) {
+        players.leave(connection, Date.now(), false);
+        positionWrites.forget(connection);
+      }
+      return;
+    }
     walks.cancel(connection);
+    presenceSync.forgetStatusTimer(connection);
     // A redeploy closes every socket, but LiveKit keeps running: calls are
     // left to the clients, which reconnect and are handed new ones.
     if (!stopping) {
@@ -260,7 +466,7 @@ export function registerGateway(
     }
     const seat = seatKey(connection);
     const standing = players.get(connection);
-    if (players.leave(connection, Date.now(), remember)) {
+    if (players.leave(connection, Date.now(), remember, connection.id)) {
       // With them goes any step of theirs the tick has not sent yet: should
       // they be back before it runs, `joined` already says where they stand.
       moves.forget(seat);
@@ -277,6 +483,24 @@ export function registerGateway(
     } else if (standing && !stopping) {
       positionWrites.left(standing, connection.cohortId);
     }
+    chat.forget(connection);
+  }
+
+  /**
+   * A socket that entered ifFree, displaced by one that took its place: it
+   * keeps watching rather than closing. Its request and pass were ended at
+   * the swap, as for any socket replaced.
+   */
+  function demote(connection: Connection): void {
+    walks.cancel(connection);
+    presenceSync.forgetStatusTimer(connection);
+    calls.leave(connection);
+    broadcastRoom.leave(connection);
+    connection.nearby = new Set();
+    calls.markNearbyStale(connection.cohortId);
+    connection.mode = 'watcher';
+    connections.addWatcher(connection);
+    ctx.send(connection.socket, { type: 'watching' });
   }
 
   const sweeps = createSweeps(ctx, accounts, {
@@ -292,7 +516,7 @@ export function registerGateway(
     if (!stopping) calls.retryRemovals();
     const now = Date.now();
     players.forgetExpired(now);
-    for (const connection of connections.all()) {
+    for (const connection of connections.everyone()) {
       // A socket that names no login has only its access token to go on, so
       // it lasts exactly as long as that token does — otherwise signing out,
       // or simply waiting, would leave the campus open with nothing to end
@@ -325,7 +549,7 @@ export function registerGateway(
         connection.socket.terminate();
         continue;
       }
-      presenceSync.checkIdle(connection, now);
+      if (connection.mode === 'avatar') presenceSync.checkIdle(connection, now);
       connection.alive = false;
       connection.socket.ping();
     }
@@ -353,10 +577,12 @@ export function registerGateway(
     appearance,
     requests,
     presence: presenceSync,
+    presenceStore: presence,
     calls,
     broadcastRoom,
     mayStepInto,
     drop,
+    demote,
     listen,
   });
 
@@ -365,6 +591,8 @@ export function registerGateway(
     players,
     appearanceChanged: appearance.changed,
     spacesChanged: doors.reload,
+    mapPublished,
+    publishedMapChanged,
     desksChanged(cohortId: string | null): void {
       if (stopping) return;
       if (cohortId !== null) {
@@ -372,7 +600,7 @@ export function registerGateway(
         return;
       }
       const frame = encode({ type: 'desksChanged' });
-      for (const connection of connections.all()) {
+      for (const connection of connections.everyone()) {
         sendFrame(connection.socket, frame);
       }
     },
@@ -388,7 +616,7 @@ export function registerGateway(
       stopping = true;
       await positionWrites.stop();
       await presenceSync.leaveAll();
-      for (const connection of connections.all()) {
+      for (const connection of connections.everyone()) {
         closeFor(connection.socket, 'server shutting down');
       }
     },

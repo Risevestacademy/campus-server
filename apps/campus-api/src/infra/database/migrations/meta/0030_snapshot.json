@@ -1,5 +1,5 @@
 {
-  "id": "32ce0915-a2cf-413e-975d-e7500be30cac",
+  "id": "d56a5817-7ce2-4e66-ade4-66ef17a0bc23",
   "prevId": "88a5602d-eba8-4210-ac15-8c9696b368de",
   "version": "7",
   "dialect": "postgresql",
@@ -1848,6 +1848,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "published_at": {
+          "name": "published_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2649,12 +2655,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "mentorship_group_id": {
-          "name": "mentorship_group_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "title": {
           "name": "title",
           "type": "varchar(200)",
@@ -2696,21 +2696,6 @@
         }
       },
       "indexes": {
-        "notices_mentorship_group_idx": {
-          "name": "notices_mentorship_group_idx",
-          "columns": [
-            {
-              "expression": "mentorship_group_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "notices_scope_created_idx": {
           "name": "notices_scope_created_idx",
           "columns": [
@@ -2789,21 +2774,6 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "notices_mentorship_group_fk": {
-          "name": "notices_mentorship_group_fk",
-          "tableFrom": "notices",
-          "tableTo": "mentorship_groups",
-          "columnsFrom": [
-            "mentorship_group_id",
-            "cohort_id"
-          ],
-          "columnsTo": [
-            "id",
-            "cohort_id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2817,10 +2787,6 @@
         "notices_track_matches_scope": {
           "name": "notices_track_matches_scope",
           "value": "(\"notices\".\"scope\" = 'cohort-track') = (\"notices\".\"cohort_track_id\" is not null)"
-        },
-        "notices_group_matches_scope": {
-          "name": "notices_group_matches_scope",
-          "value": "(\"notices\".\"scope\" = 'mentorship-group') = (\"notices\".\"mentorship_group_id\" is not null)"
         }
       },
       "isRLSEnabled": false

@@ -6,6 +6,19 @@ import type {
 import type { Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { oneAtATime } from '../one-at-a-time.js';
+import type { ServerMessage } from '../protocol.js';
+
+export function statusChangedOf(
+  connection: Connection,
+): Extract<ServerMessage, { type: 'statusChanged' }> {
+  const until = connection.availability.shownUntil;
+  return {
+    type: 'statusChanged',
+    userId: connection.userId,
+    status: connection.availability.shown,
+    until: until === null ? null : new Date(until).toISOString(),
+  };
+}
 
 type PresenceContext = Pick<
   WorldContext,
@@ -82,17 +95,43 @@ export function createPresence(
    * which carries the status too.
    */
   function statusChanged(connection: Connection): void {
-    broadcast(connection.cohortId, {
-      type: 'statusChanged',
-      userId: connection.userId,
-      status: connection.availability.shown,
-    });
+    timeStatus(connection);
+    broadcast(connection.cohortId, statusChangedOf(connection));
     store.setStatus(presenceOf(connection)).catch((err: unknown) => {
       app.log.warn(
         { err, userId: connection.userId },
         'could not record status, the next renewal will',
       );
     });
+  }
+
+  const statusTimers = new Map<Connection, ReturnType<typeof setTimeout>>();
+
+  /** Follows the connection's timed status, if it has one, to its end. */
+  function timeStatus(connection: Connection): void {
+    clearTimeout(statusTimers.get(connection));
+    statusTimers.delete(connection);
+    const until = connection.availability.until;
+    if (until === null) return;
+    const timer = setTimeout(
+      () => {
+        statusTimers.delete(connection);
+        if (!connections.has(connection)) return;
+        if (connection.availability.expire(Date.now())) {
+          statusChanged(connection);
+        } else {
+          timeStatus(connection);
+        }
+      },
+      Math.max(0, until - Date.now()),
+    );
+    timer.unref();
+    statusTimers.set(connection, timer);
+  }
+
+  function forgetStatusTimer(connection: Connection): void {
+    clearTimeout(statusTimers.get(connection));
+    statusTimers.delete(connection);
   }
 
   function noteActivity(connection: Connection): void {
@@ -162,6 +201,8 @@ export function createPresence(
 
   function stopRenewing(): void {
     clearInterval(renewal);
+    for (const timer of statusTimers.values()) clearTimeout(timer);
+    statusTimers.clear();
   }
 
   async function leaveAll(): Promise<void> {
@@ -176,6 +217,8 @@ export function createPresence(
     enter,
     changeSpace,
     statusChanged,
+    timeStatus,
+    forgetStatusTimer,
     noteActivity,
     checkIdle,
     leave,

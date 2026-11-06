@@ -7,7 +7,11 @@ import type {
   MoveOutcome as MovementOutcome,
   Player as MovementPlayer,
 } from '../movement/players.js';
-import { Status } from '../status/availability.js';
+import {
+  MAX_TIMED_STATUS_SECONDS,
+  MIN_TIMED_STATUS_SECONDS,
+  Status,
+} from '../status/availability.js';
 import { MAX_SAY_LENGTH } from './earshot.js';
 
 /*
@@ -70,6 +74,15 @@ const spaceKey = z
       `\`${DEFAULT_SPACE_KEY}\` for the corridors and grounds.`,
   );
 
+const statusUntil = z
+  .string()
+  .nullable()
+  .describe(
+    'When a status chosen for a while ends, as an ISO timestamp, and goes ' +
+      'back to the one chosen before it. Null for a status that lasts, and ' +
+      'while they show away for being idle.',
+  );
+
 /**
  * Only where somebody first appears. `moved` and `moveResult` stay a bare
  * Player: they go out every tick, and what to draw changes rarely, so a
@@ -80,6 +93,7 @@ export const Avatar = z
     ...Player.shape,
     ...appearance,
     status: StatusSchema,
+    statusUntil,
     spaceKey,
   })
   .meta({
@@ -305,6 +319,17 @@ export const ClientMessage = z
       .object({
         type: z.literal('setStatus'),
         status: StatusSchema,
+        forSeconds: z
+          .number()
+          .int()
+          .min(MIN_TIMED_STATUS_SECONDS)
+          .max(MAX_TIMED_STATUS_SECONDS)
+          .optional()
+          .describe(
+            'Choose it for this long only: then it goes back to the last ' +
+              'status chosen without a time. Leave it out for a status that ' +
+              'lasts. Choosing again, with or without one, replaces the timer.',
+          ),
       })
       .meta({
         id: 'SetStatusMessage',
@@ -492,6 +517,24 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 export type EntryRequestOutcome = z.infer<typeof EntryRequestOutcome>;
 export type WalkEndReason = z.infer<typeof WalkEndReason>;
 
+const mapMetadata = {
+  id: z
+    .string()
+    .describe(
+      'Which published map this is. With `version`, what to load: the ' +
+        'server enforces exactly that one.',
+    ),
+  version: z
+    .string()
+    .describe(
+      'The published version the server loaded. Load this version, not ' +
+        'the current one: a map published since would have walls the ' +
+        'server does not.',
+    ),
+  width: z.number().int().describe('In tiles.'),
+  height: z.number().int().describe('In tiles.'),
+};
+
 export const ServerMessage = z
   .discriminatedUnion('type', [
     z
@@ -519,6 +562,14 @@ export const ServerMessage = z
               'Send `active` well within it while the person is there. 0 when ' +
               'this deployment never does.',
           ),
+        mode: z
+          .enum(['avatar', 'watcher'])
+          .describe(
+            'avatar: you stand for this account on the map. watcher: another ' +
+              'connection does, or nobody does; you see the cohort, may set ' +
+              'the status and use the chat of whoever stands for you, and ' +
+              'are never sent a call.',
+          ),
         ...appearance,
       })
       .meta({
@@ -532,23 +583,7 @@ export const ServerMessage = z
     z
       .object({
         type: z.literal('snapshot'),
-        map: z.object({
-          id: z
-            .string()
-            .describe(
-              'Which published map this is. With `version`, what to load: the ' +
-                'server enforces exactly that one.',
-            ),
-          version: z
-            .string()
-            .describe(
-              'The published version the server loaded. Load this version, not ' +
-                'the current one: a map published since would have walls the ' +
-                'server does not.',
-            ),
-          width: z.number().int().describe('In tiles.'),
-          height: z.number().int().describe('In tiles.'),
-        }),
+        map: z.object(mapMetadata),
         players: z.array(Avatar),
         lockableSpaces: z
           .array(z.string())
@@ -570,6 +605,20 @@ export const ServerMessage = z
         description:
           'Sent once, right after `welcome`: the map, and everybody in your cohort ' +
           'on it, you included. Nobody from another cohort is ever in it.',
+      }),
+    z
+      .object({
+        type: z.literal('mapChanged'),
+        map: z.object(mapMetadata),
+      })
+      .meta({
+        id: 'MapChangedMessage',
+        description:
+          'An admin published a new version of the map while you were here. ' +
+          'Stop enforcing the one from `snapshot`, load `map.version`, and ' +
+          'replace everything you draw from the map with it. Sent to ' +
+          'everybody; a connection made afterwards gets it in `snapshot` ' +
+          'instead.',
       }),
     z.object({ type: z.literal('joined'), player: Avatar }).meta({
       id: 'JoinedMessage',
@@ -599,13 +648,15 @@ export const ServerMessage = z
         type: z.literal('statusChanged'),
         userId: z.string(),
         status: StatusSchema,
+        until: statusUntil,
       })
       .meta({
         id: 'StatusChangedMessage',
         description:
-          "Somebody in your cohort's status changed: chosen, or set to away " +
-          'while idle and back again. Sent to everybody in the cohort, you ' +
-          'included when it is yours.',
+          "Somebody in your cohort's status changed: chosen, chosen for a " +
+          'while and that time ended, or set to away while idle and back ' +
+          'again. Sent to everybody in the cohort, you included when it is ' +
+          'yours.',
       }),
     z
       .object({
@@ -828,7 +879,17 @@ export const ServerMessage = z
         'The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT ' +
         'reconnect: the two connections would replace each other for as long as both ' +
         'stayed open. Show that they are in this campus elsewhere, and reconnect only when ' +
-        'they ask to come back here.',
+        'they ask to come back here. A socket that entered with `enter=ifFree` is sent ' +
+        '`watching` instead, and stays open.',
+    }),
+    z.object({ type: z.literal('watching') }).meta({
+      id: 'WatchingMessage',
+      description:
+        'This socket entered with `enter=ifFree`, and the account has entered this ' +
+        "cohort's campus somewhere else with `enter=take`. It is a watcher from now on, " +
+        'as if `welcome.mode` had said so: leave the call and the broadcast room, stop ' +
+        'drawing yourself as walking, and offer to enter here, which is reconnecting ' +
+        'with `enter=take`. The socket stays open.',
     }),
     z.object({ type: z.literal('moved'), players: z.array(Player) }).meta({
       id: 'MovedMessage',
@@ -837,8 +898,21 @@ export const ServerMessage = z
         'now: two steps inside one tick arrive as the second, so an entry can be more ' +
         'than one tile from where they were. Sent once per tick, and not at all when ' +
         'nobody moved. You are never in your own `moved` frame — your `moveResult` ' +
-        'already says where you ended up.',
+        'already says where you ended up. A map reload can also send one at once, ' +
+        'carrying somebody the new walls moved.',
     }),
+    z
+      .object({
+        type: z.literal('positionCorrected'),
+        player: Player,
+      })
+      .meta({
+        id: 'PositionCorrectedMessage',
+        description:
+          'A new map put the tile you stood on inside a wall, so the server ' +
+          'moved you to the nearest walkable one. Snap to `player`. Only you ' +
+          'get this; the rest of your cohort sees the move in `moved`.',
+      }),
     z
       .object({
         type: z.literal('moveResult'),
@@ -1067,7 +1141,12 @@ export type OutcomeMatchesMovement = Assert<
 export type AvatarMatchesAccount = Assert<
   Same<
     z.infer<typeof Avatar>,
-    MovementPlayer & Appearance & { status: Status; spaceKey: string }
+    MovementPlayer &
+      Appearance & {
+        status: Status;
+        statusUntil: string | null;
+        spaceKey: string;
+      }
   >
 >;
 

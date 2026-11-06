@@ -14,7 +14,11 @@ import type { Invite } from '../invites/schema.js';
 import { users as usersTable, type User } from '../users/schema.js';
 import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
-import { SessionScope, signSessionToken } from '@campus/session';
+import {
+  isRefreshTokenLive,
+  SessionScope,
+  signSessionToken,
+} from '@campus/session';
 
 /** The transaction handle drizzle hands a `db.transaction` callback. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -335,11 +339,7 @@ export class SessionIssuer {
       .where(eq(refreshTokens.tokenHash, hashRefreshToken(token)))
       .limit(1);
 
-    if (
-      !stored ||
-      stored.revokedAt !== null ||
-      stored.expiresAt.getTime() <= now.getTime()
-    ) {
+    if (!stored || !isRefreshTokenLive(stored, now)) {
       throw new SessionUnauthorizedError('Refresh token is not usable');
     }
 
@@ -390,11 +390,7 @@ export class SessionIssuer {
           .where(eq(refreshTokens.id, stored.id))
           .limit(1);
 
-        if (
-          !locked ||
-          locked.revokedAt !== null ||
-          locked.expiresAt.getTime() <= now.getTime()
-        ) {
+        if (!locked || !isRefreshTokenLive(locked, now)) {
           return { kind: 'unusable' } as const;
         }
 

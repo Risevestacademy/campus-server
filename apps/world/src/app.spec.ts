@@ -23,6 +23,7 @@ const accounts = {
   memberships: async () => new Map(),
   spacesOn: async () => new Map(),
   roomLinkPassesOn: async () => [],
+  publishedEntryMapKey: async () => null,
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
   onDesksChanged: async () => undefined,
@@ -273,6 +274,7 @@ describe('with the position store failing', () => {
         displayName: null,
         spriteKey: null,
         status: 'available',
+        statusUntil: null,
         spaceKey: '_default',
       },
     ]);
