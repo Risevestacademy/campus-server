@@ -54,9 +54,11 @@ export function routeAccounts() {
     memberships: async () => new Map(),
     spacesOn: async () => new Map(),
     roomLinkPassesOn: async () => [],
+    publishedEntryMapKey: async () => null,
     onProfileChanged: async () => undefined,
     onSpacesChanged: async () => undefined,
     onDesksChanged: async () => undefined,
+    notifyEntryRequestAnswered: async () => undefined,
     close: async () => undefined,
   };
 }

@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 
 import { buildWorld, type World } from '../app.js';
 import { loadEnv } from '../infra/env.js';
-import type { RoomLinkPass } from '../infra/accounts.js';
+import type { EntryRequestAnswer, RoomLinkPass } from '../infra/accounts.js';
 import type { PositionToSave } from '../infra/positions.js';
 import { tileIndex } from '../movement/grid.js';
 import { spaceIndexFrom } from '../movement/spaces.js';
@@ -121,9 +121,21 @@ export const accounts = {
   },
   passes: [] as RoomLinkPass[],
   roomLinkPassesOn: async () => accounts.passes,
-  spaceListeners: [] as (() => void)[],
-  onSpacesChanged: async (listener: () => void) => {
+  /** The key the database says is published. Null is "nothing published". */
+  publishedKey: null as string | null,
+  publishedEntryMapKey: async () => accounts.publishedKey,
+  spaceListeners: [] as ((payload: string) => void)[],
+  reconnectListeners: [] as (() => void)[],
+  onSpacesChanged: async (
+    listener: (payload: string) => void,
+    reconnected?: () => void,
+  ) => {
     accounts.spaceListeners.push(listener);
+    if (reconnected) accounts.reconnectListeners.push(reconnected);
+  },
+  /** What campus-api's notification does: a map key, or '' for a space edit. */
+  notifySpaces: (payload = '') => {
+    for (const listener of accounts.spaceListeners) listener(payload);
   },
   deskListeners: [] as ((cohortId: string | null) => void)[],
   onDesksChanged: async (listener: (cohortId: string | null) => void) => {
@@ -133,6 +145,10 @@ export const accounts = {
   profileListeners: [] as ((userId: string) => void)[],
   onProfileChanged: async (listener: (userId: string) => void) => {
     accounts.profileListeners.push(listener);
+  },
+  answered: [] as EntryRequestAnswer[],
+  notifyEntryRequestAnswered: async (answer: EntryRequestAnswer) => {
+    accounts.answered.push(answer);
   },
   /** campus-api saving a new sprite or name: the row, then the notification. */
   changeLooks: (
@@ -303,6 +319,50 @@ export const map: WorldMap = {
     desks: [],
   }),
 };
+
+/**
+ * The map every test starts from. A reload mutates the live map in place, so
+ * this copy is what `useWorld` puts back before the next test.
+ */
+const initialMap: WorldMap = {
+  id: map.id,
+  version: map.version,
+  grid: {
+    ...map.grid,
+    walls: map.grid.walls ? map.grid.walls.slice() : undefined,
+  },
+  spaces: {
+    ...map.spaces,
+    keys: [...map.spaces.keys],
+    tiles: new Uint16Array(map.spaces.tiles),
+  },
+};
+
+/** What the next reload loads: the running map unless a test sets another. */
+export const mapSource = {
+  next: undefined as WorldMap | undefined,
+  fail: false,
+  loads: 0,
+  keys: [] as string[],
+  /** A test holds this open to keep a reload in flight. */
+  hold: undefined as Promise<void> | undefined,
+  reset(): void {
+    mapSource.next = undefined;
+    mapSource.fail = false;
+    mapSource.loads = 0;
+    mapSource.keys = [];
+    mapSource.hold = undefined;
+  },
+};
+
+/** Puts the shared live map back to what the file declared. */
+export function restoreMap(): void {
+  map.id = initialMap.id;
+  map.version = initialMap.version;
+  map.grid = initialMap.grid;
+  map.spaces = initialMap.spaces;
+  world.gateway.players.setGrid(map.grid);
+}
 
 /**
  * The library as a normal meeting room, which anybody walks into: how every
@@ -512,6 +572,9 @@ export function useWorld(): void {
     accounts.failSpaces = false;
     accounts.passes = [];
     accounts.failMemberships = false;
+    accounts.publishedKey = null;
+    mapSource.reset();
+    restoreMap();
     openLibrary();
     // A test that changed the doors must not leave them changed for the next.
     await world.gateway.spacesChanged();
@@ -551,6 +614,13 @@ export function useWorld(): void {
       positions: store,
       presence,
       map,
+      loadMap: async (mapKey?: string) => {
+        mapSource.loads += 1;
+        if (mapKey) mapSource.keys.push(mapKey);
+        if (mapSource.hold) await mapSource.hold;
+        if (mapSource.fail) throw new Error('could not load the next map');
+        return mapSource.next ?? map;
+      },
     });
     await world.app.listen({ port: 0, host: '127.0.0.1' });
     const { port } = world.app.server.address() as AddressInfo;

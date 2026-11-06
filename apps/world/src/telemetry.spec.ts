@@ -87,8 +87,10 @@ const lookup = {
   memberships: async () => new Map(),
   spacesOn: async () => new Map(),
   roomLinkPassesOn: async () => [],
+  publishedEntryMapKey: async () => null,
   onSpacesChanged: async () => undefined,
   onDesksChanged: async () => undefined,
+  notifyEntryRequestAnswered: async () => undefined,
   onProfileChanged: async () => undefined,
   close: async () => undefined,
 } as unknown as AccountLookup & {

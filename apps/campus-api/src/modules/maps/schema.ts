@@ -88,6 +88,16 @@ export const maps = pgTable(
      * and everything that ever pointed at them, are still history.
      */
     retiredAt: timestamp('retired_at', { withTimezone: true }),
+    /**
+     * When an admin made this version live for world. Null until then, and
+     * never written by the sync: a synced map is known to the database but
+     * world keeps serving the old one until an admin publishes.
+     *
+     * A re-sync does not clear it, so a map published before the sync keeps
+     * its old timestamp. The published version itself is not stored here;
+     * world reads the current map from Sanity (see the maps README).
+     */
+    publishedAt: timestamp('published_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

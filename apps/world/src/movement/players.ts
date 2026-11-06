@@ -1,4 +1,4 @@
-import type { Seat } from '../seat.js';
+import { SeatMap, type Seat } from '../seat.js';
 import { Direction, step, walkable, type Grid, type Tile } from './grid.js';
 
 /** Where somebody stands, and which way they face. What other clients draw. */
@@ -56,21 +56,30 @@ interface Held {
  * memory is per cohort too, so it only ever resumes in the campus it was left.
  */
 export class Players {
-  /** Cohort, then account. */
-  private readonly standing = new Map<string, Map<string, Held>>();
+  private readonly standing = new SeatMap<Held>();
   /** Left recently, and may come back to where they stood until `until`. */
-  private readonly departed = new Map<
-    string,
-    Map<string, { held: Held; until: number; by?: string }>
-  >();
+  private readonly departed = new SeatMap<{
+    held: Held;
+    until: number;
+    by?: string;
+  }>();
 
   constructor(
-    private readonly grid: Grid,
+    private grid: Grid,
     /** Fastest a player may walk: one tile per this many milliseconds. */
     private readonly stepMs: number,
     /** How long somebody who left is remembered. 0 forgets them at once. */
     private readonly graceMs: number = 0,
   ) {}
+
+  /**
+   * The map world now serves. Called after a publish reload, before anybody
+   * moves again; the held positions are checked against it on their next
+   * read, and a reconnect-grace position is validated on join.
+   */
+  setGrid(grid: Grid): void {
+    this.grid = grid;
+  }
 
   /**
    * Places somebody on one cohort's map: where they stood there if they left
@@ -84,17 +93,22 @@ export class Players {
     saved?: Pick<Player, 'x' | 'y' | 'facing'>,
   ): Player {
     const { userId } = seat;
-    const existing = getIn(this.standing, seat);
+    const existing = this.standing.get(seat);
     if (existing) {
       return { ...existing.player };
     }
 
-    const remembered = getIn(this.departed, seat);
-    deleteIn(this.departed, seat);
-    if (remembered && remembered.until > now) {
+    const remembered = this.departed.get(seat);
+    this.departed.delete(seat);
+    if (
+      remembered &&
+      remembered.until > now &&
+      walkable(this.grid, remembered.held.player)
+    ) {
       // The step allowance comes back as it was: leaving and rejoining must
-      // not be a way to refill it.
-      setIn(this.standing, seat, remembered.held);
+      // not be a way to refill it. A map published since may have built over
+      // the tile they left on, so it is checked like any other saved place.
+      this.standing.set(seat, remembered.held);
       return { ...remembered.held.player };
     }
 
@@ -110,7 +124,7 @@ export class Players {
             y: this.grid.spawn.y,
             facing: Direction.Down,
           };
-    setIn(this.standing, seat, { player, steps: STEP_BURST, refilledAt: now });
+    this.standing.set(seat, { player, steps: STEP_BURST, refilledAt: now });
     return { ...player };
   }
 
@@ -124,16 +138,16 @@ export class Players {
    * nothing to come back to.
    */
   leave(seat: Seat, now: number, remember: boolean, by?: string): boolean {
-    const held = getIn(this.standing, seat);
+    const held = this.standing.get(seat);
     if (!remember) {
-      deleteIn(this.departed, seat);
+      this.departed.delete(seat);
     }
     if (!held) {
       return false;
     }
-    deleteIn(this.standing, seat);
+    this.standing.delete(seat);
     if (remember && this.graceMs > 0) {
-      setIn(this.departed, seat, { held, until: now + this.graceMs, by });
+      this.departed.set(seat, { held, until: now + this.graceMs, by });
     }
     return true;
   }
@@ -144,12 +158,8 @@ export class Players {
    * being held in memory for good.
    */
   forgetExpired(now: number): void {
-    for (const [cohortId, inCohort] of this.departed) {
-      for (const [userId, remembered] of inCohort) {
-        if (remembered.until <= now) {
-          deleteIn(this.departed, { userId, cohortId });
-        }
-      }
+    for (const [seat, remembered] of this.departed) {
+      if (remembered.until <= now) this.departed.delete(seat);
     }
   }
 
@@ -160,12 +170,12 @@ export class Players {
    * resumes anybody late.
    */
   isRemembered(seat: Seat): boolean {
-    return getIn(this.departed, seat) !== undefined;
+    return this.departed.has(seat);
   }
 
   /** A position held for somebody who left, and the connection that left. */
   holdOf(seat: Seat, now: number): { by: string | undefined } | undefined {
-    const remembered = getIn(this.departed, seat);
+    const remembered = this.departed.get(seat);
     return remembered && remembered.until > now
       ? { by: remembered.by }
       : undefined;
@@ -176,19 +186,17 @@ export class Players {
    * grace has run out since the last `forgetExpired`.
    */
   get remembered(): number {
-    let count = 0;
-    for (const inCohort of this.departed.values()) count += inCohort.size;
-    return count;
+    return this.departed.size;
   }
 
   get(seat: Seat): Player | undefined {
-    const held = getIn(this.standing, seat);
+    const held = this.standing.get(seat);
     return held ? { ...held.player } : undefined;
   }
 
   /** Puts somebody on a tile without a step, facing as they were: staff moving them out of a space. */
   place(seat: Seat, tile: Tile): Player | undefined {
-    const held = getIn(this.standing, seat);
+    const held = this.standing.get(seat);
     if (!held || !walkable(this.grid, tile)) return undefined;
     held.player.x = tile.x;
     held.player.y = tile.y;
@@ -196,21 +204,19 @@ export class Players {
   }
 
   has(seat: Seat): boolean {
-    return getIn(this.standing, seat) !== undefined;
+    return this.standing.has(seat);
   }
 
   /** Everybody standing in one cohort's campus. */
   in(cohortId: string): Player[] {
-    return [...(this.standing.get(cohortId)?.values() ?? [])].map((held) => ({
+    return [...this.standing.inCohort(cohortId)].map((held) => ({
       ...held.player,
     }));
   }
 
   /** Avatars on every cohort's map; one person in two cohorts counts twice. */
   get size(): number {
-    let count = 0;
-    for (const inCohort of this.standing.values()) count += inCohort.size;
-    return count;
+    return this.standing.size;
   }
 
   /**
@@ -224,7 +230,7 @@ export class Players {
     now: number,
     admits: (target: Tile) => boolean = () => true,
   ): MoveResult {
-    const held = getIn(this.standing, seat);
+    const held = this.standing.get(seat);
     if (!held) {
       // Every connection joins before its first frame is read, so this is a
       // bug in the caller rather than something a client can cause.
@@ -276,38 +282,4 @@ export class Players {
     held.steps = Math.min(STEP_BURST, held.steps + earned);
     held.refilledAt = Math.max(held.refilledAt, now);
   }
-}
-
-/**
- * The nested maps are cohort, then account, so each cohort's campus is kept
- * together; these three are the only places that order is written.
- */
-function getIn<T>(
-  outer: Map<string, Map<string, T>>,
-  { userId, cohortId }: Seat,
-): T | undefined {
-  return outer.get(cohortId)?.get(userId);
-}
-
-function setIn<T>(
-  outer: Map<string, Map<string, T>>,
-  { userId, cohortId }: Seat,
-  value: T,
-): void {
-  let inner = outer.get(cohortId);
-  if (!inner) {
-    inner = new Map();
-    outer.set(cohortId, inner);
-  }
-  inner.set(userId, value);
-}
-
-function deleteIn<T>(
-  outer: Map<string, Map<string, T>>,
-  { userId, cohortId }: Seat,
-): void {
-  const inner = outer.get(cohortId);
-  if (!inner) return;
-  inner.delete(userId);
-  if (inner.size === 0) outer.delete(cohortId);
 }
