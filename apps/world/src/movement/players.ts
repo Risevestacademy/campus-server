@@ -58,7 +58,11 @@ interface Held {
 export class Players {
   private readonly standing = new SeatMap<Held>();
   /** Left recently, and may come back to where they stood until `until`. */
-  private readonly departed = new SeatMap<{ held: Held; until: number; by?: string }>();
+  private readonly departed = new SeatMap<{
+    held: Held;
+    until: number;
+    by?: string;
+  }>();
 
   constructor(
     private grid: Grid,

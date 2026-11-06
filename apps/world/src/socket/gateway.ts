@@ -11,7 +11,7 @@ import { nearestWalkable, walkable, type Tile } from '../movement/grid.js';
 import { Players } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
 import { assertWorldMap, type WorldMap } from '../movement/world-map.js';
-import { seatKey, type Seat } from '../seat.js';
+import type { Seat } from '../seat.js';
 import {} from './authenticate.js';
 import { Connections, personOf, type Connection } from './connections.js';
 import { createContext } from './context.js';
@@ -464,12 +464,11 @@ export function registerGateway(
     if (connections.holderOf(connection)) {
       return;
     }
-    const seat = seatKey(connection);
     const standing = players.get(connection);
     if (players.leave(connection, Date.now(), remember, connection.id)) {
       // With them goes any step of theirs the tick has not sent yet: should
       // they be back before it runs, `joined` already says where they stand.
-      moves.forget(seat);
+      moves.forget(connection);
       broadcast(connection.cohortId, {
         type: 'left',
         userId: connection.userId,
