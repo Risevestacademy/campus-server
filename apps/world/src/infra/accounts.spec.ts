@@ -9,6 +9,9 @@ import { isRefreshTokenLive, type RefreshTokenLiveness } from '@campus/session';
 
 import {
   ACCOUNT_QUERY,
+  ENTRY_REQUEST_ADMITTED_KIND,
+  ENTRY_REQUEST_DECLINED_KIND,
+  ENTRY_REQUEST_NOTIFICATION_QUERY,
   LIVE_MEMBERSHIP_QUERY,
   LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
@@ -802,6 +805,60 @@ describe("world's space doors, against campus-api's schema", () => {
     expect(at(mentor, 'garden')).toBe(true);
     expect(at(outsider, 'garden')).toBe(false);
     expect(at(student, 'old')).toBe(false);
+  });
+});
+
+describe("world's entry-request notification, against campus-api's schema", () => {
+  const asker = randomUUID();
+  const requestId = randomUUID();
+  const context = { cohortId: randomUUID(), spaceKey: 'library' };
+
+  const notify = (kind: string) =>
+    db.query(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+      asker,
+      kind,
+      requestId,
+      JSON.stringify(context),
+    ]);
+
+  beforeAll(async () => {
+    await db.exec(
+      `insert into users (id, email) values ('${asker}', 'asker@campus.local')`,
+    );
+  });
+
+  it('writes the asker one notification per answer, and a repeat is a no-op', async () => {
+    await notify(ENTRY_REQUEST_ADMITTED_KIND);
+    await notify(ENTRY_REQUEST_ADMITTED_KIND);
+    await notify(ENTRY_REQUEST_DECLINED_KIND);
+
+    const rows = await db.query<{
+      kind: string;
+      reference_type: string;
+      reference_id: string;
+      context: unknown;
+      read_at: Date | null;
+    }>(
+      `select kind, reference_type, reference_id, context, read_at from notifications
+        where recipient_id = $1 order by kind`,
+      [asker],
+    );
+    expect(rows.rows).toEqual([
+      {
+        kind: 'entry_request_admitted',
+        reference_type: 'entry_request',
+        reference_id: requestId,
+        context,
+        read_at: null,
+      },
+      {
+        kind: 'entry_request_declined',
+        reference_type: 'entry_request',
+        reference_id: requestId,
+        context,
+        read_at: null,
+      },
+    ]);
   });
 });
 

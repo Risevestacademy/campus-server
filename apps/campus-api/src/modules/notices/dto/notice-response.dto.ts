@@ -26,6 +26,13 @@ export class NoticeResponseDto {
   })
   cohortTrackId: string | null;
 
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    example: '33333333-3333-4333-8333-333333333333',
+  })
+  mentorshipGroupId: string | null;
+
   @ApiProperty({ example: 'Campus closed Friday' })
   title: string;
 
