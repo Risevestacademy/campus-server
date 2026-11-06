@@ -62,7 +62,7 @@ describe('positionKey', () => {
 describe('RedisPositionStore', () => {
   it('gives back what it saved', async () => {
     const { redis } = fakeRedis();
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
     await store.save([
       { userId: 'ada', cohortId: 'cohort-1', x: 3, y: 4, facing: 'left' },
@@ -80,7 +80,7 @@ describe('RedisPositionStore', () => {
   /** Two cohorts, two keys: one person standing in both at once. */
   it('keeps a separate position per cohort, without one overwriting the other', async () => {
     const { redis } = fakeRedis();
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
     await store.save([
       { userId: 'ada', cohortId: 'frontend', x: 1, y: 1, facing: 'up' },
@@ -107,7 +107,7 @@ describe('RedisPositionStore', () => {
 
   it('keeps each position for the TTL, refreshed on every save', async () => {
     const { redis, ttls } = fakeRedis();
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
     await store.save([
       { userId: 'ada', cohortId: 'cohort-1', x: 0, y: 0, facing: 'down' },
@@ -119,7 +119,7 @@ describe('RedisPositionStore', () => {
   });
 
   it('has nothing for somebody never saved', async () => {
-    const store = new RedisPositionStore(fakeRedis().redis, MAP_ID, 90);
+    const store = new RedisPositionStore(fakeRedis().redis, { id: MAP_ID }, 90);
 
     await expect(
       store.load({ userId: 'nobody', cohortId: 'cohort-1' }),
@@ -129,15 +129,51 @@ describe('RedisPositionStore', () => {
   /** A position from the placeholder, or a map since replaced, is not one on this map. */
   it('ignores a position saved on another map', async () => {
     const { redis } = fakeRedis();
-    await new RedisPositionStore(redis, 'old-map', 90).save([
+    await new RedisPositionStore(redis, { id: 'old-map' }, 90).save([
       { userId: 'ada', cohortId: 'cohort-1', x: 3, y: 4, facing: 'left' },
     ]);
 
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
     await expect(
       store.load({ userId: 'ada', cohortId: 'cohort-1' }),
     ).resolves.toBeUndefined();
+  });
+
+  /**
+   * A publish swaps the map in place. The store is given the map world runs,
+   * not a copy of its id, so both the check on the way back and the tag on
+   * the way out follow the swap.
+   */
+  it('follows the live map across a swap', async () => {
+    const { redis, values } = fakeRedis();
+    const live = { id: MAP_ID };
+    const seat = { userId: 'ada', cohortId: 'cohort-1' };
+    const key = positionKey(seat);
+    // The pin: the store must take the live map, not its id.
+    const store = new RedisPositionStore(redis, live, 90);
+
+    await store.save([{ ...seat, x: 3, y: 4, facing: 'left' }]);
+    expect(JSON.parse(values.get(key) as string).mapId).toBe(MAP_ID);
+    await expect(store.load(seat)).resolves.toEqual({
+      x: 3,
+      y: 4,
+      facing: 'left',
+    });
+
+    live.id = 'annex';
+    await expect(store.load(seat)).resolves.toBeUndefined();
+
+    await store.save([{ ...seat, x: 1, y: 1, facing: 'down' }]);
+    expect(JSON.parse(values.get(key) as string).mapId).toBe('annex');
+
+    // A process started on the new map reads what was written after the swap.
+    const restarted = new RedisPositionStore(redis, { id: 'annex' }, 90);
+    await expect(restarted.load(seat)).resolves.toEqual({
+      x: 1,
+      y: 1,
+      facing: 'down',
+    });
   });
 
   /**
@@ -151,7 +187,7 @@ describe('RedisPositionStore', () => {
       'world:position:ada',
       JSON.stringify({ mapId: MAP_ID, x: 3, y: 4, facing: 'left' }),
     );
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
     await expect(
       store.load({ userId: 'ada', cohortId: 'cohort-1' }),
@@ -173,7 +209,7 @@ describe('RedisPositionStore', () => {
   ])('treats %s as nothing saved', async (_label, raw) => {
     const { redis, values } = fakeRedis();
     values.set(positionKey({ userId: 'ada', cohortId: 'cohort-1' }), raw);
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
     await expect(
       store.load({ userId: 'ada', cohortId: 'cohort-1' }),
@@ -182,7 +218,7 @@ describe('RedisPositionStore', () => {
 
   it('forgets one cohort, leaving the other', async () => {
     const { redis } = fakeRedis();
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
     await store.save([
       { userId: 'ada', cohortId: 'frontend', x: 1, y: 1, facing: 'up' },
     ]);
@@ -207,7 +243,7 @@ describe('RedisPositionStore', () => {
   /** The gateway retries a failed save, so a failure has to reach it. */
   it('reports a save Redis refused', async () => {
     const { redis, failNextExec } = fakeRedis();
-    const store = new RedisPositionStore(redis, MAP_ID, 90);
+    const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
     failNextExec();
 
     await expect(
@@ -240,14 +276,18 @@ describe('RedisPositionStore', () => {
     }
 
     it('answers at once when already connected', async () => {
-      const store = new RedisPositionStore(fakeRedis().redis, MAP_ID, 90);
+      const store = new RedisPositionStore(
+        fakeRedis().redis,
+        { id: MAP_ID },
+        90,
+      );
 
       await expect(store.ready(10)).resolves.toBe(true);
     });
 
     it('waits for the connection', async () => {
       const { redis, connect } = connecting();
-      const store = new RedisPositionStore(redis, MAP_ID, 90);
+      const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
       const ready = store.ready(1_000);
       connect();
@@ -257,7 +297,7 @@ describe('RedisPositionStore', () => {
 
     it('gives up after the timeout, and stops listening', async () => {
       const { redis, listeners } = connecting();
-      const store = new RedisPositionStore(redis, MAP_ID, 90);
+      const store = new RedisPositionStore(redis, { id: MAP_ID }, 90);
 
       await expect(store.ready(20)).resolves.toBe(false);
       expect(listeners.size).toBe(0);
@@ -307,7 +347,7 @@ describe('createPositionStore with Redis unavailable', () => {
     createPositionStore(
       env,
       log,
-      MAP_ID,
+      { id: MAP_ID },
       (url, options) => new Redis(url, { ...options, Connector: Unreachable }),
     );
 
@@ -411,7 +451,7 @@ describe('createPositionStore with Redis connected but not answering', () => {
     const store = createPositionStore(
       env,
       log,
-      MAP_ID,
+      { id: MAP_ID },
       (url, options) => new Redis(url, { ...options, Connector: Stalled }),
     );
     await expect(store.ready(1_000)).resolves.toBe(true);

@@ -34,6 +34,13 @@ export interface AccountLookup {
     refreshedSince: Date,
     now: Date,
   ): Promise<Set<string>>;
+  /**
+   * The key of the entry map an admin has published, or null when none has.
+   * World serves one map: this is the database saying which version of the
+   * campus is live. The geometry itself still comes from Sanity; only the
+   * key and the decision to serve it are kept here.
+   */
+  publishedEntryMapKey(): Promise<string | null>;
   liveMembership(seat: Seat, now: Date): Promise<boolean>;
   /**
    * Which of these seats still hold a live membership: one query for every
@@ -64,12 +71,16 @@ export interface AccountLookup {
    */
   roomLinkPassesOn(mapKey: string, now: Date): Promise<RoomLinkPass[]>;
   /**
-   * Calls `listener` whenever campus-api says something a space's door reads
-   * has changed, and whenever listening (re)starts, since a change made while
-   * it was not listening reached nobody. Resolves once listening; rejects if
-   * it could not start.
+   * Calls `listener` with a published map's key, or with '' when something a
+   * space's door reads changed. `reconnected` is called again whenever
+   * listening (re)starts, since a change made while it was not listening
+   * reached nobody; left out, the listener gets '' instead. Resolves once
+   * listening; rejects if it could not start.
    */
-  onSpacesChanged(listener: () => void): Promise<void>;
+  onSpacesChanged(
+    listener: (payload: string) => void,
+    reconnected?: () => void,
+  ): Promise<void>;
   /**
    * Calls `listener` with an account id whenever campus-api says that
    * account's sprite or display name changed. Resolves once listening;
@@ -173,6 +184,18 @@ export const LIVE_MEMBERSHIPS_QUERY = `select user_id, cohort_id from cohort_mem
     from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
   )
     and ${MEMBERSHIP_IS_LIVE}`;
+
+/**
+ * The one map an admin has published for people to enter on. The partial
+ * unique index allows at most one non-retired entry map, so the order only
+ * settles a database somebody wrote around the API.
+ */
+export const PUBLISHED_ENTRY_MAP_QUERY = `select key from maps
+  where is_entry = true
+    and retired_at is null
+    and published_at is not null
+  order by published_at desc
+  limit 1`;
 
 /**
  * A seat's membership row as it stands, many seats at once. No liveness here:
@@ -374,6 +397,12 @@ export function createAccountLookup(env: Env): AccountLookup {
       );
       return new Set(rows.map((row) => row.family_id));
     },
+    async publishedEntryMapKey(): Promise<string | null> {
+      const rows = await sql.unsafe<{ key: string }[]>(
+        PUBLISHED_ENTRY_MAP_QUERY,
+      );
+      return rows[0]?.key ?? null;
+    },
     async onProfileChanged(listener): Promise<void> {
       // A connection of its own, kept open and re-listened on reconnect by
       // the driver. The payload is the account id campus-api changed.
@@ -526,14 +555,14 @@ export function createAccountLookup(env: Env): AccountLookup {
         () => listener(null),
       );
     },
-    async onSpacesChanged(listener): Promise<void> {
+    async onSpacesChanged(listener, reconnected): Promise<void> {
       // Called on every notification, and again each time the driver
       // subscribes: a change made while it was reconnecting sent its word to
       // nobody, so reading again on the way back in is what catches it.
       await sql.listen(
         SPACES_CHANGED_CHANNEL,
-        () => listener(),
-        () => listener(),
+        (payload) => listener(payload),
+        () => (reconnected ? reconnected() : listener('')),
       );
     },
     async close(): Promise<void> {
