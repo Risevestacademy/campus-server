@@ -1,6 +1,7 @@
 import {
   pgTable,
   index,
+  jsonb,
   timestamp,
   uniqueIndex,
   uuid,
@@ -10,13 +11,36 @@ import {
 import { users } from '../users/schema.js';
 
 /**
+ * What happened. world writes the entry-request kinds itself
+ * (`ENTRY_REQUEST_NOTIFICATION_QUERY` in world's accounts.ts), so a rename
+ * here must be made there too.
+ */
+export enum NotificationKind {
+  NoticePosted = 'notice_posted',
+  EntryRequestAdmitted = 'entry_request_admitted',
+  EntryRequestDeclined = 'entry_request_declined',
+}
+
+/** Where `reference_id` points. */
+export enum NotificationReferenceType {
+  Notice = 'notice',
+  /** world's in-memory request id: there is no row behind it. */
+  EntryRequest = 'entry_request',
+}
+
+/** What an entry-request notification names, since the request has no row. */
+export interface EntryRequestContext {
+  cohortId: string;
+  spaceKey: string;
+}
+
+/**
  * One alert for one person.
  *
  * `kind` and the reference pair are plain strings on purpose. Kinds are
- * added as the events they report are — `notice_posted`,
- * `entry_request_answered`, `meeting_starting` — so a new one needs a code
- * change and no migration, and the reference points at whatever row
- * triggered this: a notice, an entry request, a calendar event.
+ * added as the events they report are (see `NotificationKind`), so a new one
+ * needs a code change and no migration, and the reference points at
+ * whatever triggered this: a notice, an entry request, a calendar event.
  *
  * There is no foreign key on the reference, for the same reason: the
  * referenced row may be in any table, and a notification is the record that
@@ -37,6 +61,8 @@ export const notifications = pgTable(
     referenceType: varchar('reference_type', { length: 64 }).notNull(),
     /** The id of the row in that table. Not a foreign key — see above. */
     referenceId: varchar('reference_id', { length: 255 }).notNull(),
+    /** Set when the reference has no row to read it from. */
+    context: jsonb('context').$type<EntryRequestContext>(),
     /** Null until the recipient marks it read. */
     readAt: timestamp('read_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })

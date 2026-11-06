@@ -17,8 +17,9 @@ import { SeatMap, seatKey, type Seat } from '../seat.js';
 import type { Env } from './env.js';
 
 /**
- * What the socket layer needs to know about the person behind a token, and
- * nothing else. An interface so the gateway can be tested without a database
+ * What the socket layer needs from the database: who is behind a token, the
+ * spaces they move through, and the one row world writes, the asker's
+ * notification. An interface so the gateway can be tested without a database
  * and so the lookup can move behind Redis later without touching callers.
  */
 export interface AccountLookup {
@@ -93,7 +94,17 @@ export interface AccountLookup {
    * listening; rejects if it could not start.
    */
   onDesksChanged(listener: (cohortId: string | null) => void): Promise<void>;
+  /** world's one write: the asker's notification. A repeat is a no-op. */
+  notifyEntryRequestAnswered(answer: EntryRequestAnswer): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface EntryRequestAnswer {
+  requestId: string;
+  askerId: string;
+  admitted: boolean;
+  cohortId: string;
+  spaceKey: string;
 }
 
 /**
@@ -225,6 +236,21 @@ export const MEMBERSHIP_ROWS_QUERY = `select members.user_id, members.cohort_id,
     from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
   )`;
 
+/** campus-api's `NotificationKind` values, which its listing reads back. */
+export const ENTRY_REQUEST_ADMITTED_KIND = 'entry_request_admitted';
+export const ENTRY_REQUEST_DECLINED_KIND = 'entry_request_declined';
+
+/**
+ * $1 the asker, $2 the kind, $3 the request's id, $4 campus-api's
+ * `EntryRequestContext` as JSON. Requests have no row, so the reference is
+ * world's own id for one and the context says where it was. The conflict
+ * target is campus-api's notifications_recipient_kind_reference_unique.
+ */
+export const ENTRY_REQUEST_NOTIFICATION_QUERY = `insert into notifications
+    (recipient_id, kind, reference_type, reference_id, context)
+  values ($1, $2, 'entry_request', $3, $4::jsonb)
+  on conflict (recipient_id, kind, reference_type, reference_id) do nothing`;
+
 /** What hearing defaults to in a proximity space with no radius set, in tiles. */
 export const DEFAULT_AUDIBLE_RADIUS = 5;
 export const DEFAULT_SUBSCRIBE_RADIUS = 6;
@@ -346,15 +372,16 @@ export function looksLikeId(value: string): boolean {
  * the same answer — otherwise a ban takes effect whenever the token happens
  * to expire, which is up to AUTH_SESSION_TTL_MINUTES later.
  *
- * Raw SQL rather than drizzle: one query against two columns, of a table
- * campus-api owns. When world needs maps and spaces, the schema should move
- * to a shared package and this can move with it.
+ * Raw SQL rather than drizzle: every statement here is against tables
+ * campus-api owns, and each is exported and run against its migrations in
+ * accounts.spec.ts. If the schema moves to a shared package, these can move
+ * to drizzle with it.
  */
 export function createAccountLookup(env: Env): AccountLookup {
   const sql = postgres(env.DATABASE_URL, {
     max: env.WORLD_DB_POOL,
-    // Read-only lookups on the hot path: fail fast rather than hold a socket
-    // waiting on a database that is not answering.
+    // Lookups on the hot path, and one write nobody waits for: fail fast
+    // rather than hold a socket waiting on a database that is not answering.
     connect_timeout: 5,
   });
   if (env.FF_OTEL_ENABLED) {
@@ -564,6 +591,19 @@ export function createAccountLookup(env: Env): AccountLookup {
         (payload) => listener(payload),
         () => (reconnected ? reconnected() : listener('')),
       );
+    },
+    async notifyEntryRequestAnswered(answer): Promise<void> {
+      await sql.unsafe(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+        answer.askerId,
+        answer.admitted
+          ? ENTRY_REQUEST_ADMITTED_KIND
+          : ENTRY_REQUEST_DECLINED_KIND,
+        answer.requestId,
+        JSON.stringify({
+          cohortId: answer.cohortId,
+          spaceKey: answer.spaceKey,
+        }),
+      ]);
     },
     async close(): Promise<void> {
       await sql.end();

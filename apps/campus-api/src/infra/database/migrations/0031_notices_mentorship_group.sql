@@ -1,0 +1,4 @@
+ALTER TABLE "notices" ADD COLUMN "mentorship_group_id" uuid;--> statement-breakpoint
+ALTER TABLE "notices" ADD CONSTRAINT "notices_mentorship_group_fk" FOREIGN KEY ("mentorship_group_id","cohort_id") REFERENCES "public"."mentorship_groups"("id","cohort_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "notices_mentorship_group_idx" ON "notices" USING btree ("mentorship_group_id");--> statement-breakpoint
+ALTER TABLE "notices" ADD CONSTRAINT "notices_group_matches_scope" CHECK (("notices"."scope" = 'mentorship-group') = ("notices"."mentorship_group_id" is not null));

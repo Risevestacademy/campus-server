@@ -35,7 +35,7 @@ export class CreateNoticeDto {
 
   @ApiPropertyOptional({
     example: '11111111-1111-4111-8111-111111111111',
-    description: 'Required for cohort and cohort-track scope.',
+    description: 'Required for every scope but campus.',
   })
   @ValidateIf((o) => o.scope !== NoticeScope.Campus)
   @IsUUID()
@@ -50,4 +50,13 @@ export class CreateNoticeDto {
   @IsUUID()
   @IsOptional()
   cohortTrackId?: string;
+
+  @ApiPropertyOptional({
+    example: '33333333-3333-4333-8333-333333333333',
+    description: 'Required for mentorship-group scope.',
+  })
+  @ValidateIf((o) => o.scope === NoticeScope.MentorshipGroup)
+  @IsUUID()
+  @IsOptional()
+  mentorshipGroupId?: string;
 }
