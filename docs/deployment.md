@@ -95,6 +95,9 @@ change to either reaches both apps:
   `APP_PUBLIC_URL` (invite-link base, `{base}/invitation?token=<raw>` — set it to
   the frontend origin for that environment; required, boot fails without it),
   `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7),
+  `NOTIFICATION_RETENTION_DAYS` and `AUDIT_LOG_RETENTION_DAYS` (what the
+  retention sweep keeps; optional, default 90 and 365, at least 30; the sweep
+  only runs when called — see `apps/campus-api/src/modules/admin/README.md`),
   `FF_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM` (the invite
   email, e.g. `Campus by Rise <invites@campusbyrise.com>`),
   `RESEND_INVITE_TEMPLATE_ID`, `RESEND_INVITE_ADMIN_TEMPLATE_ID` and

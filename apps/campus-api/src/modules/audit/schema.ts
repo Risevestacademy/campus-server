@@ -178,6 +178,11 @@ export enum AuditAction {
   RoomLinkWindowChanged = 'room_link_window_changed',
   /** An admin ended somebody else's claim on a desk. */
   DeskFreed = 'desk_freed',
+  /**
+   * A super admin ran the retention sweep on one table. No subject: the rows
+   * are gone, so `details` keeps the table, the cutoff and how many went.
+   */
+  RetentionSwept = 'retention_swept',
 }
 
 export enum AuditSubjectType {
@@ -201,6 +206,13 @@ export enum AuditSubjectType {
 }
 
 /**
+ * The trigger that refuses every UPDATE and DELETE (migration 0008). Named
+ * here because the retention sweep lifts it for its own transaction, and
+ * that statement has to name it.
+ */
+export const AUDIT_LOG_APPEND_ONLY_TRIGGER = 'audit_log_append_only';
+
+/**
  * Append-only: nothing updates or deletes a row. Written in the same
  * transaction as the change it records, so a change is never committed
  * without its entry, nor an entry without its change.
@@ -209,7 +221,7 @@ export const auditLog = pgTable(
   'audit_log',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    /** Null when no person did it: a migration, the seed, a sweep. */
+    /** Null when no person did it: a migration, the seed. */
     actorUserId: uuid('actor_user_id').references(() => users.id),
     action: varchar('action', { length: 64 }).notNull(),
     subjectType: varchar('subject_type', { length: 64 }),
