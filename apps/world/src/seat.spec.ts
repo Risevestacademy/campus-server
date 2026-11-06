@@ -1,138 +1,138 @@
 import { describe, expect, it } from 'vitest';
 
-import { SeatMap } from './seat.js';
+import { SeatMap, type Seat } from './seat.js';
 
-const ada = { userId: 'ada', cohortId: 'cohort-1' };
-const grace = { userId: 'grace', cohortId: 'cohort-1' };
+const at = (userId: string, cohortId: string): Seat => ({ userId, cohortId });
 
 describe('SeatMap', () => {
-  it('sets a value and gets it back by the seat, not the object', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'here');
+  it('finds a value by account and cohort together', () => {
+    const map = new SeatMap<number>();
+    map.set(at('ada', 'frontend'), 1);
 
-    expect(seats.get({ ...ada })).toBe('here');
-    expect(seats.get({ ...ada, cohortId: 'cohort-2' })).toBeUndefined();
+    expect(map.get(at('ada', 'frontend'))).toBe(1);
+    expect(map.has(at('ada', 'frontend'))).toBe(true);
+    expect(map.get(at('ada', 'backend'))).toBeUndefined();
+    expect(map.get(at('frontend', 'ada'))).toBeUndefined();
   });
 
-  it('says whether a seat is there', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'here');
+  it('replaces a value set twice for one seat, counting it once', () => {
+    const map = new SeatMap<number>();
+    map.set(at('ada', 'frontend'), 1);
+    map.set(at('ada', 'frontend'), 2);
 
-    expect(seats.has({ ...ada })).toBe(true);
-    expect(seats.has(grace)).toBe(false);
+    expect(map.get(at('ada', 'frontend'))).toBe(2);
+    expect(map.size).toBe(1);
+    expect([...map.ofAccount('ada')]).toEqual([2]);
   });
 
-  it('deletes by seat, answering as a Map does', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'here');
+  /** A stored undefined is still an entry, as with Map. */
+  it('tells a stored undefined from no entry', () => {
+    const map = new SeatMap<undefined>();
+    map.set(at('ada', 'frontend'), undefined);
 
-    expect(seats.delete({ ...ada })).toBe(true);
-    expect(seats.delete({ ...ada })).toBe(false);
-    expect(seats.has(ada)).toBe(false);
+    expect(map.has(at('ada', 'frontend'))).toBe(true);
+    expect(map.size).toBe(1);
   });
 
-  it('keeps the original position when a seat is set again', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'first');
-    seats.set(grace, 'second');
-    seats.set({ ...ada }, 'third');
+  it('deletes one seat, leaving the account in other cohorts', () => {
+    const map = new SeatMap<number>();
+    map.set(at('ada', 'frontend'), 1);
+    map.set(at('ada', 'backend'), 2);
 
-    expect([...seats.values()]).toEqual(['third', 'second']);
+    expect(map.delete(at('ada', 'frontend'))).toBe(true);
+    expect(map.delete(at('ada', 'frontend'))).toBe(false);
+    expect(map.has(at('ada', 'frontend'))).toBe(false);
+    expect(map.get(at('ada', 'backend'))).toBe(2);
+    expect(map.size).toBe(1);
+    expect(map.accounts).toBe(1);
+    expect([...map.inCohort('frontend')]).toEqual([]);
+    expect([...map.ofAccount('ada')]).toEqual([2]);
   });
 
-  it('moves a deleted seat to the end when set again', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'first');
-    seats.set(grace, 'second');
-    seats.delete(ada);
-    seats.set(ada, 'third');
+  it('lists everybody in one cohort, in the order they came', () => {
+    const map = new SeatMap<string>();
+    map.set(at('ada', 'frontend'), 'a');
+    map.set(at('bea', 'backend'), 'b');
+    map.set(at('cy', 'frontend'), 'c');
 
-    expect([...seats.values()]).toEqual(['second', 'third']);
+    expect([...map.inCohort('frontend')]).toEqual(['a', 'c']);
+    expect([...map.inCohort('design')]).toEqual([]);
   });
 
-  it('values come back in insertion order', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'first');
-    seats.set(grace, 'second');
+  it('lists one account in every cohort it is in, in the order it joined them', () => {
+    const map = new SeatMap<string>();
+    map.set(at('ada', 'frontend'), 'f');
+    map.set(at('bea', 'frontend'), 'x');
+    map.set(at('ada', 'backend'), 'b');
 
-    expect([...seats.values()]).toEqual(['first', 'second']);
+    expect([...map.ofAccount('ada')]).toEqual(['f', 'b']);
+    expect([...map.ofAccount('cy')]).toEqual([]);
   });
 
-  it('counts its live entries', () => {
-    const seats = new SeatMap<string>();
-    expect(seats.size).toBe(0);
+  /** One person in two cohorts is two entries, and one account. */
+  it('counts entries and accounts apart', () => {
+    const map = new SeatMap<number>();
+    map.set(at('ada', 'frontend'), 1);
+    map.set(at('ada', 'backend'), 2);
+    map.set(at('bea', 'frontend'), 3);
 
-    seats.set(ada, 'first');
-    seats.set(grace, 'second');
-    expect(seats.size).toBe(2);
-
-    seats.delete(ada);
-    expect(seats.size).toBe(1);
+    expect(map.size).toBe(3);
+    expect(map.accounts).toBe(2);
   });
 
-  it('empties on clear', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'first');
+  it('walks every entry a cohort at a time, handing out the seat', () => {
+    const map = new SeatMap<string>();
+    map.set(at('ada', 'frontend'), 'a');
+    map.set(at('bea', 'backend'), 'b');
+    map.set(at('cy', 'frontend'), 'c');
 
-    seats.clear();
-
-    expect(seats.size).toBe(0);
-    expect([...seats.values()]).toEqual([]);
+    expect([...map]).toEqual([
+      [at('ada', 'frontend'), 'a'],
+      [at('cy', 'frontend'), 'c'],
+      [at('bea', 'backend'), 'b'],
+    ]);
+    expect([...map.entries()]).toEqual([...map]);
+    expect([...map.keys()]).toEqual([
+      at('ada', 'frontend'),
+      at('cy', 'frontend'),
+      at('bea', 'backend'),
+    ]);
+    expect([...map.values()]).toEqual(['a', 'c', 'b']);
   });
 
-  it('iterates values', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'first');
-    seats.set(grace, 'second');
+  it('may be deleted from while it is walked', () => {
+    const map = new SeatMap<number>();
+    map.set(at('ada', 'frontend'), 1);
+    map.set(at('bea', 'frontend'), 2);
+    map.set(at('cy', 'backend'), 3);
 
-    expect([...seats]).toEqual(['first', 'second']);
-  });
-
-  it('does not collide two seats that concatenate the same way', () => {
-    const seats = new SeatMap<string>();
-    seats.set({ userId: 'ab', cohortId: 'c' }, 'first');
-    seats.set({ userId: 'a', cohortId: 'bc' }, 'second');
-
-    expect(seats.size).toBe(2);
-  });
-
-  it('holds one entry for two seat objects with the same user and cohort', () => {
-    const seats = new SeatMap<string>();
-    seats.set(ada, 'first');
-    seats.set({ userId: ada.userId, cohortId: ada.cohortId }, 'second');
-
-    expect(seats.size).toBe(1);
-    expect(seats.get({ ...ada })).toBe('second');
-  });
-
-  it('iterates the live map, so deleting the current entry carries on', () => {
-    const seats = new SeatMap<string>();
-    seats.set({ userId: 'a', cohortId: 'cohort-1' }, 'a');
-    seats.set({ userId: 'b', cohortId: 'cohort-1' }, 'b');
-    seats.set({ userId: 'c', cohortId: 'cohort-1' }, 'c');
-    const seen: string[] = [];
-
-    for (const value of seats) {
-      seen.push(value);
-      if (value === 'a') seats.delete({ userId: 'a', cohortId: 'cohort-1' });
+    for (const [seat, value] of map) {
+      if (value !== 2) map.delete(seat);
     }
 
-    expect(seen).toEqual(['a', 'b', 'c']);
-    expect([...seats.values()]).toEqual(['b', 'c']);
+    expect([...map]).toEqual([[at('bea', 'frontend'), 2]]);
   });
 
-  it('iterates the live map, so an entry deleted before its turn is skipped', () => {
-    const seats = new SeatMap<string>();
-    seats.set({ userId: 'a', cohortId: 'cohort-1' }, 'a');
-    seats.set({ userId: 'b', cohortId: 'cohort-1' }, 'b');
-    seats.set({ userId: 'c', cohortId: 'cohort-1' }, 'c');
-    const seen: string[] = [];
+  it('clears everything', () => {
+    const map = new SeatMap<number>();
+    map.set(at('ada', 'frontend'), 1);
+    map.set(at('bea', 'backend'), 2);
+    map.clear();
 
-    for (const value of seats) {
-      seen.push(value);
-      if (value === 'a') seats.delete({ userId: 'b', cohortId: 'cohort-1' });
-    }
+    expect(map.size).toBe(0);
+    expect(map.accounts).toBe(0);
+    expect([...map]).toEqual([]);
+    expect(map.has(at('ada', 'frontend'))).toBe(false);
+  });
 
-    expect(seen).toEqual(['a', 'c']);
+  /** A connection can be the key: what it was keyed by must not be kept. */
+  it('keeps only the two ids of the object it was keyed by', () => {
+    const map = new SeatMap<number>();
+    const connection = { userId: 'ada', cohortId: 'frontend', socket: {} };
+    map.set(connection, 1);
+
+    const seat = [...map.keys()][0];
+    expect(seat).toEqual(at('ada', 'frontend'));
+    expect(seat).not.toBe(connection);
   });
 });

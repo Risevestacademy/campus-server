@@ -13,43 +13,118 @@ export function seatKey({ userId, cohortId }: Seat): string {
   return `${cohortId}\u0000${userId}`;
 }
 
-/**
- * A map keyed by seat rather than by a string a caller had to encode. Iterates
- * its values, in insertion order, as the plain Map it holds would.
- */
-export class SeatMap<T> {
-  private readonly entries = new Map<string, T>();
+const NOBODY: ReadonlyMap<string, never> = new Map<string, never>();
 
-  get(seat: Seat): T | undefined {
-    return this.entries.get(seatKey(seat));
+/**
+ * A map keyed by seat. Cohort, then account: each cohort's campus is kept
+ * together, and iteration goes one cohort at a time. A second index by
+ * account answers "this account, in whichever cohorts" without a scan.
+ *
+ * Only the two ids are kept, never the object passed as the seat, so a
+ * connection can be the key without being held in memory by it.
+ */
+export class SeatMap<T> implements Iterable<[Seat, T]> {
+  /** Cohort, then account. */
+  private readonly byCohort = new Map<string, Map<string, T>>();
+  /** Account, then cohort: the same entries, the other way round. */
+  private readonly byAccount = new Map<string, Map<string, T>>();
+  private count = 0;
+
+  get({ userId, cohortId }: Seat): T | undefined {
+    return this.byCohort.get(cohortId)?.get(userId);
+  }
+
+  has({ userId, cohortId }: Seat): boolean {
+    return this.byCohort.get(cohortId)?.has(userId) ?? false;
   }
 
   set(seat: Seat, value: T): this {
-    this.entries.set(seatKey(seat), value);
+    if (!this.has(seat)) this.count += 1;
+    put(this.byCohort, seat.cohortId, seat.userId, value);
+    put(this.byAccount, seat.userId, seat.cohortId, value);
     return this;
   }
 
-  has(seat: Seat): boolean {
-    return this.entries.has(seatKey(seat));
-  }
-
   delete(seat: Seat): boolean {
-    return this.entries.delete(seatKey(seat));
-  }
-
-  values(): IterableIterator<T> {
-    return this.entries.values();
+    if (!this.has(seat)) return false;
+    this.count -= 1;
+    remove(this.byCohort, seat.cohortId, seat.userId);
+    remove(this.byAccount, seat.userId, seat.cohortId);
+    return true;
   }
 
   clear(): void {
-    this.entries.clear();
+    this.byCohort.clear();
+    this.byAccount.clear();
+    this.count = 0;
   }
 
   get size(): number {
-    return this.entries.size;
+    return this.count;
   }
 
-  [Symbol.iterator](): IterableIterator<T> {
-    return this.entries.values();
+  /** Accounts with at least one entry, however many cohorts they are in. */
+  get accounts(): number {
+    return this.byAccount.size;
   }
+
+  /**
+   * Everybody in one cohort, in the order they came. Values, not the inner
+   * map: a caller holding that could change one index without the other.
+   */
+  inCohort(cohortId: string): IterableIterator<T> {
+    return (this.byCohort.get(cohortId) ?? NOBODY).values();
+  }
+
+  /** One account in every cohort it is in, in the order it joined them. */
+  ofAccount(userId: string): IterableIterator<T> {
+    return (this.byAccount.get(userId) ?? NOBODY).values();
+  }
+
+  *entries(): IterableIterator<[Seat, T]> {
+    for (const [cohortId, inCohort] of this.byCohort) {
+      for (const [userId, value] of inCohort) {
+        yield [{ userId, cohortId }, value];
+      }
+    }
+  }
+
+  *keys(): IterableIterator<Seat> {
+    for (const [cohortId, inCohort] of this.byCohort) {
+      for (const userId of inCohort.keys()) yield { userId, cohortId };
+    }
+  }
+
+  *values(): IterableIterator<T> {
+    for (const inCohort of this.byCohort.values()) yield* inCohort.values();
+  }
+
+  [Symbol.iterator](): IterableIterator<[Seat, T]> {
+    return this.entries();
+  }
+}
+
+function put<T>(
+  outer: Map<string, Map<string, T>>,
+  first: string,
+  second: string,
+  value: T,
+): void {
+  let inner = outer.get(first);
+  if (!inner) {
+    inner = new Map();
+    outer.set(first, inner);
+  }
+  inner.set(second, value);
+}
+
+function remove<T>(
+  outer: Map<string, Map<string, T>>,
+  first: string,
+  second: string,
+): void {
+  const inner = outer.get(first);
+  if (!inner) return;
+  inner.delete(second);
+  if (inner.size === 0) outer.delete(first);
 }
