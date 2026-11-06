@@ -230,6 +230,16 @@ interface AuditEntryShapes {
       desksRetired: string[];
     };
   };
+  [AuditAction.MapPublished]: {
+    subject: AuditSubjectType.Map;
+    details: {
+      key: string;
+      /** Null on a map that had never been published before. */
+      previousPublishedAt: Date | null;
+      /** When this publish made it live. */
+      publishedAt: Date;
+    };
+  };
   [AuditAction.FeedbackResolved]: {
     subject: AuditSubjectType.Feedback;
     /** Nothing beyond the subject: what was written stays on the feedback. */

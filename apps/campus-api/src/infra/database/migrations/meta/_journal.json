@@ -211,6 +211,13 @@
       "when": 1793832827390,
       "tag": "0029_notices_removed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793850526547,
+      "tag": "0030_map_published_at",
+      "breakpoints": true
     }
   ]
 }

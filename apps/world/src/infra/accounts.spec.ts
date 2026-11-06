@@ -13,6 +13,7 @@ import {
   LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
   MEMBERSHIP_ROWS_QUERY,
+  PUBLISHED_ENTRY_MAP_QUERY,
   ROOM_LINK_PASSES_QUERY,
   SPACES_QUERY,
   SPACE_LISTS_QUERY,
@@ -810,6 +811,33 @@ describe("world's space doors, against campus-api's schema", () => {
  * does not. It is settled once, here, rather than carried around as a string
  * every comparison downstream reads as "not proximity".
  */
+describe("world's published map lookup, against campus-api's schema", () => {
+  it('answers only a live entry map an admin published', async () => {
+    const suffix = `${Date.now().toString(36)}${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const key = `campus-${suffix}`;
+    const annex = `annex-${suffix}`;
+    await db.query(
+      `insert into maps (key, name, is_entry) values ('${key}', 'Campus', true), ('${annex}', 'Annex', false)`,
+    );
+    const read = async () =>
+      (await db.query<{ key: string }>(PUBLISHED_ENTRY_MAP_QUERY)).rows.filter(
+        (row) => row.key.endsWith(suffix),
+      );
+
+    expect(await read()).toEqual([]);
+
+    await db.query(
+      `update maps set published_at = now() where key in ('${key}', '${annex}')`,
+    );
+    expect(await read()).toEqual([{ key }]);
+
+    await db.query(`update maps set retired_at = now() where key = '${key}'`);
+    expect(await read()).toEqual([]);
+  });
+});
+
 describe('reading a space row', () => {
   const row = {
     id: '11111111-1111-4111-8111-111111111111',

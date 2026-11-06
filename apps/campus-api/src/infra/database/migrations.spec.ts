@@ -463,6 +463,40 @@ describe('participant identities over calls already recorded', () => {
   });
 });
 
+/**
+ * 0030 adds when an admin published a map. Existing rows are synced but not
+ * live: the column is null for them, and remains nullable for every row the
+ * sync writes until an admin publishes.
+ */
+describe('0030 adds a publication timestamp', () => {
+  const FILE = '0030_map_published_at.sql';
+
+  it('adds the column nullable, null on a map that was already synced', async () => {
+    const pg = new PGlite();
+    for (const f of before(FILE)) {
+      await apply(pg, f);
+    }
+    await pg.query(
+      "insert into maps (key, name, is_entry) values ('campus', 'Campus', true)",
+    );
+
+    await apply(pg, FILE);
+
+    const res = await pg.query<{
+      published_at: string | null;
+      is_nullable: string;
+    }>(
+      `select maps.published_at::text as published_at, columns.is_nullable
+       from maps
+       join information_schema.columns as columns
+         on columns.table_schema = 'public'
+        and columns.table_name = 'maps'
+        and columns.column_name = 'published_at'`,
+    );
+    expect(res.rows).toEqual([{ published_at: null, is_nullable: 'YES' }]);
+  });
+});
+
 describe('finding a migration by name', () => {
   it('fails clearly for a migration that is not there', () => {
     expect(() => before('0099_never_written.sql')).toThrow(

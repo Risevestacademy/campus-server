@@ -65,12 +65,21 @@ export class Players {
   >();
 
   constructor(
-    private readonly grid: Grid,
+    private grid: Grid,
     /** Fastest a player may walk: one tile per this many milliseconds. */
     private readonly stepMs: number,
     /** How long somebody who left is remembered. 0 forgets them at once. */
     private readonly graceMs: number = 0,
   ) {}
+
+  /**
+   * The map world now serves. Called after a publish reload, before anybody
+   * moves again; the held positions are checked against it on their next
+   * read, and a reconnect-grace position is validated on join.
+   */
+  setGrid(grid: Grid): void {
+    this.grid = grid;
+  }
 
   /**
    * Places somebody on one cohort's map: where they stood there if they left
@@ -91,9 +100,14 @@ export class Players {
 
     const remembered = getIn(this.departed, seat);
     deleteIn(this.departed, seat);
-    if (remembered && remembered.until > now) {
+    if (
+      remembered &&
+      remembered.until > now &&
+      walkable(this.grid, remembered.held.player)
+    ) {
       // The step allowance comes back as it was: leaving and rejoining must
-      // not be a way to refill it.
+      // not be a way to refill it. A map published since may have built over
+      // the tile they left on, so it is checked like any other saved place.
       setIn(this.standing, seat, remembered.held);
       return { ...remembered.held.player };
     }
