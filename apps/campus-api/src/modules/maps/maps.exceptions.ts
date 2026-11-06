@@ -35,6 +35,28 @@ export class MapSyncBusyException extends DomainException {
   readonly code = ExceptionCode.Conflict;
 }
 
+/** No map with that id. */
+export class MapNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
+
+/**
+ * The map is retired: it is off the campus, and nothing may be published for
+ * it. A 409, as for a retired space: the row is sound, its state refuses.
+ */
+export class MapRetiredException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
+/**
+ * The map is not the one people enter the campus on. World serves exactly
+ * one map, so publishing another would leave it serving something no client
+ * could walk into. A 409, the same convention as a retired space.
+ */
+export class MapNotEntryException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}
+
 /** No space with that id. */
 export class SpaceNotFoundException extends DomainException {
   readonly code = ExceptionCode.NotFound;

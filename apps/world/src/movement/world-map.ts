@@ -1,7 +1,7 @@
 import { blocked, type MapLayout } from 'campus-world-map';
 
-import { tileIndex, type Grid } from './grid.js';
-import { emptySpaceIndex, type SpaceIndex } from './spaces.js';
+import { tileIndex, walkable, type Grid, type Tile } from './grid.js';
+import { emptySpaceIndex, floorByMiddle, type SpaceIndex } from './spaces.js';
 
 /**
  * The map this process enforces, and which published version of it. Loaded
@@ -49,4 +49,28 @@ export function gridFrom(layout: MapLayout): Grid {
     }
   }
   return { width, height, spawn: layout.spawn, walls };
+}
+
+/**
+ * What a map must be before world can run on it. `gridFrom` already refuses
+ * one with no spawn; these are the failures that would leave somebody
+ * standing nowhere or seal a drawn space, and they stop a reload before it
+ * is swapped in. Checked on a built `WorldMap`, so a loader cannot hand one
+ * over unchecked.
+ */
+export function assertWorldMap(map: WorldMap): void {
+  if (map.grid.width <= 0 || map.grid.height <= 0) {
+    throw new Error(`map "${map.id}" has no tiles`);
+  }
+  if (!walkable(map.grid, map.grid.spawn)) {
+    throw new Error(`map "${map.id}" spawns on a wall`);
+  }
+  for (const spaceKey of map.spaces.keys) {
+    const floor: Tile[] = floorByMiddle(map.grid, map.spaces, spaceKey);
+    if (floor.length === 0) {
+      throw new Error(
+        `space "${spaceKey}" on "${map.id}" has no walkable tile`,
+      );
+    }
+  }
 }

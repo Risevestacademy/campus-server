@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { COHORT_QUERY_PARAM, SESSION_COOKIE, SOCKET_PATH } from './endpoint.js';
+import {
+  COHORT_QUERY_PARAM,
+  ENTER_QUERY_PARAM,
+  RESUME_QUERY_PARAM,
+  SESSION_COOKIE,
+  SOCKET_PATH,
+} from './endpoint.js';
 import { protocolAsyncApi } from './protocol.asyncapi.js';
 import { protocolJsonSchema } from './protocol.schema.js';
 
@@ -42,6 +48,8 @@ describe('the AsyncAPI document', () => {
     expect(channel.bindings.ws.query.required).toEqual([COHORT_QUERY_PARAM]);
     expect(Object.keys(channel.bindings.ws.query.properties)).toEqual([
       COHORT_QUERY_PARAM,
+      ENTER_QUERY_PARAM,
+      RESUME_QUERY_PARAM,
     ]);
     expect(channel.description).toContain(SESSION_COOKIE);
     expect(document.components.securitySchemes.session.name).toBe(
@@ -72,11 +80,18 @@ describe('the AsyncAPI document', () => {
       'WithdrawEntryRequestMessage',
       'AnswerEntryRequestMessage',
       'SayMessage',
+      'MuteMessage',
+      'RemoveFromSpaceMessage',
+      'GoToMessage',
+      'GoToSpaceMessage',
+      'GoToTileMessage',
+      'StopWalkingMessage',
     ]);
     expect(namesIn(subscribe)).toEqual([
       'WelcomeMessage',
       'PongMessage',
       'SnapshotMessage',
+      'MapChangedMessage',
       'JoinedMessage',
       'AppearanceMessage',
       'LeftMessage',
@@ -87,11 +102,18 @@ describe('the AsyncAPI document', () => {
       'NearbyMessage',
       'LockChangedMessage',
       'LockableSpacesMessage',
+      'DesksChangedMessage',
+      'SpacesMessage',
       'EntryRequestedMessage',
       'EntryRequestEndedMessage',
       'SaidMessage',
+      'StaffActionMessage',
+      'WalkingMessage',
+      'WalkEndedMessage',
       'ReplacedMessage',
+      'WatchingMessage',
       'MovedMessage',
+      'PositionCorrectedMessage',
       'MoveResultMessage',
       'ErrorMessage',
     ]);

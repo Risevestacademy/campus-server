@@ -7,7 +7,11 @@ import type {
   MoveOutcome as MovementOutcome,
   Player as MovementPlayer,
 } from '../movement/players.js';
-import { Status } from '../status/availability.js';
+import {
+  MAX_TIMED_STATUS_SECONDS,
+  MIN_TIMED_STATUS_SECONDS,
+  Status,
+} from '../status/availability.js';
 import { MAX_SAY_LENGTH } from './earshot.js';
 
 /*
@@ -70,6 +74,15 @@ const spaceKey = z
       `\`${DEFAULT_SPACE_KEY}\` for the corridors and grounds.`,
   );
 
+const statusUntil = z
+  .string()
+  .nullable()
+  .describe(
+    'When a status chosen for a while ends, as an ISO timestamp, and goes ' +
+      'back to the one chosen before it. Null for a status that lasts, and ' +
+      'while they show away for being idle.',
+  );
+
 /**
  * Only where somebody first appears. `moved` and `moveResult` stay a bare
  * Player: they go out every tick, and what to draw changes rarely, so a
@@ -80,6 +93,7 @@ export const Avatar = z
     ...Player.shape,
     ...appearance,
     status: StatusSchema,
+    statusUntil,
     spaceKey,
   })
   .meta({
@@ -88,6 +102,27 @@ export const Avatar = z
       'Somebody on the map and what to draw for them. A later change to their ' +
       'sprite or name arrives as an `appearance` message, to their status as ' +
       'a `statusChanged`, and to their space as a `spaceChanged`.',
+  });
+
+export const SpaceName = z
+  .object({
+    spaceKey: z
+      .string()
+      .describe(
+        "A drawn space's key, or " +
+          `\`${DEFAULT_SPACE_KEY}\` for the corridors and grounds.`,
+      ),
+    name: z
+      .string()
+      .describe(
+        'What to show for it. The key itself when campus-api has no row ' +
+          'for the space yet.',
+      ),
+  })
+  .meta({
+    id: 'SpaceName',
+    description:
+      'What to call a space a `spaceKey` names. The same in every cohort.',
   });
 
 export const Call = z
@@ -169,6 +204,49 @@ const requestId = z
       'request.',
   );
 
+/** What a walk is to: exactly one of the three is set. */
+const walkTarget = {
+  userId: z
+    .string()
+    .nullable()
+    .describe('Whom you are walking to, for a `goTo` walk.'),
+  toSpaceKey: z
+    .string()
+    .nullable()
+    .describe('The space you are walking into, for a `goToSpace` walk.'),
+  toTile: z
+    .object({ x: z.number().int().min(0), y: z.number().int().min(0) })
+    .nullable()
+    .describe('The tile you are walking onto, for a `goToTile` walk.'),
+};
+
+export const WalkEndReason = z
+  .enum([
+    'arrived',
+    'stopped',
+    'refused',
+    'gone',
+    'elsewhere',
+    'no_way',
+    'moved_by_staff',
+  ])
+  .meta({
+    id: 'WalkEndReason',
+    description:
+      'arrived: walking to somebody, you are one tile from them, in their ' +
+      'space, never on their tile; to a space, you are on the free tile ' +
+      'nearest its middle, or its middle when none is free; to a tile, you ' +
+      'are on it. stopped: you sent `stopWalking` or a `move`. refused: a ' +
+      'space you may not enter is in the way, or is where you were going, ' +
+      'and you stopped beside the first one; `mayAsk` says whether asking ' +
+      'to enter it would be taken. gone: they left, or were not here. ' +
+      'elsewhere: they are online, but connected to another world server, ' +
+      'which a walk cannot reach. gone and elsewhere end only walks to ' +
+      'somebody. no_way: no path reaches where you were going: walls, a ' +
+      'space with no room beside them, or a walk past the step limit. ' +
+      'moved_by_staff: staff removed you from a space mid-walk.',
+  });
+
 export const EntryRequestOutcome = z
   .enum([
     'admitted',
@@ -241,6 +319,17 @@ export const ClientMessage = z
       .object({
         type: z.literal('setStatus'),
         status: StatusSchema,
+        forSeconds: z
+          .number()
+          .int()
+          .min(MIN_TIMED_STATUS_SECONDS)
+          .max(MAX_TIMED_STATUS_SECONDS)
+          .optional()
+          .describe(
+            'Choose it for this long only: then it goes back to the last ' +
+              'status chosen without a time. Leave it out for a status that ' +
+              'lasts. Choosing again, with or without one, replaces the timer.',
+          ),
       })
       .meta({
         id: 'SetStatusMessage',
@@ -279,8 +368,9 @@ export const ClientMessage = z
       .meta({
         id: 'RequestEntryMessage',
         description:
-          'Ask to enter a space you are refused: a locked one, or a ' +
-          'designated one whose list does not name you. Only from a tile ' +
+          'Ask to enter a space you are refused: a locked one, a ' +
+          'designated one whose list does not name you, or one staff ' +
+          'removed you from in the last 90 seconds. Only from a tile ' +
           'beside it, only while somebody inside can answer, and one request ' +
           'at a time. Answered by `entryRequested`, to you and to whoever ' +
           'inside can answer; otherwise by a NOT_ALLOWED error saying why. ' +
@@ -327,12 +417,123 @@ export const ClientMessage = z
           'one a second, after which a NOT_ALLOWED error. Never stored. ' +
           'Counts as activity.',
       }),
+    z
+      .object({
+        type: z.literal('mute'),
+        userId: z.string().describe('Whose microphone to switch off.'),
+      })
+      .meta({
+        id: 'MuteMessage',
+        description:
+          'Staff only: switch off somebody’s microphone in the call for ' +
+          'their space, once; they may switch it back on. An admin may mute ' +
+          'anybody in the cohort’s campus; a professor or mentor only ' +
+          'somebody in the designated space they stand in, whose list names ' +
+          'them. Never an admin, never yourself. Answered by `staffAction`, ' +
+          'to you and to them; otherwise by a NOT_ALLOWED error saying why. ' +
+          'Counts as activity.',
+      }),
+    z
+      .object({
+        type: z.literal('removeFromSpace'),
+        userId: z
+          .string()
+          .describe('Whom to remove from the space they stand in.'),
+      })
+      .meta({
+        id: 'RemoveFromSpaceMessage',
+        description:
+          'Staff only, the same staff as for `mute`: move somebody out of ' +
+          'the space they stand in, to the nearest tile outside it, and keep ' +
+          'them out for 90 seconds; they may ask to enter meanwhile. Not ' +
+          'from the corridors, nor from a space that takes no requests. ' +
+          'Answered by `staffAction`, to you and to ' +
+          'them; otherwise by a NOT_ALLOWED error saying why. Counts as ' +
+          'activity.',
+      }),
+    z
+      .object({
+        type: z.literal('goTo'),
+        userId: z
+          .string()
+          .describe('Whom to walk to: in your cohort, on this world server.'),
+      })
+      .meta({
+        id: 'GoToMessage',
+        description:
+          'Have the server walk you to somebody, a step per `stepMs`, through ' +
+          'the same doors your own steps would be. Each step is a ' +
+          '`walking`; the walk ends with one `walkEnded`. Replaces a walk ' +
+          'already going. Somebody connected to another world server ends it ' +
+          'with `elsewhere`. Yourself is a NOT_ALLOWED error. Counts as ' +
+          'activity.',
+      }),
+    z
+      .object({
+        type: z.literal('goToSpace'),
+        spaceKey: z
+          .string()
+          .describe(
+            "A drawn space's key on this map. The corridors take `goToTile`.",
+          ),
+      })
+      .meta({
+        id: 'GoToSpaceMessage',
+        description:
+          'Have the server walk you into a space, to the free tile nearest ' +
+          'its middle, the way `goTo` walks you to somebody: a `walking` a ' +
+          'step, then one `walkEnded`. A space closed to you ends it beside ' +
+          'the space with `refused`. Replaces a walk already going. A key ' +
+          'not drawn on this map, or the corridors, is a NOT_ALLOWED error. ' +
+          'Counts as activity.',
+      }),
+    z
+      .object({
+        type: z.literal('goToTile'),
+        x: z.number().int().min(0).describe('Tile column.'),
+        y: z.number().int().min(0).describe('Tile row.'),
+      })
+      .meta({
+        id: 'GoToTileMessage',
+        description:
+          'Have the server walk you onto a tile, the way `goTo` walks you to ' +
+          'somebody: a `walking` a step, then one `walkEnded`. A tile in a ' +
+          'space closed to you ends it beside the space with `refused`. ' +
+          'Replaces a walk already going. A tile off the map or inside a ' +
+          'wall is a NOT_ALLOWED error. Counts as activity.',
+      }),
+    z.object({ type: z.literal('stopWalking') }).meta({
+      id: 'StopWalkingMessage',
+      description:
+        'End the walk `goTo`, `goToSpace` or `goToTile` started, answered by ' +
+        '`walkEnded` with `stopped`. A `move` ends it too. Counts as ' +
+        'activity.',
+    }),
   ])
   .meta({ id: 'ClientMessage', description: 'Every frame a client may send.' });
 
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export type EntryRequestOutcome = z.infer<typeof EntryRequestOutcome>;
+export type WalkEndReason = z.infer<typeof WalkEndReason>;
+
+const mapMetadata = {
+  id: z
+    .string()
+    .describe(
+      'Which published map this is. With `version`, what to load: the ' +
+        'server enforces exactly that one.',
+    ),
+  version: z
+    .string()
+    .describe(
+      'The published version the server loaded. Load this version, not ' +
+        'the current one: a map published since would have walls the ' +
+        'server does not.',
+    ),
+  width: z.number().int().describe('In tiles.'),
+  height: z.number().int().describe('In tiles.'),
+};
 
 export const ServerMessage = z
   .discriminatedUnion('type', [
@@ -361,6 +562,14 @@ export const ServerMessage = z
               'Send `active` well within it while the person is there. 0 when ' +
               'this deployment never does.',
           ),
+        mode: z
+          .enum(['avatar', 'watcher'])
+          .describe(
+            'avatar: you stand for this account on the map. watcher: another ' +
+              'connection does, or nobody does; you see the cohort, may set ' +
+              'the status and use the chat of whoever stands for you, and ' +
+              'are never sent a call.',
+          ),
         ...appearance,
       })
       .meta({
@@ -374,23 +583,7 @@ export const ServerMessage = z
     z
       .object({
         type: z.literal('snapshot'),
-        map: z.object({
-          id: z
-            .string()
-            .describe(
-              'Which published map this is. With `version`, what to load: the ' +
-                'server enforces exactly that one.',
-            ),
-          version: z
-            .string()
-            .describe(
-              'The published version the server loaded. Load this version, not ' +
-                'the current one: a map published since would have walls the ' +
-                'server does not.',
-            ),
-          width: z.number().int().describe('In tiles.'),
-          height: z.number().int().describe('In tiles.'),
-        }),
+        map: z.object(mapMetadata),
         players: z.array(Avatar),
         lockableSpaces: z
           .array(z.string())
@@ -401,12 +594,31 @@ export const ServerMessage = z
         lockedSpaces: z
           .array(z.string())
           .describe('The spaces locked in your cohort right now.'),
+        spaces: z
+          .array(SpaceName)
+          .describe(
+            `Every space a \`spaceKey\` can name on this map, \`${DEFAULT_SPACE_KEY}\` first.`,
+          ),
       })
       .meta({
         id: 'SnapshotMessage',
         description:
           'Sent once, right after `welcome`: the map, and everybody in your cohort ' +
           'on it, you included. Nobody from another cohort is ever in it.',
+      }),
+    z
+      .object({
+        type: z.literal('mapChanged'),
+        map: z.object(mapMetadata),
+      })
+      .meta({
+        id: 'MapChangedMessage',
+        description:
+          'An admin published a new version of the map while you were here. ' +
+          'Stop enforcing the one from `snapshot`, load `map.version`, and ' +
+          'replace everything you draw from the map with it. Sent to ' +
+          'everybody; a connection made afterwards gets it in `snapshot` ' +
+          'instead.',
       }),
     z.object({ type: z.literal('joined'), player: Avatar }).meta({
       id: 'JoinedMessage',
@@ -436,13 +648,15 @@ export const ServerMessage = z
         type: z.literal('statusChanged'),
         userId: z.string(),
         status: StatusSchema,
+        until: statusUntil,
       })
       .meta({
         id: 'StatusChangedMessage',
         description:
-          "Somebody in your cohort's status changed: chosen, or set to away " +
-          'while idle and back again. Sent to everybody in the cohort, you ' +
-          'included when it is yours.',
+          "Somebody in your cohort's status changed: chosen, chosen for a " +
+          'while and that time ended, or set to away while idle and back ' +
+          'again. Sent to everybody in the cohort, you included when it is ' +
+          'yours.',
       }),
     z
       .object({
@@ -516,6 +730,28 @@ export const ServerMessage = z
       }),
     z
       .object({
+        type: z.literal('desksChanged'),
+      })
+      .meta({
+        id: 'DesksChangedMessage',
+        description:
+          'Who holds a desk in your cohort may have changed, or desks were ' +
+          'added to or taken off the map: fetch ' +
+          '`GET /v1/cohorts/{cohortId}/desks` from campus-api again.',
+      }),
+    z
+      .object({
+        type: z.literal('spaces'),
+        spaces: z.array(SpaceName),
+      })
+      .meta({
+        id: 'SpacesMessage',
+        description:
+          'A space was renamed, or campus-api gained or lost a row for one: ' +
+          'replaces `snapshot.spaces`. Sent to everybody.',
+      }),
+    z
+      .object({
         type: z.literal('entryRequested'),
         requestId,
         userId: z.string().describe('Who is asking.'),
@@ -568,6 +804,73 @@ export const ServerMessage = z
           'when they said it, or your own. World keeps none of it: a line ' +
           'reaches whoever is in earshot at that moment and nobody later.',
       }),
+    z
+      .object({
+        type: z.literal('staffAction'),
+        action: z
+          .enum(['muted', 'removed'])
+          .describe(
+            'muted: their microphone was switched off; they may switch it ' +
+              'on again. removed: they were moved out of the space and are ' +
+              'kept out until `until`.',
+          ),
+        userId: z.string().describe('Whom it was done to.'),
+        by: z.string().describe('The staff member who did it.'),
+        spaceKey: z.string().describe('The space it was done in.'),
+        until: z
+          .string()
+          .nullable()
+          .describe(
+            'For removed: when they may walk back in, as an ISO timestamp. ' +
+              'Null for muted.',
+          ),
+        player: Player.nullable().describe(
+          'For removed: where they stand now, outside the space. Snap them ' +
+            'there. Null for muted.',
+        ),
+      })
+      .meta({
+        id: 'StaffActionMessage',
+        description:
+          'Staff muted somebody or removed them from a space. Sent to the ' +
+          'person it was done to and to the staff member who did it. Their ' +
+          'cohort sees a removal as a `moved` and a `spaceChanged`.',
+      }),
+    z
+      .object({
+        type: z.literal('walking'),
+        ...walkTarget,
+        player: Player,
+      })
+      .meta({
+        id: 'WalkingMessage',
+        description:
+          'The server took a step of your walk: where you are now. Only to ' +
+          'you; everybody else sees it in `moved`.',
+      }),
+    z
+      .object({
+        type: z.literal('walkEnded'),
+        ...walkTarget,
+        reason: WalkEndReason,
+        player: Player.describe('Where you stopped.'),
+        spaceKey: z
+          .string()
+          .nullable()
+          .describe('With `refused`, the space you stopped beside.'),
+        mayAsk: z
+          .boolean()
+          .describe(
+            'With `refused`, whether a `requestEntry` for `spaceKey` would ' +
+              'be taken from where you stopped. Offer to ask only when true.',
+          ),
+      })
+      .meta({
+        id: 'WalkEndedMessage',
+        description:
+          'Your walk is over, and why. Only to you. Not sent when the socket ' +
+          'closes.',
+      }),
     z.object({ type: z.literal('replaced') }).meta({
       id: 'ReplacedMessage',
       description:
@@ -576,7 +879,17 @@ export const ServerMessage = z
         'The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT ' +
         'reconnect: the two connections would replace each other for as long as both ' +
         'stayed open. Show that they are in this campus elsewhere, and reconnect only when ' +
-        'they ask to come back here.',
+        'they ask to come back here. A socket that entered with `enter=ifFree` is sent ' +
+        '`watching` instead, and stays open.',
+    }),
+    z.object({ type: z.literal('watching') }).meta({
+      id: 'WatchingMessage',
+      description:
+        'This socket entered with `enter=ifFree`, and the account has entered this ' +
+        "cohort's campus somewhere else with `enter=take`. It is a watcher from now on, " +
+        'as if `welcome.mode` had said so: leave the call and the broadcast room, stop ' +
+        'drawing yourself as walking, and offer to enter here, which is reconnecting ' +
+        'with `enter=take`. The socket stays open.',
     }),
     z.object({ type: z.literal('moved'), players: z.array(Player) }).meta({
       id: 'MovedMessage',
@@ -585,8 +898,21 @@ export const ServerMessage = z
         'now: two steps inside one tick arrive as the second, so an entry can be more ' +
         'than one tile from where they were. Sent once per tick, and not at all when ' +
         'nobody moved. You are never in your own `moved` frame — your `moveResult` ' +
-        'already says where you ended up.',
+        'already says where you ended up. A map reload can also send one at once, ' +
+        'carrying somebody the new walls moved.',
     }),
+    z
+      .object({
+        type: z.literal('positionCorrected'),
+        player: Player,
+      })
+      .meta({
+        id: 'PositionCorrectedMessage',
+        description:
+          'A new map put the tile you stood on inside a wall, so the server ' +
+          'moved you to the nearest walkable one. Snap to `player`. Only you ' +
+          'get this; the rest of your cohort sees the move in `moved`.',
+      }),
     z
       .object({
         type: z.literal('moveResult'),
@@ -815,11 +1141,17 @@ export type OutcomeMatchesMovement = Assert<
 export type AvatarMatchesAccount = Assert<
   Same<
     z.infer<typeof Avatar>,
-    MovementPlayer & Appearance & { status: Status; spaceKey: string }
+    MovementPlayer &
+      Appearance & {
+        status: Status;
+        statusUntil: string | null;
+        spaceKey: string;
+      }
   >
 >;
 
 export type Avatar = z.infer<typeof Avatar>;
+export type SpaceName = z.infer<typeof SpaceName>;
 
 export function encode(message: ServerMessage): string {
   return JSON.stringify(message);

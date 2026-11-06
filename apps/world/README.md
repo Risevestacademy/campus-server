@@ -47,9 +47,13 @@ server decides every position.
     suspension — or the end of a guest's visit — reaches an open socket
     within one heartbeat
 - **Movement on a tile grid:**
-  - the map is the published entry map, loaded from Sanity once at startup
-    through `campus-world-map`; its collision shapes become blocked tiles, and
-    the `snapshot` tells clients which map and version that is
+  - the map is the published entry map, loaded from Sanity through
+    `campus-world-map`; the database only says which map key an admin
+    published. Its collision shapes become blocked tiles, and the `snapshot`
+    tells clients which map and version that is. A publish notification
+    reloads it without a restart, after building and validating the new map
+    off to the side; connected players on new walls are nudged, crossed into
+    their new spaces, and sent `positionCorrected`
   - every tile is known to be in one space: the drawn space covering its
     middle (the smaller, where two overlap, then the key that sorts first),
     or the map's default space, `_default`, for the corridors and grounds.
@@ -93,15 +97,22 @@ server decides every position.
   devices and network before a call. See [below](#the-connection-check).
 - **Who is online, for admins:** a count for the admin dashboard, across the
   campus or in one cohort. See [below](#the-online-count).
+- **Staff muting and removing:** an admin, or a professor or mentor in a
+  designated space that lists them, may switch off somebody's microphone
+  once, or move them out of the space and keep them out for 90 seconds
+  (they may ask to enter). See
+  [the protocol doc](../../docs/world-protocol.md#staff-muting-and-removing).
 - **Locks and asking to enter:** anybody inside a normal whole-room space
   may lock it; somebody refused at a locked or designated space may ask
   from beside it, and somebody inside answers. Both are held in this
   process, per cohort. See
   [the protocol doc](../../docs/world-protocol.md#locks).
 
-Not yet: more than one map, portals, or live positions shared across
+Not yet: more than one served map, portals, or live positions shared across
 instances (a player who moves to another instance starts from their last
-saved position).
+saved position). A re-sync and a publish are expected back to back: world
+reads the current version from Sanity, so a restart between the two serves
+the re-synced geometry even though `published_at` still names the old version.
 
 ## Running it
 
@@ -150,7 +161,7 @@ src/
   media/                POST /media/connection-check and its per-account budget
   movement/             the grid and who stands where — no sockets here
   status/               available, busy or away, and going away while idle — no sockets here
-  spaces/               locks, and requests to enter — no sockets here
+  spaces/               locks, requests to enter, and staff removals — no sockets here
   socket/
     gateway.ts          the /socket route: upgrade, heartbeat, tick, messages; for now also
                         the doors (spaces read, mayEnter on a step), calls and nearby lists

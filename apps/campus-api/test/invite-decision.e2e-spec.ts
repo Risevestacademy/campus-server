@@ -554,7 +554,7 @@ describe('POST /v1/invites/decision (e2e)', () => {
     await request(app.getHttpServer())
       .post(URL_UNDER_TEST)
       .set('Cookie', await provisional(invite.id))
-      .set('x-correlation-id', 'e2e-corr-1')
+      .set('x-correlation-id', '11111111-0000-4000-8000-00000000e2e4')
       .send({ decision: InviteDecision.Accept })
       .expect(200);
 
@@ -563,7 +563,7 @@ describe('POST /v1/invites/decision (e2e)', () => {
       expect.objectContaining({
         action: AuditAction.SystemRoleChanged,
         actorUserId: inviteeId,
-        correlationId: 'e2e-corr-1',
+        correlationId: '11111111-0000-4000-8000-00000000e2e4',
       }),
     ]);
   });

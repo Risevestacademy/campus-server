@@ -76,6 +76,12 @@ export interface MentorshipGroupSnapshot {
   description: string | null;
 }
 
+/** What an admin can change on a notice: title and body only. */
+export interface NoticeSnapshot {
+  title: string;
+  body: string;
+}
+
 /** A mentorship group as a whole: the editable fields plus its people. */
 export interface MentorshipGroupRecordSnapshot extends MentorshipGroupSnapshot {
   cohortId: string;
@@ -211,11 +217,28 @@ interface AuditEntryShapes {
       spacesAdded: string[];
       spacesRestored: string[];
       spacesRetired: string[];
+      desksAdded: string[];
+      desksRestored: string[];
+      desksRetired: string[];
     };
   };
   [AuditAction.MapRetired]: {
     subject: AuditSubjectType.Map;
-    details: { key: string; spacesRetired: string[] };
+    details: {
+      key: string;
+      spacesRetired: string[];
+      desksRetired: string[];
+    };
+  };
+  [AuditAction.MapPublished]: {
+    subject: AuditSubjectType.Map;
+    details: {
+      key: string;
+      /** Null on a map that had never been published before. */
+      previousPublishedAt: Date | null;
+      /** When this publish made it live. */
+      publishedAt: Date;
+    };
   };
   [AuditAction.FeedbackResolved]: {
     subject: AuditSubjectType.Feedback;
@@ -229,11 +252,12 @@ interface AuditEntryShapes {
   [AuditAction.SpaceMembershipGranted]: {
     subject: AuditSubjectType.SpaceMembership;
     details: {
-      /** Who the grant is to: exactly one of these four is set. */
+      /** Who the grant is to: exactly one of these five is set. */
       userId: string | null;
       cohortTrackId: string | null;
       cohortRole: CohortRole | null;
       systemRole: SystemRole | null;
+      mentorshipGroupId: string | null;
       /** The span it runs for, as given — `validTo` null means no end. */
       validFrom: Date;
       validTo: Date | null;
@@ -318,10 +342,78 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.MentorshipGroup;
     details: { cohortId: string; cohortMemberId: string };
   };
+  [AuditAction.DeskFreed]: {
+    subject: AuditSubjectType.DeskClaim;
+    details: { cohortId: string; deskKey: string; holderId: string };
+  };
   [AuditAction.MentorshipGroupDeleted]: {
     subject: AuditSubjectType.MentorshipGroup;
-    details: MentorshipGroupRecordSnapshot;
+    details: MentorshipGroupRecordSnapshot & {
+      /**
+       * The ended space-list entries to the group that went with it — empty
+       * when it held none. Their granting and ending have entries of their
+       * own.
+       */
+      clearedSpaceMembershipIds: string[];
+    };
   };
+  [AuditAction.NoticeCreated]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      cohortTrackId: string | null;
+      mentorshipGroupId: string | null;
+      title: string;
+    };
+  };
+  [AuditAction.NoticeUpdated]: {
+    subject: AuditSubjectType.Notice;
+    details: { changes: FieldChanges<NoticeSnapshot> };
+  };
+  [AuditAction.NoticePinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeUnpinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeRemoved]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      title: string;
+    };
+  };
+  [AuditAction.RoomLinkCreated]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      title: string;
+    } & RoomLinkWindowDetails;
+  };
+  [AuditAction.RoomLinkRevoked]: {
+    subject: AuditSubjectType.RoomLink;
+    details: { cohortId: string; code: string; title: string };
+  };
+  [AuditAction.RoomLinkWindowChanged]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      before: RoomLinkWindowDetails;
+      after: RoomLinkWindowDetails;
+    };
+  };
+}
+
+/** When a room link's event runs, as ISO timestamps; both null for none. */
+interface RoomLinkWindowDetails {
+  startsAt: string | null;
+  endsAt: string | null;
 }
 
 /**

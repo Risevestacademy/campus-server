@@ -144,6 +144,67 @@ describe('fetchEntryMap', () => {
     expect(walkable(map.grid, { x: 2, y: 2 })).toBe(true);
   });
 
+  it('loads the map the database published, by key', async () => {
+    const map = await fetchEntryMap(
+      sanity,
+      published(
+        [manifest('campus', true), manifest('library', true)],
+        tiled([collisions, spawn]),
+      ),
+      'library',
+    );
+
+    expect(map).toMatchObject({ id: 'library', version: 'library-v1' });
+  });
+
+  it('refuses a published map that is not among the manifests', async () => {
+    await expect(
+      fetchEntryMap(
+        sanity,
+        published([manifest('campus', true)], tiled([collisions, spawn])),
+        'gone',
+      ),
+    ).rejects.toBeInstanceOf(MapUnavailableError);
+  });
+
+  it('refuses a map whose spawn is inside a wall', async () => {
+    const spawnWall = {
+      type: 'objectgroup',
+      name: 'collisions',
+      objects: [{ id: 9, x: 32, y: 32, width: 32, height: 32 }],
+    };
+
+    await expect(
+      fetchEntryMap(
+        sanity,
+        published([manifest('campus', true)], tiled([spawnWall, spawn])),
+      ),
+    ).rejects.toThrow(/spawn.*collision/);
+  });
+
+  it('refuses a drawn space with no walkable tile', async () => {
+    const walledSpace = {
+      type: 'objectgroup',
+      name: 'spaces',
+      objects: [{ id: 9, name: 'sealed', x: 0, y: 0, width: 32, height: 32 }],
+    };
+    const wallOnIt = {
+      type: 'objectgroup',
+      name: 'collisions',
+      objects: [{ id: 10, x: 0, y: 0, width: 32, height: 32 }],
+    };
+
+    await expect(
+      fetchEntryMap(
+        sanity,
+        published(
+          [manifest('campus', true)],
+          tiled([wallOnIt, spawn, walledSpace]),
+        ),
+      ),
+    ).rejects.toThrow(/space "sealed".*has no walkable tile/);
+  });
+
   it('asks the project and dataset it was given, past the CDN', async () => {
     const asked: string[] = [];
     const answer = published(
@@ -302,6 +363,33 @@ describe('loadWorldMap', () => {
         { ...sanity, DEPLOYMENT_ENVIRONMENT: 'staging' },
         logger,
         unreachable,
+      ),
+    ).rejects.toThrow(/could not load the published map/);
+  });
+
+  it('loads the map key the database published, rather than the current entry', async () => {
+    const map = await loadWorldMap(
+      { ...sanity, DEPLOYMENT_ENVIRONMENT: 'staging' },
+      log(),
+      published(
+        [manifest('campus', true), manifest('library', true)],
+        tiled([collisions, spawn]),
+      ),
+      'library',
+    );
+
+    expect(map).toMatchObject({ id: 'library', version: 'library-v1' });
+  });
+
+  /** A reload must keep the old map, never swap in the placeholder. */
+  it('refuses the development fallback when a reload asks for it', async () => {
+    await expect(
+      loadWorldMap(
+        { ...sanity, DEPLOYMENT_ENVIRONMENT: 'development' },
+        log(),
+        published([], tiled([])),
+        'campus',
+        false,
       ),
     ).rejects.toThrow(/could not load the published map/);
   });

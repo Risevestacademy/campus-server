@@ -64,18 +64,18 @@ refused.
 
 ## Rules the database enforces
 
-| Rule                                                             | Constraint                                              |
-| ---------------------------------------------------------------- | ------------------------------------------------------- |
-| A map is known by its key, once                                  | `maps_key_unique`                                       |
-| At most one entry map, not counting retired ones                 | `maps_single_entry`                                     |
-| A space is known by its key, once per map                        | `spaces_map_key_unique`                                 |
-| At most one default space per map, retired or not                | `spaces_one_default_per_map`                            |
-| The default space is normal: open to everybody                   | `spaces_default_is_normal`                              |
-| One town hall and one notice board on the campus                 | `spaces_single_town_hall`, `spaces_single_notice_board` |
-| A capacity, when there is one, is at least 1                     | `spaces_capacity_positive`                              |
-| A list entry names one person, track, cohort role or system role | `space_memberships_one_subject`                         |
-| An audit entry about a space names one that exists               | `audit_log_space_id_spaces_id_fk`                       |
-| A grant does not end before it starts                            | `space_memberships_valid_window`                        |
+| Rule                                                                    | Constraint                                              |
+| ----------------------------------------------------------------------- | ------------------------------------------------------- |
+| A map is known by its key, once                                         | `maps_key_unique`                                       |
+| At most one entry map, not counting retired ones                        | `maps_single_entry`                                     |
+| A space is known by its key, once per map                               | `spaces_map_key_unique`                                 |
+| At most one default space per map, retired or not                       | `spaces_one_default_per_map`                            |
+| The default space is normal: open to everybody                          | `spaces_default_is_normal`                              |
+| One town hall and one notice board on the campus                        | `spaces_single_town_hall`, `spaces_single_notice_board` |
+| A capacity, when there is one, is at least 1                            | `spaces_capacity_positive`                              |
+| A list entry names one person, track, cohort role, system role or group | `space_memberships_one_subject`                         |
+| An audit entry about a space names one that exists                      | `audit_log_space_id_spaces_id_fk`                       |
+| A grant does not end before it starts                                   | `space_memberships_valid_window`                        |
 
 They are tested against a real PostgreSQL engine, with the committed
 migrations applied, in `schema.db.spec.ts`.
@@ -115,6 +115,7 @@ It reads every published map from Sanity (`SANITY_PROJECT_ID`,
 | A drawn space with no row                       | Adds the row, with the kind its Tiled class suggests and that kind's settings   |
 | A retired map or space that is published again  | Brings the same row back, with the settings it had                              |
 | A row whose map or space is no longer published | Retires it. A retired map takes all its spaces with it                          |
+| A desk drawn, gone, or drawn on another map     | Adds, retires or brings back its row in `desks`, by key, and follows its map    |
 | The entry flag on a different map               | Moves it                                                                        |
 | A map or space that is already there            | Nothing. A name, a kind or a setting an admin has changed is never written over |
 
@@ -163,6 +164,34 @@ tested with two syncs on separate connections to a real PostgreSQL, in
 audit entry, and each one retired a `map_retired`; a sync that changes
 nothing writes none.
 
+## Publishing
+
+`POST /v1/maps/{id}/publish`, admins only. A sync says what the database knows;
+this says what world should serve. They are separate on purpose.
+
+An admin publishes the row for the map people enter on. The row is locked,
+checked and given this moment as `published_at` in one transaction, with a
+`map_published` audit entry naming the admin, the map and the timestamp before
+and after. Publishing an already-published map moves the timestamp and writes
+another entry; a sync never writes or clears `published_at`.
+
+Only the entry map can be published. World serves one map, and a different one
+would leave clients with no spawn: publishing another is a `409 CONFLICT`
+(`MapNotEntryException`). A retired map is also `409` (`MapRetiredException`);
+an unknown id is `404` (`MapNotFoundException`).
+
+After the commit, campus-api sends the map's key on the same `pg_notify`
+channel a space edit uses. It does not wait for world. A notification that
+fails is logged, not returned and not rolled back: the publish stands.
+
+**What this does not do.** The database stores no map geometry and no published
+version. World reads the current map from Sanity by key. So a re-sync after a
+CMS edit leaves `published_at` at the old timestamp while Sanity already holds
+the new version: a world restart between the re-sync and the publish serves
+the new geometry even though it was not published yet. Sync and publish are
+expected back to back. Fixing that needs a published version or snapshot,
+which is deliberately not part of this schema.
+
 ## Granting access
 
 `POST`, `GET` and `DELETE /v1/spaces/{id}/memberships`, admins only. This is
@@ -173,8 +202,11 @@ these routes are the only thing that writes them.
 An entry names **exactly one subject**: a person (`userId`); everybody on a
 cohort track (`cohortTrackId`, a `cohort_tracks` row, so a track some cohort
 actually runs, and only that cohort's people); everybody holding a cohort
-role (`cohortRole`), in whichever cohort's campus they walk; or everybody
-holding a system role (`systemRole`). An entry on a normal space is allowed
+role (`cohortRole`), in whichever cohort's campus they walk; everybody
+holding a system role (`systemRole`); or everybody in a mentorship group
+(`mentorshipGroupId`) — its students and its mentor, and only that cohort's
+people, for the same reason as a track: a group belongs to one cohort. An
+entry on a normal space is allowed
 but does nothing: nobody is kept out of one to be let in. It starts the moment it is
 given and may carry an end date (`validTo`, in the future: a bare date,
 read as midnight UTC, or a timestamp with its zone); without one it has no
@@ -207,9 +239,19 @@ it. Ended grants go with the track: kept for good, they would block the
 detach, and so the cohort's deletion, forever. Their record is the audit
 log — each grant's `space_membership_granted` and `space_membership_ended`
 entries — and the `cohort_track_detached` entry names the grants it cleared.
-The detach locks the link before it looks for grants, and a grant to a
+The detach locks the link before it looks for grants, and reads them `for
+update`, so an end in flight is waited for rather than raced; a grant to a
 track holds the link with `key share`, so the two never cross: tested in
 `space-memberships.pg.spec.ts`.
+
+**A mentorship group deleted.** A group entry points at the `mentorship_groups`
+row, so deleting the group (`DELETE /v1/cohorts/{id}/mentorship-groups/{groupId}`)
+refuses while a live entry names it (409, naming the spaces): end it first, so
+access is never taken away without anyone ending it. Ended entries go with the
+group, as a detached track's do, and the audit log is their record. The delete
+locks the group before it looks for entries, and reads them `for update`, so an
+end in flight is waited for; a grant to a group holds it with `key share`, so
+the two never cross.
 
 ## Setting a space up
 
@@ -240,9 +282,9 @@ the row, with the admin, the space and each changed field's `from` and `to`.
   designated one. Both are live state for world to hold, not rows here.
 - **Mentorship groups on a list.** An entry naming a group comes once the
   groups exist.
-- **Desks.** No desk is drawn on the map yet.
-- **Which version of a map is live.** Today `world` loads the latest
-  published version. Whether the database should name it is undecided, so
-  the sync reports the version it read and stores none.
-- **The sync does not reach `world`.** It loads its map at startup, so a new
-  publish is live there after a restart, whether or not this has run.
+- **Which version of a map is live.** The database stores when a map was
+  published, not which Sanity version. World reads the current version by map
+  key, and a re-sync before publish has the limitation described under
+  [Publishing](#publishing).
+- **The sync does not reach `world`.** A publish does: campus-api sends the
+  map key, and world reloads the map and its spaces without a restart.

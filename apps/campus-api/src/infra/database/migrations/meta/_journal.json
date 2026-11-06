@@ -155,6 +155,83 @@
       "when": 1793044130896,
       "tag": "0021_google_calendar_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793086871194,
+      "tag": "0022_space_membership_groups",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793358185136,
+      "tag": "0023_analytics_consent",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793638762679,
+      "tag": "0024_desks",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793702715429,
+      "tag": "0025_notices_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793702720556,
+      "tag": "0026_room_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1793780259152,
+      "tag": "0027_desk_claim_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1793827344387,
+      "tag": "0028_room_link_windows",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1793832827390,
+      "tag": "0029_notices_removed_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793850526547,
+      "tag": "0030_map_published_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1794004629939,
+      "tag": "0031_notices_mentorship_group",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794004694792,
+      "tag": "0032_notification_context",
+      "breakpoints": true
     }
   ]
 }

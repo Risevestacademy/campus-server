@@ -52,12 +52,11 @@ const trim = ({ value }: { value: unknown }) =>
  * admin to say what they are.
  */
 export class ListSpacesQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    default: false,
-    description:
-      'Only live spaces with no kind set: the queue of spaces waiting to ' +
-      'be set up.',
-  })
+  /**
+   * Only live spaces with no kind set: the queue of spaces waiting to be set
+   * up.
+   */
+  @ApiPropertyOptional()
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>
     value === 'true' ? true : value === 'false' ? false : value,
@@ -75,7 +74,7 @@ export class ListSpacesQueryDto extends PaginationQueryDto {
  * silently.
  */
 export class UpdateSpaceDto {
-  @ApiPropertyOptional({ example: 'Reading Room', maxLength: 128 })
+  /** @example "Reading Room" */
   @IsOptionalNotNull()
   @Transform(trim)
   @IsString()
@@ -83,46 +82,39 @@ export class UpdateSpaceDto {
   @MaxLength(128)
   name?: string;
 
+  /**
+   * Null puts the space back in the queue: no kind, and nobody but admins may
+   * enter it.
+   */
   @ApiPropertyOptional({
     enum: SpaceKind,
     enumName: 'SpaceKind',
     nullable: true,
-    description:
-      'Null puts the space back in the queue: no kind, and nobody but ' +
-      'admins may enter it.',
   })
   @IsOptional()
   @IsEnum(SpaceKind)
   kind?: SpaceKind | null;
 
-  @ApiPropertyOptional({
-    enum: SpaceAccess,
-    enumName: 'SpaceAccess',
-    description:
-      '`normal` admits anybody in the campus; `designated` admits whoever ' +
-      'the space’s list names. The default space stays normal.',
-  })
+  /**
+   * `normal` admits anybody in the campus; `designated` admits whoever the
+   * space’s list names. The default space stays normal.
+   */
+  @ApiPropertyOptional({ enum: SpaceAccess, enumName: 'SpaceAccess' })
   @IsOptionalNotNull()
   @IsEnum(SpaceAccess)
   access?: SpaceAccess;
 
-  @ApiPropertyOptional({
-    enum: AudioMode,
-    enumName: 'AudioMode',
-    description:
-      '`proximity` fades voices by distance; `boundary` lets everybody in ' +
-      'the space hear everybody.',
-  })
+  /**
+   * `proximity` fades voices by distance; `boundary` lets everybody in the
+   * space hear everybody.
+   */
+  @ApiPropertyOptional({ enum: AudioMode, enumName: 'AudioMode' })
   @IsOptionalNotNull()
   @IsEnum(AudioMode)
   audioMode?: AudioMode;
 
+  /** @example 25 */
   @ApiPropertyOptional({
-    type: Number,
-    example: 25,
-    nullable: true,
-    minimum: MIN_SPACE_CAPACITY,
-    maximum: MAX_SPACE_CAPACITY,
     description:
       `Null means no limit. At least ${MIN_SPACE_CAPACITY} and at most ` +
       `${MAX_SPACE_CAPACITY} when set.`,
@@ -133,11 +125,8 @@ export class UpdateSpaceDto {
   @Max(MAX_SPACE_CAPACITY)
   capacity?: number | null;
 
+  /** @example 8.5 */
   @ApiPropertyOptional({
-    type: Number,
-    example: 8.5,
-    nullable: true,
-    minimum: MIN_AUDIO_DISTANCE,
     description:
       'How far a voice carries, in tiles. Null leaves it unset. At least ' +
       `${MIN_AUDIO_DISTANCE}. The database stores two decimal places.`,
@@ -148,11 +137,8 @@ export class UpdateSpaceDto {
   @Max(9999.99)
   audibleRadius?: number | null;
 
+  /** @example 10 */
   @ApiPropertyOptional({
-    type: Number,
-    example: 10,
-    nullable: true,
-    minimum: MIN_AUDIO_DISTANCE,
     description:
       'The radius the media server subscribes people by, in tiles. Null ' +
       `leaves it unset. At least ${MIN_AUDIO_DISTANCE}. The database stores ` +
@@ -164,42 +150,33 @@ export class UpdateSpaceDto {
   @Max(9999.99)
   subscribeRadius?: number | null;
 
-  @ApiPropertyOptional({
-    type: Number,
-    example: 1.2,
-    description:
-      'How much further than subscribeRadius somebody must go before they ' +
-      'are unsubscribed. Must be greater than 0. The database stores two ' +
-      'decimal places.',
-  })
+  /**
+   * How much further than subscribeRadius somebody must go before they are
+   * unsubscribed. Must be greater than 0. The database stores two decimal
+   * places.
+   * @example 1.2
+   */
   @IsOptionalNotNull()
   @IsNumber({ maxDecimalPlaces: 2, allowNaN: false, allowInfinity: false })
   @IsPositive()
   @Max(99.99)
   hysteresisFactor?: number;
 
-  @ApiPropertyOptional({
-    type: String,
-    description:
-      'The object’s name in Tiled. Read-only: sending it is refused, ' +
-      'because renaming it there makes it a different space.',
-  })
+  /**
+   * The object’s name in Tiled. Read-only: sending it is refused, because
+   * renaming it there makes it a different space.
+   */
   @IsNotEditable()
   key?: string;
 
-  @ApiPropertyOptional({
-    type: String,
-    description: 'Read-only: a space belongs to the map that drew it.',
-  })
+  /** Read-only: a space belongs to the map that drew it. */
   @IsNotEditable()
   mapId?: string;
 
-  @ApiPropertyOptional({
-    type: Boolean,
-    description:
-      'Read-only: whether a space is its map’s default is set by the map, ' +
-      'not here.',
-  })
+  /**
+   * Read-only: whether a space is its map’s default is set by the map, not
+   * here.
+   */
   @IsNotEditable()
   isMapDefault?: boolean;
 }
@@ -209,34 +186,27 @@ export class SpaceResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
 
-  @ApiProperty({
-    format: 'uuid',
-    description: 'The map that drew this space.',
-  })
+  /** The map that drew this space. */
+  @ApiProperty({ format: 'uuid' })
   mapId: string;
 
-  @ApiProperty({
-    example: 'library',
-    description: 'The object’s name in Tiled, unique on its map.',
-  })
+  /**
+   * The object’s name in Tiled, unique on its map.
+   * @example library
+   */
   key: string;
 
-  @ApiProperty({ example: 'Library' })
+  /** @example Library */
   name: string;
 
-  @ApiProperty({
-    enum: SpaceKind,
-    enumName: 'SpaceKind',
-    nullable: true,
-    description: 'Null when no admin has said what the space is yet.',
-  })
+  /** Null when no admin has said what the space is yet. */
+  @ApiProperty({ enum: SpaceKind, enumName: 'SpaceKind', nullable: true })
   kind: SpaceKind | null;
 
-  @ApiProperty({
-    description:
-      'Whether this is its map’s default space: the one for tiles inside ' +
-      'no drawn space.',
-  })
+  /**
+   * Whether this is its map’s default space: the one for tiles inside no drawn
+   * space.
+   */
   isMapDefault: boolean;
 
   @ApiProperty({ enum: SpaceAccess, enumName: 'SpaceAccess' })
@@ -245,44 +215,31 @@ export class SpaceResponseDto {
   @ApiProperty({ enum: AudioMode, enumName: 'AudioMode' })
   audioMode: AudioMode;
 
-  @ApiProperty({
-    type: Number,
-    nullable: true,
-    example: 25,
-    description: 'Null means no limit.',
-  })
+  /**
+   * Null means no limit.
+   * @example 25
+   */
   capacity: number | null;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: '8.50',
-    description: 'In tiles, or null when it is unset.',
-  })
+  /**
+   * In tiles, or null when it is unset.
+   * @example "8.50"
+   */
   audibleRadius: string | null;
 
-  @ApiProperty({
-    type: String,
-    nullable: true,
-    example: '10.00',
-    description: 'In tiles, or null when it is unset.',
-  })
+  /**
+   * In tiles, or null when it is unset.
+   * @example "10.00"
+   */
   subscribeRadius: string | null;
 
-  @ApiProperty({ type: String, example: '1.20' })
+  /** @example "1.20" */
   hysteresisFactor: string;
 
-  @ApiProperty({
-    type: String,
-    format: 'date-time',
-    nullable: true,
-    description: 'Set when the space is no longer on its map.',
-  })
+  /** Set when the space is no longer on its map. */
   retiredAt: Date | null;
 
-  @ApiProperty({ format: 'date-time' })
   createdAt: Date;
 
-  @ApiProperty({ format: 'date-time' })
   updatedAt: Date;
 }

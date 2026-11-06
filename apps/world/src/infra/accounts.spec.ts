@@ -1,16 +1,23 @@
 import { PGlite } from '@electric-sql/pglite';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { seatKey } from '../seat.js';
 import { mayEnter } from '@campus/space-access';
+import { isRefreshTokenLive, type RefreshTokenLiveness } from '@campus/session';
 
 import {
   ACCOUNT_QUERY,
+  ENTRY_REQUEST_ADMITTED_KIND,
+  ENTRY_REQUEST_DECLINED_KIND,
+  ENTRY_REQUEST_NOTIFICATION_QUERY,
   LIVE_MEMBERSHIP_QUERY,
   LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
   MEMBERSHIP_ROWS_QUERY,
+  PUBLISHED_ENTRY_MAP_QUERY,
+  ROOM_LINK_PASSES_QUERY,
   SPACES_QUERY,
   SPACE_LISTS_QUERY,
   looksLikeId,
@@ -236,6 +243,49 @@ describe("world's live-session check, against campus-api's schema", () => {
       ]),
     ).toEqual([LIVE, ROTATED].sort());
   });
+
+  const at = (offsetMs: number) => new Date(NOW.getTime() + offsetMs);
+  const DAY = 86_400_000;
+
+  it.each<[string, RefreshTokenLiveness, boolean]>([
+    ['expired', { revokedAt: null, expiresAt: at(-60_000) }, false],
+    [
+      'revoked and expired',
+      { revokedAt: at(-120_000), expiresAt: at(-60_000) },
+      false,
+    ],
+    [
+      'valid with time to spare',
+      { revokedAt: null, expiresAt: at(30 * DAY) },
+      true,
+    ],
+    ['expiring at exactly now', { revokedAt: null, expiresAt: at(0) }, false],
+    [
+      'expiring a millisecond after now',
+      { revokedAt: null, expiresAt: at(1) },
+      true,
+    ],
+    [
+      'revoked but not yet expired',
+      { revokedAt: at(-1_000), expiresAt: at(DAY) },
+      false,
+    ],
+    ['revoked at exactly now', { revokedAt: at(0), expiresAt: at(DAY) }, false],
+  ])(
+    "agrees with @campus/session's isRefreshTokenLive on a token %s",
+    async (_, row, expected) => {
+      const family = randomUUID();
+      await token(family, {
+        expiresAt: row.expiresAt,
+        revokedAt: row.revokedAt ?? undefined,
+      });
+
+      const sqlLive = (await live([family])).length === 1;
+
+      expect(isRefreshTokenLive(row, NOW)).toBe(expected);
+      expect(sqlLive).toBe(expected);
+    },
+  );
 });
 
 /**
@@ -494,11 +544,14 @@ describe("world's space doors, against campus-api's schema", () => {
   const STUDENT = 'eeeeeee4-0000-4000-8000-000000000001';
   const GUEST = 'eeeeeee4-0000-4000-8000-000000000002';
   const NAMED = 'eeeeeee4-0000-4000-8000-000000000003';
+  const MENTOR = 'eeeeeee4-0000-4000-8000-000000000004';
+  const OUTSIDER = 'eeeeeee4-0000-4000-8000-000000000005';
 
   let spaceIds: Record<string, string>;
+  let groupId: string;
 
   beforeAll(async () => {
-    for (const id of [STUDENT, GUEST, NAMED]) {
+    for (const id of [STUDENT, GUEST, NAMED, MENTOR, OUTSIDER]) {
       await db.query(
         `insert into users (id, email, status) values ($1, $2, 'active')`,
         [id, `${id}@campus.local`],
@@ -530,6 +583,34 @@ describe("world's space doors, against campus-api's schema", () => {
         new Date(NOW.getTime() + HOUR),
       ],
     );
+    await db.query(
+      `insert into cohort_members (user_id, cohort_id, cohort_track_id, role, status)
+       values ($1, $3, null, 'mentor', null),
+              ($2, $3, $4, 'student', 'active')`,
+      [MENTOR, OUTSIDER, COHORT, COHORT_TRACK],
+    );
+    // One pod: its mentor, and one of the students. The other student is in
+    // no group, so a group entry must leave them outside.
+    const mentorMember = await db.query<{ id: string }>(
+      `select id from cohort_members where user_id = $1`,
+      [MENTOR],
+    );
+    const studentMember = await db.query<{ id: string }>(
+      `select id from cohort_members where user_id = $1`,
+      [STUDENT],
+    );
+    groupId = (
+      await db.query<{ id: string }>(
+        `insert into mentorship_groups (cohort_id, mentor_member_id, name)
+         values ($1, $2, 'The Ravens') returning id`,
+        [COHORT, mentorMember.rows[0].id],
+      )
+    ).rows[0].id;
+    await db.query(
+      `insert into mentorship_group_students (mentorship_group_id, cohort_id, cohort_member_id)
+       values ($1, $2, $3)`,
+      [groupId, COHORT, studentMember.rows[0].id],
+    );
 
     const map = await db.query<{ id: string }>(
       `insert into maps (key, name) values ('doors', 'Doors') returning id`,
@@ -542,6 +623,7 @@ describe("world's space doors, against campus-api's schema", () => {
       ['lounge', map.rows[0].id, 'meeting_room', 'normal', null],
       ['classroom', map.rows[0].id, 'classroom', 'designated', null],
       ['pod', map.rows[0].id, 'mentor_pod', 'designated', null],
+      ['garden', map.rows[0].id, 'meeting_room', 'designated', null],
       ['old', map.rows[0].id, 'meeting_room', 'normal', NOW],
       ['annex', other.rows[0].id, 'meeting_room', 'normal', null],
     ] as const) {
@@ -568,6 +650,12 @@ describe("world's space doors, against campus-api's schema", () => {
         new Date(NOW.getTime() - HOUR),
       ],
     );
+    // The garden is listed for the pod itself: its students and its mentor.
+    await db.query(
+      `insert into space_memberships (space_id, mentorship_group_id, valid_from)
+       values ($1, $2, $3)`,
+      [spaceIds.garden, groupId, new Date(NOW.getTime() - HOUR)],
+    );
   });
 
   async function spaces() {
@@ -587,6 +675,7 @@ describe("world's space doors, against campus-api's schema", () => {
         cohort_track_id: string | null;
         cohort_role: string | null;
         system_role: string | null;
+        mentorship_group_id: string | null;
         valid_from: Date;
         valid_to: Date | null;
       }>(SPACE_LISTS_QUERY, [rows.map((row) => row.id), NOW])
@@ -606,6 +695,7 @@ describe("world's space doors, against campus-api's schema", () => {
               toTrackId: entry.cohort_track_id,
               toCohortRole: entry.cohort_role,
               toSystemRole: entry.system_role,
+              toGroupId: entry.mentorship_group_id,
               validFrom: entry.valid_from,
               validTo: entry.valid_to,
             })),
@@ -623,6 +713,7 @@ describe("world's space doors, against campus-api's schema", () => {
         status: string | null;
         access_expires_at: Date | null;
         cohort_track_id: string | null;
+        mentorship_group_id: string | null;
       }>(MEMBERSHIP_ROWS_QUERY, [[userId], [COHORT]])
     ).rows[0];
     return {
@@ -636,6 +727,7 @@ describe("world's space doors, against campus-api's schema", () => {
         status: row.status,
         accessExpiresAt: row.access_expires_at,
         trackId: row.cohort_track_id,
+        mentorshipGroupId: row.mentorship_group_id,
       },
     };
   }
@@ -643,10 +735,22 @@ describe("world's space doors, against campus-api's schema", () => {
   it("reads every space on the map, retired ones too, and none on another map's", async () => {
     expect([...(await spaces()).keys()].sort()).toEqual([
       'classroom',
+      'garden',
       'lounge',
       'old',
       'pod',
     ]);
+  });
+
+  it("reads each space's name", async () => {
+    await db.query(
+      `update spaces set name = 'The Lounge' where key = 'lounge'`,
+    );
+    const rows = (
+      await db.query<{ key: string; name: string }>(SPACES_QUERY, ['doors'])
+    ).rows;
+
+    expect(rows.find((row) => row.key === 'lounge')?.name).toBe('The Lounge');
   });
 
   it('leaves out an entry that has ended', async () => {
@@ -655,16 +759,26 @@ describe("world's space doors, against campus-api's schema", () => {
     expect(pod?.grants.map((grant) => grant.toUserId)).toEqual([NAMED]);
   });
 
-  it('reads a membership row as it stands: role, track and visit', async () => {
+  it('reads a membership row as it stands: role, track, group and visit', async () => {
     expect((await person(GUEST)).membership).toMatchObject({
       role: 'guest',
       trackId: null,
+      mentorshipGroupId: null,
       accessExpiresAt: new Date(NOW.getTime() + HOUR),
     });
     expect((await person(STUDENT)).membership).toMatchObject({
       role: 'student',
       status: 'active',
       trackId: COHORT_TRACK,
+      mentorshipGroupId: groupId,
+    });
+    // A mentor holds the pod from the other side, and reads the same group.
+    expect((await person(MENTOR)).membership).toMatchObject({
+      role: 'mentor',
+      mentorshipGroupId: groupId,
+    });
+    expect((await person(OUTSIDER)).membership).toMatchObject({
+      mentorshipGroupId: null,
     });
   });
 
@@ -675,6 +789,8 @@ describe("world's space doors, against campus-api's schema", () => {
     const student = await person(STUDENT);
     const guest = await person(GUEST);
     const named = await person(NAMED);
+    const mentor = await person(MENTOR);
+    const outsider = await person(OUTSIDER);
 
     expect(at(student, 'lounge')).toBe(true);
     expect(at(guest, 'lounge')).toBe(true);
@@ -683,7 +799,66 @@ describe("world's space doors, against campus-api's schema", () => {
     expect(at(named, 'pod')).toBe(true);
     // Their entry ended an hour ago.
     expect(at(student, 'pod')).toBe(false);
+    // The garden is listed for their pod: its students and its mentor, and
+    // nobody else.
+    expect(at(student, 'garden')).toBe(true);
+    expect(at(mentor, 'garden')).toBe(true);
+    expect(at(outsider, 'garden')).toBe(false);
     expect(at(student, 'old')).toBe(false);
+  });
+});
+
+describe("world's entry-request notification, against campus-api's schema", () => {
+  const asker = randomUUID();
+  const requestId = randomUUID();
+  const context = { cohortId: randomUUID(), spaceKey: 'library' };
+
+  const notify = (kind: string) =>
+    db.query(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+      asker,
+      kind,
+      requestId,
+      JSON.stringify(context),
+    ]);
+
+  beforeAll(async () => {
+    await db.exec(
+      `insert into users (id, email) values ('${asker}', 'asker@campus.local')`,
+    );
+  });
+
+  it('writes the asker one notification per answer, and a repeat is a no-op', async () => {
+    await notify(ENTRY_REQUEST_ADMITTED_KIND);
+    await notify(ENTRY_REQUEST_ADMITTED_KIND);
+    await notify(ENTRY_REQUEST_DECLINED_KIND);
+
+    const rows = await db.query<{
+      kind: string;
+      reference_type: string;
+      reference_id: string;
+      context: unknown;
+      read_at: Date | null;
+    }>(
+      `select kind, reference_type, reference_id, context, read_at from notifications
+        where recipient_id = $1 order by kind`,
+      [asker],
+    );
+    expect(rows.rows).toEqual([
+      {
+        kind: 'entry_request_admitted',
+        reference_type: 'entry_request',
+        reference_id: requestId,
+        context,
+        read_at: null,
+      },
+      {
+        kind: 'entry_request_declined',
+        reference_type: 'entry_request',
+        reference_id: requestId,
+        context,
+        read_at: null,
+      },
+    ]);
   });
 });
 
@@ -693,10 +868,38 @@ describe("world's space doors, against campus-api's schema", () => {
  * does not. It is settled once, here, rather than carried around as a string
  * every comparison downstream reads as "not proximity".
  */
+describe("world's published map lookup, against campus-api's schema", () => {
+  it('answers only a live entry map an admin published', async () => {
+    const suffix = `${Date.now().toString(36)}${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const key = `campus-${suffix}`;
+    const annex = `annex-${suffix}`;
+    await db.query(
+      `insert into maps (key, name, is_entry) values ('${key}', 'Campus', true), ('${annex}', 'Annex', false)`,
+    );
+    const read = async () =>
+      (await db.query<{ key: string }>(PUBLISHED_ENTRY_MAP_QUERY)).rows.filter(
+        (row) => row.key.endsWith(suffix),
+      );
+
+    expect(await read()).toEqual([]);
+
+    await db.query(
+      `update maps set published_at = now() where key in ('${key}', '${annex}')`,
+    );
+    expect(await read()).toEqual([{ key }]);
+
+    await db.query(`update maps set retired_at = now() where key = '${key}'`);
+    expect(await read()).toEqual([]);
+  });
+});
+
 describe('reading a space row', () => {
   const row = {
     id: '11111111-1111-4111-8111-111111111111',
     key: 'library',
+    name: 'Library',
     kind: 'meeting_room',
     access: 'normal',
     retired_at: null,
@@ -717,5 +920,91 @@ describe('reading a space row', () => {
     expect(toWorldSpace({ ...row, audio_mode: 'spatial' }, []).audioMode).toBe(
       'boundary',
     );
+  });
+});
+
+describe("world's room link passes, against campus-api's schema", () => {
+  const NOW = new Date('2026-11-05T10:00:00.000Z');
+  const HOUR = 3_600_000;
+  const COHORT = 'fffffff1-0000-4000-8000-000000000001';
+  const ADA = 'fffffff4-0000-4000-8000-000000000001';
+  const GRACE = 'fffffff4-0000-4000-8000-000000000002';
+
+  it('reads the passes on this map whose window has not ended, revoked links left out', async () => {
+    for (const id of [ADA, GRACE]) {
+      await db.query(`insert into users (id, email) values ($1, $2)`, [
+        id,
+        `${id}@campus.local`,
+      ]);
+    }
+    await db.query(
+      `insert into cohorts (id, name, code) values ($1, 'Cohort L', 'CL')`,
+      [COHORT],
+    );
+    const here = await db.query<{ id: string }>(
+      `insert into maps (key, name) values ('links', 'Links') returning id`,
+    );
+    const there = await db.query<{ id: string }>(
+      `insert into maps (key, name) values ('links-annex', 'Annex') returning id`,
+    );
+    const space = async (mapId: string, key: string) =>
+      (
+        await db.query<{ id: string }>(
+          `insert into spaces (map_id, key, name, kind, audio_mode, access)
+           values ($1, $2, $2, 'meeting_room', 'boundary', 'designated') returning id`,
+          [mapId, key],
+        )
+      ).rows[0].id;
+    const room = await space(here.rows[0].id, 'room');
+    const annex = await space(there.rows[0].id, 'annex-room');
+    const link = async (
+      code: string,
+      spaceId: string,
+      endsInHours: number,
+      revoked = false,
+    ) => {
+      const id = (
+        await db.query<{ id: string }>(
+          `insert into room_links (code, cohort_id, space_id, title, created_by, created_at, starts_at, ends_at, revoked_at)
+           values ($1, $2, $3, $1, $4, $5, $6, $7, $8) returning id`,
+          [
+            code,
+            COHORT,
+            spaceId,
+            ADA,
+            new Date(NOW.getTime() - 3 * HOUR),
+            new Date(NOW.getTime() + (endsInHours - 1) * HOUR),
+            new Date(NOW.getTime() + endsInHours * HOUR),
+            revoked ? new Date(NOW.getTime() - HOUR) : null,
+          ],
+        )
+      ).rows[0].id;
+      await db.query(
+        `insert into room_link_passes (room_link_id, user_id) values ($1, $2), ($1, $3)`,
+        [id, ADA, GRACE],
+      );
+    };
+    await link('LiveL1nk00', room, 1);
+    await link('EndedL1nk0', room, -1);
+    await link('Rev0kedL1n', room, 1, true);
+    await link('AnnexL1nk0', annex, 1);
+
+    const rows = (
+      await db.query<{
+        cohort_id: string;
+        space_key: string;
+        user_id: string;
+        starts_at: Date;
+        ends_at: Date;
+      }>(ROOM_LINK_PASSES_QUERY, ['links', NOW])
+    ).rows;
+
+    expect(rows.map((row) => row.user_id).sort()).toEqual([ADA, GRACE].sort());
+    expect(rows[0]).toMatchObject({
+      cohort_id: COHORT,
+      space_key: 'room',
+      starts_at: NOW,
+      ends_at: new Date(NOW.getTime() + HOUR),
+    });
   });
 });

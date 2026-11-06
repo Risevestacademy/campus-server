@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ROOM_LINK_OPENS_EARLY_MS,
+  roomLinkOpen,
   ACTIVE_STUDENT_STATUS,
   COHORT_ROLES,
   SPACE_ACCESS,
@@ -19,6 +21,7 @@ const DAY = 86_400_000;
 const COHORT = 'cohort-1';
 const ELSEWHERE = 'cohort-2';
 const TRACK = 'track-1';
+const GROUP = 'group-1';
 
 function membership(
   overrides: Partial<CohortMembershipFacts> = {},
@@ -30,6 +33,7 @@ function membership(
     status: ACTIVE_STUDENT_STATUS,
     accessExpiresAt: null,
     trackId: TRACK,
+    mentorshipGroupId: null,
     ...overrides,
   };
 }
@@ -68,12 +72,14 @@ function entry(overrides: Partial<SpaceGrantFacts> = {}): SpaceGrantFacts {
   const names =
     'toTrackId' in overrides ||
     'toCohortRole' in overrides ||
-    'toSystemRole' in overrides;
+    'toSystemRole' in overrides ||
+    'toGroupId' in overrides;
   return {
     toUserId: names ? null : 'person-1',
     toTrackId: null,
     toCohortRole: null,
     toSystemRole: null,
+    toGroupId: null,
     validFrom: new Date(AT.getTime() - DAY),
     validTo: null,
     ...overrides,
@@ -285,6 +291,63 @@ describe('a designated space’s list', () => {
     ).toBe(false);
   });
 
+  it('admits a student in the mentorship group an entry names', () => {
+    expect(
+      mayEnter(
+        person({ membership: membership({ mentorshipGroupId: GROUP }) }),
+        designated(entry({ toGroupId: GROUP })),
+        AT,
+      ),
+    ).toBe(true);
+  });
+
+  it('admits the mentor of the mentorship group an entry names', () => {
+    expect(
+      mayEnter(
+        person({
+          membership: membership({
+            role: 'mentor',
+            status: null,
+            mentorshipGroupId: GROUP,
+          }),
+        }),
+        designated(entry({ toGroupId: GROUP })),
+        AT,
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses a member in another mentorship group', () => {
+    expect(
+      mayEnter(
+        person({ membership: membership({ mentorshipGroupId: 'group-2' }) }),
+        designated(entry({ toGroupId: GROUP })),
+        AT,
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a group entry to a member in no group', () => {
+    expect(
+      mayEnter(person(), designated(entry({ toGroupId: GROUP })), AT),
+    ).toBe(false);
+  });
+
+  it('reads a group from the membership in the cohort being walked', () => {
+    expect(
+      mayEnter(
+        person({
+          membership: membership({
+            cohortId: ELSEWHERE,
+            mentorshipGroupId: GROUP,
+          }),
+        }),
+        designated(entry({ toGroupId: GROUP })),
+        AT,
+      ),
+    ).toBe(false);
+  });
+
   it('admits everybody holding a cohort role an entry names, and nobody else', () => {
     const professors = designated(entry({ toCohortRole: 'professor' }));
 
@@ -424,5 +487,28 @@ describe('an access setting this package does not know', () => {
 
     expect(mayEnter(person(), unknown, AT)).toBe(false);
     expect(mayEnter(person({ systemRole: 'admin' }), unknown, AT)).toBe(true);
+  });
+});
+
+describe('a room link’s window', () => {
+  const startsAt = new Date('2026-11-05T10:00:00Z');
+  const endsAt = new Date('2026-11-05T11:00:00Z');
+  const at = (ms: number) => new Date(startsAt.getTime() + ms);
+
+  it('opens a little before the event starts, and closes as it ends', () => {
+    expect(
+      roomLinkOpen({ startsAt, endsAt }, at(-ROOM_LINK_OPENS_EARLY_MS - 1)),
+    ).toBe(false);
+    expect(
+      roomLinkOpen({ startsAt, endsAt }, at(-ROOM_LINK_OPENS_EARLY_MS)),
+    ).toBe(true);
+    expect(roomLinkOpen({ startsAt, endsAt }, at(30 * 60_000))).toBe(true);
+    expect(roomLinkOpen({ startsAt, endsAt }, endsAt)).toBe(false);
+  });
+
+  it('admits nobody without a window', () => {
+    expect(roomLinkOpen({ startsAt: null, endsAt: null }, startsAt)).toBe(
+      false,
+    );
   });
 });

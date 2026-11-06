@@ -44,29 +44,31 @@ sweeps although they carry on.
 
 With metrics on, world also sends:
 
-| Metric                               | Labels      | What it counts                                                                         |
-| ------------------------------------ | ----------- | -------------------------------------------------------------------------------------- |
-| `world.connections`                  | `cohort_id` | Open sockets, read at each export.                                                     |
-| `world.connections.opened`           |             | Sockets authenticated and joined.                                                      |
-| `world.connections.refused`          | `reason`    | Upgrades refused, by the close reason sent: the client's to fix, not world's.          |
-| `world.connections.failed`           |             | Upgrades world could not decide, closed with `internal_error`.                         |
-| `world.connections.abandoned`        |             | Clients gone before their upgrade was decided.                                         |
-| `world.connections.closed_by_server` | `reason`    | Open sockets world closed or cut off, including `heartbeat_missed` and `not_reading`.  |
-| `world.connections.closed`           | `code`      | Every close, by code. Codes other than world's own and the standard ones read `other`. |
-| `world.messages.received`            | `type`      | Frames received, by message type, or `invalid`.                                        |
-| `world.moves`                        | `outcome`   | Moves, by outcome.                                                                     |
-| `world.frames.sent`                  |             | Frames sent.                                                                           |
-| `world.socket.buffered`              |             | The most any one socket has waiting unsent, in bytes.                                  |
+| Metric                               | Labels      | What it counts                                                                                                                                           |
+| ------------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `world.connections`                  | `cohort_id` | Open sockets standing for an account, read at each export.                                                                                               |
+| `world.watchers`                     | `cohort_id` | Open sockets watching a cohort without an avatar, as a phone does while the account is on campus elsewhere.                                              |
+| `world.connections.opened`           |             | Sockets authenticated and joined.                                                                                                                        |
+| `world.connections.refused`          | `reason`    | Upgrades refused, by the close reason sent: the client's to fix, not world's.                                                                            |
+| `world.connections.failed`           |             | Upgrades world could not decide, closed with `internal_error`, and upgrades where something threw after the decision, terminated without a close reason. |
+| `world.connections.abandoned`        |             | Accepted clients gone before world let them in.                                                                                                          |
+| `world.connections.closed_by_server` | `reason`    | Open sockets world closed or cut off, including `heartbeat_missed` and `not_reading`.                                                                    |
+| `world.connections.closed`           | `code`      | Every close, by code. Codes other than world's own and the standard ones read `other`.                                                                   |
+| `world.messages.received`            | `type`      | Frames received, by message type, or `invalid`.                                                                                                          |
+| `world.moves`                        | `outcome`   | Moves, by outcome.                                                                                                                                       |
+| `world.frames.sent`                  |             | Frames sent.                                                                                                                                             |
+| `world.socket.buffered`              |             | The most any one socket has waiting unsent, in bytes.                                                                                                    |
 
 Connect success, an SLO, is `opened ÷ (opened + failed + abandoned)`.
-Abandoned counts against world: a client that gives up while world is still
-deciding is most often waiting on a slow world. Refusals are left out: a
+Abandoned counts against world: an accepted client that gives up before world
+lets it in is most often waiting on a slow world. Refusals are left out: a
 signed-out tab or a wrong origin is not world failing.
 
-Every deploy closes each open socket with `server shutting down`, so
-`world.connections.closed_by_server{reason="server shutting down"}` rises in
-a burst at each release. That marks deploys; an alert on sockets world closes
-should leave that reason out.
+Every deploy closes each open socket with `server shutting down`. Those
+closes are counted while the old process shuts down, so they reach Grafana in
+its final export at best, and a rate needs two samples: don't expect
+`world.connections.closed_by_server` to show deploys. An alert on sockets
+world closes should still leave that reason out.
 
 ## Setting up an environment
 
@@ -112,6 +114,64 @@ Do this once for staging and once for production.
    - **Loki:** pick `service_name` = `campus-api`. A log line's `trace_id`
      opens its trace.
    - **Metrics:** names start `nodejs_` and `v8js_`.
+
+## Dashboards
+
+Four dashboards live in [`infra/grafana/dashboards`](../infra/grafana/dashboards),
+tagged `campus` and linked to each other:
+
+| File            | Shows                                                                                        | Reads           |
+| --------------- | -------------------------------------------------------------------------------------------- | --------------- |
+| `api.json`      | campus-api's requests, latency and errors by route, outgoing calls by host, error log lines  | traces, logs    |
+| `world.json`    | open sockets, connect success, upgrades by outcome, closes, traffic, the work behind sockets | metrics, traces |
+| `database.json` | Postgres queries by operation, latency, failures by code, queries over 100 ms                | traces          |
+| `runtime.json`  | event loop delay and utilization, heap, GC pauses, active resources                          | metrics         |
+
+The API and database dashboards read TraceQL metrics from the spans, not
+exported metrics, so they work while `FF_OTEL_METRICS_ENABLED` is off, as it
+is for campus-api on staging. The runtime dashboard shows only services that
+export metrics, so on staging only world.
+
+**Deploying them:** the
+[Grafana dashboards workflow](../.github/workflows/grafana.yml) writes every
+file to the stack when a change under `infra/grafana` reaches `dev` (the
+`staging` GitHub environment) or `main` (`production`), and can be run by
+hand from the Actions tab. Each dashboard has a fixed uid, so a deploy
+replaces the one in Grafana, including any edit made there since. The data
+source pickers at the top of each dashboard choose the stack's `…-prom`,
+`…-traces` and `…-logs` by name.
+
+To set up an environment for it, create a service account in the stack
+(Administration → Users and access → Service accounts) with the Editor role,
+add a token, and set these on the GitHub environment:
+
+| Name                 | Kind     | Value                                                             |
+| -------------------- | -------- | ----------------------------------------------------------------- |
+| `GRAFANA_URL`        | variable | The stack's address, such as `https://campus-staging.grafana.net` |
+| `GRAFANA_TOKEN`      | secret   | The service account's token                                       |
+| `GRAFANA_FOLDER_UID` | variable | Optional: the uid of the folder to put them in                    |
+
+Until both `GRAFANA_URL` and `GRAFANA_TOKEN` are set, the workflow warns and
+deploys nothing. `pnpm grafana:deploy` does the same from a machine, with the
+three set in the shell. To import one by hand instead: Dashboards → New →
+Import, and upload the file.
+
+Change a dashboard by editing it in Grafana, then Export → Export as JSON
+with "Export the dashboard to use in another instance" off, and commit the
+file in place of the old one, so the repository stays the copy that counts:
+the next deploy overwrites anything that isn't committed.
+
+`pnpm grafana:check`, which CI runs, checks the files without Grafana: every
+metric a query names must be one that world or the runtime instrumentation
+exports, under the name Grafana Cloud gives it; every data source and variable
+a query uses must be defined; ids and uids must be unique and panels must not
+overlap. It reads the instruments from `apps/world/src/infra/metrics.ts` and
+the installed `@opentelemetry/instrumentation-runtime-node`, so a renamed
+instrument or an upgrade fails it until the dashboards follow.
+
+A counter's first increase after a restart can be missed, so connect success
+can be slightly off just after a deploy. That matters only at staging's low
+volume.
 
 ## When nothing arrives
 

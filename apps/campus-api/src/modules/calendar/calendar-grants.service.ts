@@ -16,6 +16,7 @@ import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import { timestamptz } from '../../infra/database/timestamptz.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { cohortMembers } from '../cohorts/schema.js';
 import {
@@ -214,7 +215,7 @@ export class CalendarGrantsService {
       .update(googleCalendarGrants)
       .set({
         revokeAttempts: sql`${attempts} + 1`,
-        revokeRetryAt: sql`${now.toISOString()}::timestamptz + least(${FIRST_RETRY_MS} * power(2, ${attempts}), ${LAST_RETRY_MS}) * interval '1 millisecond'`,
+        revokeRetryAt: sql`${timestamptz(now)} + least(${FIRST_RETRY_MS} * power(2, ${attempts}), ${LAST_RETRY_MS}) * interval '1 millisecond'`,
       })
       .where(
         and(

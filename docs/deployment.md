@@ -286,9 +286,13 @@ PRESENCE_UNAVAILABLE` until Redis is back.
   and `system_role` (migration `0018`) are the latest: without them world
   cannot read the spaces, and every drawn space is admins only, normal or
   designated, until it can (saved places are kept).
+- Writes one table, `notifications`: the asker's alert when an entry request
+  is answered. It needs migration `0032` (`notifications.context`); without
+  it the alert is not written and world logs a warning, nothing else breaks.
 - Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
   no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
-  from CORS, so unset means no browser can connect), `DATABASE_URL` (read-only:
+  from CORS, so unset means no browser can connect), `DATABASE_URL` (reads,
+  and inserts into `notifications`, so a read-only role is not enough:
   world re-checks that the account behind a token still exists and is not
   suspended, so a ban reaches open sockets instead of waiting out the token).
   `PORT` is injected by Railway. `REDIS_URL` (the Redis service's internal
@@ -302,6 +306,7 @@ PRESENCE_UNAVAILABLE` until Redis is back.
   `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
   `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
   `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
+  the `goTo` cap `WORLD_WALK_MAX_STEPS` (unset: the map's width × height),
   the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
   `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
   `WORLD_PRESENCE_TTL_SECONDS`, going Away when idle

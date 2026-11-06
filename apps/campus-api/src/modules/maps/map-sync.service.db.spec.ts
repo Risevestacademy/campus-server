@@ -1,4 +1,5 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DESKS_CHANGED_CHANNEL } from '@campus/session';
 import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
@@ -8,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
+import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
+import { DeskReleaseReason, deskClaims, desks } from '../desks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import { MapSyncOutcome } from './dto/map-sync.dto.js';
 import { MapSyncService } from './map-sync.service.js';
@@ -63,6 +66,7 @@ const map = (
   version: `${key}-v1`,
   isEntry: key === 'campus',
   spaces: drawn,
+  desks: [],
   ...overrides,
 });
 
@@ -169,6 +173,7 @@ describe('a first sync', () => {
             retired: [],
             needsKind: [],
           },
+          desks: { added: [], restored: [], retired: [] },
         },
       ],
     });
@@ -281,6 +286,9 @@ describe('a first sync', () => {
           spacesAdded: ['library', 'nook'],
           spacesRestored: [],
           spacesRetired: [],
+          desksAdded: [],
+          desksRestored: [],
+          desksRetired: [],
         },
         correlationId: 'corr-1',
       },
@@ -705,6 +713,9 @@ describe('syncing again', () => {
           spacesAdded: ['cafe'],
           spacesRestored: [],
           spacesRetired: ['room_1'],
+          desksAdded: [],
+          desksRestored: [],
+          desksRetired: [],
         },
       }),
     ]);
@@ -797,6 +808,60 @@ describe('the default space', () => {
   });
 });
 
+/**
+ * A sync owns the rows, not whether the map is live. `published_at` is the
+ * admin's, so neither a new map nor a re-sync may write it; a map published
+ * before a CMS edit keeps the moment it went live.
+ */
+describe('what a sync never does to publication', () => {
+  const publishedAt = new Date('2026-09-01T09:00:00Z');
+
+  const publishedOf = async (key: string) =>
+    (
+      await db
+        .select({ publishedAt: maps.publishedAt })
+        .from(maps)
+        .where(eq(maps.key, key))
+    )[0]?.publishedAt;
+
+  it('leaves a new map unpublished', async () => {
+    await sync([map('campus')]);
+
+    await expect(publishedOf('campus')).resolves.toBeNull();
+  });
+
+  it('leaves a re-synced unpublished map unpublished', async () => {
+    await sync([map('campus', [space('library')])]);
+
+    await sync([map('campus', [space('library'), space('lab')])]);
+
+    await expect(publishedOf('campus')).resolves.toBeNull();
+  });
+
+  it('does not overwrite the publication of an already-published map', async () => {
+    await sync([map('campus', [space('library')])]);
+    await db.update(maps).set({ publishedAt }).where(eq(maps.key, 'campus'));
+
+    await sync([
+      map('campus', [space('library'), space('lab')], {
+        version: 'campus-v2',
+      }),
+    ]);
+
+    await expect(publishedOf('campus')).resolves.toEqual(publishedAt);
+  });
+
+  it('does not write it when a retired map is restored', async () => {
+    await sync([map('campus')]);
+    await db.update(maps).set({ publishedAt }).where(eq(maps.key, 'campus'));
+    await sync([]);
+
+    await sync([map('campus')]);
+
+    await expect(publishedOf('campus')).resolves.toEqual(publishedAt);
+  });
+});
+
 describe('a map no longer published', () => {
   const both = [
     map('campus', [space('library', 'open')]),
@@ -820,6 +885,7 @@ describe('a map no longer published', () => {
           retired: ['den', 'lab'],
           needsKind: [],
         },
+        desks: { added: [], restored: [], retired: [] },
       },
       expect.objectContaining({
         key: 'campus',
@@ -851,7 +917,11 @@ describe('a map no longer published', () => {
       expect.objectContaining({
         action: AuditAction.MapRetired,
         subjectType: AuditSubjectType.Map,
-        details: { key: 'annex', spacesRetired: ['den', 'lab'] },
+        details: {
+          key: 'annex',
+          spacesRetired: ['den', 'lab'],
+          desksRetired: [],
+        },
       }),
     ]);
   });
@@ -1006,6 +1076,60 @@ describe('telling world the spaces changed', () => {
     }
   });
 
+  it('says nothing when only desks changed, which world does not read', async () => {
+    await sync([map('campus', [space('library', 'open')])]);
+    const { heard, stop } = await listening();
+    try {
+      const result = await sync([
+        map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
+      ]);
+      expect(result.changed).toBe(true);
+
+      // Notices arrive in commit order, so one sent above would come first.
+      await db.execute(
+        sql`select pg_notify(${SPACES_CHANGED_CHANNEL}, 'marker')`,
+      );
+      await vi.waitFor(() => expect(heard).toContain('marker'));
+      expect(heard).toEqual(['marker']);
+    } finally {
+      await stop();
+    }
+  });
+
+  it('tells every cohort when desks are added or retired, and only then', async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(DESKS_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    try {
+      await sync([map('campus', [space('library', 'open')])]);
+      await sync([
+        map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
+      ]);
+      await sync([
+        map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
+      ]);
+      // A held desk leaving: one word to every cohort, not one per holder too.
+      await db.execute(sql`truncate cohorts cascade`);
+      const [cohort] = await db
+        .insert(cohorts)
+        .values({ name: 'Cohort 1', code: 'C1' })
+        .returning();
+      const [desk] = await db.select().from(desks);
+      await db
+        .insert(deskClaims)
+        .values({ deskId: desk.id, cohortId: cohort.id, userId: admin.id });
+      await sync([map('campus', [space('library', 'open')])]);
+      await db.execute(
+        sql`select pg_notify(${DESKS_CHANGED_CHANNEL}, 'marker')`,
+      );
+      await vi.waitFor(() => expect(heard).toContain('marker'));
+      expect(heard).toEqual(['', '', 'marker']);
+    } finally {
+      await stop();
+    }
+  });
+
   it('says nothing on a dry run, which changes nothing', async () => {
     const { heard, stop } = await listening();
     try {
@@ -1057,6 +1181,235 @@ describe('a dry run', () => {
     });
     await expect(snapshot()).resolves.toEqual(before);
     await expect(entries()).resolves.toHaveLength(1);
+  });
+});
+
+describe('desks', () => {
+  const withDesks = (keys: string[], mapKey = 'campus') =>
+    map(mapKey, [space('library', 'open')], { desks: keys });
+
+  /** Every desk, as `map:key`, with a `†` on a retired one. */
+  const deskRows = async () =>
+    (
+      await db
+        .select({ key: desks.key, map: maps.key, retired: desks.retiredAt })
+        .from(desks)
+        .innerJoin(maps, eq(maps.id, desks.mapId))
+        .orderBy(asc(desks.key))
+    ).map((row) => `${row.map}:${row.key}${row.retired ? '†' : ''}`);
+
+  it('gives each desk drawn a row', async () => {
+    const result = await sync([withDesks(['desk_b', 'desk_a'])]);
+
+    expect(result.maps[0].desks).toEqual({
+      added: ['desk_a', 'desk_b'],
+      restored: [],
+      retired: [],
+    });
+    await expect(deskRows()).resolves.toEqual([
+      'campus:desk_a',
+      'campus:desk_b',
+    ]);
+  });
+
+  it('retires a desk no longer drawn, and brings it back as the same row', async () => {
+    await sync([withDesks(['desk_a', 'desk_b'])]);
+    const [before] = await db
+      .select()
+      .from(desks)
+      .where(eq(desks.key, 'desk_b'));
+
+    const gone = await sync([withDesks(['desk_a'])]);
+    expect(gone.maps[0]).toMatchObject({
+      outcome: MapSyncOutcome.Updated,
+      desks: { added: [], restored: [], retired: ['desk_b'] },
+    });
+    await expect(deskRows()).resolves.toEqual([
+      'campus:desk_a',
+      'campus:desk_b†',
+    ]);
+
+    const back = await sync([withDesks(['desk_a', 'desk_b'])]);
+    expect(back.maps[0].desks).toEqual({
+      added: [],
+      restored: ['desk_b'],
+      retired: [],
+    });
+    const [after] = await db
+      .select()
+      .from(desks)
+      .where(eq(desks.key, 'desk_b'));
+    expect(after).toMatchObject({ id: before.id, retiredAt: null });
+  });
+
+  it('changes nothing when the desks are as they were', async () => {
+    await sync([withDesks(['desk_a'])]);
+    const before = await db.select().from(desks);
+
+    const again = await sync([withDesks(['desk_a'])]);
+
+    expect(again.changed).toBe(false);
+    await expect(db.select().from(desks)).resolves.toEqual(before);
+  });
+
+  it('follows a desk drawn on another map, keeping its row', async () => {
+    await sync([withDesks(['desk_a']), withDesks([], 'annex')]);
+    const [before] = await db.select().from(desks);
+
+    const result = await sync([withDesks([]), withDesks(['desk_a'], 'annex')]);
+
+    expect(result.maps).toEqual([
+      expect.objectContaining({
+        key: 'annex',
+        desks: { added: [], restored: ['desk_a'], retired: [] },
+      }),
+      expect.objectContaining({
+        key: 'campus',
+        desks: { added: [], restored: [], retired: ['desk_a'] },
+      }),
+    ]);
+    await expect(deskRows()).resolves.toEqual(['annex:desk_a']);
+    const [after] = await db.select().from(desks);
+    expect(after.id).toBe(before.id);
+  });
+
+  it('retires the desks of a map no longer published, and records them', async () => {
+    await sync([withDesks([]), withDesks(['desk_a'], 'annex')]);
+    await db.execute(sql`truncate audit_log`);
+
+    const result = await sync([withDesks([])]);
+
+    expect(result.maps[0]).toMatchObject({
+      key: 'annex',
+      outcome: MapSyncOutcome.Retired,
+      desks: { retired: ['desk_a'] },
+    });
+    await expect(deskRows()).resolves.toEqual(['annex:desk_a†']);
+    await expect(entries()).resolves.toEqual([
+      expect.objectContaining({
+        action: AuditAction.MapRetired,
+        details: {
+          key: 'annex',
+          spacesRetired: ['library'],
+          desksRetired: ['desk_a'],
+        },
+      }),
+    ]);
+  });
+
+  it('records the desks a sync changed on the map', async () => {
+    await sync([withDesks(['desk_a'])]);
+    await db.execute(sql`truncate audit_log`);
+
+    await sync([withDesks(['desk_b'])]);
+
+    await expect(entries()).resolves.toEqual([
+      expect.objectContaining({
+        action: AuditAction.MapSynced,
+        details: expect.objectContaining({
+          outcome: 'updated',
+          desksAdded: ['desk_b'],
+          desksRestored: [],
+          desksRetired: ['desk_a'],
+        }),
+      }),
+    ]);
+  });
+
+  describe('held when it leaves its map', () => {
+    /** Desk key → [holder's email, release reason or null], one per claim. */
+    const claims = async () =>
+      (
+        await db
+          .select({
+            desk: desks.key,
+            email: users.email,
+            reason: deskClaims.releaseReason,
+            releasedAt: deskClaims.releasedAt,
+          })
+          .from(deskClaims)
+          .innerJoin(desks, eq(desks.id, deskClaims.deskId))
+          .innerJoin(users, eq(users.id, deskClaims.userId))
+          .orderBy(asc(users.email))
+      ).map((row) => {
+        expect(row.releasedAt === null).toBe(row.reason === null);
+        return [row.desk, row.email, row.reason];
+      });
+
+    /** Somebody in a cohort of their own holds the desk, and somebody once did. */
+    const hold = async (key: string) => {
+      await db.execute(sql`truncate cohorts cascade`);
+      const [desk] = await db.select().from(desks).where(eq(desks.key, key));
+      const [cohort] = await db
+        .insert(cohorts)
+        .values({ name: 'Cohort 1', code: 'C1' })
+        .returning();
+      const people = await db
+        .insert(users)
+        .values([{ email: 'ada@campus.local' }, { email: 'bo@campus.local' }])
+        .returning();
+      await db.insert(cohortMembers).values(
+        people.map((person) => ({
+          cohortId: cohort.id,
+          userId: person.id,
+          role: CohortRole.Mentor,
+        })),
+      );
+      await db.insert(deskClaims).values([
+        { deskId: desk.id, cohortId: cohort.id, userId: people[0].id },
+        {
+          deskId: desk.id,
+          cohortId: cohort.id,
+          userId: people[1].id,
+          claimedAt: new Date('2026-11-01T09:00:00Z'),
+          releasedAt: new Date('2026-11-02T09:00:00Z'),
+          releaseReason: DeskReleaseReason.Released,
+        },
+      ]);
+    };
+
+    it('ends the claim on it when it is retired, and leaves ended ones as they were', async () => {
+      await sync([withDesks(['desk_a'])]);
+      await hold('desk_a');
+
+      await sync([withDesks([])]);
+
+      await expect(claims()).resolves.toEqual([
+        ['desk_a', 'ada@campus.local', DeskReleaseReason.DeskRetired],
+        ['desk_a', 'bo@campus.local', DeskReleaseReason.Released],
+      ]);
+    });
+
+    it('ends the claim on it when it is drawn on another map', async () => {
+      await sync([withDesks(['desk_a']), withDesks([], 'annex')]);
+      await hold('desk_a');
+
+      await sync([withDesks([]), withDesks(['desk_a'], 'annex')]);
+
+      await expect(claims()).resolves.toEqual([
+        ['desk_a', 'ada@campus.local', DeskReleaseReason.DeskRetired],
+        ['desk_a', 'bo@campus.local', DeskReleaseReason.Released],
+      ]);
+    });
+
+    it('keeps the claim on a desk still drawn where it was', async () => {
+      await sync([withDesks(['desk_a'])]);
+      await hold('desk_a');
+
+      await sync([withDesks(['desk_a', 'desk_b'])]);
+
+      await expect(claims()).resolves.toEqual([
+        ['desk_a', 'ada@campus.local', null],
+        ['desk_a', 'bo@campus.local', DeskReleaseReason.Released],
+      ]);
+    });
+  });
+
+  it('writes no desk on a dry run', async () => {
+    const preview = await sync([withDesks(['desk_a'])], true);
+
+    expect(preview.maps[0].desks.added).toEqual(['desk_a']);
+    await expect(db.select().from(desks)).resolves.toEqual([]);
   });
 });
 

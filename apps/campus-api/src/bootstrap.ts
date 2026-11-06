@@ -11,6 +11,10 @@ import { fileURLToPath } from 'node:url';
 import { Logger } from 'nestjs-pino';
 
 import { AppModule } from './app.module.js';
+import {
+  ANALYTICS,
+  type Analytics,
+} from './infra/analytics/analytics.module.js';
 import { parseCorsOrigins, type Env } from './infra/config/env.js';
 import {
   ERROR_REPORTER,
@@ -44,6 +48,7 @@ export async function bootstrap(
   let app: NestExpressApplication | undefined;
   let logger: Logger | undefined;
   let reporter: ErrorReporter | undefined;
+  let analytics: Analytics | undefined;
 
   /** Closes the app, then sends what telemetry and PostHog still hold. */
   async function exit(code: number): Promise<void> {
@@ -51,6 +56,7 @@ export async function bootstrap(
       await gracefulShutdown(app, [
         () => (telemetry ? telemetry.shutdown() : Promise.resolve()),
         () => (reporter ? reporter.shutdown() : Promise.resolve()),
+        () => (analytics ? analytics.shutdown() : Promise.resolve()),
       ]);
     } catch (err) {
       console.error('Error during shutdown', err);
@@ -79,6 +85,7 @@ export async function bootstrap(
     logger = appLogger;
     app.useLogger(appLogger);
     reporter = app.get<ErrorReporter>(ERROR_REPORTER);
+    analytics = app.get<Analytics>(ANALYTICS);
 
     await configureAndListen(app, config, appLogger);
   } catch (err) {

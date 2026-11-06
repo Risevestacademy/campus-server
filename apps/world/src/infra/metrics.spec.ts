@@ -12,10 +12,13 @@ class TestReader extends MetricReader {
   protected async onShutdown(): Promise<void> {}
 }
 
-function setUp(sockets: OpenSockets = { all: () => [] }) {
+function setUp(sockets: Partial<OpenSockets> = {}) {
   const reader = new TestReader();
   const provider = new MeterProvider({ readers: [reader] });
-  const recorder = worldMetrics(sockets, provider.getMeter('world'));
+  const recorder = worldMetrics(
+    { all: () => [], allWatchers: () => [], ...sockets },
+    provider.getMeter('world'),
+  );
   return {
     recorder,
     async points(name: string): Promise<DataPoint<number>[]> {
@@ -149,6 +152,30 @@ describe('worldMetrics', () => {
     );
     expect(byAttributes(await points('world.socket.buffered'))).toEqual([
       { value: 4_096 },
+    ]);
+  });
+
+  it('counts watchers apart from avatars, by cohort, and reads their buffers too', async () => {
+    const { points } = setUp({
+      all: () => [{ cohortId: 'c-1', socket: { bufferedAmount: 10 } }],
+      allWatchers: () => [
+        { cohortId: 'c-1', socket: { bufferedAmount: 0 } },
+        { cohortId: 'c-1', socket: { bufferedAmount: 8_192 } },
+        { cohortId: 'c-2', socket: { bufferedAmount: 0 } },
+      ],
+    });
+
+    expect(byAttributes(await points('world.connections'))).toEqual([
+      { cohort_id: 'c-1', value: 1 },
+    ]);
+    expect(byAttributes(await points('world.watchers'))).toEqual(
+      expect.arrayContaining([
+        { cohort_id: 'c-1', value: 2 },
+        { cohort_id: 'c-2', value: 1 },
+      ]),
+    );
+    expect(byAttributes(await points('world.socket.buffered'))).toEqual([
+      { value: 8_192 },
     ]);
   });
 });

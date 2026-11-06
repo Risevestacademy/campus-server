@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import {
   REAL_POSTGRES_URL,
@@ -108,24 +108,93 @@ describe.skipIf(!REAL_POSTGRES_URL)(
       expect(survivors).toEqual([]);
     }, 120_000);
 
+    /**
+     * Holds the family's rows from a connection of its own, so a refresh
+     * that reaches its family lock stops there, inside its transaction and
+     * past the epoch check, until released.
+     */
+    const holdFamily = async (familyId: string) => {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let holding!: (pid: number) => void;
+      const pid = new Promise<number>((resolve) => (holding = resolve));
+      const done = pg.db.transaction(async (tx) => {
+        await tx
+          .select({ id: refreshTokens.id })
+          .from(refreshTokens)
+          .where(eq(refreshTokens.familyId, familyId))
+          .for('update');
+        const [row] = await tx.execute(sql`select pg_backend_pid() as pid`);
+        holding(Number(row.pid));
+        await released;
+      });
+      return {
+        pid: await pid,
+        release: async () => {
+          release();
+          await done;
+        },
+      };
+    };
+
+    /**
+     * Resolves once a backend not in `except` is waiting on any of `pids`, or
+     * once `unless` settles, which means it never had to wait.
+     */
+    const waitingOn = async (
+      pids: number[],
+      unless: Promise<unknown>,
+      except: number[] = [],
+    ): Promise<number | null> => {
+      let settled = false;
+      const stop = () => (settled = true);
+      unless.then(stop, stop);
+      while (!settled) {
+        const rows = await pg.db.execute(
+          sql`select pid, pg_blocking_pids(pid) as blockers from pg_stat_activity`,
+        );
+        const waiting = rows.find(
+          (row) =>
+            !except.includes(Number(row.pid)) &&
+            (row.blockers as number[]).some((pid) => pids.includes(pid)),
+        );
+        if (waiting) {
+          return Number(waiting.pid);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      return null;
+    };
+
+    // Not left to timing like the others: where the revoke has to land moves
+    // with the machine, and a stagger that misses it passes whatever the
+    // locking. Each round parks the refresh between its epoch check and its
+    // commit, starts the revoke-all, and lets the refresh go only once the
+    // revoke is waiting too, so every round races the new token being written.
     it('leaves no live token when every session is ended during a refresh', async () => {
-      const survivors: string[] = [];
+      const wrong: string[] = [];
 
       for (let round = 0; round < ROUNDS; round += 1) {
         const { user, session } = await signedIn();
+        const [{ familyId }] = await liveTokens(user.id);
 
-        await Promise.allSettled([
-          issuer.refreshSession(session.refreshToken),
-          after(stagger(round), () => issuer.revokeAllSessions(user.id)),
-        ]);
+        const hold = await holdFamily(familyId);
+        const refresh = issuer.refreshSession(session.refreshToken);
+        const refreshPid = (await waitingOn([hold.pid], refresh)) ?? hold.pid;
+        const revoke = issuer.revokeAllSessions(user.id);
+        await waitingOn([hold.pid, refreshPid], revoke, [refreshPid]);
+        await hold.release();
+        const [refreshed] = await Promise.allSettled([refresh, revoke]);
 
         const live = await liveTokens(user.id);
-        if (live.length > 0) {
-          survivors.push(`round ${round}: ${live.length} live token(s)`);
+        if (refreshed.status === 'rejected' || live.length > 0) {
+          wrong.push(
+            `round ${round}: refresh ${refreshed.status}, ${live.length} live token(s)`,
+          );
         }
       }
 
-      expect(survivors).toEqual([]);
+      expect(wrong).toEqual([]);
     }, 120_000);
 
     // Within the grace window a token presented twice is one client retrying,

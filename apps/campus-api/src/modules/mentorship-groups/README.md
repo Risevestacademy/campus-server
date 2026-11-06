@@ -29,9 +29,11 @@ are admin-only and live under
   group in the same transaction.
 - **A group can be deleted.** Deleting it removes its student links; the
   students stay in the cohort. Settled invites keep their row but have the
-  group id cleared. It is refused while a pending invite still names it.
-  A cohort with groups cannot be deleted until its groups are deleted, like
-  cohorts with tracks or invites.
+  group id cleared. It is refused while a pending invite still names it, or
+  while a live entry on a space's list names it — end that entry first. Ended
+  entries go with the group, and the delete's audit entry names them, as a
+  detached track's does. A cohort with groups cannot be deleted until its
+  groups are deleted, like cohorts with tracks or invites.
 
 ## Constraints
 

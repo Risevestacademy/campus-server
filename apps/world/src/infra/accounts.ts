@@ -1,4 +1,5 @@
 import {
+  DESKS_CHANGED_CHANNEL,
   PROFILE_CHANGED_CHANNEL,
   hasAdminPowers,
   spriteKeyOrNone,
@@ -16,8 +17,9 @@ import { seatKey, type Seat } from '../seat.js';
 import type { Env } from './env.js';
 
 /**
- * What the socket layer needs to know about the person behind a token, and
- * nothing else. An interface so the gateway can be tested without a database
+ * What the socket layer needs from the database: who is behind a token, the
+ * spaces they move through, and the one row world writes, the asker's
+ * notification. An interface so the gateway can be tested without a database
  * and so the lookup can move behind Redis later without touching callers.
  */
 export interface AccountLookup {
@@ -33,6 +35,13 @@ export interface AccountLookup {
     refreshedSince: Date,
     now: Date,
   ): Promise<Set<string>>;
+  /**
+   * The key of the entry map an admin has published, or null when none has.
+   * World serves one map: this is the database saying which version of the
+   * campus is live. The geometry itself still comes from Sanity; only the
+   * key and the decision to serve it are kept here.
+   */
+  publishedEntryMapKey(): Promise<string | null>;
   liveMembership(seat: Seat, now: Date): Promise<boolean>;
   /**
    * Which of these seats still hold a live membership: one query for every
@@ -57,19 +66,45 @@ export interface AccountLookup {
    */
   spacesOn(mapKey: string, now: Date): Promise<Map<string, WorldSpace>>;
   /**
-   * Calls `listener` whenever campus-api says something a space's door reads
-   * has changed, and whenever listening (re)starts, since a change made while
-   * it was not listening reached nobody. Resolves once listening; rejects if
-   * it could not start.
+   * The passes of people who entered through a room link to a space on this
+   * map whose window has not ended by `now`. The door decides whether each
+   * window is open yet.
    */
-  onSpacesChanged(listener: () => void): Promise<void>;
+  roomLinkPassesOn(mapKey: string, now: Date): Promise<RoomLinkPass[]>;
+  /**
+   * Calls `listener` with a published map's key, or with '' when something a
+   * space's door reads changed. `reconnected` is called again whenever
+   * listening (re)starts, since a change made while it was not listening
+   * reached nobody; left out, the listener gets '' instead. Resolves once
+   * listening; rejects if it could not start.
+   */
+  onSpacesChanged(
+    listener: (payload: string) => void,
+    reconnected?: () => void,
+  ): Promise<void>;
   /**
    * Calls `listener` with an account id whenever campus-api says that
    * account's sprite or display name changed. Resolves once listening;
    * rejects if it could not start.
    */
   onProfileChanged(listener: (userId: string) => void): Promise<void>;
+  /**
+   * Calls `listener` with a cohort id, or null for every cohort, whenever
+   * campus-api says who holds a desk there may have changed. Resolves once
+   * listening; rejects if it could not start.
+   */
+  onDesksChanged(listener: (cohortId: string | null) => void): Promise<void>;
+  /** world's one write: the asker's notification. A repeat is a no-op. */
+  notifyEntryRequestAnswered(answer: EntryRequestAnswer): Promise<void>;
   close(): Promise<void>;
+}
+
+export interface EntryRequestAnswer {
+  requestId: string;
+  askerId: string;
+  admitted: boolean;
+  cohortId: string;
+  spaceKey: string;
 }
 
 /**
@@ -116,6 +151,11 @@ export const ACCOUNT_QUERY =
  * "minted recently" is campus-api vouching for the session again. Signing out
  * revokes the family outright.
  *
+ * `revoked_at is null and expires_at > $3` is @campus/session's
+ * `isRefreshTokenLive`, written in SQL; the two must agree, or world holds a
+ * socket on a token campus-api will no longer refresh. `created_at >= $2` is
+ * world's own rule on top.
+ *
  * $1 uuid[] of families, $2 refreshed-since, $3 now. Same reason to export it
  * as ACCOUNT_QUERY: refresh_tokens belongs to campus-api.
  */
@@ -157,16 +197,59 @@ export const LIVE_MEMBERSHIPS_QUERY = `select user_id, cohort_id from cohort_mem
     and ${MEMBERSHIP_IS_LIVE}`;
 
 /**
+ * The one map an admin has published for people to enter on. The partial
+ * unique index allows at most one non-retired entry map, so the order only
+ * settles a database somebody wrote around the API.
+ */
+export const PUBLISHED_ENTRY_MAP_QUERY = `select key from maps
+  where is_entry = true
+    and retired_at is null
+    and published_at is not null
+  order by published_at desc
+  limit 1`;
+
+/**
  * A seat's membership row as it stands, many seats at once. No liveness here:
  * the door decides that with `isLiveMembership`, at the moment of the step.
  * $1 user ids and $2 cohort ids, paired by position.
+ *
+ * The group comes from wherever the membership holds one: a student's from
+ * `mentorship_group_students`, a mentor's from `mentorship_groups`. The two
+ * uniques behind those tables — one group per student per cohort, one per
+ * mentor — and a row being either student-role or mentor-role are what keep
+ * this one row per seat.
  */
-export const MEMBERSHIP_ROWS_QUERY = `select user_id, cohort_id, role, left_at, status, access_expires_at, cohort_track_id
-  from cohort_members
-  where (user_id, cohort_id) in (
+export const MEMBERSHIP_ROWS_QUERY = `select members.user_id, members.cohort_id, members.role, members.left_at,
+    members.status, members.access_expires_at, members.cohort_track_id,
+    coalesce(student_group.mentorship_group_id, mentored_group.id) as mentorship_group_id
+  from cohort_members as members
+  left join mentorship_group_students as student_group
+    on student_group.cohort_member_id = members.id
+    and student_group.cohort_id = members.cohort_id
+    and members.role = 'student'
+  left join mentorship_groups as mentored_group
+    on mentored_group.mentor_member_id = members.id
+    and mentored_group.cohort_id = members.cohort_id
+    and members.role = 'mentor'
+  where (members.user_id, members.cohort_id) in (
     select seat.user_id, seat.cohort_id
     from unnest($1::uuid[], $2::uuid[]) as seat(user_id, cohort_id)
   )`;
+
+/** campus-api's `NotificationKind` values, which its listing reads back. */
+export const ENTRY_REQUEST_ADMITTED_KIND = 'entry_request_admitted';
+export const ENTRY_REQUEST_DECLINED_KIND = 'entry_request_declined';
+
+/**
+ * $1 the asker, $2 the kind, $3 the request's id, $4 campus-api's
+ * `EntryRequestContext` as JSON. Requests have no row, so the reference is
+ * world's own id for one and the context says where it was. The conflict
+ * target is campus-api's notifications_recipient_kind_reference_unique.
+ */
+export const ENTRY_REQUEST_NOTIFICATION_QUERY = `insert into notifications
+    (recipient_id, kind, reference_type, reference_id, context)
+  values ($1, $2, 'entry_request', $3, $4::jsonb)
+  on conflict (recipient_id, kind, reference_type, reference_id) do nothing`;
 
 /** What hearing defaults to in a proximity space with no radius set, in tiles. */
 export const DEFAULT_AUDIBLE_RADIUS = 5;
@@ -178,16 +261,38 @@ export type SpaceAudioMode = 'proximity' | 'boundary';
 /** A space's door, and how people in it hear one another. */
 export interface WorldSpace extends SpaceFacts {
   id: string;
+  name: string;
   audioMode: SpaceAudioMode;
   audibleRadius: number;
   subscribeRadius: number;
   hysteresisFactor: number;
 }
 
+/** Somebody who entered through a room link, and when the link's event runs. */
+export interface RoomLinkPass {
+  cohortId: string;
+  spaceKey: string;
+  userId: string;
+  startsAt: Date;
+  endsAt: Date;
+}
+
+/** $1 the map's key, $2 now. */
+export const ROOM_LINK_PASSES_QUERY = `select room_links.cohort_id, spaces.key as space_key, room_link_passes.user_id,
+    room_links.starts_at, room_links.ends_at
+  from room_link_passes
+  join room_links on room_links.id = room_link_passes.room_link_id
+  join spaces on spaces.id = room_links.space_id
+  join maps on maps.id = spaces.map_id
+  where maps.key = $1
+    and room_links.revoked_at is null
+    and room_links.ends_at > $2`;
+
 /** A `spaces` row as `SPACES_QUERY` reads it, before world decides what it means. */
 export interface SpaceRow {
   id: string;
   key: string;
+  name: string;
   kind: string | null;
   access: string;
   retired_at: Date | null;
@@ -215,6 +320,7 @@ export function toWorldSpace(
 ): WorldSpace {
   return {
     id: row.id,
+    name: row.name,
     kind: row.kind,
     access: row.access,
     retiredAt: row.retired_at,
@@ -234,7 +340,7 @@ export function toWorldSpace(
 }
 
 /** Every space on one map, retired ones included. $1 the map's key. */
-export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.kind, spaces.access, spaces.retired_at,
+export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.name, spaces.kind, spaces.access, spaces.retired_at,
     spaces.audio_mode, spaces.audible_radius, spaces.subscribe_radius, spaces.hysteresis_factor
   from spaces
   join maps on maps.id = spaces.map_id
@@ -244,7 +350,7 @@ export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.kind, spaces.a
  * The entries on those spaces' lists that have not ended. One ended stays
  * ended, so leaving it out loses nothing. $1 space ids, $2 now.
  */
-export const SPACE_LISTS_QUERY = `select space_id, user_id, cohort_track_id, cohort_role, system_role, valid_from, valid_to
+export const SPACE_LISTS_QUERY = `select space_id, user_id, cohort_track_id, cohort_role, system_role, mentorship_group_id, valid_from, valid_to
   from space_memberships
   where space_id = any($1::uuid[])
     and (valid_to is null or valid_to > $2)`;
@@ -266,15 +372,16 @@ export function looksLikeId(value: string): boolean {
  * the same answer — otherwise a ban takes effect whenever the token happens
  * to expire, which is up to AUTH_SESSION_TTL_MINUTES later.
  *
- * Raw SQL rather than drizzle: one query against two columns, of a table
- * campus-api owns. When world needs maps and spaces, the schema should move
- * to a shared package and this can move with it.
+ * Raw SQL rather than drizzle: every statement here is against tables
+ * campus-api owns, and each is exported and run against its migrations in
+ * accounts.spec.ts. If the schema moves to a shared package, these can move
+ * to drizzle with it.
  */
 export function createAccountLookup(env: Env): AccountLookup {
   const sql = postgres(env.DATABASE_URL, {
     max: env.WORLD_DB_POOL,
-    // Read-only lookups on the hot path: fail fast rather than hold a socket
-    // waiting on a database that is not answering.
+    // Lookups on the hot path, and one write nobody waits for: fail fast
+    // rather than hold a socket waiting on a database that is not answering.
     connect_timeout: 5,
   });
   if (env.FF_OTEL_ENABLED) {
@@ -316,6 +423,12 @@ export function createAccountLookup(env: Env): AccountLookup {
         [ids, refreshedSince, now],
       );
       return new Set(rows.map((row) => row.family_id));
+    },
+    async publishedEntryMapKey(): Promise<string | null> {
+      const rows = await sql.unsafe<{ key: string }[]>(
+        PUBLISHED_ENTRY_MAP_QUERY,
+      );
+      return rows[0]?.key ?? null;
     },
     async onProfileChanged(listener): Promise<void> {
       // A connection of its own, kept open and re-listened on reconnect by
@@ -390,6 +503,7 @@ export function createAccountLookup(env: Env): AccountLookup {
           status: string | null;
           access_expires_at: Date | null;
           cohort_track_id: string | null;
+          mentorship_group_id: string | null;
         }[]
       >(MEMBERSHIP_ROWS_QUERY, [
         named.map((seat) => seat.userId),
@@ -405,6 +519,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             status: row.status,
             accessExpiresAt: row.access_expires_at,
             trackId: row.cohort_track_id,
+            mentorshipGroupId: row.mentorship_group_id,
           },
         ]),
       );
@@ -422,6 +537,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             cohort_track_id: string | null;
             cohort_role: string | null;
             system_role: string | null;
+            mentorship_group_id: string | null;
             valid_from: Date;
             valid_to: Date | null;
           }[]
@@ -432,6 +548,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             toTrackId: entry.cohort_track_id,
             toCohortRole: entry.cohort_role,
             toSystemRole: entry.system_role,
+            toGroupId: entry.mentorship_group_id,
             validFrom: entry.valid_from,
             validTo: entry.valid_to,
           });
@@ -444,15 +561,55 @@ export function createAccountLookup(env: Env): AccountLookup {
         ]),
       );
     },
-    async onSpacesChanged(listener): Promise<void> {
+    async roomLinkPassesOn(mapKey, now): Promise<RoomLinkPass[]> {
+      const rows = await sql.unsafe<
+        {
+          cohort_id: string;
+          space_key: string;
+          user_id: string;
+          starts_at: Date;
+          ends_at: Date;
+        }[]
+      >(ROOM_LINK_PASSES_QUERY, [mapKey, now]);
+      return rows.map((row) => ({
+        cohortId: row.cohort_id,
+        spaceKey: row.space_key,
+        userId: row.user_id,
+        startsAt: row.starts_at,
+        endsAt: row.ends_at,
+      }));
+    },
+    async onDesksChanged(listener): Promise<void> {
+      // As for spaces: a change made while the driver was reconnecting told
+      // nobody, so every cohort fetches again once it is back.
+      await sql.listen(
+        DESKS_CHANGED_CHANNEL,
+        (cohortId) => listener(cohortId === '' ? null : cohortId),
+        () => listener(null),
+      );
+    },
+    async onSpacesChanged(listener, reconnected): Promise<void> {
       // Called on every notification, and again each time the driver
       // subscribes: a change made while it was reconnecting sent its word to
       // nobody, so reading again on the way back in is what catches it.
       await sql.listen(
         SPACES_CHANGED_CHANNEL,
-        () => listener(),
-        () => listener(),
+        (payload) => listener(payload),
+        () => (reconnected ? reconnected() : listener('')),
       );
+    },
+    async notifyEntryRequestAnswered(answer): Promise<void> {
+      await sql.unsafe(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+        answer.askerId,
+        answer.admitted
+          ? ENTRY_REQUEST_ADMITTED_KIND
+          : ENTRY_REQUEST_DECLINED_KIND,
+        answer.requestId,
+        JSON.stringify({
+          cohortId: answer.cohortId,
+          spaceKey: answer.spaceKey,
+        }),
+      ]);
     },
     async close(): Promise<void> {
       await sql.end();

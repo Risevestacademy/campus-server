@@ -58,15 +58,24 @@ interface Held {
 export class Players {
   private readonly standing = new SeatMap<Held>();
   /** Left recently, and may come back to where they stood until `until`. */
-  private readonly departed = new SeatMap<{ held: Held; until: number }>();
+  private readonly departed = new SeatMap<{ held: Held; until: number; by?: string }>();
 
   constructor(
-    private readonly grid: Grid,
+    private grid: Grid,
     /** Fastest a player may walk: one tile per this many milliseconds. */
     private readonly stepMs: number,
     /** How long somebody who left is remembered. 0 forgets them at once. */
     private readonly graceMs: number = 0,
   ) {}
+
+  /**
+   * The map world now serves. Called after a publish reload, before anybody
+   * moves again; the held positions are checked against it on their next
+   * read, and a reconnect-grace position is validated on join.
+   */
+  setGrid(grid: Grid): void {
+    this.grid = grid;
+  }
 
   /**
    * Places somebody on one cohort's map: where they stood there if they left
@@ -87,9 +96,14 @@ export class Players {
 
     const remembered = this.departed.get(seat);
     this.departed.delete(seat);
-    if (remembered && remembered.until > now) {
+    if (
+      remembered &&
+      remembered.until > now &&
+      walkable(this.grid, remembered.held.player)
+    ) {
       // The step allowance comes back as it was: leaving and rejoining must
-      // not be a way to refill it.
+      // not be a way to refill it. A map published since may have built over
+      // the tile they left on, so it is checked like any other saved place.
       this.standing.set(seat, remembered.held);
       return { ...remembered.held.player };
     }
@@ -119,7 +133,7 @@ export class Players {
    * this cohort entirely — for access being taken away, where there is
    * nothing to come back to.
    */
-  leave(seat: Seat, now: number, remember: boolean): boolean {
+  leave(seat: Seat, now: number, remember: boolean, by?: string): boolean {
     const held = this.standing.get(seat);
     if (!remember) {
       this.departed.delete(seat);
@@ -129,7 +143,7 @@ export class Players {
     }
     this.standing.delete(seat);
     if (remember && this.graceMs > 0) {
-      this.departed.set(seat, { held, until: now + this.graceMs });
+      this.departed.set(seat, { held, until: now + this.graceMs, by });
     }
     return true;
   }
@@ -155,6 +169,14 @@ export class Players {
     return this.departed.has(seat);
   }
 
+  /** A position held for somebody who left, and the connection that left. */
+  holdOf(seat: Seat, now: number): { by: string | undefined } | undefined {
+    const remembered = this.departed.get(seat);
+    return remembered && remembered.until > now
+      ? { by: remembered.by }
+      : undefined;
+  }
+
   /**
    * How many positions are held for people who left, including any whose
    * grace has run out since the last `forgetExpired`.
@@ -166,6 +188,15 @@ export class Players {
   get(seat: Seat): Player | undefined {
     const held = this.standing.get(seat);
     return held ? { ...held.player } : undefined;
+  }
+
+  /** Puts somebody on a tile without a step, facing as they were: staff moving them out of a space. */
+  place(seat: Seat, tile: Tile): Player | undefined {
+    const held = this.standing.get(seat);
+    if (!held || !walkable(this.grid, tile)) return undefined;
+    held.player.x = tile.x;
+    held.player.y = tile.y;
+    return { ...held.player };
   }
 
   has(seat: Seat): boolean {

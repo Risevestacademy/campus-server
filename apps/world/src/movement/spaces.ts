@@ -1,7 +1,7 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { contains, type MapLayout } from 'campus-world-map';
 
-import { tileIndex, type Tile } from './grid.js';
+import { tileIndex, walkable, type Grid, type Tile } from './grid.js';
 
 /**
  * Which space each tile of a map is in, worked out once when the map loads,
@@ -85,4 +85,30 @@ export function spaceAt(index: SpaceIndex, tile: Tile): string {
   }
   const at = index.tiles[tileIndex(index, tile)];
   return at === 0 ? DEFAULT_SPACE_KEY : (index.keys[at - 1] as string);
+}
+
+/**
+ * A space's floor, the tile nearest its middle first: where a walk into the
+ * space aims. The middle is the average of the floor's tiles; ties go to the
+ * upper row, then the left, so every instance picks the same one.
+ */
+export function floorByMiddle(
+  grid: Grid,
+  index: SpaceIndex,
+  key: string,
+): Tile[] {
+  const floor: Tile[] = [];
+  for (let y = 0; y < index.height; y += 1) {
+    for (let x = 0; x < index.width; x += 1) {
+      const tile = { x, y };
+      if (spaceAt(index, tile) === key && walkable(grid, tile)) {
+        floor.push(tile);
+      }
+    }
+  }
+  if (floor.length === 0) return floor;
+  const mx = floor.reduce((sum, t) => sum + t.x, 0) / floor.length;
+  const my = floor.reduce((sum, t) => sum + t.y, 0) / floor.length;
+  const apart = (t: Tile) => (t.x - mx) ** 2 + (t.y - my) ** 2;
+  return floor.sort((a, b) => apart(a) - apart(b) || a.y - b.y || a.x - b.x);
 }

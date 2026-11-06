@@ -104,6 +104,12 @@ export enum AuditAction {
    */
   MapRetired = 'map_retired',
   /**
+   * An admin made a synced map live for world. `details` keeps the map's key
+   * and the publication timestamp before and after; a republish writes
+   * another entry, so the history of when each version went live is kept.
+   */
+  MapPublished = 'map_published',
+  /**
    * An admin ended a membership: dismissed, withdrew, deferred or graduated
    * a student, or removed any member. `details` keeps the role, the student
    * status it was given (null for a removal, which carries none) and the
@@ -161,6 +167,17 @@ export enum AuditAction {
    * An admin deleted a group. The row is gone, so `details` keeps what it was.
    */
   MentorshipGroupDeleted = 'mentorship_group_deleted',
+  NoticeCreated = 'notice_created',
+  NoticeUpdated = 'notice_updated',
+  NoticePinned = 'notice_pinned',
+  NoticeUnpinned = 'notice_unpinned',
+  NoticeRemoved = 'notice_removed',
+  RoomLinkCreated = 'room_link_created',
+  RoomLinkRevoked = 'room_link_revoked',
+  /** Staff set, moved or cleared when a room link's event runs. */
+  RoomLinkWindowChanged = 'room_link_window_changed',
+  /** An admin ended somebody else's claim on a desk. */
+  DeskFreed = 'desk_freed',
 }
 
 export enum AuditSubjectType {
@@ -177,6 +194,10 @@ export enum AuditSubjectType {
   /** One row of `space_memberships`: a grant of access to a space. */
   SpaceMembership = 'space_membership',
   MentorshipGroup = 'mentorship_group',
+  Notice = 'notice',
+  RoomLink = 'room_link',
+  /** One row of `desk_claims`: somebody holding a desk in a cohort. */
+  DeskClaim = 'desk_claim',
 }
 
 /**

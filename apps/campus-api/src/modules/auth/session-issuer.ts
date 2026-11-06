@@ -14,7 +14,11 @@ import type { Invite } from '../invites/schema.js';
 import { users as usersTable, type User } from '../users/schema.js';
 import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
-import { SessionScope, signSessionToken } from '@campus/session';
+import {
+  isRefreshTokenLive,
+  SessionScope,
+  signSessionToken,
+} from '@campus/session';
 
 /** The transaction handle drizzle hands a `db.transaction` callback. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -304,16 +308,11 @@ export class SessionIssuer {
       return null;
     }
 
-    // The UPDATE above is what a sign-in or refresh in flight is waited out
-    // on: each holds a shared lock on this row until it commits (see
-    // assertEpochCurrent). Then the same two steps as revokeFamily, for the
-    // same reason: the UPDATE of the tokens reads afresh once the lock is
-    // held, so it revokes the row that sign-in or refresh minted too.
-    await tx
-      .select({ id: refreshTokens.id })
-      .from(refreshTokens)
-      .where(eq(refreshTokens.userId, userId))
-      .for('update');
+    // No lock on the tokens first, unlike revokeFamily: the UPDATE above has
+    // already waited out any sign-in or refresh in flight, since each holds a
+    // shared lock on this row until it commits (see assertEpochCurrent). This
+    // statement starts after that commit, so it sees the token minted there
+    // too; one that starts later finds the epoch moved and mints nothing.
     await tx
       .update(refreshTokens)
       .set({ revokedAt: now })
@@ -340,11 +339,7 @@ export class SessionIssuer {
       .where(eq(refreshTokens.tokenHash, hashRefreshToken(token)))
       .limit(1);
 
-    if (
-      !stored ||
-      stored.revokedAt !== null ||
-      stored.expiresAt.getTime() <= now.getTime()
-    ) {
+    if (!stored || !isRefreshTokenLive(stored, now)) {
       throw new SessionUnauthorizedError('Refresh token is not usable');
     }
 
@@ -395,11 +390,7 @@ export class SessionIssuer {
           .where(eq(refreshTokens.id, stored.id))
           .limit(1);
 
-        if (
-          !locked ||
-          locked.revokedAt !== null ||
-          locked.expiresAt.getTime() <= now.getTime()
-        ) {
+        if (!locked || !isRefreshTokenLive(locked, now)) {
           return { kind: 'unusable' } as const;
         }
 
