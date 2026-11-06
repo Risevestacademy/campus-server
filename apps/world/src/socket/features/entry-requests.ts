@@ -227,6 +227,8 @@ export function createEntryRequests(
         requestId: request.id,
         askerId: request.userId,
         admitted,
+        cohortId: request.cohortId,
+        spaceKey: request.spaceKey,
       })
       .catch((err: unknown) => {
         app.log.warn(

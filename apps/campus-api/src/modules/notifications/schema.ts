@@ -1,6 +1,7 @@
 import {
   pgTable,
   index,
+  jsonb,
   timestamp,
   uniqueIndex,
   uuid,
@@ -25,6 +26,12 @@ export enum NotificationReferenceType {
   Notice = 'notice',
   /** world's in-memory request id: there is no row behind it. */
   EntryRequest = 'entry_request',
+}
+
+/** What an entry-request notification names, since the request has no row. */
+export interface EntryRequestContext {
+  cohortId: string;
+  spaceKey: string;
 }
 
 /**
@@ -54,6 +61,8 @@ export const notifications = pgTable(
     referenceType: varchar('reference_type', { length: 64 }).notNull(),
     /** The id of the row in that table. Not a foreign key — see above. */
     referenceId: varchar('reference_id', { length: 255 }).notNull(),
+    /** Set when the reference has no row to read it from. */
+    context: jsonb('context').$type<EntryRequestContext>(),
     /** Null until the recipient marks it read. */
     readAt: timestamp('read_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })

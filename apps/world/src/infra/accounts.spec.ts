@@ -811,9 +811,15 @@ describe("world's space doors, against campus-api's schema", () => {
 describe("world's entry-request notification, against campus-api's schema", () => {
   const asker = randomUUID();
   const requestId = randomUUID();
+  const context = { cohortId: randomUUID(), spaceKey: 'library' };
 
   const notify = (kind: string) =>
-    db.query(ENTRY_REQUEST_NOTIFICATION_QUERY, [asker, kind, requestId]);
+    db.query(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+      asker,
+      kind,
+      requestId,
+      JSON.stringify(context),
+    ]);
 
   beforeAll(async () => {
     await db.exec(
@@ -830,9 +836,10 @@ describe("world's entry-request notification, against campus-api's schema", () =
       kind: string;
       reference_type: string;
       reference_id: string;
+      context: unknown;
       read_at: Date | null;
     }>(
-      `select kind, reference_type, reference_id, read_at from notifications
+      `select kind, reference_type, reference_id, context, read_at from notifications
         where recipient_id = $1 order by kind`,
       [asker],
     );
@@ -841,12 +848,14 @@ describe("world's entry-request notification, against campus-api's schema", () =
         kind: 'entry_request_admitted',
         reference_type: 'entry_request',
         reference_id: requestId,
+        context,
         read_at: null,
       },
       {
         kind: 'entry_request_declined',
         reference_type: 'entry_request',
         reference_id: requestId,
+        context,
         read_at: null,
       },
     ]);

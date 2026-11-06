@@ -103,6 +103,8 @@ export interface EntryRequestAnswer {
   requestId: string;
   askerId: string;
   admitted: boolean;
+  cohortId: string;
+  spaceKey: string;
 }
 
 /**
@@ -239,13 +241,14 @@ export const ENTRY_REQUEST_ADMITTED_KIND = 'entry_request_admitted';
 export const ENTRY_REQUEST_DECLINED_KIND = 'entry_request_declined';
 
 /**
- * $1 the asker, $2 the kind, $3 the request's id. Requests have no row, so
- * the reference is world's own id for one. The conflict target is
- * campus-api's notifications_recipient_kind_reference_unique.
+ * $1 the asker, $2 the kind, $3 the request's id, $4 campus-api's
+ * `EntryRequestContext` as JSON. Requests have no row, so the reference is
+ * world's own id for one and the context says where it was. The conflict
+ * target is campus-api's notifications_recipient_kind_reference_unique.
  */
 export const ENTRY_REQUEST_NOTIFICATION_QUERY = `insert into notifications
-    (recipient_id, kind, reference_type, reference_id)
-  values ($1, $2, 'entry_request', $3)
+    (recipient_id, kind, reference_type, reference_id, context)
+  values ($1, $2, 'entry_request', $3, $4::jsonb)
   on conflict (recipient_id, kind, reference_type, reference_id) do nothing`;
 
 /** What hearing defaults to in a proximity space with no radius set, in tiles. */
@@ -602,6 +605,10 @@ export function createAccountLookup(env: Env): AccountLookup {
           ? ENTRY_REQUEST_ADMITTED_KIND
           : ENTRY_REQUEST_DECLINED_KIND,
         answer.requestId,
+        JSON.stringify({
+          cohortId: answer.cohortId,
+          spaceKey: answer.spaceKey,
+        }),
       ]);
     },
     async close(): Promise<void> {

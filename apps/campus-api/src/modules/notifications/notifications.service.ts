@@ -1,13 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  type SQL,
-  type SQLWrapper,
-  and,
-  eq,
-  inArray,
-  isNull,
-  sql,
-} from 'drizzle-orm';
+import { type SQL, type SQLWrapper, and, eq, inArray, sql } from 'drizzle-orm';
 import { alias, union } from 'drizzle-orm/pg-core';
 
 import {
@@ -163,7 +155,7 @@ function noticeAudience(
             and(
               eq(mentorshipGroups.cohortId, notice.cohortId!),
               eq(studentMember.cohortTrackId, notice.cohortTrackId!),
-              isNull(studentMember.leftAt),
+              isLiveMembership(now, studentMember),
               live,
             ),
           ),

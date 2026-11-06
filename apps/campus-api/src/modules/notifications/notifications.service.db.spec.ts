@@ -316,6 +316,22 @@ describe('NotificationsService.notifyNoticePosted', () => {
     ]);
   });
 
+  it("leaves out a track's mentor whose pod holds no live student of it", async () => {
+    const mentor = await person('mentor@campus.local');
+    const unclassified = await person('unclassified@campus.local');
+    await pod(c1, await join(mentor, c1, CohortRole.Mentor), [
+      await join(unclassified, c1, CohortRole.Student, {
+        cohortTrackId: c1se,
+        status: null,
+      }),
+    ]);
+    const posted = notice(NoticeScope.CohortTrack, c1, c1se);
+
+    await service.notifyNoticePosted(posted);
+
+    expect(await recipientsOf(posted.id)).toEqual([]);
+  });
+
   it("reaches a mentorship-group notice's mentor and students only", async () => {
     const mentor = await person('mentor@campus.local');
     const inPod = await person('in-pod@campus.local');
