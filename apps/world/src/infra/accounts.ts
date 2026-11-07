@@ -94,8 +94,13 @@ export interface AccountLookup {
    * listening; rejects if it could not start.
    */
   onDesksChanged(listener: (cohortId: string | null) => void): Promise<void>;
-  /** world's one write: the asker's notification. A repeat is a no-op. */
-  notifyEntryRequestAnswered(answer: EntryRequestAnswer): Promise<void>;
+  /**
+   * world's one write: the asker's notification, answered as written for
+   * the push. A repeat writes nothing and answers undefined.
+   */
+  notifyEntryRequestAnswered(
+    answer: EntryRequestAnswer,
+  ): Promise<WrittenNotification | undefined>;
   close(): Promise<void>;
 }
 
@@ -105,6 +110,15 @@ export interface EntryRequestAnswer {
   admitted: boolean;
   cohortId: string;
   spaceKey: string;
+}
+
+export interface WrittenNotification {
+  id: string;
+  kind: string;
+  referenceType: string;
+  referenceId: string;
+  context: { cohortId: string; spaceKey: string } | null;
+  createdAt: Date;
 }
 
 /**
@@ -244,12 +258,14 @@ export const ENTRY_REQUEST_DECLINED_KIND = 'entry_request_declined';
  * $1 the asker, $2 the kind, $3 the request's id, $4 campus-api's
  * `EntryRequestContext` as JSON. Requests have no row, so the reference is
  * world's own id for one and the context says where it was. The conflict
- * target is campus-api's notifications_recipient_kind_reference_unique.
+ * target is campus-api's notifications_recipient_kind_reference_unique. A
+ * repeat returns no row.
  */
 export const ENTRY_REQUEST_NOTIFICATION_QUERY = `insert into notifications
     (recipient_id, kind, reference_type, reference_id, context)
   values ($1, $2, 'entry_request', $3, $4::jsonb)
-  on conflict (recipient_id, kind, reference_type, reference_id) do nothing`;
+  on conflict (recipient_id, kind, reference_type, reference_id) do nothing
+  returning id, kind, reference_type, reference_id, context, created_at`;
 
 /** What hearing defaults to in a proximity space with no radius set, in tiles. */
 export const DEFAULT_AUDIBLE_RADIUS = 5;
@@ -592,8 +608,17 @@ export function createAccountLookup(env: Env): AccountLookup {
         () => (reconnected ? reconnected() : listener('')),
       );
     },
-    async notifyEntryRequestAnswered(answer): Promise<void> {
-      await sql.unsafe(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+    async notifyEntryRequestAnswered(answer) {
+      const [row] = await sql.unsafe<
+        {
+          id: string;
+          kind: string;
+          reference_type: string;
+          reference_id: string;
+          context: { cohortId: string; spaceKey: string } | null;
+          created_at: Date;
+        }[]
+      >(ENTRY_REQUEST_NOTIFICATION_QUERY, [
         answer.askerId,
         answer.admitted
           ? ENTRY_REQUEST_ADMITTED_KIND
@@ -604,6 +629,16 @@ export function createAccountLookup(env: Env): AccountLookup {
           spaceKey: answer.spaceKey,
         }),
       ]);
+      return row
+        ? {
+            id: row.id,
+            kind: row.kind,
+            referenceType: row.reference_type,
+            referenceId: row.reference_id,
+            context: row.context,
+            createdAt: row.created_at,
+          }
+        : undefined;
     },
     async close(): Promise<void> {
       await sql.end();

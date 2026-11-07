@@ -1,3 +1,4 @@
+import type { NotificationCreated } from '@campus/session';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -18,6 +19,7 @@ import {
   mentorshipGroupStudents,
   mentorshipGroups,
 } from '../mentorship-groups/schema.js';
+import type { NotificationPush } from '../notifications/notification-push.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { notifications } from '../notifications/schema.js';
 import { tracks } from '../tracks/schema.js';
@@ -38,9 +40,17 @@ const MIGRATIONS = fileURLToPath(
 const pglite = drizzle(new PGlite(), {
   schema: { users, tracks, cohorts, cohortTracks, notices, auditLog },
 });
+/** What would have gone to world, in place of Redis. */
+const pushed: NotificationCreated[] = [];
+const push = {
+  send: async (created: readonly NotificationCreated[]) => {
+    pushed.push(...created);
+  },
+} as unknown as NotificationPush;
 const service = new NoticesService(
   pglite as unknown as Db,
   new NotificationsService(pglite as unknown as Db),
+  push,
 );
 
 let adminUser: AuthenticatedUser;
@@ -58,6 +68,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  pushed.length = 0;
   await pglite.execute(
     sql`truncate audit_log, notices, cohort_tracks, cohorts, tracks, users cascade`,
   );
@@ -208,6 +219,37 @@ describe('create', () => {
     );
     expect(sent.every((row) => row.kind === 'notice_posted')).toBe(true);
     expect(await pglite.select().from(auditLog)).toHaveLength(1);
+    // Each row, once committed, goes to world for that cohort's sockets.
+    expect(
+      [...pushed].sort((a, b) => a.recipientId.localeCompare(b.recipientId)),
+    ).toEqual(
+      [...sent]
+        .sort((a, b) => a.recipientId.localeCompare(b.recipientId))
+        .map((row) => ({
+          recipientId: row.recipientId,
+          cohortId,
+          id: row.id,
+          kind: 'notice_posted',
+          referenceType: 'notice',
+          referenceId: notice.id,
+          context: null,
+          createdAt: row.createdAt.toISOString(),
+        })),
+    );
+  });
+
+  it('pushes a campus notice to every socket, naming no cohort', async () => {
+    await service.create(
+      { title: 'All', body: 'Everybody.', scope: NoticeScope.Campus },
+      adminUser,
+      { ...audit, actorUserId: adminUser.id },
+    );
+
+    expect(pushed).toHaveLength(3);
+    expect(pushed.map((message) => message.recipientId)).toContain(
+      adminUser.id,
+    );
+    expect(pushed.every((message) => message.cohortId === null)).toBe(true);
   });
 
   it('notifies nobody when the notice is refused', async () => {
@@ -220,6 +262,7 @@ describe('create', () => {
     ).rejects.toBeInstanceOf(NoticeForbiddenException);
 
     expect(await pglite.select().from(notifications)).toEqual([]);
+    expect(pushed).toEqual([]);
   });
 
   it('mentor cannot post cohort-wide', async () => {

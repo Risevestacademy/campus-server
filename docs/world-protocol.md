@@ -549,7 +549,8 @@ a web tab, without taking its place. Connect with `enter=ifFree`:
 
 What a watcher gets: the `snapshot` and everything sent to the whole cohort —
 `joined`, `left`, `statusChanged`, `spaceChanged`, `appearance`, locks, desks
-and spaces — and every `said` that reaches the avatar. Never `moved`, `call`,
+and spaces — every `said` that reaches the avatar, and the account's
+`notification`s. Never `moved`, `call`,
 `nearby`, `broadcast`, walks or requests to enter. Find yourself in the
 players by `welcome.userId`: there means you are on campus elsewhere, absent
 means nobody stands for you.
@@ -644,6 +645,34 @@ routes too. world carries no desk state; it only says when to fetch again.
   random 0–2 seconds before fetching, so they don't all arrive together.
 - **Your own claim** answers with the desk as it now is, so you need not
   wait for the message to draw it.
+
+## Notifications
+
+A member's notifications live in campus-api: `GET /v1/notifications`
+(newest first, paginated; `?unread=true` for the badge), marked read with
+`PATCH /v1/notifications/{id}/read`, or all at once with
+`POST /v1/notifications/read-all`. world only tells you when a new one is
+written, so you need not poll.
+
+- **What arrives.** `{ "type": "notification", "id": "…", "kind": "…",
+"referenceType": "…", "referenceId": "…", "context": null, "createdAt": "…" }`,
+  the same fields the list has, less `read`: a new one is always unread.
+  Enough for a badge or a toast. For the text, fetch what `referenceId`
+  names: a notice from campus-api. For an entry request it is the
+  `requestId` its `entryRequestEnded` carried, which campus-api has nothing
+  behind, so `context` says where it was: `{ "cohortId": "…", "spaceKey":
+"…" }`.
+- **Kinds.** `notice_posted`, `entry_request_admitted`,
+  `entry_request_declined`. More will be added: show a plain alert for one
+  you do not know rather than dropping it.
+- **Which socket.** One about a cohort, as a cohort's notice or an answer to
+  a request to enter, comes only on that cohort's socket. One about no
+  cohort, as a campus-wide notice, comes on every socket you have open, one
+  per cohort, so with two tabs on two cohorts count it once, by `id`.
+  Watcher sockets get them as the avatar's socket does.
+- **Best effort.** One written while you had no socket open, or that world
+  missed, is not sent later. Fetch the list on arriving, and treat the
+  message as a nudge to update what you show, not the record of it.
 
 ## Staff: muting and removing
 

@@ -193,6 +193,8 @@ export default defineRailway((ctx) => {
       PORT: preserve(),
       POSTHOG_HOST: preserve(),
       POSTHOG_PROJECT_TOKEN: preserve(),
+      // The same Redis world reads, set by hand as world's is.
+      REDIS_URL: preserve(),
       RESEND_API_KEY: preserve(),
       RESEND_INVITE_ADMIN_TEMPLATE_ID: preserve(),
       RESEND_INVITE_GUEST_TEMPLATE_ID: preserve(),

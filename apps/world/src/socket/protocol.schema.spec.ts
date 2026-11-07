@@ -86,6 +86,7 @@ describe('protocol.schema.json', () => {
         'LockableSpacesMessage',
         'DesksChangedMessage',
         'SpacesMessage',
+        'NotificationMessage',
         'EntryRequestedMessage',
         'EntryRequestEndedMessage',
         'SaidMessage',
