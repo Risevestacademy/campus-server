@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { type SQL, and, eq, gt, isNull, ne, not, or, sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 import {
   DRIZZLE,
@@ -53,19 +54,25 @@ import {
  * the comparison NULL rather than false, and this predicate is negated by
  * enrolment — where NULL would silently refuse to revive.
  */
-export function isLiveMembership(now: Date): SQL<unknown> {
+export function isLiveMembership(
+  now: Date,
+  members: LivenessColumns = cohortMembers,
+): SQL<unknown> {
   return and(
-    isNull(cohortMembers.leftAt),
+    isNull(members.leftAt),
     or(
-      ne(cohortMembers.role, CohortRole.Student),
-      sql`${cohortMembers.status} is not distinct from ${sql.raw(`'${StudentStatus.Active}'`)}`,
+      ne(members.role, CohortRole.Student),
+      sql`${members.status} is not distinct from ${sql.raw(`'${StudentStatus.Active}'`)}`,
     ),
-    or(
-      isNull(cohortMembers.accessExpiresAt),
-      gt(cohortMembers.accessExpiresAt, now),
-    ),
+    or(isNull(members.accessExpiresAt), gt(members.accessExpiresAt, now)),
   ) as SQL<unknown>;
 }
+
+/** The columns liveness reads, so an alias of `cohort_members` can be passed. */
+type LivenessColumns = Record<
+  'leftAt' | 'role' | 'status' | 'accessExpiresAt',
+  AnyPgColumn
+>;
 
 /** The negation, for callers that want the rows a live one would exclude. */
 export function isNotLiveMembership(now: Date): SQL<unknown> {

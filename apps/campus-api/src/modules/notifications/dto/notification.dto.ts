@@ -5,6 +5,14 @@ import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
 import { PaginationQueryDto } from '../../../shared/dto/pagination-query.dto.js';
 import { NotificationKind, NotificationReferenceType } from '../schema.js';
 
+export class EntryRequestContextDto {
+  @ApiProperty({ format: 'uuid' })
+  cohortId: string;
+
+  /** @example lounge */
+  spaceKey: string;
+}
+
 /**
  * One alert, without what it points at: the client fetches the notice, or
  * whatever else, itself when it needs more than a badge.
@@ -38,6 +46,13 @@ export class NotificationDto {
    * @example 3f0e1c2a-8b4d-4e6f-9a1b-2c3d4e5f6a7b
    */
   referenceId: string;
+
+  /**
+   * For an entry request, the cohort and space it was for. Null for a
+   * notice, which is fetched by `referenceId` instead.
+   */
+  @ApiProperty({ type: EntryRequestContextDto, nullable: true })
+  context: EntryRequestContextDto | null;
 
   /** @example false */
   read: boolean;

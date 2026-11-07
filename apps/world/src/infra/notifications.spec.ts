@@ -20,6 +20,7 @@ const created = (
   kind: 'notice_posted',
   referenceType: 'notice',
   referenceId: randomUUID(),
+  context: null,
   createdAt: '2026-11-05T09:30:00.000Z',
   ...overrides,
 });

@@ -1,6 +1,16 @@
 import type { NotificationCreated } from '@campus/session';
 import { Inject, Injectable } from '@nestjs/common';
-import { type SQL, and, count, desc, eq, isNull, sql } from 'drizzle-orm';
+import {
+  type SQL,
+  and,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  sql,
+} from 'drizzle-orm';
+import { alias, union } from 'drizzle-orm/pg-core';
 
 import {
   DRIZZLE,
@@ -10,13 +20,23 @@ import {
 import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { cohortMembers } from '../cohorts/schema.js';
-import { NoticeScope, type Notice } from '../notices/schema.js';
+import {
+  mentorshipGroupStudents,
+  mentorshipGroups,
+} from '../mentorship-groups/schema.js';
+import {
+  NoticeScope,
+  type Notice,
+  type NoticeTarget,
+} from '../notices/schema.js';
+import { SystemRole, UserStatus, users } from '../users/schema.js';
 import type {
   ListNotificationsQueryDto,
   NotificationDto,
 } from './dto/notification.dto.js';
 import { NotificationNotFoundException } from './notifications.exceptions.js';
 import {
+  type EntryRequestContext,
   NotificationKind,
   NotificationReferenceType,
   notifications,
@@ -34,6 +54,7 @@ export interface NotifyInput {
   cohortId: string | null;
   kind: NotificationKind;
   reference: NotificationReference;
+  context?: EntryRequestContext;
 }
 
 /**
@@ -63,25 +84,28 @@ export class NotificationsService {
         kind: input.kind,
         referenceType: input.reference.type,
         referenceId: input.reference.id,
+        context: input.context,
       })
       .onConflictDoNothing({ target: UNIQUE_TARGET })
       .returning();
     return rows.map((row) => created(row, input.cohortId));
   }
 
-  /** Every live member in the notice's scope, in one statement. */
+  /** Everybody the notice reaches whose account is active, in one statement. */
   async notifyNoticePosted(
-    notice: Pick<Notice, 'id' | 'scope' | 'cohortId' | 'cohortTrackId'>,
+    notice: Pick<Notice, 'id'> & NoticeTarget,
     executor: DbExecutor = this.db,
     now: Date = new Date(),
   ): Promise<NotificationCreated[]> {
+    const audience = noticeAudience(executor, notice, now).as('audience');
     const recipients = executor
-      .selectDistinct({ userId: cohortMembers.userId })
-      .from(cohortMembers)
-      .where(and(isLiveMembership(now), scopeFilter(notice)))
+      .selectDistinct({ userId: audience.userId })
+      .from(audience)
+      .innerJoin(users, eq(users.id, audience.userId))
+      .where(eq(users.status, UserStatus.Active))
       .as('recipients');
-    // Every column, in the table's order: drizzle refuses the statement if
-    // one is added there and not here.
+    // Every column, in the table's order: drizzle refuses the statement at
+    // run time if one is added there and not here.
     const rows = await executor
       .insert(notifications)
       .select((qb) =>
@@ -97,6 +121,7 @@ export class NotificationsService {
                 'reference_type',
               ),
             referenceId: sql<string>`${notice.id}::varchar`.as('reference_id'),
+            context: sql<EntryRequestContext | null>`null::jsonb`.as('context'),
             readAt: sql<Date | null>`null::timestamptz`.as('read_at'),
             createdAt: sql<Date>`now()`.as('created_at'),
           })
@@ -193,6 +218,11 @@ const UNIQUE_TARGET = [
   notifications.referenceId,
 ];
 
+/** The roles `hasAdminPowers` accepts. */
+const ADMIN_ROLES = [SystemRole.Admin, SystemRole.SuperAdmin];
+
+const studentMember = alias(cohortMembers, 'student_member');
+
 function created(
   row: Notification,
   cohortId: string | null,
@@ -204,6 +234,7 @@ function created(
     kind: row.kind,
     referenceType: row.referenceType,
     referenceId: row.referenceId,
+    context: row.context ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -214,23 +245,96 @@ function toDto(row: Notification): NotificationDto {
     kind: row.kind,
     referenceType: row.referenceType,
     referenceId: row.referenceId,
+    context: row.context ?? null,
     read: row.readAt !== null,
     createdAt: row.createdAt,
   };
 }
 
-function scopeFilter(
-  notice: Pick<Notice, 'scope' | 'cohortId' | 'cohortTrackId'>,
-): SQL | undefined {
+/**
+ * Who a notice reaches, as one `user_id` column. Live memberships only; the
+ * caller drops accounts that are not active.
+ */
+function noticeAudience(db: DbExecutor, notice: NoticeTarget, now: Date) {
+  const live = isLiveMembership(now);
+  const members = (where?: SQL) =>
+    db
+      .select({ userId: cohortMembers.userId })
+      .from(cohortMembers)
+      .where(and(live, where));
+
   switch (notice.scope as NoticeScope) {
     case NoticeScope.Campus:
-      return undefined;
+      // Admins need no membership to run the campus, so they are added here.
+      return union(
+        members(),
+        db
+          .select({ userId: users.id })
+          .from(users)
+          .where(inArray(users.systemRole, ADMIN_ROLES)),
+      );
     case NoticeScope.Cohort:
-      return eq(cohortMembers.cohortId, notice.cohortId as string);
+      return members(eq(cohortMembers.cohortId, notice.cohortId!));
     case NoticeScope.CohortTrack:
-      return and(
-        eq(cohortMembers.cohortId, notice.cohortId as string),
-        eq(cohortMembers.cohortTrackId, notice.cohortTrackId as string),
+      // Staff rarely name a track on their membership, so a track's mentors
+      // are also found through the students in their pods.
+      return union(
+        members(
+          and(
+            eq(cohortMembers.cohortId, notice.cohortId!),
+            eq(cohortMembers.cohortTrackId, notice.cohortTrackId!),
+          ),
+        ),
+        db
+          .select({ userId: cohortMembers.userId })
+          .from(mentorshipGroups)
+          .innerJoin(
+            cohortMembers,
+            eq(cohortMembers.id, mentorshipGroups.mentorMemberId),
+          )
+          .innerJoin(
+            mentorshipGroupStudents,
+            eq(mentorshipGroupStudents.mentorshipGroupId, mentorshipGroups.id),
+          )
+          .innerJoin(
+            studentMember,
+            eq(studentMember.id, mentorshipGroupStudents.cohortMemberId),
+          )
+          .where(
+            and(
+              eq(mentorshipGroups.cohortId, notice.cohortId!),
+              eq(studentMember.cohortTrackId, notice.cohortTrackId!),
+              isLiveMembership(now, studentMember),
+              live,
+            ),
+          ),
+      );
+    case NoticeScope.MentorshipGroup:
+      return union(
+        db
+          .select({ userId: cohortMembers.userId })
+          .from(mentorshipGroups)
+          .innerJoin(
+            cohortMembers,
+            eq(cohortMembers.id, mentorshipGroups.mentorMemberId),
+          )
+          .where(and(eq(mentorshipGroups.id, notice.mentorshipGroupId!), live)),
+        db
+          .select({ userId: cohortMembers.userId })
+          .from(mentorshipGroupStudents)
+          .innerJoin(
+            cohortMembers,
+            eq(cohortMembers.id, mentorshipGroupStudents.cohortMemberId),
+          )
+          .where(
+            and(
+              eq(
+                mentorshipGroupStudents.mentorshipGroupId,
+                notice.mentorshipGroupId!,
+              ),
+              live,
+            ),
+          ),
       );
     default:
       throw new Error(`Unknown notice scope: ${notice.scope}`);

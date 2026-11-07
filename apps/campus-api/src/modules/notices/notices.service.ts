@@ -13,7 +13,9 @@ import {
   writeAuditEntry,
 } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortRole, cohortMembers, cohortTracks } from '../cohorts/schema.js';
+import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import { NotificationPush } from '../notifications/notification-push.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { hasAdminPowers } from '../users/schema.js';
@@ -25,7 +27,12 @@ import {
   NoticeInvalidArgumentException,
   NoticeNotFoundException,
 } from './notices.exceptions.js';
-import { NoticeScope, notices, type Notice } from './schema.js';
+import {
+  NoticeScope,
+  notices,
+  type Notice,
+  type NoticeTarget,
+} from './schema.js';
 
 const MAX_PINNED_PER_SCOPE = 3;
 const NOTICE_AUDITED_FIELDS = ['title', 'body'] as const;
@@ -44,30 +51,36 @@ export class NoticesService {
     audit: AuditContext,
   ): Promise<Notice> {
     this.validateScopeReferences(dto);
-    await this.assertCanManageNotices(
-      this.db,
-      actor,
-      dto.scope,
-      dto.cohortId ?? null,
-    );
+    // Validation has refused any reference the scope does not take.
+    const target: NoticeTarget = {
+      scope: dto.scope,
+      cohortId: dto.cohortId ?? null,
+      cohortTrackId: dto.cohortTrackId ?? null,
+      mentorshipGroupId: dto.mentorshipGroupId ?? null,
+    };
+    await this.assertCanManageNotices(this.db, actor, target);
 
     const { row, created } = await this.db.transaction(async (tx) => {
-      if (dto.cohortTrackId) {
+      if (target.cohortTrackId) {
         await this.assertCohortTrackExists(
           tx,
-          dto.cohortTrackId,
-          dto.cohortId!,
+          target.cohortTrackId,
+          target.cohortId!,
+        );
+      }
+      if (target.mentorshipGroupId) {
+        await this.assertMentorshipGroupExists(
+          tx,
+          target.mentorshipGroupId,
+          target.cohortId!,
         );
       }
 
       const [row] = await tx
         .insert(notices)
         .values({
+          ...target,
           authorId: actor.id,
-          scope: dto.scope,
-          cohortId: dto.scope === NoticeScope.Campus ? null : dto.cohortId!,
-          cohortTrackId:
-            dto.scope === NoticeScope.CohortTrack ? dto.cohortTrackId! : null,
           title: dto.title,
           body: dto.body,
         })
@@ -81,6 +94,7 @@ export class NoticesService {
           scope: row.scope,
           cohortId: row.cohortId,
           cohortTrackId: row.cohortTrackId,
+          mentorshipGroupId: row.mentorshipGroupId,
           title: row.title,
         },
       });
@@ -111,12 +125,7 @@ export class NoticesService {
         });
       }
 
-      await this.assertCanManageNotices(
-        tx,
-        actor,
-        existing.scope as NoticeScope,
-        existing.cohortId,
-      );
+      await this.assertCanManageNotices(tx, actor, existing);
 
       if (dto.title === undefined && dto.body === undefined) {
         return existing;
@@ -163,12 +172,7 @@ export class NoticesService {
         });
       }
 
-      await this.assertCanManageNotices(
-        tx,
-        actor,
-        existing.scope as NoticeScope,
-        existing.cohortId,
-      );
+      await this.assertCanManageNotices(tx, actor, existing);
 
       if (existing.pinned === pinned) {
         return existing;
@@ -177,18 +181,8 @@ export class NoticesService {
       if (pinned) {
         // The row lock above covers only this notice: hold the scope's lock
         // until commit so two pins in one scope count one after the other.
-        await this.lockScopePins(
-          tx,
-          existing.scope as NoticeScope,
-          existing.cohortId,
-          existing.cohortTrackId,
-        );
-        const pinnedInScope = await this.countPinnedInScope(
-          tx,
-          existing.scope as NoticeScope,
-          existing.cohortId,
-          existing.cohortTrackId,
-        );
+        await this.lockScopePins(tx, existing);
+        const pinnedInScope = await this.countPinnedInScope(tx, existing);
 
         if (pinnedInScope >= MAX_PINNED_PER_SCOPE) {
           throw new NoticeConflictException(
@@ -233,12 +227,7 @@ export class NoticesService {
         });
       }
 
-      await this.assertCanManageNotices(
-        tx,
-        actor,
-        existing.scope as NoticeScope,
-        existing.cohortId,
-      );
+      await this.assertCanManageNotices(tx, actor, existing);
 
       await tx
         .update(notices)
@@ -259,89 +248,94 @@ export class NoticesService {
   }
 
   private validateScopeReferences(dto: CreateNoticeDto): void {
-    if (dto.scope === NoticeScope.Campus) {
-      if (dto.cohortId) {
-        throw new NoticeInvalidArgumentException(
-          'Campus-scoped notices must not name a cohort',
-          { scope: dto.scope },
-        );
-      }
-      if (dto.cohortTrackId) {
-        throw new NoticeInvalidArgumentException(
-          'Campus-scoped notices must not name a cohort track',
-          { scope: dto.scope },
-        );
-      }
+    const { scope } = dto;
+    const refuse = (message: string): never => {
+      throw new NoticeInvalidArgumentException(message, { scope });
+    };
+
+    if (scope === NoticeScope.Campus) {
+      if (dto.cohortId) refuse('campus-scoped notices must not name a cohort');
+    } else if (!dto.cohortId) {
+      refuse(`${scope}-scoped notices require a cohort`);
     }
 
-    if (
-      dto.scope === NoticeScope.Cohort ||
-      dto.scope === NoticeScope.CohortTrack
-    ) {
-      if (!dto.cohortId) {
-        throw new NoticeInvalidArgumentException(
-          `${dto.scope}-scoped notices require a cohort`,
-          { scope: dto.scope },
-        );
+    if (scope === NoticeScope.CohortTrack) {
+      if (!dto.cohortTrackId) {
+        refuse('cohort-track-scoped notices require a cohort track');
       }
+    } else if (dto.cohortTrackId) {
+      refuse(`${scope}-scoped notices must not name a cohort track`);
     }
 
-    if (dto.scope === NoticeScope.CohortTrack && !dto.cohortTrackId) {
-      throw new NoticeInvalidArgumentException(
-        'cohort-track-scoped notices require a cohort track',
-        { scope: dto.scope },
-      );
-    }
-
-    if (dto.scope === NoticeScope.Cohort && dto.cohortTrackId) {
-      throw new NoticeInvalidArgumentException(
-        'Cohort-scoped notices must not name a cohort track',
-        { scope: dto.scope },
-      );
+    if (scope === NoticeScope.MentorshipGroup) {
+      if (!dto.mentorshipGroupId) {
+        refuse('mentorship-group-scoped notices require a mentorship group');
+      }
+    } else if (dto.mentorshipGroupId) {
+      refuse(`${scope}-scoped notices must not name a mentorship group`);
     }
   }
 
   /**
+   * Each role reaches only the people it answers for: admins anyone, a
+   * professor the track their own membership names, a mentor their pod.
+   *
    * Reads through `db`, so callers inside a transaction pass it rather than
    * taking a second pool connection while theirs is held.
    */
   private async assertCanManageNotices(
     db: DbExecutor,
     actor: AuthenticatedUser,
-    scope: NoticeScope,
-    cohortId: string | null,
+    target: NoticeTarget,
+    now: Date = new Date(),
   ): Promise<void> {
     if (hasAdminPowers(actor.systemRole)) {
       return;
     }
 
-    if (scope === NoticeScope.Campus) {
-      throw new NoticeForbiddenException(
-        'Only admins may post campus-wide notices',
-      );
-    }
-
-    if (!cohortId) {
-      throw new NoticeForbiddenException(
-        'Only admins may post notices without a cohort',
-      );
-    }
-
-    const [membership] = await db
-      .select({ role: cohortMembers.role })
-      .from(cohortMembers)
-      .where(
-        and(
-          eq(cohortMembers.userId, actor.id),
-          eq(cohortMembers.cohortId, cohortId),
-          isNull(cohortMembers.leftAt),
-        ),
-      );
-
-    if (!membership || membership.role !== CohortRole.Professor) {
-      throw new NoticeForbiddenException(
-        'Only admins and professors of the cohort may manage its notices',
-      );
+    switch (target.scope as NoticeScope) {
+      case NoticeScope.CohortTrack: {
+        const [professor] = await db
+          .select({ id: cohortMembers.id })
+          .from(cohortMembers)
+          .where(
+            and(
+              eq(cohortMembers.userId, actor.id),
+              eq(cohortMembers.cohortId, target.cohortId!),
+              eq(cohortMembers.cohortTrackId, target.cohortTrackId!),
+              eq(cohortMembers.role, CohortRole.Professor),
+              isLiveMembership(now),
+            ),
+          );
+        if (professor) return;
+        throw new NoticeForbiddenException(
+          "Only admins and the track's professors may manage its notices",
+        );
+      }
+      case NoticeScope.MentorshipGroup: {
+        const [mentor] = await db
+          .select({ id: mentorshipGroups.id })
+          .from(mentorshipGroups)
+          .innerJoin(
+            cohortMembers,
+            eq(cohortMembers.id, mentorshipGroups.mentorMemberId),
+          )
+          .where(
+            and(
+              eq(mentorshipGroups.id, target.mentorshipGroupId!),
+              eq(cohortMembers.userId, actor.id),
+              isLiveMembership(now),
+            ),
+          );
+        if (mentor) return;
+        throw new NoticeForbiddenException(
+          "Only admins and the group's mentor may manage its notices",
+        );
+      }
+      default:
+        throw new NoticeForbiddenException(
+          `Only admins may manage ${target.scope}-wide notices`,
+        );
     }
   }
 
@@ -368,38 +362,61 @@ export class NoticesService {
     }
   }
 
+  private async assertMentorshipGroupExists(
+    tx: DbExecutor,
+    mentorshipGroupId: string,
+    cohortId: string,
+  ): Promise<void> {
+    const [group] = await tx
+      .select({ id: mentorshipGroups.id })
+      .from(mentorshipGroups)
+      .where(
+        and(
+          eq(mentorshipGroups.id, mentorshipGroupId),
+          eq(mentorshipGroups.cohortId, cohortId),
+        ),
+      );
+
+    if (!group) {
+      throw new NoticeInvalidArgumentException(
+        'The mentorship group does not belong to the given cohort',
+        { mentorshipGroupId, cohortId },
+      );
+    }
+  }
+
   /**
    * A transaction-scoped advisory lock on one scope's pins, released at
    * commit or rollback. Campus notices have no row to lock, hence a key.
    */
   private async lockScopePins(
     tx: DbExecutor,
-    scope: NoticeScope,
-    cohortId: string | null,
-    cohortTrackId: string | null,
+    target: NoticeTarget,
   ): Promise<void> {
-    const key = `notices:pins:${scope}:${cohortTrackId ?? cohortId ?? '-'}`;
+    const key = `notices:pins:${target.scope}:${
+      target.mentorshipGroupId ?? target.cohortTrackId ?? target.cohortId ?? '-'
+    }`;
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`,
     );
   }
 
   private async countPinnedInScope(
-    tx: Parameters<Parameters<Db['transaction']>[0]>[0],
-    scope: NoticeScope,
-    cohortId: string | null,
-    cohortTrackId: string | null,
+    tx: DbExecutor,
+    target: NoticeTarget,
   ): Promise<number> {
     const conditions = [
       eq(notices.pinned, true),
       isNull(notices.removedAt),
-      eq(notices.scope, scope),
+      eq(notices.scope, target.scope),
     ];
 
-    if (scope === NoticeScope.CohortTrack && cohortTrackId) {
-      conditions.push(eq(notices.cohortTrackId, cohortTrackId));
-    } else if (scope === NoticeScope.Cohort && cohortId) {
-      conditions.push(eq(notices.cohortId, cohortId));
+    if (target.mentorshipGroupId) {
+      conditions.push(eq(notices.mentorshipGroupId, target.mentorshipGroupId));
+    } else if (target.cohortTrackId) {
+      conditions.push(eq(notices.cohortTrackId, target.cohortTrackId));
+    } else if (target.cohortId) {
+      conditions.push(eq(notices.cohortId, target.cohortId));
     }
 
     const [{ total }] = await tx

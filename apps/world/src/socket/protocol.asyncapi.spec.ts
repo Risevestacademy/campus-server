@@ -91,6 +91,7 @@ describe('the AsyncAPI document', () => {
       'WelcomeMessage',
       'PongMessage',
       'SnapshotMessage',
+      'MapChangedMessage',
       'JoinedMessage',
       'AppearanceMessage',
       'LeftMessage',
@@ -113,6 +114,7 @@ describe('the AsyncAPI document', () => {
       'ReplacedMessage',
       'WatchingMessage',
       'MovedMessage',
+      'PositionCorrectedMessage',
       'MoveResultMessage',
       'ErrorMessage',
     ]);

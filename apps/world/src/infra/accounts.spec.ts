@@ -16,6 +16,7 @@ import {
   LIVE_MEMBERSHIPS_QUERY,
   LIVE_SESSIONS_QUERY,
   MEMBERSHIP_ROWS_QUERY,
+  PUBLISHED_ENTRY_MAP_QUERY,
   ROOM_LINK_PASSES_QUERY,
   SPACES_QUERY,
   SPACE_LISTS_QUERY,
@@ -810,9 +811,15 @@ describe("world's space doors, against campus-api's schema", () => {
 describe("world's entry-request notification, against campus-api's schema", () => {
   const asker = randomUUID();
   const requestId = randomUUID();
+  const context = { cohortId: randomUUID(), spaceKey: 'library' };
 
   const notify = (kind: string) =>
-    db.query(ENTRY_REQUEST_NOTIFICATION_QUERY, [asker, kind, requestId]);
+    db.query(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+      asker,
+      kind,
+      requestId,
+      JSON.stringify(context),
+    ]);
 
   beforeAll(async () => {
     await db.exec(
@@ -832,6 +839,7 @@ describe("world's entry-request notification, against campus-api's schema", () =
         kind: 'entry_request_admitted',
         reference_type: 'entry_request',
         reference_id: requestId,
+        context,
         created_at: expect.any(Date),
       },
     ]);
@@ -841,9 +849,10 @@ describe("world's entry-request notification, against campus-api's schema", () =
       kind: string;
       reference_type: string;
       reference_id: string;
+      context: unknown;
       read_at: Date | null;
     }>(
-      `select kind, reference_type, reference_id, read_at from notifications
+      `select kind, reference_type, reference_id, context, read_at from notifications
         where recipient_id = $1 order by kind`,
       [asker],
     );
@@ -852,12 +861,14 @@ describe("world's entry-request notification, against campus-api's schema", () =
         kind: 'entry_request_admitted',
         reference_type: 'entry_request',
         reference_id: requestId,
+        context,
         read_at: null,
       },
       {
         kind: 'entry_request_declined',
         reference_type: 'entry_request',
         reference_id: requestId,
+        context,
         read_at: null,
       },
     ]);
@@ -870,6 +881,33 @@ describe("world's entry-request notification, against campus-api's schema", () =
  * does not. It is settled once, here, rather than carried around as a string
  * every comparison downstream reads as "not proximity".
  */
+describe("world's published map lookup, against campus-api's schema", () => {
+  it('answers only a live entry map an admin published', async () => {
+    const suffix = `${Date.now().toString(36)}${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const key = `campus-${suffix}`;
+    const annex = `annex-${suffix}`;
+    await db.query(
+      `insert into maps (key, name, is_entry) values ('${key}', 'Campus', true), ('${annex}', 'Annex', false)`,
+    );
+    const read = async () =>
+      (await db.query<{ key: string }>(PUBLISHED_ENTRY_MAP_QUERY)).rows.filter(
+        (row) => row.key.endsWith(suffix),
+      );
+
+    expect(await read()).toEqual([]);
+
+    await db.query(
+      `update maps set published_at = now() where key in ('${key}', '${annex}')`,
+    );
+    expect(await read()).toEqual([{ key }]);
+
+    await db.query(`update maps set retired_at = now() where key = '${key}'`);
+    expect(await read()).toEqual([]);
+  });
+});
+
 describe('reading a space row', () => {
   const row = {
     id: '11111111-1111-4111-8111-111111111111',

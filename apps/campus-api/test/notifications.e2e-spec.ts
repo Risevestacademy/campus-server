@@ -168,6 +168,7 @@ describe('notifications (e2e)', () => {
       kind: 'notice_posted',
       referenceType: 'notice',
       referenceId: notice.id,
+      context: null,
       createdAt: expect.any(String),
     });
 
@@ -179,6 +180,7 @@ describe('notifications (e2e)', () => {
           kind: 'notice_posted',
           referenceType: 'notice',
           referenceId: notice.id,
+          context: null,
           read: false,
           createdAt: pushed!.createdAt,
         },

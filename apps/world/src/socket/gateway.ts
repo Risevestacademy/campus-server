@@ -8,11 +8,11 @@ import { worldMetrics } from '../infra/metrics.js';
 import type { NotificationFeed } from '../infra/notifications.js';
 import type { PositionStore } from '../infra/positions.js';
 import type { PresenceStore } from '../infra/presence.js';
-import { type Tile } from '../movement/grid.js';
+import { nearestWalkable, walkable, type Tile } from '../movement/grid.js';
 import { Players } from '../movement/players.js';
 import { spaceAt } from '../movement/spaces.js';
-import type { WorldMap } from '../movement/world-map.js';
-import { seatKey, type Seat } from '../seat.js';
+import { assertWorldMap, type WorldMap } from '../movement/world-map.js';
+import type { Seat } from '../seat.js';
 import {} from './authenticate.js';
 import { Connections, personOf, type Connection } from './connections.js';
 import { createContext } from './context.js';
@@ -47,14 +47,27 @@ export interface Gateway {
    */
   spacesChanged(): Promise<void>;
   /**
+   * campus-api says this map key was published. Reloads the map if it is
+   * still the entry map the database names; a key world does not serve is
+   * logged and ignored.
+   */
+  mapPublished(mapKey: string): Promise<void>;
+  /**
+   * Re-reads which entry map is published and reloads it when it differs
+   * from what is running. Called when the database notification channel
+   * (re)subscribes, so a publish missed while world was down is caught.
+   */
+  publishedMapChanged(): Promise<void>;
+  /**
    * campus-api says who holds a desk may have changed, in one cohort or, with
    * null, in every cohort: tell the people there to fetch the desks again.
    */
   desksChanged(cohortId: string | null): void;
   /**
    * A notification was written: tell the recipient on the sockets this
-   * instance holds for them. Only the named cohort's socket, or every one of
-   * theirs when it names none. Nobody here, nothing sent.
+   * instance holds for them, avatar and watchers alike. Only the named
+   * cohort's sockets, or every one of theirs when it names none. Nobody
+   * here, nothing sent.
    */
   notify(created: NotificationCreated): void;
   stop(): Promise<void>;
@@ -74,6 +87,8 @@ export function registerGateway(
   positions: PositionStore,
   presence: PresenceStore,
   map: WorldMap,
+  /** The same startup loading path, for a publish that happens later. */
+  loadMap: (mapKey: string) => Promise<WorldMap>,
   notifications: Pick<NotificationFeed, 'publish'>,
 ): Gateway {
   const connections = new Connections();
@@ -94,7 +109,7 @@ export function registerGateway(
     metrics,
     isStopping: () => stopping,
   });
-  const { sendFrame, broadcast, closeFor } = ctx;
+  const { send, sendFrame, broadcast, closeFor } = ctx;
   const appearance = createAppearance(ctx, accounts);
 
   const doors = createDoors(ctx, accounts, afterSpacesRead);
@@ -225,6 +240,185 @@ export function registerGateway(
   const presenceSync = createPresence(ctx, presence, drop);
 
   /**
+   * A reload in flight, and the latest key asked for while it runs. One at a
+   * time, as the doors read: two quick publishes end with the later map
+   * served, and a notification during a reload is not lost.
+   */
+  let reloading: Promise<void> | undefined;
+  let reloadAgain = false;
+  let pendingKey: string | undefined;
+
+  /**
+   * The map is built and validated before this runs. Everything here is
+   * synchronous: no socket handler can run between the swap and the end of
+   * the player fix-up, so nobody steps onto a tile being reassigned.
+   */
+  function applyWorldMap(next: WorldMap): void {
+    if (next.id === map.id && next.version === map.version) return;
+
+    map.id = next.id;
+    map.version = next.version;
+    map.grid = next.grid;
+    map.spaces = next.spaces;
+    players.setGrid(next.grid);
+
+    const mapChanged = encode({
+      type: 'mapChanged',
+      map: {
+        id: map.id,
+        version: map.version,
+        width: map.grid.width,
+        height: map.grid.height,
+      },
+    });
+    for (const connection of connections.everyone()) {
+      sendFrame(connection.socket, mapChanged);
+    }
+
+    // Paths were found against the old walls. The walks keep their targets
+    // and find the way again from where the people now stand.
+    walks.replanAll();
+    fixPlayers();
+
+    // Derived from the map: names, lockable spaces and calls. A read of the
+    // spaces themselves is started too, for a map whose key moved.
+    calls.refresh();
+    locks.refreshLockable();
+    doors.refreshNames();
+    requests.review();
+    void doors.reload();
+  }
+
+  /**
+   * Everybody still connected, against the new map: off a tile that became a
+   * wall, then into the space that tile is in now. A nudge is sent to the
+   * person it happened to and, as ordinary news, to the rest of the cohort.
+   */
+  function fixPlayers(): void {
+    for (const connection of connections.all()) {
+      const player = players.get(connection);
+      if (!player) continue;
+
+      let at = player;
+      if (!walkable(map.grid, at)) {
+        const nearest =
+          nearestWalkable(map.grid, at) ??
+          (walkable(map.grid, map.grid.spawn) ? map.grid.spawn : undefined);
+        if (!nearest) {
+          app.log.error(
+            {
+              userId: connection.userId,
+              cohortId: connection.cohortId,
+              x: at.x,
+              y: at.y,
+            },
+            'new map leaves a player with no walkable tile; leaving them where they stand',
+          );
+          continue;
+        }
+        const placed = players.place(connection, nearest);
+        if (!placed) {
+          app.log.error(
+            { userId: connection.userId, cohortId: connection.cohortId },
+            'could not move a player off a wall on the new map',
+          );
+          continue;
+        }
+        at = placed;
+        send(connection.socket, { type: 'positionCorrected', player: at });
+        // Watchers see the map change, but not moves: the tick sends those to
+        // avatar holders only, and a correction is a move.
+        const moved = encode({ type: 'moved', players: [at] });
+        for (const other of connections.all()) {
+          if (other.cohortId === connection.cohortId && other !== connection) {
+            sendFrame(other.socket, moved);
+          }
+        }
+        positionWrites.moved(connection);
+        // The nudge changed where somebody stands without a step, so the tick
+        // has no move of theirs to notice. Say the cohort's lists are stale.
+        calls.markNearbyStale(connection.cohortId);
+      }
+
+      const spaceKey = spaceAt(map.spaces, at);
+      if (spaceKey !== connection.spaceKey) {
+        arrivedAt(connection, at);
+      }
+    }
+  }
+
+  /**
+   * Reads and builds the map before anything live is touched. A failure of
+   * any kind leaves the old map serving and is logged; world does not crash
+   * for a bad publish.
+   */
+  async function reloadMap(mapKey: string): Promise<void> {
+    try {
+      const next = await loadMap(mapKey);
+      assertWorldMap(next);
+      applyWorldMap(next);
+    } catch (err) {
+      app.log.error(
+        { err, mapKey },
+        'could not reload the published map; keeping the one running',
+      );
+    }
+  }
+
+  function requestReload(mapKey: string): Promise<void> {
+    pendingKey = mapKey;
+    if (reloading) {
+      reloadAgain = true;
+      return reloading;
+    }
+    reloading = (async () => {
+      do {
+        reloadAgain = false;
+        const key = pendingKey;
+        pendingKey = undefined;
+        if (key !== undefined) await reloadMap(key);
+      } while (reloadAgain);
+    })().finally(() => {
+      reloading = undefined;
+    });
+    return reloading;
+  }
+
+  async function mapPublished(mapKey: string): Promise<void> {
+    if (typeof mapKey !== 'string' || mapKey.length === 0) return;
+    try {
+      const published = await accounts.publishedEntryMapKey();
+      if (published !== mapKey) {
+        app.log.warn(
+          { mapKey, published },
+          'ignoring a map notification for a key world does not serve',
+        );
+        return;
+      }
+    } catch (err) {
+      app.log.error(
+        { err, mapKey },
+        'could not check which map is published; keeping the one running',
+      );
+      return;
+    }
+    await requestReload(mapKey);
+  }
+
+  async function publishedMapChanged(): Promise<void> {
+    try {
+      const published = await accounts.publishedEntryMapKey();
+      if (published === null) return;
+      await requestReload(published);
+    } catch (err) {
+      app.log.error(
+        { err },
+        'could not check which map is published; keeping the one running',
+      );
+    }
+  }
+
+  /**
    * Every way a socket stops counting goes through here, so a player can
    * never outlive the socket standing for them. Idempotent: a socket dropped
    * by the heartbeat comes back through here from its close event, and a
@@ -280,12 +474,11 @@ export function registerGateway(
     if (connections.holderOf(connection)) {
       return;
     }
-    const seat = seatKey(connection);
     const standing = players.get(connection);
     if (players.leave(connection, Date.now(), remember, connection.id)) {
       // With them goes any step of theirs the tick has not sent yet: should
       // they be back before it runs, `joined` already says where they stand.
-      moves.forget(seat);
+      moves.forget(connection);
       broadcast(connection.cohortId, {
         type: 'left',
         userId: connection.userId,
@@ -407,6 +600,8 @@ export function registerGateway(
     players,
     appearanceChanged: appearance.changed,
     spacesChanged: doors.reload,
+    mapPublished,
+    publishedMapChanged,
     desksChanged(cohortId: string | null): void {
       if (stopping) return;
       if (cohortId !== null) {
@@ -420,12 +615,15 @@ export function registerGateway(
     },
     notify({ recipientId, cohortId, ...notification }): void {
       if (stopping) return;
-      const held =
-        cohortId === null
-          ? connections.forUser(recipientId)
-          : [connections.holderOf({ userId: recipientId, cohortId })];
+      const seat = cohortId === null ? null : { userId: recipientId, cohortId };
+      const open = seat
+        ? [connections.holderOf(seat), ...connections.watchersOf(seat)]
+        : [
+            ...connections.forUser(recipientId),
+            ...connections.watchersForUser(recipientId),
+          ];
       const frame = encode({ type: 'notification', ...notification });
-      for (const connection of held) {
+      for (const connection of open) {
         if (connection) sendFrame(connection.socket, frame);
       }
     },

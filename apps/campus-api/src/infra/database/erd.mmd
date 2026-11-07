@@ -122,6 +122,7 @@ erDiagram
         varchar name
         boolean is_entry
         timestamptz retired_at "Set when the map is no longer published. Never deleted."
+        timestamptz published_at "Set by an admin to make a synced map live; never by the sync."
         timestamptz created_at
         timestamptz updated_at
     }

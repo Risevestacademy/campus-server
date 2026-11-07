@@ -15,6 +15,7 @@ const message = (recipientId: string): NotificationCreated => ({
   kind: 'notice_posted',
   referenceType: 'notice',
   referenceId: 'notice-1',
+  context: null,
   createdAt: '2026-11-05T09:30:00.000Z',
 });
 

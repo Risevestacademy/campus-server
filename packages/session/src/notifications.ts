@@ -20,6 +20,11 @@ export interface NotificationCreated {
   kind: string;
   referenceType: string;
   referenceId: string;
+  /**
+   * Where an entry request was, since the request has no row to read it
+   * from. Null for every other kind.
+   */
+  context: { cohortId: string; spaceKey: string } | null;
   /** ISO 8601. */
   createdAt: string;
 }

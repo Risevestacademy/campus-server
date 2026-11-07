@@ -1,13 +1,18 @@
-import type { NotificationCreated } from '@campus/session';
+import { SessionScope, type NotificationCreated } from '@campus/session';
 import { describe, expect, it } from 'vitest';
 
 import {
   COHORT,
+  ORIGIN,
+  SECRET,
   arrive,
+  connect,
   leave,
   notifications,
   person,
   quiet,
+  token,
+  url,
   useWorld,
   waitFor,
   world,
@@ -28,8 +33,26 @@ const posted = (
   kind: 'notice_posted',
   referenceType: 'notice',
   referenceId: 'notice-1',
+  context: null,
   createdAt: '2026-11-05T09:30:00.000Z',
 });
+
+/** The account's second socket in a cohort it already stands in: a watcher. */
+async function watch(userId: string, cohortId = COHORT) {
+  const query = new URLSearchParams({ cohortId, enter: 'ifFree' });
+  const conn = connect(
+    {
+      origin: ORIGIN,
+      cookie: `campus_session=${await token(SessionScope.FullAccess, SECRET, userId)}`,
+    },
+    '',
+    `${url}?${query.toString()}`,
+  );
+  const welcome = await waitFor(conn, (m) => m.type === 'welcome');
+  expect(welcome.mode).toBe('watcher');
+  await waitFor(conn, (m) => m.type === 'snapshot');
+  return conn;
+}
 
 const pushedTo = (conn: { messages: Record<string, unknown>[] }) =>
   conn.messages.filter((m) => m.type === 'notification');
@@ -48,6 +71,7 @@ describe('notifications', () => {
       kind: 'notice_posted',
       referenceType: 'notice',
       referenceId: 'notice-1',
+      context: null,
       createdAt: '2026-11-05T09:30:00.000Z',
     };
     await expect(
@@ -96,5 +120,34 @@ describe('notifications', () => {
 
     expect(pushedTo(here)).toEqual([]);
     await leave(here);
+  });
+
+  it("pushes one about a cohort to that cohort's watchers too", async () => {
+    const ada = person();
+    const web = await arrive(ada);
+    const phone = await watch(ada);
+
+    notifications.deliver(posted(ada, COHORT));
+
+    await waitFor(web, (m) => m.type === 'notification');
+    await waitFor(phone, (m) => m.type === 'notification');
+    await quiet();
+    expect(pushedTo(web)).toHaveLength(1);
+    expect(pushedTo(phone)).toHaveLength(1);
+    await Promise.all([leave(web), leave(phone)]);
+  });
+
+  it('pushes one about no cohort to every watcher the recipient has', async () => {
+    const ada = person();
+    const web = await arrive(ada);
+    const phone = await watch(ada);
+
+    notifications.deliver(posted(ada, null));
+
+    await waitFor(phone, (m) => m.type === 'notification');
+    await quiet();
+    expect(pushedTo(web)).toHaveLength(1);
+    expect(pushedTo(phone)).toHaveLength(1);
+    await Promise.all([leave(web), leave(phone)]);
   });
 });

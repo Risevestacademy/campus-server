@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import {} from '../infra/presence.js';
 
 import {
+  COHORT,
   accounts,
   arrive,
   connect,
@@ -130,7 +131,13 @@ describe('movement', () => {
       await expect(ended(outside)).resolves.toEqual(admitted);
       await expect(ended(inside)).resolves.toEqual(admitted);
       expect(accounts.answered.filter((a) => a.askerId === grace)).toEqual([
-        { requestId: sent.requestId, askerId: grace, admitted: true },
+        {
+          requestId: sent.requestId,
+          askerId: grace,
+          admitted: true,
+          cohortId: COHORT,
+          spaceKey: 'library',
+        },
       ]);
       // Written, then pushed to the asker on this cohort's socket alone.
       await expect(
@@ -141,6 +148,7 @@ describe('movement', () => {
         kind: 'entry_request_admitted',
         referenceType: 'entry_request',
         referenceId: sent.requestId,
+        context: { cohortId: COHORT, spaceKey: 'library' },
         createdAt: expect.any(String),
       });
       expect(inside.messages.some((m) => m.type === 'notification')).toBe(
@@ -191,7 +199,13 @@ describe('movement', () => {
       ).resolves.toMatchObject({ outcome: 'declined' });
       // The withdrawn request and the refused late answer notify nobody.
       expect(accounts.answered.filter((a) => a.askerId === ada)).toEqual([
-        { requestId: second, askerId: ada, admitted: false },
+        {
+          requestId: second,
+          askerId: ada,
+          admitted: false,
+          cohortId: COHORT,
+          spaceKey: 'library',
+        },
       ]);
       await Promise.all([leave(inside), leave(outside)]);
     });

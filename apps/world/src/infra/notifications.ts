@@ -36,6 +36,10 @@ const notificationCreated = z.object({
   kind: z.string(),
   referenceType: z.string(),
   referenceId: z.string(),
+  context: z
+    .object({ cohortId: z.string(), spaceKey: z.string() })
+    .nullable()
+    .default(null),
   createdAt: z.string(),
 }) satisfies z.ZodType<NotificationCreated>;
 

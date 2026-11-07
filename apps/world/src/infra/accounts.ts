@@ -13,12 +13,13 @@ import {
 import { installPostgresTracing } from '@campus/telemetry/sql';
 import postgres from 'postgres';
 
-import { seatKey, type Seat } from '../seat.js';
+import { SeatMap, seatKey, type Seat } from '../seat.js';
 import type { Env } from './env.js';
 
 /**
- * What the socket layer needs to know about the person behind a token, and
- * nothing else. An interface so the gateway can be tested without a database
+ * What the socket layer needs from the database: who is behind a token, the
+ * spaces they move through, and the one row world writes, the asker's
+ * notification. An interface so the gateway can be tested without a database
  * and so the lookup can move behind Redis later without touching callers.
  */
 export interface AccountLookup {
@@ -34,6 +35,13 @@ export interface AccountLookup {
     refreshedSince: Date,
     now: Date,
   ): Promise<Set<string>>;
+  /**
+   * The key of the entry map an admin has published, or null when none has.
+   * World serves one map: this is the database saying which version of the
+   * campus is live. The geometry itself still comes from Sanity; only the
+   * key and the decision to serve it are kept here.
+   */
+  publishedEntryMapKey(): Promise<string | null>;
   liveMembership(seat: Seat, now: Date): Promise<boolean>;
   /**
    * Which of these seats still hold a live membership: one query for every
@@ -64,12 +72,16 @@ export interface AccountLookup {
    */
   roomLinkPassesOn(mapKey: string, now: Date): Promise<RoomLinkPass[]>;
   /**
-   * Calls `listener` whenever campus-api says something a space's door reads
-   * has changed, and whenever listening (re)starts, since a change made while
-   * it was not listening reached nobody. Resolves once listening; rejects if
-   * it could not start.
+   * Calls `listener` with a published map's key, or with '' when something a
+   * space's door reads changed. `reconnected` is called again whenever
+   * listening (re)starts, since a change made while it was not listening
+   * reached nobody; left out, the listener gets '' instead. Resolves once
+   * listening; rejects if it could not start.
    */
-  onSpacesChanged(listener: () => void): Promise<void>;
+  onSpacesChanged(
+    listener: (payload: string) => void,
+    reconnected?: () => void,
+  ): Promise<void>;
   /**
    * Calls `listener` with an account id whenever campus-api says that
    * account's sprite or display name changed. Resolves once listening;
@@ -96,6 +108,8 @@ export interface EntryRequestAnswer {
   requestId: string;
   askerId: string;
   admitted: boolean;
+  cohortId: string;
+  spaceKey: string;
 }
 
 export interface WrittenNotification {
@@ -103,6 +117,7 @@ export interface WrittenNotification {
   kind: string;
   referenceType: string;
   referenceId: string;
+  context: { cohortId: string; spaceKey: string } | null;
   createdAt: Date;
 }
 
@@ -196,6 +211,18 @@ export const LIVE_MEMBERSHIPS_QUERY = `select user_id, cohort_id from cohort_mem
     and ${MEMBERSHIP_IS_LIVE}`;
 
 /**
+ * The one map an admin has published for people to enter on. The partial
+ * unique index allows at most one non-retired entry map, so the order only
+ * settles a database somebody wrote around the API.
+ */
+export const PUBLISHED_ENTRY_MAP_QUERY = `select key from maps
+  where is_entry = true
+    and retired_at is null
+    and published_at is not null
+  order by published_at desc
+  limit 1`;
+
+/**
  * A seat's membership row as it stands, many seats at once. No liveness here:
  * the door decides that with `isLiveMembership`, at the moment of the step.
  * $1 user ids and $2 cohort ids, paired by position.
@@ -228,16 +255,17 @@ export const ENTRY_REQUEST_ADMITTED_KIND = 'entry_request_admitted';
 export const ENTRY_REQUEST_DECLINED_KIND = 'entry_request_declined';
 
 /**
- * $1 the asker, $2 the kind, $3 the request's id. Requests have no row, so
- * the reference is world's own id for one. The conflict target is
- * campus-api's notifications_recipient_kind_reference_unique. A repeat
- * returns no row.
+ * $1 the asker, $2 the kind, $3 the request's id, $4 campus-api's
+ * `EntryRequestContext` as JSON. Requests have no row, so the reference is
+ * world's own id for one and the context says where it was. The conflict
+ * target is campus-api's notifications_recipient_kind_reference_unique. A
+ * repeat returns no row.
  */
 export const ENTRY_REQUEST_NOTIFICATION_QUERY = `insert into notifications
-    (recipient_id, kind, reference_type, reference_id)
-  values ($1, $2, 'entry_request', $3)
+    (recipient_id, kind, reference_type, reference_id, context)
+  values ($1, $2, 'entry_request', $3, $4::jsonb)
   on conflict (recipient_id, kind, reference_type, reference_id) do nothing
-  returning id, kind, reference_type, reference_id, created_at`;
+  returning id, kind, reference_type, reference_id, context, created_at`;
 
 /** What hearing defaults to in a proximity space with no radius set, in tiles. */
 export const DEFAULT_AUDIBLE_RADIUS = 5;
@@ -360,15 +388,16 @@ export function looksLikeId(value: string): boolean {
  * the same answer — otherwise a ban takes effect whenever the token happens
  * to expire, which is up to AUTH_SESSION_TTL_MINUTES later.
  *
- * Raw SQL rather than drizzle: one query against two columns, of a table
- * campus-api owns. When world needs maps and spaces, the schema should move
- * to a shared package and this can move with it.
+ * Raw SQL rather than drizzle: every statement here is against tables
+ * campus-api owns, and each is exported and run against its migrations in
+ * accounts.spec.ts. If the schema moves to a shared package, these can move
+ * to drizzle with it.
  */
 export function createAccountLookup(env: Env): AccountLookup {
   const sql = postgres(env.DATABASE_URL, {
     max: env.WORLD_DB_POOL,
-    // Read-only lookups on the hot path: fail fast rather than hold a socket
-    // waiting on a database that is not answering.
+    // Lookups on the hot path, and one write nobody waits for: fail fast
+    // rather than hold a socket waiting on a database that is not answering.
     connect_timeout: 5,
   });
   if (env.FF_OTEL_ENABLED) {
@@ -411,6 +440,12 @@ export function createAccountLookup(env: Env): AccountLookup {
       );
       return new Set(rows.map((row) => row.family_id));
     },
+    async publishedEntryMapKey(): Promise<string | null> {
+      const rows = await sql.unsafe<{ key: string }[]>(
+        PUBLISHED_ENTRY_MAP_QUERY,
+      );
+      return rows[0]?.key ?? null;
+    },
     async onProfileChanged(listener): Promise<void> {
       // A connection of its own, kept open and re-listened on reconnect by
       // the driver. The payload is the account id campus-api changed.
@@ -432,16 +467,13 @@ export function createAccountLookup(env: Env): AccountLookup {
       // would fail it for every socket at once. Dropped here, user and cohort
       // alike, where holding nothing is what a non-id could only have meant
       // anyway.
-      const named = [
-        ...new Map(
-          seats
-            .filter(
-              ({ userId, cohortId }) =>
-                looksLikeId(userId) && looksLikeId(cohortId),
-            )
-            .map((seat) => [seatKey(seat), seat]),
-        ).values(),
-      ];
+      const unique = new SeatMap<Seat>();
+      for (const seat of seats) {
+        if (looksLikeId(seat.userId) && looksLikeId(seat.cohortId)) {
+          unique.set(seat, seat);
+        }
+      }
+      const named = [...unique.values()];
       if (named.length === 0) {
         return new Set();
       }
@@ -462,16 +494,13 @@ export function createAccountLookup(env: Env): AccountLookup {
     async memberships(seats): Promise<Map<string, CohortMembershipFacts>> {
       // As in liveMemberships: a pair the database cannot cast would fail
       // the query for every socket, so it is dropped here.
-      const named = [
-        ...new Map(
-          seats
-            .filter(
-              ({ userId, cohortId }) =>
-                looksLikeId(userId) && looksLikeId(cohortId),
-            )
-            .map((seat) => [seatKey(seat), seat]),
-        ).values(),
-      ];
+      const unique = new SeatMap<Seat>();
+      for (const seat of seats) {
+        if (looksLikeId(seat.userId) && looksLikeId(seat.cohortId)) {
+          unique.set(seat, seat);
+        }
+      }
+      const named = [...unique.values()];
       if (named.length === 0) {
         return new Map();
       }
@@ -569,14 +598,14 @@ export function createAccountLookup(env: Env): AccountLookup {
         () => listener(null),
       );
     },
-    async onSpacesChanged(listener): Promise<void> {
+    async onSpacesChanged(listener, reconnected): Promise<void> {
       // Called on every notification, and again each time the driver
       // subscribes: a change made while it was reconnecting sent its word to
       // nobody, so reading again on the way back in is what catches it.
       await sql.listen(
         SPACES_CHANGED_CHANNEL,
-        () => listener(),
-        () => listener(),
+        (payload) => listener(payload),
+        () => (reconnected ? reconnected() : listener('')),
       );
     },
     async notifyEntryRequestAnswered(answer) {
@@ -586,6 +615,7 @@ export function createAccountLookup(env: Env): AccountLookup {
           kind: string;
           reference_type: string;
           reference_id: string;
+          context: { cohortId: string; spaceKey: string } | null;
           created_at: Date;
         }[]
       >(ENTRY_REQUEST_NOTIFICATION_QUERY, [
@@ -594,6 +624,10 @@ export function createAccountLookup(env: Env): AccountLookup {
           ? ENTRY_REQUEST_ADMITTED_KIND
           : ENTRY_REQUEST_DECLINED_KIND,
         answer.requestId,
+        JSON.stringify({
+          cohortId: answer.cohortId,
+          spaceKey: answer.spaceKey,
+        }),
       ]);
       return row
         ? {
@@ -601,6 +635,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             kind: row.kind,
             referenceType: row.reference_type,
             referenceId: row.reference_id,
+            context: row.context,
             createdAt: row.created_at,
           }
         : undefined;
