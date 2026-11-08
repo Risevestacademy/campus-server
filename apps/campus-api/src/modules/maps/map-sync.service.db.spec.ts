@@ -1,4 +1,5 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DESKS_CHANGED_CHANNEL } from '@campus/session';
 import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
@@ -807,6 +808,60 @@ describe('the default space', () => {
   });
 });
 
+/**
+ * A sync owns the rows, not whether the map is live. `published_at` is the
+ * admin's, so neither a new map nor a re-sync may write it; a map published
+ * before a CMS edit keeps the moment it went live.
+ */
+describe('what a sync never does to publication', () => {
+  const publishedAt = new Date('2026-09-01T09:00:00Z');
+
+  const publishedOf = async (key: string) =>
+    (
+      await db
+        .select({ publishedAt: maps.publishedAt })
+        .from(maps)
+        .where(eq(maps.key, key))
+    )[0]?.publishedAt;
+
+  it('leaves a new map unpublished', async () => {
+    await sync([map('campus')]);
+
+    await expect(publishedOf('campus')).resolves.toBeNull();
+  });
+
+  it('leaves a re-synced unpublished map unpublished', async () => {
+    await sync([map('campus', [space('library')])]);
+
+    await sync([map('campus', [space('library'), space('lab')])]);
+
+    await expect(publishedOf('campus')).resolves.toBeNull();
+  });
+
+  it('does not overwrite the publication of an already-published map', async () => {
+    await sync([map('campus', [space('library')])]);
+    await db.update(maps).set({ publishedAt }).where(eq(maps.key, 'campus'));
+
+    await sync([
+      map('campus', [space('library'), space('lab')], {
+        version: 'campus-v2',
+      }),
+    ]);
+
+    await expect(publishedOf('campus')).resolves.toEqual(publishedAt);
+  });
+
+  it('does not write it when a retired map is restored', async () => {
+    await sync([map('campus')]);
+    await db.update(maps).set({ publishedAt }).where(eq(maps.key, 'campus'));
+    await sync([]);
+
+    await sync([map('campus')]);
+
+    await expect(publishedOf('campus')).resolves.toEqual(publishedAt);
+  });
+});
+
 describe('a map no longer published', () => {
   const both = [
     map('campus', [space('library', 'open')]),
@@ -1036,6 +1091,40 @@ describe('telling world the spaces changed', () => {
       );
       await vi.waitFor(() => expect(heard).toContain('marker'));
       expect(heard).toEqual(['marker']);
+    } finally {
+      await stop();
+    }
+  });
+
+  it('tells every cohort when desks are added or retired, and only then', async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(DESKS_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    try {
+      await sync([map('campus', [space('library', 'open')])]);
+      await sync([
+        map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
+      ]);
+      await sync([
+        map('campus', [space('library', 'open')], { desks: ['desk_a'] }),
+      ]);
+      // A held desk leaving: one word to every cohort, not one per holder too.
+      await db.execute(sql`truncate cohorts cascade`);
+      const [cohort] = await db
+        .insert(cohorts)
+        .values({ name: 'Cohort 1', code: 'C1' })
+        .returning();
+      const [desk] = await db.select().from(desks);
+      await db
+        .insert(deskClaims)
+        .values({ deskId: desk.id, cohortId: cohort.id, userId: admin.id });
+      await sync([map('campus', [space('library', 'open')])]);
+      await db.execute(
+        sql`select pg_notify(${DESKS_CHANGED_CHANNEL}, 'marker')`,
+      );
+      await vi.waitFor(() => expect(heard).toContain('marker'));
+      expect(heard).toEqual(['', '', 'marker']);
     } finally {
       await stop();
     }

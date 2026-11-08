@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { type SQL, and, eq, gt, isNull, ne, not, or, sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 import {
   DRIZZLE,
@@ -8,6 +9,8 @@ import {
 } from '../../infra/database/database.constants.js';
 import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { endDeskClaims } from '../desks/end-claims.js';
+import { DeskReleaseReason, deskClaims } from '../desks/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
@@ -51,19 +54,25 @@ import {
  * the comparison NULL rather than false, and this predicate is negated by
  * enrolment — where NULL would silently refuse to revive.
  */
-export function isLiveMembership(now: Date): SQL<unknown> {
+export function isLiveMembership(
+  now: Date,
+  members: LivenessColumns = cohortMembers,
+): SQL<unknown> {
   return and(
-    isNull(cohortMembers.leftAt),
+    isNull(members.leftAt),
     or(
-      ne(cohortMembers.role, CohortRole.Student),
-      sql`${cohortMembers.status} is not distinct from ${sql.raw(`'${StudentStatus.Active}'`)}`,
+      ne(members.role, CohortRole.Student),
+      sql`${members.status} is not distinct from ${sql.raw(`'${StudentStatus.Active}'`)}`,
     ),
-    or(
-      isNull(cohortMembers.accessExpiresAt),
-      gt(cohortMembers.accessExpiresAt, now),
-    ),
+    or(isNull(members.accessExpiresAt), gt(members.accessExpiresAt, now)),
   ) as SQL<unknown>;
 }
+
+/** The columns liveness reads, so an alias of `cohort_members` can be passed. */
+type LivenessColumns = Record<
+  'leftAt' | 'role' | 'status' | 'accessExpiresAt',
+  AnyPgColumn
+>;
 
 /** The negation, for callers that want the rows a live one would exclude. */
 export function isNotLiveMembership(now: Date): SQL<unknown> {
@@ -293,7 +302,8 @@ export class CohortMembersService {
    * committed.
    *
    * An end is not a revive. The row stays, `left_at` is set, and the roster
-   * files it under `state=ended` with the status and reason.
+   * files it under `state=ended` with the status and reason. A desk they
+   * hold in the cohort is let go (`enrolment_ended`).
    *
    * The member's sessions are ended in the same transaction, through
    * `endSessions` (the session issuer, which this module cannot import
@@ -398,6 +408,12 @@ export class CohortMembersService {
           .delete(mentorshipGroupStudents)
           .where(eq(mentorshipGroupStudents.cohortMemberId, existing.id));
       }
+      await endDeskClaims(
+        tx,
+        and(eq(deskClaims.cohortId, cohortId), eq(deskClaims.userId, userId)),
+        DeskReleaseReason.EnrolmentEnded,
+        now,
+      );
 
       await writeAuditEntry(tx, {
         ...audit,

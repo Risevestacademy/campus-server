@@ -107,6 +107,13 @@
         "status": {
           "$ref": "#/definitions/Status"
         },
+        "statusUntil": {
+          "description": "When a status chosen for a while ends, as an ISO timestamp, and goes back to the one chosen before it. Null for a status that lasts, and while they show away for being idle.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "spaceKey": {
           "type": "string",
           "description": "The space they are standing in: a drawn space's key, or `_default` for the corridors and grounds."
@@ -120,6 +127,7 @@
         "displayName",
         "spriteKey",
         "status",
+        "statusUntil",
         "spaceKey"
       ],
       "additionalProperties": false,
@@ -223,7 +231,7 @@
         "full",
         "too_fast"
       ],
-      "description": "moved: one tile in the direction asked. blocked: the tile is not walkable; they turn to face it without moving. refused: the tile is floor, but in a space they may not enter (designated and not on its list, or locked); they turn to face it without moving, and may ask with `requestEntry`. full: the tile is floor, in a space they could enter but it is at capacity; they turn to face it without moving. too_fast: over walking speed; nothing happens, not even the turn."
+      "description": "moved: one tile in the direction asked. blocked: the tile is not walkable; they turn to face it without moving. refused: the tile is floor, but in a space they may not enter (designated and not on its list, or locked); they turn to face it without moving, and may ask with `requestEntry`. full: the tile is floor, in a space they may enter but that already holds as many people as its capacity allows; they turn to face it without moving. Asking does not help. too_fast: over walking speed; nothing happens, not even the turn."
     },
     "WalkEndReason": {
       "type": "string",
@@ -237,7 +245,7 @@
         "no_way",
         "moved_by_staff"
       ],
-      "description": "arrived: you are one tile from them, in their space, never on their tile. stopped: you sent `stopWalking` or a `move`. refused: a space you may not enter is in the way, theirs or another, and you stopped beside the first one; `mayAsk` says whether asking to enter it would be taken. full: a space is at capacity; you stopped beside it. gone: they left, or were not here. elsewhere: they are online, but connected to another world server, which a walk cannot reach. no_way: no path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase past the step limit. moved_by_staff: staff removed you from a space mid-walk."
+      "description": "arrived: walking to somebody, you are one tile from them, in their space, never on their tile; to a space, you are on the free tile nearest its middle, or its middle when none is free; to a tile, you are on it. stopped: you sent `stopWalking` or a `move`. refused: a space you may not enter is in the way, or is where you were going, and you stopped beside the first one; `mayAsk` says whether asking to enter it would be taken. full: a space you may enter is in the way, or is where you were going, but already holds as many people as its capacity allows, and you stopped beside the first one; `mayAsk` is false. Refused wins when a space is both closed to you and full. gone: they left, or were not here. elsewhere: they are online, but connected to another world server, which a walk cannot reach. gone and elsewhere end only walks to somebody. no_way: no path reaches where you were going: walls, a space with no room beside them, or a walk past the step limit. moved_by_staff: staff removed you from a space mid-walk."
     },
     "EntryRequestOutcome": {
       "type": "string",
@@ -305,6 +313,12 @@
         },
         "status": {
           "$ref": "#/definitions/Status"
+        },
+        "forSeconds": {
+          "description": "Choose it for this long only: then it goes back to the last status chosen without a time. Leave it out for a status that lasts. Choosing again, with or without one, replaces the timer.",
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 43200
         }
       },
       "required": [
@@ -483,6 +497,53 @@
       "additionalProperties": false,
       "description": "Have the server walk you to somebody, a step per `stepMs`, through the same doors your own steps would be. Each step is a `walking`; the walk ends with one `walkEnded`. Replaces a walk already going. Somebody connected to another world server ends it with `elsewhere`. Yourself is a NOT_ALLOWED error. Counts as activity."
     },
+    "GoToSpaceMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "goToSpace"
+        },
+        "spaceKey": {
+          "type": "string",
+          "description": "A drawn space's key on this map. The corridors take `goToTile`."
+        }
+      },
+      "required": [
+        "type",
+        "spaceKey"
+      ],
+      "additionalProperties": false,
+      "description": "Have the server walk you into a space, to the free tile nearest its middle, the way `goTo` walks you to somebody: a `walking` a step, then one `walkEnded`. A space closed to you ends it beside the space with `refused`. Replaces a walk already going. A key not drawn on this map, or the corridors, is a NOT_ALLOWED error. Counts as activity."
+    },
+    "GoToTileMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "goToTile"
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Tile column."
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Tile row."
+        }
+      },
+      "required": [
+        "type",
+        "x",
+        "y"
+      ],
+      "additionalProperties": false,
+      "description": "Have the server walk you onto a tile, the way `goTo` walks you to somebody: a `walking` a step, then one `walkEnded`. A tile in a space closed to you ends it beside the space with `refused`. Replaces a walk already going. A tile off the map or inside a wall is a NOT_ALLOWED error. Counts as activity."
+    },
     "StopWalkingMessage": {
       "type": "object",
       "properties": {
@@ -495,7 +556,7 @@
         "type"
       ],
       "additionalProperties": false,
-      "description": "End the walk `goTo` started, answered by `walkEnded` with `stopped`. A `move` ends it too. Counts as activity."
+      "description": "End the walk `goTo`, `goToSpace` or `goToTile` started, answered by `walkEnded` with `stopped`. A `move` ends it too. Counts as activity."
     },
     "ClientMessage": {
       "oneOf": [
@@ -534,6 +595,12 @@
         },
         {
           "$ref": "#/definitions/GoToMessage"
+        },
+        {
+          "$ref": "#/definitions/GoToSpaceMessage"
+        },
+        {
+          "$ref": "#/definitions/GoToTileMessage"
         },
         {
           "$ref": "#/definitions/StopWalkingMessage"
@@ -577,6 +644,14 @@
           "maximum": 9007199254740991,
           "description": "How long you may do nothing before the server shows you away. Send `active` well within it while the person is there. 0 when this deployment never does."
         },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "avatar",
+            "watcher"
+          ],
+          "description": "avatar: you stand for this account on the map. watcher: another connection does, or nobody does; you see the cohort, may set the status and use the chat of whoever stands for you, and are never sent a call."
+        },
         "displayName": {
           "description": "The name to show beside them. Null when they have set none.",
           "type": [
@@ -600,6 +675,7 @@
         "stepMs",
         "tickMs",
         "awayAfterSeconds",
+        "mode",
         "displayName",
         "spriteKey"
       ],
@@ -698,6 +774,53 @@
       "additionalProperties": false,
       "description": "Sent once, right after `welcome`: the map, and everybody in your cohort on it, you included. Nobody from another cohort is ever in it."
     },
+    "MapChangedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "mapChanged"
+        },
+        "map": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Which published map this is. With `version`, what to load: the server enforces exactly that one."
+            },
+            "version": {
+              "type": "string",
+              "description": "The published version the server loaded. Load this version, not the current one: a map published since would have walls the server does not."
+            },
+            "width": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "description": "In tiles."
+            },
+            "height": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "description": "In tiles."
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "map"
+      ],
+      "additionalProperties": false,
+      "description": "An admin published a new version of the map while you were here. Stop enforcing the one from `snapshot`, load `map.version`, and replace everything you draw from the map with it. Sent to everybody; a connection made afterwards gets it in `snapshot` instead."
+    },
     "JoinedMessage": {
       "type": "object",
       "properties": {
@@ -780,15 +903,23 @@
         },
         "status": {
           "$ref": "#/definitions/Status"
+        },
+        "until": {
+          "description": "When a status chosen for a while ends, as an ISO timestamp, and goes back to the one chosen before it. Null for a status that lasts, and while they show away for being idle.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "type",
         "userId",
-        "status"
+        "status",
+        "until"
       ],
       "additionalProperties": false,
-      "description": "Somebody in your cohort's status changed: chosen, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
+      "description": "Somebody in your cohort's status changed: chosen, chosen for a while and that time ended, or set to away while idle and back again. Sent to everybody in the cohort, you included when it is yours."
     },
     "SpaceChangedMessage": {
       "type": "object",
@@ -935,6 +1066,20 @@
       "additionalProperties": false,
       "description": "Which spaces can be locked changed, because an admin changed a space: replaces the list from `snapshot`."
     },
+    "DesksChangedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "desksChanged"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "Who holds a desk in your cohort may have changed, or desks were added to or taken off the map: fetch `GET /v1/cohorts/{cohortId}/desks` from campus-api again."
+    },
     "SpacesMessage": {
       "type": "object",
       "properties": {
@@ -955,6 +1100,70 @@
       ],
       "additionalProperties": false,
       "description": "A space was renamed, or campus-api gained or lost a row for one: replaces `snapshot.spaces`. Sent to everybody."
+    },
+    "NotificationMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "notification"
+        },
+        "id": {
+          "type": "string",
+          "description": "The notification, as `GET /v1/notifications` lists it on campus-api; mark it read with `PATCH /v1/notifications/{id}/read`."
+        },
+        "kind": {
+          "type": "string",
+          "description": "What happened: `notice_posted`, `entry_request_admitted` or `entry_request_declined`. More will be added: show a plain alert for one you do not know."
+        },
+        "referenceType": {
+          "type": "string",
+          "description": "What `referenceId` names: `notice` or `entry_request`. Grows with `kind`."
+        },
+        "referenceId": {
+          "type": "string",
+          "description": "The notice's id, to fetch from campus-api for its text; for an entry request, the `requestId` its `entryRequestEnded` carried."
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "cohortId": {
+                  "type": "string"
+                },
+                "spaceKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "cohortId",
+                "spaceKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For an entry request, the cohort and space it was for. Null for a notice."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "When it was written, as an ISO timestamp."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "kind",
+        "referenceType",
+        "referenceId",
+        "context",
+        "createdAt"
+      ],
+      "additionalProperties": false,
+      "description": "Something happened that you are told about: enough to show a badge or a toast without asking campus-api. One about a cohort comes only on that cohort’s socket; one about no cohort, as a campus-wide notice, on every socket you have open. Best effort: one sent while you had no socket open, or that world missed, is in the list all the same, so fetch it on arriving."
     },
     "EntryRequestedMessage": {
       "type": "object",
@@ -1128,8 +1337,46 @@
           "const": "walking"
         },
         "userId": {
-          "type": "string",
-          "description": "Whom you are walking to."
+          "description": "Whom you are walking to, for a `goTo` walk.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toSpaceKey": {
+          "description": "The space you are walking into, for a `goToSpace` walk.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toTile": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tile you are walking onto, for a `goToTile` walk."
         },
         "player": {
           "$ref": "#/definitions/Player"
@@ -1138,10 +1385,12 @@
       "required": [
         "type",
         "userId",
+        "toSpaceKey",
+        "toTile",
         "player"
       ],
       "additionalProperties": false,
-      "description": "The server took a step of your `goTo` walk: where you are now. Only to you; everybody else sees it in `moved`."
+      "description": "The server took a step of your walk: where you are now. Only to you; everybody else sees it in `moved`."
     },
     "WalkEndedMessage": {
       "type": "object",
@@ -1151,8 +1400,46 @@
           "const": "walkEnded"
         },
         "userId": {
-          "type": "string",
-          "description": "Whom you were walking to."
+          "description": "Whom you are walking to, for a `goTo` walk.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toSpaceKey": {
+          "description": "The space you are walking into, for a `goToSpace` walk.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "toTile": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tile you are walking onto, for a `goToTile` walk."
         },
         "reason": {
           "$ref": "#/definitions/WalkEndReason"
@@ -1180,13 +1467,15 @@
       "required": [
         "type",
         "userId",
+        "toSpaceKey",
+        "toTile",
         "reason",
         "player",
         "spaceKey",
         "mayAsk"
       ],
       "additionalProperties": false,
-      "description": "Your `goTo` walk is over, and why. Only to you. Not sent when the socket closes."
+      "description": "Your walk is over, and why. Only to you. Not sent when the socket closes."
     },
     "ReplacedMessage": {
       "type": "object",
@@ -1200,7 +1489,21 @@
         "type"
       ],
       "additionalProperties": false,
-      "description": "This account opened this cohort's campus somewhere else — another device or tab — and that connection has taken its place. Being in another cohort never causes this. The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections would replace each other for as long as both stayed open. Show that they are in this campus elsewhere, and reconnect only when they ask to come back here."
+      "description": "This account opened this cohort's campus somewhere else — another device or tab — and that connection has taken its place. Being in another cohort never causes this. The socket closes immediately afterwards with 4000 `entered_elsewhere`. Do NOT reconnect: the two connections would replace each other for as long as both stayed open. Show that they are in this campus elsewhere, and reconnect only when they ask to come back here. A socket that entered with `enter=ifFree` is sent `watching` instead, and stays open."
+    },
+    "WatchingMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watching"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "This socket entered with `enter=ifFree`, and the account has entered this cohort's campus somewhere else with `enter=take`. It is a watcher from now on, as if `welcome.mode` had said so: leave the call and the broadcast room, stop drawing yourself as walking, and offer to enter here, which is reconnecting with `enter=take`. The socket stays open."
     },
     "MovedMessage": {
       "type": "object",
@@ -1221,7 +1524,25 @@
         "players"
       ],
       "additionalProperties": false,
-      "description": "Everybody in your cohort who moved or turned since the last tick, once each, as they stand now: two steps inside one tick arrive as the second, so an entry can be more than one tile from where they were. Sent once per tick, and not at all when nobody moved. You are never in your own `moved` frame — your `moveResult` already says where you ended up."
+      "description": "Everybody in your cohort who moved or turned since the last tick, once each, as they stand now: two steps inside one tick arrive as the second, so an entry can be more than one tile from where they were. Sent once per tick, and not at all when nobody moved. You are never in your own `moved` frame — your `moveResult` already says where you ended up. A map reload can also send one at once, carrying somebody the new walls moved."
+    },
+    "PositionCorrectedMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "positionCorrected"
+        },
+        "player": {
+          "$ref": "#/definitions/Player"
+        }
+      },
+      "required": [
+        "type",
+        "player"
+      ],
+      "additionalProperties": false,
+      "description": "A new map put the tile you stood on inside a wall, so the server moved you to the nearest walkable one. Snap to `player`. Only you get this; the rest of your cohort sees the move in `moved`."
     },
     "MoveResultMessage": {
       "type": "object",
@@ -1290,6 +1611,9 @@
           "$ref": "#/definitions/SnapshotMessage"
         },
         {
+          "$ref": "#/definitions/MapChangedMessage"
+        },
+        {
           "$ref": "#/definitions/JoinedMessage"
         },
         {
@@ -1320,7 +1644,13 @@
           "$ref": "#/definitions/LockableSpacesMessage"
         },
         {
+          "$ref": "#/definitions/DesksChangedMessage"
+        },
+        {
           "$ref": "#/definitions/SpacesMessage"
+        },
+        {
+          "$ref": "#/definitions/NotificationMessage"
         },
         {
           "$ref": "#/definitions/EntryRequestedMessage"
@@ -1344,7 +1674,13 @@
           "$ref": "#/definitions/ReplacedMessage"
         },
         {
+          "$ref": "#/definitions/WatchingMessage"
+        },
+        {
           "$ref": "#/definitions/MovedMessage"
+        },
+        {
+          "$ref": "#/definitions/PositionCorrectedMessage"
         },
         {
           "$ref": "#/definitions/MoveResultMessage"

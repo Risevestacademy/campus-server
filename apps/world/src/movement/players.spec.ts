@@ -533,6 +533,25 @@ describe('Players', () => {
       });
     });
 
+    it('does not resume a grace position on a tile the new map made a wall', () => {
+      const world = new Players(
+        { width: 3, height: 1, spawn: { x: 0, y: 0 } },
+        STEP_MS,
+        1_000,
+      );
+      world.join(at(), 0);
+      world.place(at(), { x: 2, y: 0 });
+      world.leave(at(), 0, true);
+      world.setGrid({
+        width: 3,
+        height: 1,
+        spawn: { x: 0, y: 0 },
+        walls: Uint8Array.from([0, 0, 1]),
+      });
+
+      expect(world.join(at(), 10)).toMatchObject({ x: 0, y: 0 });
+    });
+
     it('starts at the spawn when the tile is off the map', () => {
       expect(
         players().join(at(), 0, { x: 9, y: 2, facing: 'left' }),

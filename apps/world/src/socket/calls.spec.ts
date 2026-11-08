@@ -11,7 +11,8 @@ import { buildWorld, type World } from '../app.js';
 import type { WorldSpace } from '../infra/accounts.js';
 import { loadEnv } from '../infra/env.js';
 import { MemoryPresenceStore } from '../infra/presence.js';
-import { spaceIndexFrom } from '../movement/spaces.js';
+import { emptySpaceIndex, spaceIndexFrom } from '../movement/spaces.js';
+import { tileIndex } from '../movement/grid.js';
 import { seatKey } from '../seat.js';
 import type { WorldMap } from '../movement/world-map.js';
 
@@ -50,6 +51,8 @@ function space(id: string, audioMode: string, radius = 1): WorldSpace {
 
 const spaces = new Map<string, WorldSpace>();
 const admins = new Set<string>();
+/** What the database says is published; null until a test publishes one. */
+let publishedKey: string | null = null;
 
 const accounts = {
   find: async (id: string) => ({
@@ -80,8 +83,12 @@ const accounts = {
       ]),
     ),
   spacesOn: async () => new Map(spaces),
+  roomLinkPassesOn: async () => [],
+  publishedEntryMapKey: async () => publishedKey,
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
+  onDesksChanged: async () => undefined,
+  notifyEntryRequestAnswered: async () => undefined,
   close: async () => undefined,
 };
 
@@ -207,6 +214,7 @@ beforeEach(async () => {
   lookups.absent = false;
   refusals.left = 0;
   refusals.seen = 0;
+  publishedKey = null;
   admins.clear();
   spaces.clear();
   spaces.set(DEFAULT_SPACE_KEY, space(CORRIDOR, 'proximity'));
@@ -214,8 +222,11 @@ beforeEach(async () => {
   await world.gateway.spacesChanged();
 });
 
-async function arrive({ admin = false } = {}) {
-  const userId = randomUUID();
+async function arrive({
+  admin = false,
+  userId = randomUUID(),
+  enter,
+}: { admin?: boolean; userId?: string; enter?: 'ifFree' } = {}) {
   if (admin) admins.add(userId);
   const { token } = await signSessionToken(
     {
@@ -226,7 +237,7 @@ async function arrive({ admin = false } = {}) {
     },
     { secret: SECRET, ttlMinutes: 30 },
   );
-  const ws = new WebSocket(url, {
+  const ws = new WebSocket(enter ? `${url}&enter=${enter}` : url, {
     headers: { origin: ORIGIN, cookie: `campus_session=${token}` },
   });
   const messages: Record<string, unknown>[] = [];
@@ -337,10 +348,65 @@ async function withHeartbeat(run: () => Promise<void>) {
   }
 }
 
+/**
+ * A 5 × 5 map on which only `walkable` is floor. No drawn spaces: every tile
+ * is the map's default space, which is the proximity corridor these tests set
+ * up in `beforeEach`.
+ */
+function mapWith(
+  version: string,
+  spawn: { x: number; y: number },
+  walkable: { x: number; y: number }[],
+): WorldMap {
+  const walls = new Uint8Array(5 * 5).fill(1);
+  for (const tile of walkable) {
+    walls[tileIndex({ width: 5 }, tile)] = 0;
+  }
+  return {
+    id: 'campus',
+    version,
+    grid: { width: 5, height: 5, spawn, walls },
+    spaces: emptySpaceIndex(5, 5),
+  };
+}
+
+const ALL_TILES = Array.from({ length: 25 }, (_, at) => ({
+  x: at % 5,
+  y: Math.floor(at / 5),
+}));
+
+/** A world of its own whose next publish loads `next`, on its own socket url. */
+async function withReloadableMap(
+  start: WorldMap,
+  next: WorldMap,
+  run: (world: World) => Promise<void>,
+) {
+  const own = await buildWorld({
+    env,
+    accounts,
+    presence: new MemoryPresenceStore(),
+    map: start,
+    loadMap: async () => next,
+  });
+  await own.app.listen({ port: 0, host: '127.0.0.1' });
+  const { port } = own.app.server.address() as AddressInfo;
+  const saved = url;
+  url = `ws://127.0.0.1:${port}/socket?cohortId=${COHORT}`;
+  try {
+    await run(own);
+  } finally {
+    url = saved;
+    await own.gateway.stop();
+    await own.app.close();
+  }
+}
+
 const nearbyLists = (conn: Conn) =>
   conn.messages
     .filter((m) => m.type === 'nearby')
     .map((m) => m.userIds as string[]);
+
+const nearbyOf = (conn: Conn) => nearbyLists(conn).at(-1) ?? [];
 
 describe('the call for the space you stand in', () => {
   it('hands an arrival the call for the corridor, heard by distance', async () => {
@@ -393,6 +459,29 @@ describe('the call for the space you stand in', () => {
       call: null,
     });
     await leave(ada);
+  });
+
+  it('takes a socket demoted to watching out of its call and the broadcast room, and hands it no other', async () => {
+    const phone = await arrive({ enter: 'ifFree' });
+    const message = await waitFor(phone, (m) => m.type === 'call');
+    await waitFor(phone, (m) => m.type === 'broadcast');
+
+    const web = await arrive({ userId: phone.userId });
+    await waitFor(phone, (m) => m.type === 'watching');
+
+    await expect
+      .poll(() => removedFor(phone))
+      .toEqual([(message.call as { room: string }).room]);
+    await expect
+      .poll(() => removedFor(phone, 'broadcast'))
+      .toEqual([`broadcast:${COHORT}`]);
+    await waitFor(web, (m) => m.type === 'call');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(calls(phone)).toHaveLength(1);
+    expect(phone.messages.filter((m) => m.type === 'broadcast')).toHaveLength(
+      1,
+    );
+    await leave(phone, web);
   });
 
   it('takes you out of the call when your socket closes', async () => {
@@ -793,5 +882,90 @@ describe('keeping calls current', () => {
       url = saved;
       await own.app.close();
     }
+  });
+});
+
+describe('nearby after a map reload', () => {
+  /**
+   * A nudge can move somebody without a step, so nothing adds them to the
+   * move tick. The correction itself has to make the cohort's lists stale.
+   */
+  it('drops somebody the new map moved out of hearing range', async () => {
+    // Ada starts on the spawn at (4, 3); Bob starts there too and is placed
+    // one tile away, so an initial tick before the placement cannot empty the
+    // lists: the two are in range either way.
+    const start = mapWith('v1', { x: 4, y: 3 }, ALL_TILES);
+    // Bob's tile becomes a wall. Up and down are walls too, so the nearest
+    // floor is (2, 3), two tiles from Ada at (4, 3): past radius x hysteresis.
+    const next = mapWith(
+      'v2',
+      { x: 4, y: 3 },
+      ALL_TILES.filter((tile) => !(tile.x === 3 && tile.y >= 2 && tile.y <= 4)),
+    );
+
+    await withReloadableMap(start, next, async (own) => {
+      const ada = await arrive();
+      const bob = await arrive();
+      own.gateway.players.place(
+        { userId: bob.userId, cohortId: COHORT },
+        { x: 3, y: 3 },
+      );
+
+      await expect.poll(() => nearbyOf(ada)).toEqual([bob.userId]);
+      await expect.poll(() => nearbyOf(bob)).toEqual([ada.userId]);
+
+      publishedKey = 'campus';
+      await own.gateway.mapPublished('campus');
+      expect(start.version).toBe('v2');
+      expect(
+        own.gateway.players.get({ userId: bob.userId, cohortId: COHORT }),
+      ).toMatchObject({ x: 2, y: 3 });
+
+      await expect.poll(() => nearbyOf(ada), { timeout: 2_000 }).toEqual([]);
+      await expect.poll(() => nearbyOf(bob), { timeout: 2_000 }).toEqual([]);
+      await leave(ada, bob);
+    });
+  });
+
+  /** The other direction: a nudge brings somebody within the radius. */
+  it('adds somebody the new map moved into hearing range', async () => {
+    // Ada stands at (2, 0). Cara's tile becomes a wall and every neighbour is
+    // walled off, so the nearest floor is Ada's tile, two steps away.
+    const start = mapWith('v1', { x: 4, y: 4 }, ALL_TILES);
+    const next = mapWith('v2', { x: 4, y: 4 }, [
+      { x: 2, y: 0 },
+      { x: 4, y: 4 },
+    ]);
+
+    await withReloadableMap(start, next, async (own) => {
+      const ada = await arrive();
+      own.gateway.players.place(
+        { userId: ada.userId, cohortId: COHORT },
+        { x: 2, y: 0 },
+      );
+      const cara = await arrive();
+      own.gateway.players.place(
+        { userId: cara.userId, cohortId: COHORT },
+        { x: 0, y: 0 },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(nearbyOf(ada)).toEqual([]);
+      expect(nearbyOf(cara)).toEqual([]);
+
+      publishedKey = 'campus';
+      await own.gateway.mapPublished('campus');
+      expect(start.version).toBe('v2');
+      expect(
+        own.gateway.players.get({ userId: cara.userId, cohortId: COHORT }),
+      ).toMatchObject({ x: 2, y: 0 });
+
+      await expect
+        .poll(() => nearbyOf(ada), { timeout: 2_000 })
+        .toEqual([cara.userId]);
+      await expect
+        .poll(() => nearbyOf(cara), { timeout: 2_000 })
+        .toEqual([ada.userId]);
+      await leave(ada, cara);
+    });
   });
 });

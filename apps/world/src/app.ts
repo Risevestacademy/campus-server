@@ -9,6 +9,10 @@ import { registerOnlineCount } from './admin/online-count.js';
 import { createAccountLookup, type AccountLookup } from './infra/accounts.js';
 import { loadEnv, type Env } from './infra/env.js';
 import { createPositionStore, type PositionStore } from './infra/positions.js';
+import {
+  createNotificationFeed,
+  type NotificationFeed,
+} from './infra/notifications.js';
 import { createPresenceStore, type PresenceStore } from './infra/presence.js';
 import { loadWorldMap } from './infra/world-map.js';
 import { registerConnectionCheck } from './media/connection-check.js';
@@ -32,6 +36,7 @@ export interface World {
   accounts: AccountLookup;
   positions: PositionStore;
   presence: PresenceStore;
+  notifications: NotificationFeed;
   reporter: ErrorReporter;
 }
 
@@ -45,8 +50,15 @@ export interface BuildWorldOptions {
   positions?: PositionStore;
   /** Redis when REDIS_URL is set, memory if not. */
   presence?: PresenceStore;
+  /** Redis when REDIS_URL is set, this instance alone if not. */
+  notifications?: NotificationFeed;
   /** The published entry map when left out, which is a call to Sanity. */
   map?: WorldMap;
+  /**
+   * The same loading path a live reload uses. Left out, it reads the map the
+   * database says is published, or the CMS entry map when none is.
+   */
+  loadMap?: (mapKey?: string) => Promise<WorldMap>;
   /** Where errors are reported. Built from `env` when left out. */
   reporter?: ErrorReporter;
 }
@@ -56,7 +68,9 @@ export async function buildWorld({
   accounts = createAccountLookup(env),
   positions,
   presence,
+  notifications,
   map,
+  loadMap,
   reporter = createErrorReporter({
     enabled: env.FF_POSTHOG_ENABLED,
     token: env.POSTHOG_PROJECT_TOKEN,
@@ -109,10 +123,43 @@ export async function buildWorld({
   // Before any socket is accepted, and before anything is connected to: every
   // position placed, moved or read back from here on is checked against this
   // map, and a boot that fails for want of one leaves nothing open behind it.
-  const worldMap = map ?? (await loadWorldMap(env, app.log));
-  const store = positions ?? createPositionStore(env, app.log, worldMap.id);
+  //
+  // The database names the entry map an admin has published. With none, world
+  // keeps the old behaviour and loads the CMS entry map, so local development
+  // works without publishing. The published version itself is not stored;
+  // world still reads the current one from Sanity (see the maps README).
+  const loader =
+    loadMap ??
+    ((mapKey?: string) =>
+      loadWorldMap(env, app.log, undefined, mapKey, mapKey === undefined));
+  let publishedKey: string | null = null;
+  if (!map) {
+    try {
+      publishedKey = await accounts.publishedEntryMapKey();
+    } catch (err) {
+      // A database that will not answer must not keep the campus shut. The
+      // CMS fallback is what world did before publication existed.
+      app.log.warn(
+        { err },
+        'could not read the published map; loading the CMS entry map',
+      );
+    }
+  }
+  const worldMap = map ?? (await loader(publishedKey ?? undefined));
+  const store = positions ?? createPositionStore(env, app.log, worldMap);
   const present = presence ?? createPresenceStore(env, app.log);
-  const gateway = registerGateway(app, env, accounts, store, present, worldMap);
+  const feed = notifications ?? createNotificationFeed(env, app.log);
+  const gateway = registerGateway(
+    app,
+    env,
+    accounts,
+    store,
+    present,
+    worldMap,
+    (mapKey) => loader(mapKey),
+    feed,
+  );
+  feed.onNotification((created) => gateway.notify(created));
   // Not awaited: a database that will not take the listen must not stop the
   // campus opening. The heartbeat re-reads every account, so a change still
   // shows, a heartbeat late.
@@ -121,9 +168,27 @@ export async function buildWorld({
     .catch((err: unknown) =>
       app.log.error({ err }, 'could not listen for profile changes'),
     );
-  // The same for the spaces: the heartbeat reads them again too.
+  // Desks are not kept here: clients fetch them from campus-api when told.
   accounts
-    .onSpacesChanged(() => void gateway.spacesChanged())
+    .onDesksChanged((cohortId) => gateway.desksChanged(cohortId))
+    .catch((err: unknown) =>
+      app.log.error({ err }, 'could not listen for desk changes'),
+    );
+  // The same for the spaces: the heartbeat reads them again too. A payload
+  // is a published map key; an empty one is a space edit. Re-subscribing
+  // fires the second callback, which catches a publish sent while this
+  // instance was not listening.
+  accounts
+    .onSpacesChanged(
+      (payload) => {
+        if (payload) void gateway.mapPublished(payload);
+        else void gateway.spacesChanged();
+      },
+      () => {
+        void gateway.spacesChanged();
+        void gateway.publishedMapChanged();
+      },
+    )
     .catch((err: unknown) =>
       app.log.error({ err }, 'could not listen for space changes'),
     );
@@ -186,6 +251,7 @@ export async function buildWorld({
     accounts,
     positions: store,
     presence: present,
+    notifications: feed,
     reporter,
   };
 }

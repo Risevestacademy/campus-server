@@ -1,8 +1,8 @@
-import type { CohortMembershipFacts } from '@campus/space-access';
+import type { CohortMembershipFacts, PersonFacts } from '@campus/space-access';
 import type { WebSocket } from 'ws';
 
 import type { Appearance } from '../infra/accounts.js';
-import type { Seat } from '../seat.js';
+import { SeatMap, seatKey, type Seat } from '../seat.js';
 import type { Availability } from '../status/availability.js';
 
 /** A space's call as a socket is told it, short of the token. */
@@ -13,11 +13,26 @@ export interface CallSpec {
   subscribeRadius: number;
 }
 
+/**
+ * avatar: stands for the account on the map. watcher: sees the cohort and
+ * may set the avatar's status and speak as it, but has no avatar of its own.
+ */
+export type ConnectionMode = 'avatar' | 'watcher';
+
+/**
+ * take: entering takes the avatar, displacing whoever held it. ifFree: only
+ * when nobody holds it, else a watcher; displaced later, it is demoted to a
+ * watcher rather than closed.
+ */
+export type EnterMode = 'take' | 'ifFree';
+
 export interface Connection {
   id: string;
   userId: string;
   email: string;
   cohortId: string;
+  mode: ConnectionMode;
+  enter: EnterMode;
   /** As the account was when this socket opened, updated as it changes. */
   appearance: Appearance;
   /**
@@ -84,21 +99,17 @@ export interface Connection {
  * first rather than joining it.
  */
 export class Connections {
-  /** Account, then cohort. */
-  private readonly byUser = new Map<string, Map<string, Connection>>();
+  private readonly held = new SeatMap<Connection>();
+  /** By seat: watchers never hold the account's place. */
+  private readonly watchers = new Map<string, Set<Connection>>();
 
   /**
    * Takes the account's place in this connection's cohort and returns
    * whatever held it before. Its places in other cohorts are untouched.
    */
   add(connection: Connection): Connection | undefined {
-    let held = this.byUser.get(connection.userId);
-    if (!held) {
-      held = new Map();
-      this.byUser.set(connection.userId, held);
-    }
-    const displaced = held.get(connection.cohortId);
-    held.set(connection.cohortId, connection);
+    const displaced = this.held.get(connection);
+    this.held.set(connection, connection);
     return displaced === connection ? undefined : displaced;
   }
 
@@ -108,55 +119,109 @@ export class Connections {
    * would take the live socket out from under it.
    */
   remove(connection: Connection): void {
-    const held = this.byUser.get(connection.userId);
-    if (held?.get(connection.cohortId) !== connection) {
-      return;
-    }
-    held.delete(connection.cohortId);
-    if (held.size === 0) {
-      this.byUser.delete(connection.userId);
+    if (this.held.get(connection) === connection) {
+      this.held.delete(connection);
     }
   }
 
   has(connection: Connection): boolean {
-    return (
-      this.byUser.get(connection.userId)?.get(connection.cohortId) ===
-      connection
-    );
+    return this.held.get(connection) === connection;
   }
 
   /** The socket holding the account's place in one cohort. */
-  holderOf({ userId, cohortId }: Seat): Connection | undefined {
-    return this.byUser.get(userId)?.get(cohortId);
+  holderOf(seat: Seat): Connection | undefined {
+    return this.held.get(seat);
   }
 
   /** Every socket the account holds, one per cohort it is in. */
   forUser(userId: string): Connection[] {
-    return [...(this.byUser.get(userId)?.values() ?? [])];
+    return [...this.held.ofAccount(userId)];
   }
 
   all(): Connection[] {
-    return [...this.byUser.values()].flatMap((held) => [...held.values()]);
+    return [...this.held.values()];
+  }
+
+  addWatcher(connection: Connection): void {
+    const key = seatKey(connection);
+    let watching = this.watchers.get(key);
+    if (!watching) {
+      watching = new Set();
+      this.watchers.set(key, watching);
+    }
+    watching.add(connection);
+  }
+
+  removeWatcher(connection: Connection): void {
+    const key = seatKey(connection);
+    const watching = this.watchers.get(key);
+    if (!watching?.delete(connection)) return;
+    if (watching.size === 0) this.watchers.delete(key);
+  }
+
+  isWatching(connection: Connection): boolean {
+    return this.watchers.get(seatKey(connection))?.has(connection) ?? false;
+  }
+
+  /** Holds the avatar, or watches. */
+  isOpen(connection: Connection): boolean {
+    return this.has(connection) || this.isWatching(connection);
+  }
+
+  watchersOf(seat: Seat): Connection[] {
+    return [...(this.watchers.get(seatKey(seat)) ?? [])];
+  }
+
+  watchersIn(cohortId: string): Connection[] {
+    return this.allWatchers().filter((w) => w.cohortId === cohortId);
+  }
+
+  watchersForUser(userId: string): Connection[] {
+    return this.allWatchers().filter((w) => w.userId === userId);
+  }
+
+  allWatchers(): Connection[] {
+    return [...this.watchers.values()].flatMap((watching) => [...watching]);
+  }
+
+  /** Holders and watchers alike: whoever a sweep or a shutdown has to reach. */
+  everyone(): Connection[] {
+    return [...this.all(), ...this.allWatchers()];
+  }
+
+  get watcherCount(): number {
+    let count = 0;
+    for (const watching of this.watchers.values()) count += watching.size;
+    return count;
   }
 
   get size(): number {
-    let count = 0;
-    for (const held of this.byUser.values()) count += held.size;
-    return count;
+    return this.held.size;
   }
 
   /** Accounts with at least one socket, however many cohorts they are in. */
   get users(): number {
-    return this.byUser.size;
+    return this.held.accounts;
   }
 
-  /** How many sockets in one cohort stand in one space. */
+  /**
+   * How many avatars in one cohort stand in one space. Watchers hold no
+   * place on the map, so they never count.
+   */
   occupancy(cohortId: string, spaceKey: string): number {
     let count = 0;
-    for (const held of this.byUser.values()) {
-      const connection = held.get(cohortId);
-      if (connection && connection.spaceKey === spaceKey) count += 1;
+    for (const connection of this.held.inCohort(cohortId)) {
+      if (connection.spaceKey === spaceKey) count += 1;
     }
     return count;
   }
+}
+
+export function personOf(connection: Connection): PersonFacts {
+  return {
+    userId: connection.userId,
+    systemRole: connection.systemRole,
+    cohortId: connection.cohortId,
+    membership: connection.membership,
+  };
 }

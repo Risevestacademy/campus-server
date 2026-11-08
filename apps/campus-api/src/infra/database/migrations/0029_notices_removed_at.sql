@@ -1,0 +1,1 @@
+ALTER TABLE "notices" ADD COLUMN "removed_at" timestamp with time zone;

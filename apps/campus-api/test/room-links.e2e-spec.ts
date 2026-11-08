@@ -32,7 +32,10 @@ import {
   maps,
   spaces,
 } from './../src/modules/maps/schema.js';
-import { roomLinks } from './../src/modules/room-links/schema.js';
+import {
+  roomLinkPasses,
+  roomLinks,
+} from './../src/modules/room-links/schema.js';
 import { users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
@@ -132,7 +135,7 @@ describe('room links (e2e)', () => {
 
   beforeEach(async () => {
     await db.execute(
-      sql`truncate audit_log, room_links, spaces, maps, cohort_members, cohorts, users cascade`,
+      sql`truncate audit_log, room_link_passes, room_links, spaces, maps, cohort_members, cohorts, users cascade`,
     );
     const [mentor, guest, outsider] = await db
       .insert(users)
@@ -247,6 +250,63 @@ describe('room links (e2e)', () => {
     await revoke(body.code, outsiderCookie).expect(404);
   });
 
+  it('enters through a link while its window is open, with a pass world reads', async () => {
+    const startsAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    const endsAt = new Date(Date.now() + 65 * 60_000).toISOString();
+    const { body } = await request(app.getHttpServer())
+      .post(linksPath())
+      .set('Cookie', mentorCookie)
+      .send({ title: 'Class', startsAt, endsAt })
+      .expect(201);
+    expect(body).toMatchObject({ startsAt, endsAt });
+
+    const entered = await request(app.getHttpServer())
+      .post(`/v1/room-links/${body.code}/enter`)
+      .set('Cookie', guestCookie)
+      .expect(200);
+
+    expect(entered.body).toMatchObject({
+      code: body.code,
+      spaceKey: 'pod-a',
+      admitted: true,
+    });
+    expect(await db.select().from(roomLinkPasses)).toHaveLength(1);
+    await request(app.getHttpServer())
+      .post(`/v1/room-links/${body.code}/enter`)
+      .set('Cookie', outsiderCookie)
+      .expect(404);
+  });
+
+  it('lets staff set a window, and refuses a half or backwards one', async () => {
+    const { body } = await make('Later').expect(201);
+    const window = (cookie: string, times: object) =>
+      request(app.getHttpServer())
+        .put(`/v1/room-links/${body.code}/window`)
+        .set('Cookie', cookie)
+        .send(times);
+    const startsAt = '2026-12-01T10:00:00.000Z';
+    const endsAt = '2026-12-01T11:00:00.000Z';
+
+    const set = await window(mentorCookie, { startsAt, endsAt }).expect(200);
+    expect(set.body).toMatchObject({ startsAt, endsAt });
+    await window(mentorCookie, {}).expect(200);
+    await window(mentorCookie, { startsAt }).expect(400);
+    await window(mentorCookie, { startsAt: null, endsAt }).expect(400);
+    await window(mentorCookie, { startsAt: null, endsAt: null }).expect(400);
+    await request(app.getHttpServer())
+      .post(linksPath())
+      .set('Cookie', mentorCookie)
+      .send({ title: 'Null start', startsAt: null, endsAt })
+      .expect(400);
+    await window(mentorCookie, { startsAt: endsAt, endsAt: startsAt }).expect(
+      400,
+    );
+    await window(mentorCookie, { startsAt: '2026-12-01T10:00', endsAt }).expect(
+      400,
+    );
+    await window(guestCookie, { startsAt, endsAt }).expect(403);
+  });
+
   it('refuses malformed requests with a 400', async () => {
     await make('   ').expect(400);
     await make('x'.repeat(129)).expect(400);
@@ -277,6 +337,13 @@ describe('room links (e2e)', () => {
       expect.arrayContaining(['200', '400', '401', '403', '404']),
     );
     expect(JSON.stringify(many.post)).toContain('CreateRoomLinkDto');
+
+    expect(
+      Object.keys(paths['/v1/room-links/{code}/enter'].post.responses),
+    ).toEqual(expect.arrayContaining(['200', '400', '401', '404']));
+    expect(
+      Object.keys(paths['/v1/room-links/{code}/window'].put.responses),
+    ).toEqual(expect.arrayContaining(['200', '400', '401', '403', '404']));
 
     const one = paths['/v1/room-links/{code}'];
     expect(Object.keys(one.get.responses)).toEqual(

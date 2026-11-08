@@ -66,8 +66,12 @@ const accounts = {
       ]),
     ),
   spacesOn: async () => new Map(spaces),
+  roomLinkPassesOn: async () => [],
+  publishedEntryMapKey: async () => null,
   onProfileChanged: async () => undefined,
   onSpacesChanged: async () => undefined,
+  onDesksChanged: async () => undefined,
+  notifyEntryRequestAnswered: async () => undefined,
   close: async () => undefined,
 };
 
@@ -131,8 +135,10 @@ beforeEach(async () => {
   await world.gateway.spacesChanged();
 });
 
-async function arrive(cohortId = COHORT) {
-  const userId = randomUUID();
+async function arrive(
+  cohortId = COHORT,
+  { userId = randomUUID(), enter }: { userId?: string; enter?: 'ifFree' } = {},
+) {
   const { token } = await signSessionToken(
     {
       epoch: 0,
@@ -143,7 +149,7 @@ async function arrive(cohortId = COHORT) {
     { secret: SECRET, ttlMinutes: 30 },
   );
   const ws = new WebSocket(
-    `ws://127.0.0.1:${port}/socket?cohortId=${cohortId}`,
+    `ws://127.0.0.1:${port}/socket?cohortId=${cohortId}${enter ? `&enter=${enter}` : ''}`,
     { headers: { origin: ORIGIN, cookie: `campus_session=${token}` } },
   );
   const messages: Record<string, unknown>[] = [];
@@ -311,5 +317,92 @@ describe('saying something', () => {
     say(ada, 'line 7');
     await expect.poll(() => heard(ada).at(-1)).toBe('line 7');
     await leave(ada);
+  });
+});
+
+describe('meeting chat on a watching socket', () => {
+  async function watching(avatar: Conn) {
+    const phone = await arrive(COHORT, {
+      userId: avatar.userId,
+      enter: 'ifFree',
+    });
+    await expect(
+      waitFor(phone, (m) => m.type === 'welcome'),
+    ).resolves.toMatchObject({ mode: 'watcher' });
+    return phone;
+  }
+
+  it('hears what is said where the avatar stands', async () => {
+    const ada = await arrive();
+    const grace = await arrive();
+    await intoLibrary(ada);
+    await intoLibrary(grace);
+    const phone = await watching(ada);
+
+    say(grace, 'agenda first');
+
+    await expect(
+      waitFor(phone, (m) => m.type === 'said'),
+    ).resolves.toMatchObject({
+      userId: grace.userId,
+      spaceKey: 'library',
+      text: 'agenda first',
+    });
+    await leave(phone, ada, grace);
+  });
+
+  it('speaks as the avatar, to the room it stands in, and every socket of theirs hears it back', async () => {
+    const ada = await arrive();
+    const grace = await arrive();
+    const outside = await arrive();
+    await intoLibrary(ada);
+    await intoLibrary(grace);
+    const phone = await watching(ada);
+
+    say(phone, 'from my phone');
+
+    for (const conn of [grace, ada, phone]) {
+      await expect(
+        waitFor(conn, (m) => m.type === 'said'),
+      ).resolves.toMatchObject({
+        userId: ada.userId,
+        spaceKey: 'library',
+        text: 'from my phone',
+      });
+    }
+    await quiet();
+    expect(heard(outside)).toEqual([]);
+    await leave(phone, ada, grace, outside);
+  });
+
+  it('shares one budget between the avatar and its watcher', async () => {
+    const ada = await arrive();
+    const phone = await watching(ada);
+
+    for (let i = 1; i <= 3; i += 1) say(ada, `web ${i}`);
+    for (let i = 1; i <= 3; i += 1) say(phone, `phone ${i}`);
+
+    await expect(
+      waitFor(phone, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({
+      code: 'NOT_ALLOWED',
+      message: 'saying too much too fast',
+    });
+    expect(heard(ada)).toHaveLength(5);
+    await leave(phone, ada);
+  });
+
+  it('cannot speak once nobody stands for it', async () => {
+    const ada = await arrive();
+    const phone = await watching(ada);
+    await leave(ada);
+    await waitFor(phone, (m) => m.type === 'left');
+
+    say(phone, 'anyone there?');
+
+    await expect(
+      waitFor(phone, (m) => m.type === 'error'),
+    ).resolves.toMatchObject({ code: 'NOT_ALLOWED' });
+    await leave(phone);
   });
 });

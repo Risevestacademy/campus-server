@@ -7,10 +7,10 @@ import {
   type Db,
   type DbExecutor,
 } from '../../infra/database/database.constants.js';
-import { timestamptz } from '../../infra/database/timestamptz.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
+import { endDeskClaims, tellDesksChanged } from '../desks/end-claims.js';
 import { DeskReleaseReason, deskClaims, desks } from '../desks/schema.js';
 import {
   MapSyncOutcome,
@@ -574,19 +574,13 @@ class Reconciliation {
     }
 
     if (leaving.length > 0) {
-      await this.tx
-        .update(deskClaims)
-        .set({
-          // The claim's time is the database's, this sync's the server's.
-          releasedAt: sql`greatest(${deskClaims.claimedAt}, ${timestamptz(this.now)})`,
-          releaseReason: DeskReleaseReason.DeskRetired,
-        })
-        .where(
-          and(
-            inArray(deskClaims.deskId, leaving),
-            isNull(deskClaims.releasedAt),
-          ),
-        );
+      await endDeskClaims(
+        this.tx,
+        inArray(deskClaims.deskId, leaving),
+        DeskReleaseReason.DeskRetired,
+        this.now,
+        { notify: false },
+      );
     }
     if (retiring.length > 0) {
       await this.tx
@@ -612,6 +606,10 @@ class Reconciliation {
       for (const [key, mapKey] of drawnOn) {
         this.deskChanges(mapKey)?.added.push(key);
       }
+    }
+
+    if (leaving.length + retiring.length + restoring.size + drawnOn.size > 0) {
+      await tellDesksChanged(this.tx, 'all');
     }
 
     for (const result of this.results.values()) {

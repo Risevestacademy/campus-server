@@ -1,0 +1,56 @@
+name: Grafana dashboards
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - infra/grafana/**
+      - .github/workflows/grafana.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HUSKY: 0
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    concurrency:
+      group: grafana-${{ github.ref_name }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Grafana dashboards
+        run: pnpm grafana:check
+
+      - name: Deploy dashboards
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_FOLDER_UID: ${{ vars.GRAFANA_FOLDER_UID }}
+          GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+        run: |
+          if [ -z "$GRAFANA_URL" ] || [ -z "$GRAFANA_TOKEN" ]; then
+            echo "::warning::GRAFANA_URL or GRAFANA_TOKEN is not set for the ${{ github.ref_name == 'main' && 'production' || 'staging' }} environment; dashboards not deployed."
+            exit 0
+          fi
+          pnpm grafana:deploy

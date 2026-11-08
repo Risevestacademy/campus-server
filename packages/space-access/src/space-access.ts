@@ -27,6 +27,27 @@ import { hasAdminPowers } from '@campus/session';
  */
 export const SPACES_CHANGED_CHANNEL = 'spaces_changed';
 
+/** How long before a room link's event starts that the link lets people in. */
+export const ROOM_LINK_OPENS_EARLY_MS = 10 * 60 * 1000;
+
+/**
+ * Whether a room link's window admits somebody at `at`: from a little before
+ * the event starts until it ends. A link with no window admits nobody.
+ */
+export function roomLinkOpen(
+  window: { startsAt: Date | null; endsAt: Date | null },
+  at: Date,
+): boolean {
+  if (window.startsAt === null || window.endsAt === null) {
+    return false;
+  }
+  const now = at.getTime();
+  return (
+    now >= window.startsAt.getTime() - ROOM_LINK_OPENS_EARLY_MS &&
+    now < window.endsAt.getTime()
+  );
+}
+
 /**
  * `space_access`, the two kinds of space. A `normal` space admits anybody in
  * the campus unless the people inside have locked it; a `designated` one

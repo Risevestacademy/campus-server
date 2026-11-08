@@ -58,6 +58,10 @@ frame, both ways, is one JSON object with a `type`.
   covered by CORS, so world checks `Origin` itself and refuses anything not on
   its list.
 - **Not a browser?** Send `Authorization: Bearer <token>` and no cookie.
+- **Entering to look, not to stand.** Add `enter=ifFree` to stand for the
+  account only when nobody does; otherwise you watch. See
+  [Watching](#watching). Leaving it off, or `enter=take`, takes the avatar as
+  every client always has.
 
 > **World on its own hostname.** Browsers cannot put an `Authorization`
 > header on a WebSocket, so the cookie is the only way in, and by default it
@@ -110,11 +114,32 @@ starts. `snapshot.map` says which:
 ```
 
 Load **that version**, with `fetchWorldMapManifest({ mapId: id, version })`
-from `campus-world-map`, not the current one. A map published since the server
-started has walls the server does not enforce, and every step into one would
-come back `moved` while you drew it `blocked`, or the other way round. The
-server picks up a new version only when it restarts, which closes every socket;
-the `snapshot` after you reconnect carries the new version.
+from `campus-world-map`, not the current one. Until the server says otherwise,
+that is the map it enforces: loading another one would make your steps disagree
+with it.
+
+When an admin publishes a new version while you are connected, everybody gets
+a `mapChanged` with the same four fields:
+
+```json
+{
+  "type": "mapChanged",
+  "map": { "id": "campus", "version": "…", "width": 60, "height": 40 }
+}
+```
+
+Stop using the old map, load `map.version`, and replace the tilemap and
+everything you derive from it. It arrives before the server sends any corrected
+positions for that reload. A connection made afterwards gets the new map in its
+`snapshot` instead, so both paths reach the same state.
+
+**If a wall appears under you.** After a reload the server checks every
+connected player. Anybody standing on a tile that is now a wall is moved to the
+nearest walkable tile. You are told with `positionCorrected`
+(`{ "type": "positionCorrected", "player": {…} }`): snap to it. The rest of your
+cohort sees the same move in `moved`. If the move puts you in another space, a
+`spaceChanged` follows as usual, with the calls and presence that go with it.
+A player whose tile and space did not change receives neither.
 
 A tile is a wall when a collision shape covers its middle: `blocked(layout,
 tile)` from the same package gives the answer the server uses, so predict with
@@ -126,13 +151,26 @@ it by the client but mean nothing to the server yet.
 **Spaces have doors.** Most spaces admit anybody in the campus unless the
 people inside have locked them (see [Locks](#locks)). A _designated_ space
 admits only the people its list names (an admin keeps the list in
-campus-api). A step into a space you may not enter is answered `refused`,
+campus-api). Entering through a room link while its event runs (campus-api's
+`POST /v1/room-links/{code}/enter`) lets you into that link's space, locked or
+designated, until the event ends. A step into a space you may not enter is answered `refused`,
 like a wall you cannot see. The corridors and grounds (every tile
 in no drawn space) are always open. Only the step _into_ a space is asked
 about: somebody already inside stays until they step out, whatever changes
 meanwhile. You cannot predict a refusal, so draw the step and let the
 `moveResult` correct it. If your saved place is in a space you may no longer
 enter, you arrive at the spawn.
+
+**Spaces can have a capacity.** A space with one holds at most that many
+people; a step into it once it is full is answered `full`, even for an
+admin or somebody let in by a yes to `requestEntry`. A space you may not
+enter at all is `refused`, full or not. No capacity means no limit, which is
+how every space starts. Lowering a space's capacity moves nobody already
+inside: it is only asked about on the way in, like the rest of the door. A
+saved place in a space that has filled up since sends you to the spawn, but
+your own place never counts against you, so reopening the app while you
+stand inside keeps you there. The count is per world server, which is all of
+it while world runs as one replica.
 
 In local development only, a server with no published map to load (none
 configured, none published, or Sanity out of reach) runs on a placeholder
@@ -156,12 +194,13 @@ The client says which way, never where to. The server decides every position.
 3. **Every admitted move is answered with a `moveResult`**, in the order sent,
    carrying your `seq` and where the server has you:
 
-   | `outcome`  | Meaning                                                  | What to draw                  |
-   | ---------- | -------------------------------------------------------- | ----------------------------- |
-   | `moved`    | One tile, as you predicted                               | Nothing changes               |
-   | `blocked`  | Not walkable; you turn to face it without moving         | Snap back, facing the new way |
-   | `refused`  | Floor, in a space you may not enter; you turn to face it | Snap back, facing the new way |
-   | `too_fast` | Over walking speed; nothing happened, not even the turn  | Snap back                     |
+   | `outcome`  | Meaning                                                  | What to draw                                         |
+   | ---------- | -------------------------------------------------------- | ---------------------------------------------------- |
+   | `moved`    | One tile, as you predicted                               | Nothing changes                                      |
+   | `blocked`  | Not walkable; you turn to face it without moving         | Snap back, facing the new way                        |
+   | `refused`  | Floor, in a space you may not enter; you turn to face it | Snap back, facing the new way                        |
+   | `full`     | Floor, in a space at capacity; you turn to face it       | Snap back, facing the new way; say the space is full |
+   | `too_fast` | Over walking speed; nothing happened, not even the turn  | Snap back                                            |
 
 4. **Correct against the server, then replay what it has not answered yet.**
    By the time a `moveResult` arrives you may have predicted further steps.
@@ -195,18 +234,20 @@ connected to another ends the walk with `elsewhere`.
   else sees an ordinary walk in `moved`, with a `spaceChanged` at each
   crossing, and your call changes as you go.
 - **Each step it takes is a `walking`** (`{ "type": "walking", "userId":
-"…", "player": {…} }`), only to you: you are never in your own `moved`, so
+"…", "toSpaceKey": null, "toTile": null, "player": {…} }`), only to you: you are never in your own `moved`, so
   this is where you are. Draw it as you would a `moveResult` you did not
   predict. Mobile, which draws no map, can ignore the position.
 - **It ends with one `walkEnded`** (`{ "type": "walkEnded", "userId": "…",
-"reason": "…", "player": {…}, "spaceKey": "…" | null, "mayAsk": false }`),
+"toSpaceKey": null, "toTile": null, "reason": "…", "player": {…},
+"spaceKey": "…" | null, "mayAsk": false }`),
   saying where you stopped and why:
 
   | `reason`         | Meaning                                                                                                                             | What to do                                                          |
   | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-  | `arrived`        | You stand next to them, in their space, never on their tile                                                                         | Nothing                                                             |
+  | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                       | Nothing                                                             |
   | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
   | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
+  | `full`           | A space at capacity is in the way, theirs or another; you stopped beside the first one (`spaceKey`). `mayAsk` is `false`            | Say the space is full                                               |
   | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
   | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                   | Say they cannot be reached right now                                |
   | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit | Say so                                                              |
@@ -221,6 +262,27 @@ connected to another ends the walk with `elsewhere`.
   as the app keeps its socket.
 - Asking to walk to yourself is an `error` with code `NOT_ALLOWED`.
 
+### Going to a space or a tile
+
+The same walk, to a place instead of a person: a room link's page sends
+`goToSpace` once it knows the space, and a tap on the map can send
+`goToTile`.
+
+- **`{ "type": "goToSpace", "spaceKey": "…" }`** walks you into a drawn
+  space, to the free tile nearest its middle, or its middle when every tile
+  is taken. A key not drawn on this map, or `_default`, is an `error` with
+  `NOT_ALLOWED`: the corridors take `goToTile`.
+- **`{ "type": "goToTile", "x": 0, "y": 0 }`** walks you onto that tile. A
+  tile off the map or in a wall is an `error` with `NOT_ALLOWED`.
+- **`walking` and `walkEnded` say what the walk is to**: exactly one of
+  `userId`, `toSpaceKey` and `toTile` is set, the others `null`.
+- **`arrived`** means you stand on the tile the walk aimed at. **`refused`**
+  works as for a person: a closed space in the way, or the space you were
+  walking into or the tile is in, stops you beside it with `spaceKey` and
+  `mayAsk`; **`full`** does the same for a space at capacity. `gone` and `elsewhere` only end walks to somebody.
+- **Stopping and replacing** work as for `goTo`: `stopWalking`, a `move`, or
+  any new `goTo`, `goToSpace` or `goToTile` ends the walk going.
+
 ## Everybody else
 
 **Everybody else means everybody in your cohort.** Each cohort is its own
@@ -228,14 +290,16 @@ campus: the cohort named when the socket opened decides whose avatars you are
 told about, and nobody in another cohort appears in your `snapshot`, `joined`,
 `left`, `moved`, `statusChanged` or `spaceChanged`, or you in theirs.
 
-| Message         | When                                              | What to do                                         |
-| --------------- | ------------------------------------------------- | -------------------------------------------------- |
-| `joined`        | Somebody arrived                                  | Add their avatar, with its sprite, name and status |
-| `appearance`    | Somebody changed their sprite or name             | Redraw them with it                                |
-| `statusChanged` | Somebody's status changed, yours included         | Show their new status                              |
-| `spaceChanged`  | Somebody stepped into another space, you included | Move them to that space in your sidebar            |
-| `left`          | Somebody's socket in this cohort closed           | Remove their avatar                                |
-| `moved`         | Once per tick, if anybody moved or turned         | Move each listed player                            |
+| Message             | When                                              | What to do                                         |
+| ------------------- | ------------------------------------------------- | -------------------------------------------------- |
+| `joined`            | Somebody arrived                                  | Add their avatar, with its sprite, name and status |
+| `appearance`        | Somebody changed their sprite or name             | Redraw them with it                                |
+| `statusChanged`     | Somebody's status changed, yours included         | Show their new status                              |
+| `spaceChanged`      | Somebody stepped into another space, you included | Move them to that space in your sidebar            |
+| `left`              | Somebody's socket in this cohort closed           | Remove their avatar                                |
+| `moved`             | Once per tick, if anybody moved or turned         | Move each listed player                            |
+| `mapChanged`        | An admin published a new map                      | Load the new version and replace the tilemap       |
+| `positionCorrected` | A new map put you inside a wall                   | Snap yourself to the tile it names                 |
 
 About `moved`:
 
@@ -245,7 +309,8 @@ About `moved`:
   diagonally — a diagonal slide cuts corners that will be walls once real
   maps exist.
 - **You are never in your own `moved` frame** — your `moveResult` already says
-  where you ended up.
+  where you ended up. A map reload can send one outside the tick, for somebody
+  the new walls moved.
 
 ### Drawing each person
 
@@ -323,9 +388,19 @@ cohort sees which: `Avatar.status` says what it is when they appear, and a
 
 - **Choosing.** Send `{ "type": "setStatus", "status": "busy" }`. When that
   changes what the cohort sees, everybody in it gets
-  `{ "type": "statusChanged", "userId": "…", "status": "busy" }` — you too,
-  which is your confirmation. Choosing what you already show sends nothing
-  back, so draw your own choice at once rather than waiting for an answer.
+  `{ "type": "statusChanged", "userId": "…", "status": "busy", "until": null }`
+  — you too, which is your confirmation. Choosing what you already show sends
+  nothing back, so draw your own choice at once rather than waiting for an
+  answer.
+- **For a while.** Add `forSeconds`, from 60 to 43200 (twelve hours):
+  `{ "type": "setStatus", "status": "busy", "forSeconds": 300 }` is busy for
+  five minutes. `statusChanged.until` and `Avatar.statusUntil` say when it
+  ends, as an ISO timestamp, so you can show "Busy · 4 min". When the time is
+  up it goes back to the last status chosen without a time, and everybody gets
+  the `statusChanged`. Choosing again, with or without a time, replaces the
+  timer; the same status with a new time is a change too. While somebody is
+  away for being idle, `until` is null and the time runs on underneath. A tab
+  that replaces another in the same cohort keeps the timer.
 - **Away while idle.** Somebody who does nothing for
   `welcome.awayAfterSeconds` (600, ten minutes, by default) is shown as away,
   and is sent the `statusChanged` saying so like everybody else. The first
@@ -431,8 +506,11 @@ Text goes where voice goes: a line reaches whoever can hear you.
   somebody who arrives later, or reconnects, does not see it. Clear a
   meeting's lines when you leave its space, if you like: world will not
   send them again.
-- **Limit:** five lines at once, then one a second. Past that, an `error`
-  with code `NOT_ALLOWED` and the line is dropped; the socket stays open.
+- **Limit:** five lines at once, then one a second, for the account in the
+  cohort, however many sockets it speaks from. Past that, an `error` with code
+  `NOT_ALLOWED` and the line is dropped; the socket stays open.
+- **On a watching socket**, you hear and speak as the avatar, wherever it
+  stands: see [Watching](#watching).
 
 ## One connection per cohort
 
@@ -457,6 +535,49 @@ screen hold no socket, so they keep working in as many tabs as you like.
 > would replace each other for as long as both stayed open, and neither would
 > be usable. Show **"You opened this campus somewhere else"** with an
 > **"Enter here"** button, and reconnect only when the person presses it.
+
+### Watching
+
+A phone can follow the campus while the account stands somewhere else, say in
+a web tab, without taking its place. Connect with `enter=ifFree`:
+
+- **Nobody stands for the account in this cohort:** you do, as with any other
+  entry. `welcome.mode` is `"avatar"`.
+- **Somebody does, in another tab or device, or on another world instance,
+  or an avatar is kept for a connection that dropped and may come back
+  within the grace:** you watch. `welcome.mode` is `"watcher"`, nobody is
+  displaced, and nobody is told anything.
+- **Coming back after a drop.** Send the `connectionId` from your last
+  `welcome` as `resume`. If the avatar is being kept for that connection, it
+  is yours and you stand again; if somebody else took it meanwhile, you watch.
+- **Displaced while standing.** Somebody who enters with `enter=take` (a web
+  tab, or "Enter here") takes the avatar as usual. A socket that entered
+  `ifFree` is sent `{ "type": "watching" }` instead of `replaced`, and stays
+  open as a watcher: leave the call and the broadcast room. Displaced from
+  another world instance, it is still `replaced` and closed: what a watcher
+  mirrors lives on the instance that holds the avatar.
+- **Enter here.** Reconnect with `enter=take`. The other socket is displaced
+  in its turn. A watcher is never made the avatar on its own, not even when
+  the avatar leaves.
+
+What a watcher gets: the `snapshot` and everything sent to the whole cohort —
+`joined`, `left`, `statusChanged`, `spaceChanged`, `appearance`, locks, desks
+and spaces — every `said` that reaches the avatar, and the account's
+`notification`s. Never `moved`, `call`,
+`nearby`, `broadcast`, walks or requests to enter. Find yourself in the
+players by `welcome.userId`: there means you are on campus elsewhere, absent
+means nobody stands for you.
+
+What a watcher may send: `ping`; `setStatus`, which sets the avatar's status
+for the whole cohort, timer and all; and `say`, sent as the avatar, from
+where it stands, to whoever can hear it. Both are a NOT_ALLOWED error while
+nobody stands for the account. `active` is ignored: looking at a phone does
+not keep the avatar from going away. Anything else is a NOT_ALLOWED error.
+The chat budget belongs to the account in the cohort, shared by the avatar
+and every watcher. Several watchers may be open at once.
+
+A watcher is closed as any socket is, for a session that ends, an account
+suspended, a membership gone, or a missed heartbeat, and the avatar stays.
 
 ## Limits
 
@@ -521,6 +642,50 @@ own locks.
   `lockChanged` then has `userId: null`. A world restart ends every lock.
 - **A step refused while it is locked** looks the same as any other
   `refused`. Use the locked list to tell the person why.
+
+## Desks
+
+Desks, and who holds which in your cohort, come from campus-api:
+`GET /v1/cohorts/{cohortId}/desks`. Claiming and letting go are campus-api
+routes too. world carries no desk state; it only says when to fetch again.
+
+- **When to fetch.** On arriving, and whenever `{ "type": "desksChanged" }`
+  arrives. It comes after anybody in your cohort claims or lets go of a desk,
+  an admin frees one, a membership or account ends, or a map sync adds or
+  retires desks (that last one goes to every cohort).
+- **Wait a moment first.** A message for every cohort, from a map sync or
+  world reconnecting to the database, reaches every client at once. Wait a
+  random 0–2 seconds before fetching, so they don't all arrive together.
+- **Your own claim** answers with the desk as it now is, so you need not
+  wait for the message to draw it.
+
+## Notifications
+
+A member's notifications live in campus-api: `GET /v1/notifications`
+(newest first, paginated; `?unread=true` for the badge), marked read with
+`PATCH /v1/notifications/{id}/read`, or all at once with
+`POST /v1/notifications/read-all`. world only tells you when a new one is
+written, so you need not poll.
+
+- **What arrives.** `{ "type": "notification", "id": "…", "kind": "…",
+"referenceType": "…", "referenceId": "…", "context": null, "createdAt": "…" }`,
+  the same fields the list has, less `read`: a new one is always unread.
+  Enough for a badge or a toast. For the text, fetch what `referenceId`
+  names: a notice from campus-api. For an entry request it is the
+  `requestId` its `entryRequestEnded` carried, which campus-api has nothing
+  behind, so `context` says where it was: `{ "cohortId": "…", "spaceKey":
+"…" }`.
+- **Kinds.** `notice_posted`, `entry_request_admitted`,
+  `entry_request_declined`. More will be added: show a plain alert for one
+  you do not know rather than dropping it.
+- **Which socket.** One about a cohort, as a cohort's notice or an answer to
+  a request to enter, comes only on that cohort's socket. One about no
+  cohort, as a campus-wide notice, comes on every socket you have open, one
+  per cohort, so with two tabs on two cohorts count it once, by `id`.
+  Watcher sockets get them as the avatar's socket does.
+- **Best effort.** One written while you had no socket open, or that world
+  missed, is not sent later. Fetch the list on arriving, and treat the
+  message as a nudge to update what you show, not the record of it.
 
 ## Staff: muting and removing
 
