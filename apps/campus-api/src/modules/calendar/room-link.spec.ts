@@ -75,3 +75,102 @@ it('copes with a trailing slash on the app URL', () => {
     CODE,
   );
 });
+
+describe('a link written another way', () => {
+  const SITE = 'https://campusbyrise.com';
+
+  it.each([
+    `https://campusbyrise.com/join/${CODE}`,
+    `http://campusbyrise.com/join/${CODE}`,
+    `https://www.campusbyrise.com/join/${CODE}`,
+    `https://CampusByRise.com/join/${CODE}`,
+    `https://campusbyrise.com/%6Aoin/${CODE}`,
+    `HTTPS://campusbyrise.com/join/${CODE}`,
+  ])('takes the code from %s', (link) => {
+    expect(extractRoomLinkCode(SITE, null, `Class at ${link} today`)).toBe(
+      CODE,
+    );
+  });
+
+  it('matches www. on the app URL against a link without it', () => {
+    expect(
+      extractRoomLinkCode(
+        'https://www.campusbyrise.com',
+        `https://campusbyrise.com/join/${CODE}`,
+        null,
+      ),
+    ).toBe(CODE);
+  });
+
+  it('keeps the code case-sensitive', () => {
+    expect(
+      extractRoomLinkCode(
+        SITE,
+        null,
+        `https://campusbyrise.com/join/${CODE.toUpperCase()}`,
+      ),
+    ).toBe(CODE.toUpperCase());
+    expect(
+      extractRoomLinkCode(
+        SITE,
+        null,
+        `https://campusbyrise.com/join/${CODE.toLowerCase()}`,
+      ),
+    ).not.toBe(CODE);
+  });
+
+  it('refuses another port, or a host that only ends the same', () => {
+    expect(
+      extractRoomLinkCode(
+        SITE,
+        `https://campusbyrise.com:8443/join/${CODE}`,
+        null,
+      ),
+    ).toBeNull();
+    expect(
+      extractRoomLinkCode(
+        SITE,
+        `https://evilcampusbyrise.com/join/${CODE}`,
+        null,
+      ),
+    ).toBeNull();
+    expect(
+      extractRoomLinkCode(
+        SITE,
+        `https://campusbyrise.com.evil.test/join/${CODE}`,
+        null,
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses an encoded slash and skips bad percent-encoding', () => {
+    expect(
+      extractRoomLinkCode(
+        SITE,
+        `https://campusbyrise.com/join%2F${CODE}`,
+        null,
+      ),
+    ).toBeNull();
+    expect(
+      extractRoomLinkCode(
+        SITE,
+        null,
+        `https://campusbyrise.com/%E0%A4%A/join/x then https://campusbyrise.com/join/${CODE}`,
+      ),
+    ).toBe(CODE);
+  });
+
+  it('keeps a path on the app URL', () => {
+    const app = 'https://example.test/campus';
+    expect(
+      extractRoomLinkCode(
+        app,
+        `https://example.test/campus/join/${CODE}`,
+        null,
+      ),
+    ).toBe(CODE);
+    expect(
+      extractRoomLinkCode(app, `https://example.test/join/${CODE}`, null),
+    ).toBeNull();
+  });
+});

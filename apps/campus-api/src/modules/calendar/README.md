@@ -116,6 +116,10 @@ into the Google Calendar event's **location** or **description**:
 {APP_PUBLIC_URL}/join/{code}
 ```
 
+A link written another way that opens the same page still counts: `http` or
+`https`, with or without `www.`, any case in the host, and percent-encoding
+in the path. The code itself is case-sensitive.
+
 The events endpoint looks in the location, then the description, for the
 first such link, and resolves every code it found in one lookup through
 `RoomLinksService.resolve`, which applies the same rules as opening a link.
