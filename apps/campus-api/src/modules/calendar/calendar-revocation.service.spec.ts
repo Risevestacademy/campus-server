@@ -5,10 +5,8 @@ import type {
   CalendarGrantsService,
   PendingRevocation,
 } from './calendar-grants.service.js';
-import {
-  CalendarRevocationService,
-  SWEEP_INTERVAL_MS,
-} from './calendar-revocation.service.js';
+import type { CalendarChannelsService } from './calendar-channels.service.js';
+import { CalendarRevocationService } from './calendar-revocation.service.js';
 import type { GoogleCalendarClient } from './google-calendar.client.js';
 
 const grants = {
@@ -20,13 +18,15 @@ const grants = {
 };
 const google = { revoke: vi.fn() };
 const tokens = { evict: vi.fn(), clear: vi.fn() };
-const logger = { error: vi.fn(), setContext: vi.fn() };
+const channels = { stopAll: vi.fn() };
+const logger = { error: vi.fn(), warn: vi.fn(), setContext: vi.fn() };
 
 const revocations = () =>
   new CalendarRevocationService(
     grants as unknown as CalendarGrantsService,
     google as unknown as GoogleCalendarClient,
     tokens as unknown as AccessTokenCache,
+    channels as unknown as CalendarChannelsService,
     logger as unknown as PinoLogger,
   );
 
@@ -46,6 +46,7 @@ beforeEach(() => {
   grants.requestLapsedRevocations.mockResolvedValue(0);
   grants.pendingRevocations.mockResolvedValue([]);
   google.revoke.mockResolvedValue(true);
+  channels.stopAll.mockResolvedValue(undefined);
 });
 
 describe('disconnect', () => {
@@ -156,29 +157,36 @@ describe('sweep', () => {
   });
 });
 
-describe('sweepIfDue', () => {
-  it('sweeps at most every ten minutes', async () => {
-    const service = revocations();
-    const start = NOW.getTime();
+describe('channels', () => {
+  it('stops a grant’s channels before revoking it', async () => {
+    grants.pendingRevocations.mockResolvedValue([pending('user-1')]);
+    const order: string[] = [];
+    channels.stopAll.mockImplementation(() => {
+      order.push('stopped');
+      return Promise.resolve();
+    });
+    google.revoke.mockImplementation(() => {
+      order.push('revoked');
+      return Promise.resolve(true);
+    });
 
-    service.sweepIfDue(start);
-    service.sweepIfDue(start + SWEEP_INTERVAL_MS - 1);
-    await vi.waitFor(() =>
-      expect(grants.requestLapsedRevocations).toHaveBeenCalledTimes(1),
-    );
+    await revocations().disconnect('user-1', NOW);
 
-    service.sweepIfDue(start + SWEEP_INTERVAL_MS);
-    await vi.waitFor(() =>
-      expect(grants.requestLapsedRevocations).toHaveBeenCalledTimes(2),
-    );
+    expect(channels.stopAll).toHaveBeenCalledWith({
+      userId: 'user-1',
+      sealed: 'user-1-sealed',
+      refreshToken: 'user-1-refresh',
+    });
+    expect(order).toEqual(['stopped', 'revoked']);
   });
 
-  it('logs a sweep that fails, without throwing at the caller', async () => {
-    grants.requestLapsedRevocations.mockRejectedValue(
-      new Error('database gone'),
-    );
+  it('revokes anyway when the channels cannot be stopped', async () => {
+    grants.pendingRevocations.mockResolvedValue([pending('user-1')]);
+    channels.stopAll.mockRejectedValue(new Error('google down'));
 
-    expect(() => revocations().sweepIfDue(NOW.getTime())).not.toThrow();
-    await vi.waitFor(() => expect(logger.error).toHaveBeenCalled());
+    await revocations().disconnect('user-1', NOW);
+
+    expect(google.revoke).toHaveBeenCalled();
+    expect(grants.removeRevoked).toHaveBeenCalled();
   });
 });

@@ -179,6 +179,7 @@ export default defineRailway((ctx) => {
       FF_POSTHOG_ENABLED: preserve(),
       GOOGLE_CALENDAR_CALLBACK_URL: preserve(),
       GOOGLE_CALENDAR_TOKEN_KEY: preserve(),
+      GOOGLE_CALENDAR_WEBHOOK_URL: preserve(),
       GOOGLE_CALLBACK_URL: preserve(),
       GOOGLE_CLIENT_ID: preserve(),
       GOOGLE_CLIENT_SECRET: preserve(),
@@ -201,6 +202,8 @@ export default defineRailway((ctx) => {
       RESEND_INVITE_TEMPLATE_ID: preserve(),
       SANITY_DATASET: 'staging',
       SANITY_PROJECT_ID,
+      // It sleeps, so scheduled jobs ride on requests instead of a timer.
+      SCHEDULER_TIMER_ENABLED: 'false',
       TRUST_PROXY_HOPS: preserve(),
     },
   });

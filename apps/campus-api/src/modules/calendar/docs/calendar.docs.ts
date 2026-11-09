@@ -126,3 +126,16 @@ export function ApiDisconnectCalendar(): MethodDecorator {
     NO_SESSION,
   );
 }
+
+export function ApiCalendarNotification(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Receive a Google Calendar push notification (Google only)',
+      description:
+        'Where Google reports that a watched calendar changed. The channel id ' +
+        'and its token are checked; anything else is acknowledged and ' +
+        'ignored. Each notification syncs that calendar.',
+    }),
+    ApiNoContentResponse({ description: 'Received.' }),
+  );
+}

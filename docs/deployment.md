@@ -79,6 +79,9 @@ change to either reaches both apps:
   may answer 502. Anything that keeps sending keeps it awake, which is why
   the database pool closes idle connections and why nothing here should
   poll; a signed-in browser refreshing its token also wakes it.
+  `SCHEDULER_TIMER_ENABLED=false` there: scheduled jobs (calendar sync,
+  grant revocations) then run on the back of requests, at most once a
+  minute, instead of on a timer that would keep it awake.
 - Healthcheck path: `/v1/health`
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
   `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED`, `FF_OTEL_METRICS_ENABLED`,
@@ -143,6 +146,9 @@ change to either reaches both apps:
   status is Testing their refresh tokens lapse after 7 days. Sign-in never
   asks for it. See the calendar module's
   [README](../apps/campus-api/src/modules/calendar/README.md).
+- Calendar push needs `GOOGLE_CALENDAR_WEBHOOK_URL`, this API's
+  `https://<api host>/v1/calendar/notifications`. Unset, room-link calendars
+  are only synced by the hourly backstop.
 - `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
   shared under, so world on its own subdomain receives it — for example
   `campus.example`. Only `campus_session` gets it; the refresh and state

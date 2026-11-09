@@ -1,9 +1,10 @@
 # Google Calendar
 
 A member can connect their own Google Calendar to campus, read-only
-(`calendar.events.readonly`), and campus shows them their events. Campus
-never creates or changes an event, and keeps no copy of one: events are read
-from Google each time the member asks.
+(`calendar.events.readonly`), and campus shows them their events, read from
+Google each time they ask. Campus never creates or changes an event. The
+only copy it keeps is the times of events that carry a room link, synced
+from the calendars of people who manage room links (see Sync).
 
 It is an integration of its own, behind `FF_GOOGLE_CALENDAR_ENABLED`.
 Sign-in never asks for calendar access, and connecting asks for nothing
@@ -139,6 +140,34 @@ The read is held to three seconds. No grant, the calendar switched off,
 Google failing or slow, or no such event: the link's stored window stands.
 A grant Google has withdrawn is deleted, as for any read.
 
+## Sync
+
+The calendars of people who manage room links (admins, and live professors
+and mentors) are kept in step with `room_link_instances`: one row per run of
+an event carrying a room link, with its times and whether it was cancelled.
+Nothing else of the event is kept.
+
+- **Which events.** Only those the calendar's owner organised, carrying a
+  live link of a cohort they manage. Recurring events are read one instance
+  at a time; an instance is keyed by its organiser and Google's event id,
+  which stays the same when that one run is moved.
+- **Reading.** The first read takes everything from a day ago on and keeps
+  Google's sync token; later reads ask only for what changed since. Google
+  refusing the token (`410`) means one full read again, and anything held
+  that it no longer has is cancelled. Every page is read before any is
+  applied, and the rows and the new token are written together.
+- **Push.** With `GOOGLE_CALENDAR_WEBHOOK_URL` set, each watched calendar
+  has a Google push channel to `POST /v1/calendar/notifications`, renewed a
+  day before it lapses. A notification is checked against the channel's id
+  and token (kept as a hash) and syncs that calendar.
+- **Backstop.** Google drops some notifications, so every watched calendar
+  is also synced at least hourly (the `calendar-sync` job, every five
+  minutes, takes the 100 synced longest ago).
+- **One at a time.** A sync holds a lease on the grant. A change arriving
+  meanwhile leaves word, and the holder reads again before letting go.
+- **Connecting** opens the channel and syncs straight away. Somebody who
+  stops managing room links has their channels stopped.
+
 ## Talking to Google
 
 Every request the calendar makes to Google, OAuth and Calendar API alike,
@@ -174,9 +203,9 @@ tried first, so grants Google keeps refusing do not hold up newer ones.
   account's connections, and works while the calendar is switched off.
 - **Access ending:** the sweep marks the grants of suspended accounts, and
   of anybody who is neither an admin nor holds a live membership (they left,
-  a guest's visit ran out), then revokes every grant marked. It runs at most
-  every ten minutes, on the back of calendar requests: a timer would keep
-  the API awake, and it sleeps when idle.
+  a guest's visit ran out), then revokes every grant marked. It is a
+  scheduled job, every ten minutes. A grant's push channels are stopped
+  before it is revoked.
 - **Without the right key:** a token that cannot be opened is still live at
   Google, so its grant stays marked, logged as an error at each try, until
   `GOOGLE_CALENDAR_TOKEN_KEY` is right again. With no key set at all, marked

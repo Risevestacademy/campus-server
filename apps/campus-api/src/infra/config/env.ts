@@ -239,6 +239,27 @@ export class Env {
   GOOGLE_CALENDAR_CALLBACK_URL?: string;
 
   /**
+   * This API's /v1/calendar/notifications, where Google pushes calendar
+   * changes. HTTPS with a valid certificate. Unset, calendars are only synced
+   * on the hourly backstop.
+   */
+  @IsOptional()
+  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  GOOGLE_CALENDAR_WEBHOOK_URL?: string;
+
+  /**
+   * Off where the API sleeps when idle: a timer would keep it awake, so
+   * scheduled jobs run on the back of requests instead.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return true;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  SCHEDULER_TIMER_ENABLED: boolean = true;
+
+  /**
    * Must point at this API, not at the web app, and must match a redirect URI
    * registered on the same Google client byte for byte.
    */
