@@ -306,6 +306,30 @@ describe('room links (e2e)', () => {
       .expect(404);
   });
 
+  it('makes a link for an audience, and refuses one it does not know', async () => {
+    const { body } = await request(app.getHttpServer())
+      .post(linksPath())
+      .set('Cookie', mentorCookie)
+      .send({ title: 'Whole cohort' })
+      .expect(201);
+    expect(body).toMatchObject({
+      audience: 'cohort',
+      cohortTrackId: null,
+      mentorshipGroupId: null,
+    });
+
+    await request(app.getHttpServer())
+      .post(linksPath())
+      .set('Cookie', mentorCookie)
+      .send({ title: 'Nobody', audience: 'everyone' })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post(linksPath())
+      .set('Cookie', mentorCookie)
+      .send({ title: 'No track', audience: 'cohort-track' })
+      .expect(400);
+  });
+
   it('refuses malformed requests with a 400', async () => {
     await make('   ').expect(400);
     await make('x'.repeat(129)).expect(400);

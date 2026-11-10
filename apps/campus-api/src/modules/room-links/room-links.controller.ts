@@ -52,6 +52,8 @@ export class SpaceRoomLinksController {
       params.spaceId,
       body.title,
       { actorUserId: user.id, correlationId },
+      new Date(),
+      body,
     );
   }
 

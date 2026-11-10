@@ -7,8 +7,8 @@ the person to the space.
 
 Routes:
 
-- `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/links` with `{ title }`
-  makes one.
+- `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/links` with `{ title }`,
+  and optionally `{ audience, cohortTrackId | mentorshipGroupId }`, makes one.
 - `GET /v1/cohorts/{cohortId}/spaces/{spaceId}/links` lists a space's live
   links in the cohort, newest first.
 - `GET /v1/room-links/{code}` opens one: its cohort, space, title, and its
@@ -40,6 +40,11 @@ Routes:
   `room_link_revoked`, with `space_id` set; opening a link writes nothing.
 - **Links do not expire.** They last until revoked or until the space leaves
   the map.
+- **A link has an audience.** The whole cohort (the default), one of its
+  tracks or one of its pods: the students expected at the event, which
+  attendance counts. A track cannot be detached, nor a pod deleted, while a
+  live link is aimed at it; revoked links lose the pointer and keep their
+  audience, and the detach or delete entry names them.
 
 ## Entering
 

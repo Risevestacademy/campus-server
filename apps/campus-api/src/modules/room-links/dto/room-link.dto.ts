@@ -1,6 +1,9 @@
 import { Transform } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsEnum,
   IsNotEmpty,
+  IsOptional,
   IsString,
   IsUUID,
   Matches,
@@ -8,6 +11,7 @@ import {
 } from 'class-validator';
 
 import { ROOM_LINK_CODE } from '../room-link-code.js';
+import { RoomLinkAudience } from '../schema.js';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -38,6 +42,31 @@ export class CreateRoomLinkDto {
   @IsNotEmpty()
   @MaxLength(128)
   title: string;
+
+  /** Whose event it is: the students expected at it. Defaults to the whole cohort. */
+  @ApiPropertyOptional({
+    enum: RoomLinkAudience,
+    default: RoomLinkAudience.Cohort,
+  })
+  @IsOptional()
+  @IsEnum(RoomLinkAudience)
+  audience?: RoomLinkAudience;
+
+  /**
+   * The cohort-track, for `cohort-track`.
+   * @example 44444444-4444-4444-8444-444444444444
+   */
+  @IsOptional()
+  @IsUUID()
+  cohortTrackId?: string;
+
+  /**
+   * The pod, for `mentorship-group`.
+   * @example 55555555-5555-4555-8555-555555555555
+   */
+  @IsOptional()
+  @IsUUID()
+  mentorshipGroupId?: string;
 }
 
 /** A link to a space in one cohort's campus, made for one event. */
@@ -65,6 +94,15 @@ export class RoomLinkDto {
 
   /** @example "Pod A" */
   spaceName: string;
+
+  @ApiProperty({ enum: RoomLinkAudience })
+  audience: RoomLinkAudience;
+
+  /** Set for a `cohort-track` link. */
+  cohortTrackId: string | null;
+
+  /** Set for a `mentorship-group` link. */
+  mentorshipGroupId: string | null;
 
   /**
    * When the run going on now, else the next one, starts, as synced from the

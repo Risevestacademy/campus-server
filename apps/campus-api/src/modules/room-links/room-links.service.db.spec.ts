@@ -1,6 +1,6 @@
 import { DEFAULT_SPACE_KEY } from '@campus/session';
 import { PGlite } from '@electric-sql/pglite';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, desc, eq, inArray } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import {
   maps,
   spaces,
 } from '../maps/schema.js';
+import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import { SystemRole, users } from '../users/schema.js';
 import { ROOM_LINK_CODE } from './room-link-code.js';
 import {
@@ -24,7 +25,12 @@ import {
   RoomLinkNotFoundException,
 } from './room-links.exceptions.js';
 import { RoomLinksService } from './room-links.service.js';
-import { roomLinkInstances, roomLinkPasses, roomLinks } from './schema.js';
+import {
+  RoomLinkAudience,
+  roomLinkInstances,
+  roomLinkPasses,
+  roomLinks,
+} from './schema.js';
 
 const MIGRATIONS = fileURLToPath(
   new URL('../../infra/database/migrations', import.meta.url),
@@ -131,6 +137,9 @@ describe('RoomLinksService', () => {
       spaceId: pod.id,
       spaceKey: pod.key,
       spaceName: pod.name,
+      audience: RoomLinkAudience.Cohort,
+      cohortTrackId: null,
+      mentorshipGroupId: null,
       startsAt: null,
       endsAt: null,
       createdAt: made.createdAt,
@@ -427,6 +436,97 @@ describe('RoomLinksService', () => {
 
     expect(await service.resolve(guest, [made.code], afterExpiry)).toEqual([]);
   }, 30_000);
+
+  describe('audience', () => {
+    const trackOf = async (cohortId: string, code: string) => {
+      const [track] = await db
+        .insert(schema.tracks)
+        .values({ name: code, code })
+        .returning();
+      const [cohortTrack] = await db
+        .insert(schema.cohortTracks)
+        .values({ cohortId, trackId: track.id })
+        .returning();
+      return cohortTrack.id;
+    };
+
+    it('makes a link for one track of the cohort', async () => {
+      const { cohortId, mentor, pod } = await setting();
+      const cohortTrackId = await trackOf(cohortId, `T${unique()}`);
+
+      const made = await service.create(
+        mentor,
+        cohortId,
+        pod.id,
+        'Backend standup',
+        { actorUserId: mentor.id },
+        new Date(),
+        { audience: RoomLinkAudience.CohortTrack, cohortTrackId },
+      );
+
+      expect(made).toMatchObject({
+        audience: RoomLinkAudience.CohortTrack,
+        cohortTrackId,
+        mentorshipGroupId: null,
+      });
+      const [entry] = await db
+        .select({ details: auditLog.details })
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.RoomLinkCreated))
+        .orderBy(desc(auditLog.createdAt))
+        .limit(1);
+      expect(entry.details).toMatchObject({
+        audience: RoomLinkAudience.CohortTrack,
+        cohortTrackId,
+      });
+    }, 30_000);
+
+    it('refuses an audience without its track or pod, or with one it does not take', async () => {
+      const { cohortId, mentor, pod } = await setting();
+      const cohortTrackId = await trackOf(cohortId, `T${unique()}`);
+      const make = (target: object) =>
+        service.create(
+          mentor,
+          cohortId,
+          pod.id,
+          'Class',
+          { actorUserId: mentor.id },
+          new Date(),
+          target,
+        );
+
+      await expect(
+        make({ audience: RoomLinkAudience.CohortTrack }),
+      ).rejects.toThrow(InvalidArgumentException);
+      await expect(make({ cohortTrackId })).rejects.toThrow(
+        InvalidArgumentException,
+      );
+      await expect(
+        make({
+          audience: RoomLinkAudience.MentorshipGroup,
+          cohortTrackId,
+        }),
+      ).rejects.toThrow(InvalidArgumentException);
+    }, 30_000);
+
+    it('is a 404 for a track of another cohort', async () => {
+      const { cohortId, mentor, pod } = await setting();
+      const other = await setting();
+      const elsewhere = await trackOf(other.cohortId, `T${unique()}`);
+
+      await expect(
+        service.create(
+          mentor,
+          cohortId,
+          pod.id,
+          'Class',
+          { actorUserId: mentor.id },
+          new Date(),
+          { audience: RoomLinkAudience.CohortTrack, cohortTrackId: elsewhere },
+        ),
+      ).rejects.toThrow(RoomLinkNotFoundException);
+    }, 30_000);
+  });
 
   describe('runs and entering', () => {
     const MINUTE = 60_000;

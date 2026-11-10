@@ -300,6 +300,8 @@ interface AuditEntryShapes {
        * it held none. Their granting and ending have entries of their own.
        */
       clearedSpaceMembershipIds: string[];
+      /** Revoked room links aimed at the track, which lost the pointer. */
+      clearedRoomLinkIds: string[];
     };
   };
   [AuditAction.TrackCreated]: {
@@ -355,6 +357,8 @@ interface AuditEntryShapes {
        * own.
        */
       clearedSpaceMembershipIds: string[];
+      /** Revoked room links aimed at the group, which lost the pointer. */
+      clearedRoomLinkIds: string[];
     };
   };
   [AuditAction.NoticeCreated]: {

@@ -524,6 +524,7 @@ describe('space memberships (e2e)', () => {
           first.body.id,
           second.body.id,
         ]),
+        clearedRoomLinkIds: [],
       });
       // The grants' own entries stay: they are the record now.
       await expect(entriesFor(first.body.id)).resolves.toHaveLength(2);

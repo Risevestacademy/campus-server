@@ -239,6 +239,20 @@
       "when": 1794092680478,
       "tag": "0033_calendar_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794352232972,
+      "tag": "0034_attendance",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1794352234120,
+      "tag": "0035_drop_room_link_windows",
+      "breakpoints": true
     }
   ]
 }

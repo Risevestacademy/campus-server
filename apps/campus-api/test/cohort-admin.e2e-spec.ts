@@ -876,6 +876,64 @@ describe('cohort and track admin routes (e2e)', () => {
       await detach(cohort.id, track.id).expect(409);
     });
 
+    it('refuses while a live room link is aimed at the track, and clears revoked ones', async () => {
+      const { track, cohort, link } = await running();
+      const [map] = await db
+        .insert(schema.maps)
+        .values({ key: `detach-${cohort.id}`, name: 'Campus' })
+        .returning();
+      const [room] = await db
+        .insert(schema.spaces)
+        .values({
+          mapId: map.id,
+          key: 'lecture',
+          name: 'Lecture',
+          audioMode: schema.AudioMode.Boundary,
+          access: schema.SpaceAccess.Normal,
+        })
+        .returning();
+      const [roomLink] = await db
+        .insert(schema.roomLinks)
+        .values({
+          code: `t${cohort.id.slice(0, 9)}`,
+          cohortId: cohort.id,
+          spaceId: room.id,
+          title: 'Track standup',
+          createdBy: adminId,
+          audience: schema.RoomLinkAudience.CohortTrack,
+          cohortTrackId: link.id,
+        })
+        .returning();
+
+      const res = await detach(cohort.id, track.id).expect(409);
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        details: { cohortId: cohort.id, roomLinkIds: [roomLink.id] },
+      });
+
+      await db
+        .update(schema.roomLinks)
+        .set({ revokedAt: new Date() })
+        .where(eq(schema.roomLinks.id, roomLink.id));
+      await detach(cohort.id, track.id).expect(204);
+
+      const [after] = await db
+        .select()
+        .from(schema.roomLinks)
+        .where(eq(schema.roomLinks.id, roomLink.id));
+      expect(after).toMatchObject({
+        audience: schema.RoomLinkAudience.CohortTrack,
+        cohortTrackId: null,
+      });
+      const [entry] = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, AuditAction.CohortTrackDetached));
+      expect(entry.details).toMatchObject({
+        clearedRoomLinkIds: [roomLink.id],
+      });
+    });
+
     // Staff carry no track, so they are no obstacle to taking one off.
     it('is not held up by a member who is not on the track', async () => {
       const { track, cohort } = await running();
@@ -961,6 +1019,7 @@ describe('cohort and track admin routes (e2e)', () => {
             cohortId: cohort.id,
             trackId: track.id,
             clearedSpaceMembershipIds: [],
+            clearedRoomLinkIds: [],
           },
         }),
       ]);
