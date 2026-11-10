@@ -4,6 +4,7 @@ import type { UsersService } from '../users/users.service.js';
 import type { AccessTokenCache } from './access-token-cache.js';
 import type { CalendarGrantsService } from './calendar-grants.service.js';
 import type { CalendarStateService } from './calendar-state.service.js';
+import type { CalendarWatchService } from './calendar-watch.service.js';
 import { CalendarConnectService } from './calendar-connect.service.js';
 import { CalendarConnectFailedError } from './calendar.exceptions.js';
 import type { GoogleCalendarClient } from './google-calendar.client.js';
@@ -20,6 +21,7 @@ const google = {
 const states = { issue: vi.fn(), verify: vi.fn() };
 const tokens = { evict: vi.fn() };
 const users = { findById: vi.fn() };
+const watch = { afterConnect: vi.fn() };
 const logger = { info: vi.fn(), setContext: vi.fn() };
 
 const service = new CalendarConnectService(
@@ -28,6 +30,7 @@ const service = new CalendarConnectService(
   states as unknown as CalendarStateService,
   tokens as unknown as AccessTokenCache,
   users as unknown as UsersService,
+  watch as unknown as CalendarWatchService,
   logger as unknown as PinoLogger,
 );
 
@@ -69,6 +72,7 @@ it('keeps the grant Google hands back to the member who asked', async () => {
   expect(states.verify).toHaveBeenCalledWith('s', 'user-1');
   expect(google.redeemWebCode).toHaveBeenCalledWith('c');
   expect(grants.save).toHaveBeenCalledWith('user-1', 'new-refresh');
+  expect(watch.afterConnect).toHaveBeenCalledWith('user-1');
   expect(tokens.evict).toHaveBeenCalledWith('user-1');
   expect(google.revoke).not.toHaveBeenCalled();
 });

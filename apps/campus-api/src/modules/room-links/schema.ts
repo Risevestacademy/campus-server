@@ -88,3 +88,49 @@ export const roomLinkPasses = pgTable(
 export type RoomLink = typeof roomLinks.$inferSelect;
 export type NewRoomLink = typeof roomLinks.$inferInsert;
 export type RoomLinkPass = typeof roomLinkPasses.$inferSelect;
+
+/**
+ * One run of a room link's event, synced from its organiser's Google
+ * Calendar. Keyed by the organiser and Google's event id, which for a
+ * recurring event names one instance and survives it being moved.
+ */
+export const roomLinkInstances = pgTable(
+  'room_link_instances',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    roomLinkId: uuid('room_link_id')
+      .notNull()
+      .references(() => roomLinks.id),
+    organizerId: uuid('organizer_id')
+      .notNull()
+      .references(() => users.id),
+    googleEventId: varchar('google_event_id', { length: 1024 }).notNull(),
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    endsAt: timestamp('ends_at', { withTimezone: true }).notNull(),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('room_link_instances_event_unique').on(
+      table.organizerId,
+      table.googleEventId,
+    ),
+    index('room_link_instances_link_start_idx').on(
+      table.roomLinkId,
+      table.startsAt,
+    ),
+    check(
+      'room_link_instances_window',
+      sql`${table.endsAt} > ${table.startsAt}`,
+    ),
+  ],
+);
+
+export type RoomLinkInstance = typeof roomLinkInstances.$inferSelect;
+export type NewRoomLinkInstance = typeof roomLinkInstances.$inferInsert;

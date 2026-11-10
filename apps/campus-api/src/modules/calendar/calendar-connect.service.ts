@@ -6,6 +6,7 @@ import { UsersService } from '../users/users.service.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import { CalendarGrantsService } from './calendar-grants.service.js';
 import { CalendarStateService } from './calendar-state.service.js';
+import { CalendarWatchService } from './calendar-watch.service.js';
 import { CalendarConnectFailedError } from './calendar.exceptions.js';
 import { GOOGLE_CALENDAR_SCOPE } from './calendar.settings.js';
 import type { CalendarCallbackQueryDto } from './dto/calendar-connect.dto.js';
@@ -23,6 +24,7 @@ export class CalendarConnectService {
     private readonly states: CalendarStateService,
     private readonly tokens: AccessTokenCache,
     private readonly users: UsersService,
+    private readonly watch: CalendarWatchService,
     private readonly logger: PinoLogger,
   ) {
     this.logger.setContext(CalendarConnectService.name);
@@ -59,21 +61,19 @@ export class CalendarConnectService {
   ): Promise<void> {
     const user = await this.users.findById(userId);
     if (!user?.providerId || user.providerId !== redeemed.subject) {
-      // Another Google account's calendar: nothing of it is kept, and its
-      // owner is not left with campus on their account.
       await this.google.revoke(redeemed.refreshToken ?? redeemed.accessToken);
       throw new CalendarConnectFailedError('wrong_account');
     }
     if (!redeemed.scopes.includes(GOOGLE_CALENDAR_SCOPE)) {
       throw new CalendarConnectFailedError('not_granted');
     }
-    // Not revoked: that would end the member's whole grant, and with it a
-    // connection they may already have.
+    // Not revoked: that would end a connection they may already have.
     if (!redeemed.refreshToken) {
       throw new CalendarConnectFailedError('no_refresh_token');
     }
     await this.grants.save(userId, redeemed.refreshToken);
     this.tokens.evict(userId);
     this.logger.info({ userId }, 'calendar connected');
+    this.watch.afterConnect(userId);
   }
 }

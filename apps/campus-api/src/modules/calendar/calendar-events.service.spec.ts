@@ -6,11 +6,11 @@ import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import type { RoomLinksService } from '../room-links/room-links.service.js';
 import { SystemRole } from '../users/schema.js';
 import { AccessTokenCache } from './access-token-cache.js';
+import { GoogleCalendarApi } from './google-calendar-api.js';
 import type {
   CalendarGrant,
   CalendarGrantsService,
 } from './calendar-grants.service.js';
-import type { CalendarRevocationService } from './calendar-revocation.service.js';
 import {
   CalendarEventsService,
   READ_BUDGET_MS,
@@ -34,7 +34,6 @@ const GRANT: CalendarGrant = {
 
 const grants = { find: vi.fn(), forget: vi.fn() };
 const google = { refresh: vi.fn() };
-const revocations = { sweepIfDue: vi.fn() };
 const fetch = vi.fn();
 const logger = { info: vi.fn(), error: vi.fn(), setContext: vi.fn() };
 const roomLinks = { resolve: vi.fn() };
@@ -59,8 +58,7 @@ function calendar(): CalendarEventsService {
   return new CalendarEventsService(
     grants as unknown as CalendarGrantsService,
     tokens,
-    revocations as unknown as CalendarRevocationService,
-    fetch,
+    new GoogleCalendarApi(tokens, fetch, logger as unknown as PinoLogger),
     { APP_PUBLIC_URL: APP_URL } as Env,
     roomLinks as unknown as RoomLinksService,
     logger as unknown as PinoLogger,
@@ -344,13 +342,12 @@ it.each([
   );
 });
 
-it('is not there while the calendar is switched off, but still sweeps', async () => {
+it('is not there while the calendar is switched off', async () => {
   grants.find.mockRejectedValue(new CalendarNotConfiguredError());
 
   await expect(
     calendar().events(USER, { from: 'not checked first' }),
   ).rejects.toThrow(CalendarNotConfiguredError);
-  expect(revocations.sweepIfDue).toHaveBeenCalled();
 });
 
 it('puts an event in the room its location links to', async () => {

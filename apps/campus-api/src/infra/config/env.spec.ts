@@ -373,4 +373,25 @@ describe('loadEnv email (Resend)', () => {
       /EMAIL_FROM/,
     );
   });
+
+  describe('SCHEDULER_TIMER_ENABLED', () => {
+    it('is on unless switched off', () => {
+      expect(testEnv({}).SCHEDULER_TIMER_ENABLED).toBe(true);
+      expect(
+        testEnv({ SCHEDULER_TIMER_ENABLED: 'false' }).SCHEDULER_TIMER_ENABLED,
+      ).toBe(false);
+    });
+  });
+
+  describe('GOOGLE_CALENDAR_WEBHOOK_URL', () => {
+    it('must be https', () => {
+      expect(() =>
+        testEnv({ GOOGLE_CALENDAR_WEBHOOK_URL: 'http://api.campus.test/x' }),
+      ).toThrow(/GOOGLE_CALENDAR_WEBHOOK_URL/);
+      expect(
+        testEnv({ GOOGLE_CALENDAR_WEBHOOK_URL: 'https://api.campus.test/x' })
+          .GOOGLE_CALENDAR_WEBHOOK_URL,
+      ).toBe('https://api.campus.test/x');
+    });
+  });
 });

@@ -3,6 +3,7 @@ import {
   and,
   asc,
   eq,
+  exists,
   inArray,
   isNotNull,
   isNull,
@@ -18,7 +19,7 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { timestamptz } from '../../infra/database/timestamptz.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
-import { cohortMembers } from '../cohorts/schema.js';
+import { CohortRole, cohortMembers } from '../cohorts/schema.js';
 import {
   SystemRole,
   UserStatus,
@@ -26,7 +27,7 @@ import {
   users,
 } from '../users/schema.js';
 import { calendarTokenKey, requireCalendar } from './calendar.settings.js';
-import { googleCalendarGrants } from './schema.js';
+import { googleCalendarChannels, googleCalendarGrants } from './schema.js';
 import { openToken, sealToken } from './token-cipher.js';
 
 export interface CalendarGrant {
@@ -35,7 +36,7 @@ export interface CalendarGrant {
   sealed: string;
 }
 
-/** A grant waiting to be revoked. No token when it can no longer be opened. */
+/** No token when it can no longer be opened. */
 export interface PendingRevocation {
   userId: string;
   sealed: string;
@@ -43,6 +44,7 @@ export interface PendingRevocation {
 }
 
 const ADMIN_ROLES = Object.values(SystemRole).filter(hasAdminPowers);
+const LINK_MANAGER_ROLES = [CohortRole.Professor, CohortRole.Mentor];
 
 const FIRST_RETRY_MS = 10 * 60 * 1000;
 const LAST_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -57,10 +59,7 @@ export class CalendarGrantsService {
     this.logger.setContext(CalendarGrantsService.name);
   }
 
-  /**
-   * Also takes back a revocation still waiting for this member: revoking the
-   * old token now would end the grant this one belongs to.
-   */
+  /** Takes back a pending revocation: Google revokes a whole grant at once. */
   async save(userId: string, refreshToken: string): Promise<void> {
     const { tokenKey } = requireCalendar(this.config);
     const sealedRefreshToken = sealToken(tokenKey, refreshToken, userId);
@@ -93,13 +92,12 @@ export class CalendarGrantsService {
     if (!row) {
       return null;
     }
-    // Unreadable is kept, not deleted: a wrong key on one deployment would
-    // otherwise wipe every member's grant. A reconnect overwrites it.
+    // Kept, not deleted: a wrong key would otherwise wipe every grant.
     const refreshToken = this.open(tokenKey, row.sealed, userId);
     return refreshToken ? { userId, refreshToken, sealed: row.sealed } : null;
   }
 
-  /** Google has withdrawn it: nothing to revoke. Only the grant that was read. */
+  /** Google has withdrawn it. Only the grant that was read. */
   async forget(grant: CalendarGrant): Promise<void> {
     await this.db
       .delete(googleCalendarGrants)
@@ -109,6 +107,53 @@ export class CalendarGrantsService {
           eq(googleCalendarGrants.sealedRefreshToken, grant.sealed),
         ),
       );
+  }
+
+  /**
+   * Grants to watch or stop watching, synced longest ago first: those of
+   * people who manage room links, and any still holding a channel.
+   */
+  async watchable(
+    now: Date,
+    limit: number,
+  ): Promise<{ userId: string; syncedAt: Date | null }[]> {
+    const manager = this.db
+      .select({ one: sql`1` })
+      .from(cohortMembers)
+      .where(
+        and(
+          eq(cohortMembers.userId, googleCalendarGrants.userId),
+          inArray(cohortMembers.role, LINK_MANAGER_ROLES),
+          isLiveMembership(now),
+        ),
+      );
+    const admin = this.db
+      .select({ one: sql`1` })
+      .from(users)
+      .where(
+        and(
+          eq(users.id, googleCalendarGrants.userId),
+          inArray(users.systemRole, ADMIN_ROLES),
+        ),
+      );
+    const watched = this.db
+      .select({ one: sql`1` })
+      .from(googleCalendarChannels)
+      .where(eq(googleCalendarChannels.userId, googleCalendarGrants.userId));
+    return this.db
+      .select({
+        userId: googleCalendarGrants.userId,
+        syncedAt: googleCalendarGrants.syncedAt,
+      })
+      .from(googleCalendarGrants)
+      .where(
+        and(
+          isNull(googleCalendarGrants.revokeRequestedAt),
+          or(exists(manager), exists(admin), exists(watched)),
+        ),
+      )
+      .orderBy(sql`${googleCalendarGrants.syncedAt} asc nulls first`)
+      .limit(limit);
   }
 
   async requestRevocation(userId: string, now: Date): Promise<void> {
@@ -123,11 +168,7 @@ export class CalendarGrantsService {
       );
   }
 
-  /**
-   * Marks for revocation the grants of everybody who can no longer use them:
-   * suspended accounts, and anybody who is neither an admin nor holds a live
-   * membership.
-   */
+  /** Suspended accounts, and anybody neither an admin nor a live member. */
   async requestLapsedRevocations(now: Date): Promise<number> {
     const live = this.db
       .select({ one: sql`1` })
@@ -161,11 +202,7 @@ export class CalendarGrantsService {
     return marked.length;
   }
 
-  /**
-   * The marked grants due a try, those never tried first. Empty while the
-   * key is not configured: the tokens cannot be opened, so they wait, still
-   * marked, until it is.
-   */
+  /** Due a try, never-tried first. Empty without a key: they wait, marked. */
   async pendingRevocations(
     now: Date,
     userId?: string,
@@ -202,10 +239,7 @@ export class CalendarGrantsService {
     }));
   }
 
-  /**
-   * Not revoked this time: tried again ten minutes later, then twice as long
-   * after each failure, at most a day.
-   */
+  /** Retried after ten minutes, doubling, at most a day. */
   async revocationFailed(
     pending: PendingRevocation,
     now: Date,
@@ -228,7 +262,7 @@ export class CalendarGrantsService {
     return row?.attempts ?? 0;
   }
 
-  /** Only while still the grant marked: a reconnect since has replaced it. */
+  /** Only while still the grant marked; a reconnect may have replaced it. */
   async removeRevoked(pending: PendingRevocation): Promise<void> {
     await this.db
       .delete(googleCalendarGrants)
