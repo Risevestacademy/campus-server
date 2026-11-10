@@ -92,8 +92,9 @@ it for its own transaction and for nothing else:
 
 `ALTER TABLE` is transactional. If any step fails, the rollback undoes the
 disable along with the delete, so the trigger is never left off. The lock
-it takes (`ACCESS EXCLUSIVE`) keeps every other transaction off `audit_log`
-until commit, so nothing else ever sees the trigger disabled.
+it takes (`SHARE ROW EXCLUSIVE`) blocks every other insert, update and
+delete on `audit_log` until commit, and any second sweep, so nothing else
+can delete while the trigger is disabled. Reads are not blocked.
 
 That lock has a cost. While the sweep runs, every write to the audit log,
 and so every admin change that records one, waits for it. The lock timeout

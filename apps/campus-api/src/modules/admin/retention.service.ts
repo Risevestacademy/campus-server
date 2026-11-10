@@ -126,8 +126,9 @@ export class RetentionService {
   /**
    * Audit entries past the period. The append-only trigger refuses every
    * DELETE, so it is lifted for this transaction alone: ALTER TABLE is
-   * transactional, and the lock it takes keeps everyone else off the table
-   * until commit, so no other transaction ever sees it disabled. If anything
+   * transactional, and the lock it takes (SHARE ROW EXCLUSIVE) blocks every
+   * other write to the table until commit, so nothing else can delete while
+   * it is disabled. Reads are not blocked. If anything
    * fails the rollback undoes the disable along with the delete.
    *
    * The sweep's own entry is written after the trigger is back on, so it is
