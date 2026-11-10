@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
+import { CommentTargetType, comments } from '../../modules/comments/schema.js';
 import {
   CohortRole,
   CohortStatus,
@@ -40,6 +41,7 @@ const db = drizzle(new PGlite(), {
     invites,
     notices,
     notifications,
+    comments,
   },
 });
 
@@ -82,7 +84,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await db.execute(
-    sql`truncate mentorship_group_students, mentorship_groups, notices, notifications, space_memberships, spaces, maps, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate comments, mentorship_group_students, mentorship_groups, notices, notifications, space_memberships, spaces, maps, invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
   );
 
   const [admin] = await db
@@ -952,5 +954,60 @@ describe('notifications', () => {
     const rows = await db.select().from(notifications);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ referenceId: noticeId });
+  });
+});
+
+describe('comments', () => {
+  const comment = (overrides: Partial<typeof comments.$inferInsert> = {}) =>
+    db
+      .insert(comments)
+      .values({
+        authorId: fixtures.adminId,
+        targetType: CommentTargetType.Notice,
+        // No foreign key on the target: any uuid is accepted.
+        targetId: '00000000-0000-4000-8000-000000000001',
+        body: 'I can help with the setup on Friday.',
+        ...overrides,
+      })
+      .returning();
+
+  it('requires an author that exists', async () => {
+    await expectViolation(
+      comment({ authorId: '00000000-0000-4000-8000-000000000000' }),
+      'comments_author_id_users_id_fk',
+    );
+  });
+
+  it('accepts only a known target type', async () => {
+    await comment();
+
+    await expectViolation(
+      comment({ targetType: 'project' as CommentTargetType }),
+      'comments_target_type_known',
+    );
+  });
+
+  /**
+   * The whole point of the polymorphic target: the row it names may be in a
+   * table that does not exist yet, or one that has been deleted. There is no
+   * foreign key here, so a target id matching nothing is by design.
+   */
+  it('accepts a target id that matches no notice', async () => {
+    const [row] = await comment({
+      targetId: '00000000-0000-4000-8000-000000000002',
+    });
+
+    expect(row.targetId).toBe('00000000-0000-4000-8000-000000000002');
+  });
+
+  it('keeps the body non-blank and within its limit', async () => {
+    await expectViolation(
+      comment({ body: ' \t\n' }),
+      'comments_body_not_blank',
+    );
+    await expectViolation(
+      comment({ body: 'x'.repeat(2001) }),
+      'comments_body_length',
+    );
   });
 });

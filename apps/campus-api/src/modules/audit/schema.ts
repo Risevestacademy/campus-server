@@ -185,6 +185,11 @@ export enum AuditAction {
   RetentionSwept = 'retention_swept',
   /** Staff set a student's status at one class; the reason is in `details`. */
   AttendanceCorrected = 'attendance_corrected',
+  /**
+   * A member commented on a notice. `details` keeps the notice id only; what
+   * the member wrote stays on the comment and never comes here.
+   */
+  CommentCreated = 'comment_created',
 }
 
 export enum AuditSubjectType {
@@ -207,6 +212,8 @@ export enum AuditSubjectType {
   DeskClaim = 'desk_claim',
   /** One row of `attendance`: a student at one run. */
   Attendance = 'attendance',
+  /** One row of `comments`, whatever it is attached to. */
+  Comment = 'comment',
 }
 
 /**
