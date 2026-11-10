@@ -157,8 +157,10 @@ Nothing else of the event is kept.
   meanwhile leaves word, and the holder reads again before letting go.
 - **Reconciling.** Google's feed only returns events that changed, so each
   `calendar-sync` run also cancels, across every instance, the runs still to
-  come whose link was revoked or whose organiser no longer manages its
-  cohort. Past runs are kept.
+  come whose link was revoked, whose organiser no longer manages its cohort,
+  or whose organiser's calendar is no longer synced (disconnected, access
+  ended, or withdrawn at Google), since a cancellation could no longer reach
+  them. Past runs are kept.
 - **Push is not required.** A channel that cannot be opened is logged, and
   the calendar is synced anyway.
 - **Connecting** opens the channel and syncs straight away. Somebody who

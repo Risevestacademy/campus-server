@@ -418,6 +418,26 @@ describe('reconcile', () => {
     expect(await cancelled()).toEqual([NOW]);
   });
 
+  it.each([
+    ['disconnected', () => grants.requestRevocation(mentorId, NOW)],
+    [
+      'withdrawn at Google',
+      () =>
+        db
+          .delete(googleCalendarGrants)
+          .where(eq(googleCalendarGrants.userId, mentorId)),
+    ],
+  ])(
+    'cancels the runs to come of a calendar %s, which nothing syncs any more',
+    async (_, withdraw) => {
+      await synced([past, event()]);
+      await withdraw();
+
+      await expect(sync.reconcile(NOW)).resolves.toBe(1);
+      expect(await cancelled()).toEqual([null, NOW]);
+    },
+  );
+
   it('keeps an admin’s runs in any cohort', async () => {
     const adminId = await person('admin@campus.local', SystemRole.Admin);
     await grants.save(adminId, 'admin-refresh');
