@@ -409,6 +409,16 @@ interface AuditEntryShapes {
       after: RoomLinkWindowDetails;
     };
   };
+  [AuditAction.RetentionSwept]: {
+    subject: null;
+    details: {
+      table: string;
+      retentionDays: number;
+      /** Rows created before this instant were deleted. */
+      cutoff: Date;
+      deleted: number;
+    };
+  };
 }
 
 /** When a room link's event runs, as ISO timestamps; both null for none. */
@@ -424,11 +434,16 @@ interface RoomLinkWindowDetails {
  * Built from AuditEntryShapes rather than written out member by member, and
  * mapped over the whole enum — so an action added to AuditAction without a
  * shape fails here, not at the first call site that happens to use it.
+ *
+ * An action whose shape has `subject: null` is about no one row, and its
+ * entry carries `subject: null`.
  */
 export type AuditEntry = {
   [A in AuditAction]: AuditContext & {
     action: A;
-    subject: { type: AuditEntryShapes[A]['subject']; id: string };
+    subject: AuditEntryShapes[A]['subject'] extends AuditSubjectType
+      ? { type: AuditEntryShapes[A]['subject']; id: string }
+      : null;
     details: AuditEntryShapes[A]['details'];
   };
 }[AuditAction];
@@ -465,8 +480,8 @@ export async function writeAuditEntry(
   await executor.insert(auditLog).values({
     actorUserId: entry.actorUserId,
     action: entry.action,
-    subjectType: entry.subject.type,
-    subjectId: entry.subject.id,
+    subjectType: entry.subject?.type ?? null,
+    subjectId: entry.subject?.id ?? null,
     spaceId: entry.spaceId ?? null,
     details: entry.details,
     // Stored as given, never trimmed: the request's id is settled as it

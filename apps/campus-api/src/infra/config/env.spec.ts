@@ -300,6 +300,26 @@ describe('loadEnv session lifetimes', () => {
   });
 });
 
+describe('loadEnv retention', () => {
+  it('keeps read notifications 90 days and audit entries a year by default', () => {
+    const env = testEnv({});
+    expect(env.NOTIFICATION_RETENTION_DAYS).toBe(90);
+    expect(env.AUDIT_LOG_RETENTION_DAYS).toBe(365);
+  });
+
+  it('refuses a retention under the 30-day floor', () => {
+    expect(() => testEnv({ NOTIFICATION_RETENTION_DAYS: '29' })).toThrow(
+      /NOTIFICATION_RETENTION_DAYS/,
+    );
+    expect(() => testEnv({ AUDIT_LOG_RETENTION_DAYS: '7' })).toThrow(
+      /AUDIT_LOG_RETENTION_DAYS/,
+    );
+    expect(
+      testEnv({ AUDIT_LOG_RETENTION_DAYS: '30' }).AUDIT_LOG_RETENTION_DAYS,
+    ).toBe(30);
+  });
+});
+
 describe('loadEnv APP_PUBLIC_URL validation', () => {
   it('fails boot when APP_PUBLIC_URL is missing — no silent fallback', () => {
     // Deliberately loadEnv, not testEnv: this is the one case asserting
