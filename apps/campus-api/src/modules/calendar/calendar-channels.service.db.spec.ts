@@ -135,6 +135,27 @@ describe('ensure', () => {
     expect((await stored()).map((c) => c.resourceId)).toEqual(['res-new']);
   });
 
+  it('leaves standing a channel opened after its own, so two renewals at once keep one', async () => {
+    const newer = '33333333-3333-4333-8333-333333333333';
+    await db.insert(googleCalendarChannels).values({
+      id: newer,
+      userId: grant.userId,
+      resourceId: 'res-newer',
+      tokenHash: 'x'.repeat(64),
+      expiresAt: NOW,
+      createdAt: new Date(Date.now() + 3_600_000),
+    });
+    fetch.mockResolvedValueOnce(answer(200, { resourceId: 'res-mine' }));
+
+    await channels().ensure(grant, NOW);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((await stored()).map((c) => c.resourceId).sort()).toEqual([
+      'res-mine',
+      'res-newer',
+    ]);
+  });
+
   it('opens nothing without a webhook address', async () => {
     await channels(null).ensure(grant, NOW);
 

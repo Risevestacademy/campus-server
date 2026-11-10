@@ -38,7 +38,7 @@ import type { GoogleEvent } from './google-event.js';
 import { googleCalendarGrants } from './schema.js';
 import { extractRoomLinkCode } from './room-link.js';
 
-const LEASE_MS = 2 * 60_000;
+const LEASE_MS = 5 * 60_000;
 const SYNC_BUDGET_MS = 60_000;
 const PAGE_SIZE = 250;
 export const MAX_SYNC_PAGES = 40;
@@ -103,20 +103,24 @@ export class CalendarSyncService {
     if (!grant) {
       return;
     }
-    const signal = AbortSignal.timeout(SYNC_BUDGET_MS);
     try {
       const [row] = await this.db
         .select({ syncToken: googleCalendarGrants.syncToken })
         .from(googleCalendarGrants)
         .where(eq(googleCalendarGrants.userId, userId));
       try {
-        await this.read(grant, row?.syncToken ?? null, now, signal);
+        await this.read(
+          grant,
+          row?.syncToken ?? null,
+          now,
+          AbortSignal.timeout(SYNC_BUDGET_MS),
+        );
       } catch (err) {
         if (!(err instanceof SyncTokenExpiredError)) {
           throw err;
         }
         this.logger.info({ userId }, 'calendar sync token expired; full read');
-        await this.read(grant, null, now, signal);
+        await this.read(grant, null, now, AbortSignal.timeout(SYNC_BUDGET_MS));
       }
     } catch (err) {
       if (err instanceof GrantWithdrawnError) {
@@ -176,11 +180,16 @@ export class CalendarSyncService {
   /** `fullFrom` set: everything the organiser still holds from then was read. */
   private async apply(
     organizerId: string,
-    items: GoogleEvent[],
+    read: GoogleEvent[],
     fullFrom: Date | null,
     nextSyncToken: string,
     now: Date,
   ): Promise<void> {
+    const items = [
+      ...new Map(
+        read.filter((i) => i.id).map((i) => [i.id, i] as const),
+      ).values(),
+    ];
     const managed = await this.managedCohorts(organizerId, now);
     const codes = new Map<string, string>();
     for (const item of items) {
@@ -225,7 +234,7 @@ export class CalendarSyncService {
         });
       } else {
         drop.push(item.id);
-        if (item.status === 'cancelled') {
+        if (item.status === 'cancelled' && !item.id.includes('_')) {
           droppedSeries.push(item.id);
         }
       }
@@ -260,7 +269,7 @@ export class CalendarSyncService {
       }
       for (const series of droppedSeries) {
         stale.push(
-          sql`${roomLinkInstances.googleEventId} like ${`${series}\\_%`}`,
+          sql`${roomLinkInstances.googleEventId} like ${`${series.replace(/[\\%_]/g, '\\$&')}\\_%`}`,
         );
       }
       if (fullFrom) {
@@ -288,6 +297,20 @@ export class CalendarSyncService {
         .set({ syncToken: nextSyncToken, syncedAt: now })
         .where(eq(googleCalendarGrants.userId, organizerId));
     });
+  }
+
+  /** Somebody no longer managing links: their runs still to come are cancelled. */
+  async forgetOrganizer(organizerId: string, now: Date): Promise<void> {
+    await this.db
+      .update(roomLinkInstances)
+      .set({ cancelledAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(roomLinkInstances.organizerId, organizerId),
+          isNull(roomLinkInstances.cancelledAt),
+          gt(roomLinkInstances.endsAt, now),
+        ),
+      );
   }
 
   private async liveLinks(

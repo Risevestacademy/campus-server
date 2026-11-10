@@ -12,6 +12,7 @@ export const SYNC_JOB_MS = 5 * 60_000;
 export const BACKSTOP_MS = 60 * 60_000;
 export const REVOCATION_JOB_MS = 10 * 60_000;
 const GRANTS_PER_RUN = 100;
+const PARALLEL_GRANTS = 5;
 
 /**
  * Watches the calendars of people who manage room links: a push channel
@@ -49,16 +50,21 @@ export class CalendarWatchService implements OnModuleInit {
     if (!this.config.FF_GOOGLE_CALENDAR_ENABLED) {
       return;
     }
-    for (const { userId, syncedAt } of await this.grants.inUse(
-      GRANTS_PER_RUN,
-    )) {
-      const due =
-        !syncedAt || now.getTime() - syncedAt.getTime() >= BACKSTOP_MS;
-      try {
-        await this.refresh(userId, now, due);
-      } catch (err) {
-        this.logger.error({ err, userId }, 'calendar watch failed');
-      }
+    const grants = await this.grants.watchable(now, GRANTS_PER_RUN);
+    for (let i = 0; i < grants.length; i += PARALLEL_GRANTS) {
+      await Promise.all(
+        grants
+          .slice(i, i + PARALLEL_GRANTS)
+          .map(({ userId, syncedAt }) =>
+            this.refresh(
+              userId,
+              now,
+              !syncedAt || now.getTime() - syncedAt.getTime() >= BACKSTOP_MS,
+            ).catch((err: unknown) =>
+              this.logger.error({ err, userId }, 'calendar watch failed'),
+            ),
+          ),
+      );
     }
   }
 
@@ -80,6 +86,7 @@ export class CalendarWatchService implements OnModuleInit {
     }
     if (!(await this.sync.managesRoomLinks(userId, now))) {
       await this.channels.stopAll(grant);
+      await this.sync.forgetOrganizer(userId, now);
       return;
     }
     await this.channels.ensure(grant, now);

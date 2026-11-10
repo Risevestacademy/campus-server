@@ -3,6 +3,7 @@ import {
   and,
   asc,
   eq,
+  exists,
   inArray,
   isNotNull,
   isNull,
@@ -18,7 +19,7 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { timestamptz } from '../../infra/database/timestamptz.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
-import { cohortMembers } from '../cohorts/schema.js';
+import { CohortRole, cohortMembers } from '../cohorts/schema.js';
 import {
   SystemRole,
   UserStatus,
@@ -26,7 +27,7 @@ import {
   users,
 } from '../users/schema.js';
 import { calendarTokenKey, requireCalendar } from './calendar.settings.js';
-import { googleCalendarGrants } from './schema.js';
+import { googleCalendarChannels, googleCalendarGrants } from './schema.js';
 import { openToken, sealToken } from './token-cipher.js';
 
 export interface CalendarGrant {
@@ -43,6 +44,7 @@ export interface PendingRevocation {
 }
 
 const ADMIN_ROLES = Object.values(SystemRole).filter(hasAdminPowers);
+const LINK_MANAGER_ROLES = [CohortRole.Professor, CohortRole.Mentor];
 
 const FIRST_RETRY_MS = 10 * 60 * 1000;
 const LAST_RETRY_MS = 24 * 60 * 60 * 1000;
@@ -107,17 +109,49 @@ export class CalendarGrantsService {
       );
   }
 
-  /** Grants in use, those synced longest ago first. */
-  async inUse(
+  /**
+   * Grants to watch or stop watching, synced longest ago first: those of
+   * people who manage room links, and any still holding a channel.
+   */
+  async watchable(
+    now: Date,
     limit: number,
   ): Promise<{ userId: string; syncedAt: Date | null }[]> {
+    const manager = this.db
+      .select({ one: sql`1` })
+      .from(cohortMembers)
+      .where(
+        and(
+          eq(cohortMembers.userId, googleCalendarGrants.userId),
+          inArray(cohortMembers.role, LINK_MANAGER_ROLES),
+          isLiveMembership(now),
+        ),
+      );
+    const admin = this.db
+      .select({ one: sql`1` })
+      .from(users)
+      .where(
+        and(
+          eq(users.id, googleCalendarGrants.userId),
+          inArray(users.systemRole, ADMIN_ROLES),
+        ),
+      );
+    const watched = this.db
+      .select({ one: sql`1` })
+      .from(googleCalendarChannels)
+      .where(eq(googleCalendarChannels.userId, googleCalendarGrants.userId));
     return this.db
       .select({
         userId: googleCalendarGrants.userId,
         syncedAt: googleCalendarGrants.syncedAt,
       })
       .from(googleCalendarGrants)
-      .where(isNull(googleCalendarGrants.revokeRequestedAt))
+      .where(
+        and(
+          isNull(googleCalendarGrants.revokeRequestedAt),
+          or(exists(manager), exists(admin), exists(watched)),
+        ),
+      )
       .orderBy(sql`${googleCalendarGrants.syncedAt} asc nulls first`)
       .limit(limit);
   }

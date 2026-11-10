@@ -6,7 +6,7 @@ import {
 } from 'node:crypto';
 
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, gt, ne } from 'drizzle-orm';
+import { and, eq, gt, lt } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
@@ -93,25 +93,33 @@ export class CalendarChannelsService {
     const expiresAt = answer.expiration
       ? new Date(Number(answer.expiration))
       : new Date(now.getTime() + CHANNEL_TTL_MS);
-    await this.db.insert(googleCalendarChannels).values({
-      id,
-      userId: grant.userId,
-      resourceId: answer.resourceId,
-      tokenHash: hash(token),
-      expiresAt,
-    });
-    await this.stopAll(grant, id);
+    const [opened] = await this.db
+      .insert(googleCalendarChannels)
+      .values({
+        id,
+        userId: grant.userId,
+        resourceId: answer.resourceId,
+        tokenHash: hash(token),
+        expiresAt,
+      })
+      .returning({ createdAt: googleCalendarChannels.createdAt });
+    await this.stopAll(grant, opened.createdAt);
   }
 
-  /** Best effort at Google; the rows go regardless. */
-  async stopAll(grant: CalendarGrant, except?: string): Promise<void> {
+  /**
+   * Best effort at Google; the rows go regardless. With `openedBefore`, only
+   * older channels, so two renewals at once leave the newer one standing.
+   */
+  async stopAll(grant: CalendarGrant, openedBefore?: Date): Promise<void> {
     const channels = await this.db
       .select()
       .from(googleCalendarChannels)
       .where(
         and(
           eq(googleCalendarChannels.userId, grant.userId),
-          except ? ne(googleCalendarChannels.id, except) : undefined,
+          openedBefore
+            ? lt(googleCalendarChannels.createdAt, openedBefore)
+            : undefined,
         ),
       );
     for (const channel of channels) {

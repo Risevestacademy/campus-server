@@ -240,7 +240,7 @@ describe('a full read', () => {
   it('leaves out a revoked link', async () => {
     await db
       .update(roomLinks)
-      .set({ revokedAt: NOW })
+      .set({ revokedAt: new Date() })
       .where(eq(roomLinks.id, linkId));
     google(answer(200, { items: [event()], nextSyncToken: 's' }));
 
@@ -306,6 +306,52 @@ describe('a full read', () => {
   });
 });
 
+describe('one read', () => {
+  it('takes the last copy of an event it was handed twice', async () => {
+    google(
+      answer(200, { items: [event()], nextPageToken: 'page-2' }),
+      answer(200, {
+        items: [
+          event({
+            start: { dateTime: '2026-11-10T12:00:00Z' },
+            end: { dateTime: '2026-11-10T13:00:00Z' },
+          }),
+        ],
+        nextSyncToken: 'sync-1',
+      }),
+    );
+
+    await sync.sync(mentorId, NOW);
+
+    expect(await instances()).toEqual([
+      expect.objectContaining({ startsAt: new Date('2026-11-10T12:00:00Z') }),
+    ]);
+  });
+});
+
+describe('forgetOrganizer', () => {
+  it('cancels the runs still to come, and leaves the past alone', async () => {
+    google(
+      answer(200, {
+        items: [
+          event({
+            id: 'standup_20261108T100000Z',
+            start: { dateTime: '2026-11-08T10:00:00Z' },
+            end: { dateTime: '2026-11-08T11:00:00Z' },
+          }),
+          event(),
+        ],
+        nextSyncToken: 's',
+      }),
+    );
+    await sync.sync(mentorId, NOW);
+
+    await sync.forgetOrganizer(mentorId, NOW);
+
+    expect((await instances()).map((i) => i.cancelledAt)).toEqual([null, NOW]);
+  });
+});
+
 describe('an incremental read', () => {
   beforeEach(async () => {
     google(answer(200, { items: [event()], nextSyncToken: 'sync-1' }));
@@ -368,6 +414,30 @@ describe('an incremental read', () => {
     await sync.sync(mentorId, NOW);
 
     expect((await instances())[0].cancelledAt).toEqual(NOW);
+  });
+
+  it('cancels only the one instance when a single run is cancelled', async () => {
+    google(
+      answer(200, {
+        items: [
+          event({
+            id: 'standupX20261117T100000Z',
+            start: { dateTime: '2026-11-17T10:00:00Z' },
+            end: { dateTime: '2026-11-17T11:00:00Z' },
+          }),
+        ],
+        nextSyncToken: 'sync-2',
+      }),
+      answer(200, {
+        items: [{ id: 'standup_20261110T100000Z', status: 'cancelled' }],
+        nextSyncToken: 'sync-3',
+      }),
+    );
+    await sync.sync(mentorId, NOW);
+
+    await sync.sync(mentorId, NOW);
+
+    expect((await instances()).map((i) => i.cancelledAt)).toEqual([NOW, null]);
   });
 
   it('brings back an instance restored in Google', async () => {

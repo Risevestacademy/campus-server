@@ -12,9 +12,13 @@ const NOW = new Date('2026-11-09T08:00:00Z');
 const grant = { userId: 'user-1', refreshToken: 'r', sealed: 's' };
 
 const scheduler = { register: vi.fn() };
-const grants = { inUse: vi.fn(), find: vi.fn() };
+const grants = { watchable: vi.fn(), find: vi.fn() };
 const channels = { ensure: vi.fn(), stopAll: vi.fn() };
-const sync = { managesRoomLinks: vi.fn(), sync: vi.fn() };
+const sync = {
+  managesRoomLinks: vi.fn(),
+  sync: vi.fn(),
+  forgetOrganizer: vi.fn(),
+};
 const revocations = { sweep: vi.fn() };
 const logger = { error: vi.fn(), setContext: vi.fn() };
 
@@ -46,7 +50,7 @@ it('registers the sync and the revocation sweep with the scheduler', () => {
 
 describe('watchAll', () => {
   it('keeps every channel open, and syncs only calendars due the backstop', async () => {
-    grants.inUse.mockResolvedValue([
+    grants.watchable.mockResolvedValue([
       { userId: 'never', syncedAt: null },
       { userId: 'stale', syncedAt: new Date(NOW.getTime() - BACKSTOP_MS) },
       { userId: 'fresh', syncedAt: new Date(NOW.getTime() - 60_000) },
@@ -55,29 +59,37 @@ describe('watchAll', () => {
     await watch().watchAll(NOW);
 
     expect(channels.ensure).toHaveBeenCalledTimes(3);
-    expect(sync.sync.mock.calls.map(([userId]) => userId)).toEqual([
+    expect(sync.sync.mock.calls.map(([userId]) => userId).sort()).toEqual([
       'never',
       'stale',
     ]);
   });
 
-  it('stops watching somebody who no longer manages room links', async () => {
-    grants.inUse.mockResolvedValue([{ userId: 'user-1', syncedAt: null }]);
+  it('stops watching somebody who no longer manages room links, and cancels their runs to come', async () => {
+    grants.watchable.mockResolvedValue([{ userId: 'user-1', syncedAt: null }]);
     sync.managesRoomLinks.mockResolvedValue(false);
 
     await watch().watchAll(NOW);
 
     expect(channels.stopAll).toHaveBeenCalledWith(grant);
+    expect(sync.forgetOrganizer).toHaveBeenCalledWith('user-1', NOW);
     expect(channels.ensure).not.toHaveBeenCalled();
     expect(sync.sync).not.toHaveBeenCalled();
   });
 
   it('carries on past a calendar that fails', async () => {
-    grants.inUse.mockResolvedValue([
+    grants.watchable.mockResolvedValue([
       { userId: 'a', syncedAt: null },
       { userId: 'b', syncedAt: null },
     ]);
-    channels.ensure.mockRejectedValueOnce(new Error('google down'));
+    grants.find.mockImplementation((userId: string) =>
+      Promise.resolve({ ...grant, userId }),
+    );
+    channels.ensure.mockImplementation((g: { userId: string }) =>
+      g.userId === 'a'
+        ? Promise.reject(new Error('google down'))
+        : Promise.resolve(),
+    );
 
     await watch().watchAll(NOW);
 
@@ -88,7 +100,7 @@ describe('watchAll', () => {
   it('does nothing while the calendar is switched off', async () => {
     await watch(false).watchAll(NOW);
 
-    expect(grants.inUse).not.toHaveBeenCalled();
+    expect(grants.watchable).not.toHaveBeenCalled();
   });
 });
 
