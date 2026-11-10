@@ -66,6 +66,7 @@ export interface OpenDeps {
   calls: Pick<Calls, 'join'>;
   broadcastRoom: Pick<BroadcastRoom, 'join'>;
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
+  isFull(connection: Connection, spaceKey: string): boolean;
   drop(connection: Connection, remember?: boolean): void;
   /** Keeps a displaced ifFree socket open as a watcher. */
   demote(connection: Connection): void;
@@ -99,6 +100,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     calls,
     broadcastRoom,
     mayStepInto,
+    isFull,
     drop,
     demote,
     listen,
@@ -354,8 +356,10 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     // can never arrive for a player who is not standing anywhere yet. Another
     // socket for the same account and cohort — loaded while this one waited
     // — has already placed the avatar, and this one takes it over.
-    // A saved place inside a space they may no longer enter is not where
-    // they come back to: they start at the spawn, as on a first visit. Only
+    // A saved place inside a space they may no longer enter, or one that has
+    // filled up meanwhile, is not where they come back to: they start at the
+    // spawn, as on a first visit. Their own place does not count against the
+    // limit, so a quick reconnect keeps it unless the space has filled. Only
     // when their row and the spaces were both read: a read that failed says
     // nothing about where they may stand, and the place would be lost for
     // good once the spawn was saved over it.
@@ -365,7 +369,8 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       savedIn &&
       membershipKnown &&
       doors.hasBeenRead() &&
-      !mayStepInto(connection, savedIn, new Date())
+      (!mayStepInto(connection, savedIn, new Date()) ||
+        isFull(connection, savedIn))
     ) {
       app.log.info(
         {
@@ -373,6 +378,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
           cohortId: connection.cohortId,
           spaceKey: savedIn,
           locked: locks.isLocked(connection.cohortId, savedIn),
+          full: isFull(connection, savedIn),
         },
         'saved position is in a space closed to them now, starting at the spawn',
       );

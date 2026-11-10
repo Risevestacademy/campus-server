@@ -158,6 +158,24 @@ export function registerGateway(
     );
   }
 
+  /**
+   * Whether a space already holds as many people as it may, not counting
+   * this socket's own person: somebody coming back to a place they never
+   * really left is not one more. The default space has no limit, as it is
+   * the way to everywhere else. Everyone is held to it, staff included.
+   * The count is this world server's, which is all of it while world runs
+   * one replica.
+   */
+  function isFull(connection: Connection, spaceKey: string): boolean {
+    if (spaceKey === DEFAULT_SPACE_KEY) return false;
+    const capacity = doors.get(spaceKey)?.capacity;
+    if (capacity === null || capacity === undefined) return false;
+    let others = connections.occupancy(connection.cohortId, spaceKey);
+    const own = connections.holderOf(connection);
+    if (own && own.spaceKey === spaceKey) others -= 1;
+    return others >= capacity;
+  }
+
   const requests = createEntryRequests(ctx, {
     doors,
     locks,
@@ -177,6 +195,7 @@ export function registerGateway(
     requests,
     media,
     mayStepInto,
+    isFull,
     movedOut(target, player) {
       noteMoved(target);
       arrivedAt(target, player);
@@ -188,6 +207,7 @@ export function registerGateway(
     readRoomLinkPasses: doors.readRoomLinkPasses,
     requests,
     mayStepInto,
+    isFull,
     noteMoved,
     arrivedAt,
   });
@@ -590,6 +610,7 @@ export function registerGateway(
     calls,
     broadcastRoom,
     mayStepInto,
+    isFull,
     drop,
     demote,
     listen,

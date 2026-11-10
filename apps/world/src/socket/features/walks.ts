@@ -60,6 +60,8 @@ export interface WalkDeps {
   readRoomLinkPasses(): Promise<void>;
   requests: Pick<EntryRequestsFeature, 'hasPass' | 'passFor' | 'mayAsk'>;
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
+  /** Whether a space is at capacity, not counting this person. */
+  isFull(connection: Connection, spaceKey: string): boolean;
   noteMoved(connection: Connection): void;
   arrivedAt(connection: Connection, tile: Tile): void;
 }
@@ -73,6 +75,7 @@ export function createWalks(
     readRoomLinkPasses,
     requests,
     mayStepInto,
+    isFull,
     noteMoved,
     arrivedAt,
   }: WalkDeps,
@@ -82,28 +85,42 @@ export function createWalks(
   const walkLimit =
     env.WORLD_WALK_MAX_STEPS ?? map.grid.width * map.grid.height;
 
-  function admitsStep(connection: Connection, now: number) {
-    // Asked only on a step into another space: somebody already inside
-    // stays until they leave, whatever has changed since they came in.
-    return (target: Tile) => {
-      const into = spaceAt(map.spaces, target);
-      return (
-        into === connection.spaceKey ||
-        mayStepInto(connection, into, new Date(now)) ||
-        requests.hasPass(connection, into)
-      );
-    };
+  /**
+   * Why a space is closed to this person, or null when they may step in.
+   * `refused` comes first: a space they may not enter at all is not "full"
+   * to them. Asked only on a step into another space: somebody already
+   * inside stays until they leave, whatever has changed since they came in,
+   * a lowered capacity included.
+   */
+  function whyClosed(
+    connection: Connection,
+    spaceKey: string,
+    now: number,
+  ): 'refused' | 'full' | null {
+    if (spaceKey === connection.spaceKey) return null;
+    if (
+      !mayStepInto(connection, spaceKey, new Date(now)) &&
+      !requests.hasPass(connection, spaceKey)
+    ) {
+      return 'refused';
+    }
+    if (isFull(connection, spaceKey)) return 'full';
+    return null;
   }
 
-  /** admitsStep, asked once per space: a search asks of every tile. */
+  function admitsStep(connection: Connection, now: number) {
+    return (target: Tile): true | 'refused' | 'full' =>
+      whyClosed(connection, spaceAt(map.spaces, target), now) ?? true;
+  }
+
+  /** whyClosed, asked once per space: a search asks of every tile. */
   function crossingFor(connection: Connection, now: number) {
-    const admits = admitsStep(connection, now);
     const answers = new Map<string, boolean>();
     return (tile: Tile) => {
       const into = spaceAt(map.spaces, tile);
       let answer = answers.get(into);
       if (answer === undefined) {
-        answer = admits(tile);
+        answer = whyClosed(connection, into, now) === null;
         answers.set(into, answer);
       }
       return answer;
@@ -215,8 +232,11 @@ export function createWalks(
       reason,
       player,
       spaceKey,
+      // Asking gets past a list or a lock, never a full room.
       mayAsk:
-        spaceKey !== null && requests.mayAsk(connection, spaceKey, new Date()),
+        reason !== 'full' &&
+        spaceKey !== null &&
+        requests.mayAsk(connection, spaceKey, new Date()),
     });
   }
 
@@ -431,13 +451,17 @@ export function createWalks(
       });
       arrivedAt(connection, moved.player);
     } else if (moved.outcome !== 'too_fast') {
-      // A door locked, or a list changed, since the path was found.
+      // A door locked, a list changed, or a space filled since the path was
+      // found.
       walk.path = [];
       walk.failed += 1;
       if (walk.failed >= 2) {
         const into = spaceAt(map.spaces, step(me, direction));
-        if (moved.outcome === 'refused') refuseWalk(connection, walk, into);
-        else endWalk(connection, 'no_way');
+        if (moved.outcome === 'refused' || moved.outcome === 'full') {
+          refuseWalk(connection, walk, into);
+        } else {
+          endWalk(connection, 'no_way');
+        }
         return;
       }
     }
@@ -448,11 +472,19 @@ export function createWalks(
   }
 
   /**
+   * Ends the walk beside `into`, saying why it is closed: the reason is
+   * worked out for that space, which may not be the target's.
+   *
    * A pass made by entering through a room link reaches world by a read that
    * may not have finished when the walk began, so a walk about to be refused
-   * reads the passes once more first, and goes on if the door now opens.
+   * reads the passes once more first, and goes on if the door now opens. A
+   * full space is not waited on: no pass makes room in it.
    */
   function refuseWalk(connection: Connection, walk: Walk, into: string): void {
+    if (whyClosed(connection, into, Date.now()) === 'full') {
+      endWalk(connection, 'full', into);
+      return;
+    }
     if (walk.rechecked) {
       endWalk(connection, 'refused', into);
       return;

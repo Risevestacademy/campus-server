@@ -117,7 +117,7 @@ export const accounts = {
     );
   },
   /** The spaces on the map as campus-api has them. See openLibrary. */
-  spaces: new Map<string, SpaceFacts>(),
+  spaces: new Map<string, SpaceFacts & { capacity?: number | null }>(),
   failSpaces: false,
   spacesOn: async () => {
     if (accounts.failSpaces) throw new Error('postgres is down');
@@ -402,9 +402,9 @@ export function restoreMap(): void {
 
 /**
  * The library as a normal meeting room, which anybody walks into: how every
- * test finds it unless it says otherwise.
+ * test finds it unless it says otherwise. No capacity means no limit.
  */
-export function openLibrary(): void {
+export function openLibrary(capacity: number | null = null): void {
   accounts.spaces.clear();
   accounts.spaces.set('library', {
     name: 'Library',
@@ -413,6 +413,7 @@ export function openLibrary(): void {
     retiredAt: null,
     locked: false,
     grants: [],
+    capacity,
   });
 }
 

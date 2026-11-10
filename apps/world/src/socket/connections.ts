@@ -203,6 +203,18 @@ export class Connections {
   get users(): number {
     return this.held.accounts;
   }
+
+  /**
+   * How many avatars in one cohort stand in one space. Watchers hold no
+   * place on the map, so they never count.
+   */
+  occupancy(cohortId: string, spaceKey: string): number {
+    let count = 0;
+    for (const connection of this.held.inCohort(cohortId)) {
+      if (connection.spaceKey === spaceKey) count += 1;
+    }
+    return count;
+  }
 }
 
 export function personOf(connection: Connection): PersonFacts {

@@ -156,6 +156,7 @@ describe('movement', () => {
         y: number;
         width: number;
         height: number;
+        capacity?: number;
       }[],
       {
         walls = [],
@@ -179,9 +180,10 @@ describe('movement', () => {
           ...accounts,
           spacesOn: async () =>
             new Map<string, SpaceFacts>(
-              spaces.map(({ key, access }) => [
+              spaces.map(({ key, access, capacity = null }) => [
                 key,
                 {
+                  capacity,
                   kind:
                     access === SPACE_ACCESS.Designated
                       ? 'classroom'
@@ -263,17 +265,37 @@ describe('movement', () => {
      * A booth at (3, 2) and (3, 3) inside a hall (x 2 to 4) designated for
      * nobody.
      */
-    const hallWithBooth = (boothAccess: string) =>
+    const hallWithBooth = (
+      boothAccess: string,
+      {
+        hallAccess = SPACE_ACCESS.Designated,
+        hallCapacity,
+        boothCapacity,
+      }: {
+        hallAccess?: string;
+        hallCapacity?: number;
+        boothCapacity?: number;
+      } = {},
+    ) =>
       ownWorld([
         {
           key: 'hall',
-          access: SPACE_ACCESS.Designated,
+          access: hallAccess,
           x: 2,
           y: 0,
           width: 3,
           height: 5,
+          capacity: hallCapacity,
         },
-        { key: 'booth', access: boothAccess, x: 3, y: 2, width: 1, height: 2 },
+        {
+          key: 'booth',
+          access: boothAccess,
+          x: 3,
+          y: 2,
+          width: 1,
+          height: 2,
+          capacity: boothCapacity,
+        },
       ]);
 
     it('stops beside a closed space in the way, though theirs is open', async () => {
@@ -301,6 +323,55 @@ describe('movement', () => {
       try {
         const admin = person();
         accounts.admins.add(admin);
+        await own.open(admin, { x: 3, y: 2 });
+        const walker = await own.open(person());
+
+        goTo(walker, admin);
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'refused',
+          spaceKey: 'hall',
+          player: { x: 1, y: 0 },
+        });
+      } finally {
+        await own.close();
+      }
+    });
+
+    it('says full for a full space in the way, though theirs is closed', async () => {
+      const own = await hallWithBooth(SPACE_ACCESS.Designated, {
+        hallAccess: SPACE_ACCESS.Normal,
+        hallCapacity: 1,
+      });
+      try {
+        const admin = person();
+        accounts.admins.add(admin);
+        await own.open(admin, { x: 3, y: 2 });
+        // Fills the hall: the admin stands in the booth, not the hall.
+        await own.open(person(), { x: 4, y: 4 });
+        const walker = await own.open(person());
+
+        goTo(walker, admin);
+
+        await expect(walkEnded(walker)).resolves.toMatchObject({
+          reason: 'full',
+          spaceKey: 'hall',
+          mayAsk: false,
+          player: { x: 1, y: 0 },
+        });
+      } finally {
+        await own.close();
+      }
+    });
+
+    it('says refused for a closed space in the way, though theirs is full', async () => {
+      const own = await hallWithBooth(SPACE_ACCESS.Normal, {
+        boothCapacity: 1,
+      });
+      try {
+        const admin = person();
+        accounts.admins.add(admin);
+        // The admin fills the booth.
         await own.open(admin, { x: 3, y: 2 });
         const walker = await own.open(person());
 
