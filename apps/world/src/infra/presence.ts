@@ -122,6 +122,12 @@ export function cohortPresenceKey(cohortId: string): string {
   return `world:presence:cohort:${cohortId}`;
 }
 
+/**
+ * Every cohort somebody has been present in. Never pruned: a cohort whose
+ * index is gone reads as nobody, and cohorts are few.
+ */
+export const PRESENT_COHORTS_KEY = 'world:presence:cohorts';
+
 export const DISPLACED_CHANNEL = 'world:presence:displaced';
 
 /**
@@ -251,7 +257,9 @@ export function createPresenceStore(
  *
  * The cohort index is a sorted set scored by when each entry lapses. It is
  * only an index: a reader confirms each member against the account's entry
- * for that cohort, so a member whose entry lapsed reads as nothing.
+ * for that cohort, so a member whose entry lapsed reads as nothing. The
+ * cohort goes in PRESENT_COHORTS_KEY, so a count across the campus can find
+ * every index without scanning for them.
  */
 const CLAIM = `
 local held = redis.call('HMGET', KEYS[1], 'connectionId', 'instanceId', 'since')
@@ -272,6 +280,7 @@ redis.call('PEXPIRE', KEYS[1], ttl)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', tonumber(lapses) - tonumber(ttl))
 redis.call('ZADD', KEYS[2], lapses, userId)
 redis.call('PEXPIRE', KEYS[2], ttl)
+redis.call('SADD', KEYS[3], cohortId)
 if holder and holder ~= connectionId then
   return {'took', holder, held[2]}
 end
@@ -334,7 +343,7 @@ export class RedisPresenceStore implements PresenceStore {
   ) {
     this.instanceId = instanceId;
     this.ttlMs = ttlSeconds * 1000;
-    redis.defineCommand('claimPresence', { numberOfKeys: 2, lua: CLAIM });
+    redis.defineCommand('claimPresence', { numberOfKeys: 3, lua: CLAIM });
     redis.defineCommand('releasePresence', { numberOfKeys: 2, lua: RELEASE });
     redis.defineCommand('setPresenceStatus', {
       numberOfKeys: 1,
@@ -421,7 +430,9 @@ export class RedisPresenceStore implements PresenceStore {
 
   async onlineUserIds(cohortId?: string): Promise<Set<string>> {
     const cohortIds =
-      cohortId === undefined ? await this.cohortIds() : [cohortId];
+      cohortId === undefined
+        ? await this.redis.smembers(PRESENT_COHORTS_KEY)
+        : [cohortId];
     const indexes = this.redis.pipeline();
     for (const id of cohortIds) {
       indexes.zrangebyscore(cohortPresenceKey(id), `(${Date.now()}`, '+inf');
@@ -448,25 +459,6 @@ export class RedisPresenceStore implements PresenceStore {
     return userIds;
   }
 
-  /** Every cohort with an index of who is in it. Scanned, as only an admin's count asks. */
-  private async cohortIds(): Promise<string[]> {
-    const prefix = cohortPresenceKey('');
-    const ids = new Set<string>();
-    let cursor = '0';
-    do {
-      const [next, found] = await this.redis.scan(
-        cursor,
-        'MATCH',
-        `${prefix}*`,
-        'COUNT',
-        1000,
-      );
-      cursor = next;
-      for (const key of found) ids.add(key.slice(prefix.length));
-    } while (cursor !== '0');
-    return [...ids];
-  }
-
   onDisplaced(listener: (displaced: Displacement) => void): void {
     this.listeners.push(listener);
   }
@@ -487,6 +479,7 @@ export class RedisPresenceStore implements PresenceStore {
     const reply = await this.scripts.claimPresence(
       presenceKey(presence),
       cohortPresenceKey(cohortId),
+      PRESENT_COHORTS_KEY,
       userId,
       connectionId,
       this.instanceId,

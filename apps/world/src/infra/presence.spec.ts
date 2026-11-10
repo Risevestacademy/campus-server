@@ -7,6 +7,7 @@ import {
   MemoryPresenceStore,
   RedisPresenceStore,
   DISPLACED_CHANNEL,
+  PRESENT_COHORTS_KEY,
   cohortPresenceKey,
   createPresenceStore,
   presenceKey,
@@ -560,6 +561,45 @@ describe.skipIf(!url)('RedisPresenceStore', () => {
     await redis.del(presenceKey({ userId: user, cohortId: cohort }));
 
     await expect(store.onlineUserIds(cohort)).resolves.toEqual(new Set());
+    expect(await store.onlineUserIds()).not.toContain(user);
+  });
+
+  it('finds every cohort through the set an entry adds it to, not by scanning keys', async () => {
+    const { user, cohort } = fresh();
+    const stray = fresh();
+    const { store, redis } = instance();
+    await store.enter(presenceOf(user, { cohortId: cohort }));
+    // An index and entry no claim wrote, so its cohort is not in the set.
+    await redis.zadd(
+      cohortPresenceKey(stray.cohort),
+      Date.now() + 60_000,
+      stray.user,
+    );
+    await redis.hset(
+      presenceKey({ userId: stray.user, cohortId: stray.cohort }),
+      'connectionId',
+      randomUUID(),
+    );
+
+    await expect(redis.sismember(PRESENT_COHORTS_KEY, cohort)).resolves.toBe(1);
+    const everybody = await store.onlineUserIds();
+    expect(everybody).toContain(user);
+    expect(everybody).not.toContain(stray.user);
+    await redis.del(
+      cohortPresenceKey(stray.cohort),
+      presenceKey({ userId: stray.user, cohortId: stray.cohort }),
+    );
+  });
+
+  it('keeps a cohort in the set after everybody leaves, and counts nobody there', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+
+    await store.leave([ada]);
+
+    await expect(redis.sismember(PRESENT_COHORTS_KEY, cohort)).resolves.toBe(1);
     expect(await store.onlineUserIds()).not.toContain(user);
   });
 });

@@ -1,7 +1,8 @@
 /**
- * How many connection checks one account may start per minute, counted per
- * account rather than per address: everybody behind one campus network
- * shares an address, and the check is only open to the signed in.
+ * How many requests one account may make to one route per minute, counted
+ * per account rather than per address: everybody behind one campus network
+ * shares an address, and the routes using it are only open to the signed in.
+ * The connection check and the online count each keep one.
  */
 export class CheckBudget {
   private readonly windows = new Map<
