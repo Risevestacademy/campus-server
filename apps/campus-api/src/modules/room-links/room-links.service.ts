@@ -2,9 +2,11 @@ import { roomLinkOpen } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
 import {
   and,
+  asc,
   desc,
   eq,
   exists,
+  gt,
   inArray,
   isNotNull,
   isNull,
@@ -19,7 +21,6 @@ import {
   type DbExecutor,
 } from '../../infra/database/database.constants.js';
 import { isUniqueViolation } from '../../infra/database/unique-violation.js';
-import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { appUrl } from '../../shared/http/app-url.js';
 import { writeAuditEntry, type AuditContext } from '../audit/audit-log.js';
@@ -44,22 +45,14 @@ import {
   RoomLinkForbiddenException,
   RoomLinkNotFoundException,
 } from './room-links.exceptions.js';
-import { roomLinkPasses, roomLinks } from './schema.js';
+import { roomLinkInstances, roomLinkPasses, roomLinks } from './schema.js';
 
 type Standing = 'admin' | 'staff' | 'member';
 
-/** When a link's event runs. */
-export interface RoomLinkWindow {
+/** One run of a link's event. */
+interface Run {
   startsAt: Date;
   endsAt: Date;
-}
-
-/** A link somebody may open, as `forEntry` found it, for `enter`. */
-export interface RoomLinkEntry {
-  id: string;
-  createdBy: string;
-  standing: Standing;
-  link: LinkRow;
 }
 
 const STAFF_ROLES: readonly CohortRole[] = [
@@ -78,18 +71,19 @@ const liveSpace: SQL = and(
 ) as SQL;
 
 const linkColumns = {
+  id: roomLinks.id,
   code: roomLinks.code,
   title: roomLinks.title,
   cohortId: roomLinks.cohortId,
   spaceId: roomLinks.spaceId,
   spaceKey: spaces.key,
   spaceName: spaces.name,
-  startsAt: roomLinks.startsAt,
-  endsAt: roomLinks.endsAt,
   createdAt: roomLinks.createdAt,
 };
 
-type LinkRow = Omit<RoomLinkDto, 'url'>;
+type LinkRow = Omit<RoomLinkDto, 'url' | 'startsAt' | 'endsAt'> & {
+  id: string;
+};
 
 const targetColumns = {
   code: roomLinks.code,
@@ -103,7 +97,8 @@ const targetColumns = {
 /**
  * Links to a space in one cohort's campus, one per event. Admins and the
  * cohort's professors and mentors make, list and revoke them; anybody with a
- * live place in the cohort, and any admin, opens one.
+ * live place in the cohort, and any admin, opens one. When the event runs
+ * comes from its runs synced from the organiser's calendar.
  */
 @Injectable()
 export class RoomLinksService {
@@ -117,11 +112,9 @@ export class RoomLinksService {
     cohortId: string,
     spaceId: string,
     title: string,
-    window: RoomLinkWindow | null,
     audit: AuditContext,
     now: Date = new Date(),
   ): Promise<RoomLinkDto> {
-    requireOrdered(window);
     await requireStaff(this.db, user, cohortId, now);
     await requireLiveSpace(this.db, spaceId);
 
@@ -137,8 +130,6 @@ export class RoomLinksService {
               title,
               createdBy: user.id,
               createdAt: now,
-              startsAt: window?.startsAt ?? null,
-              endsAt: window?.endsAt ?? null,
             })
             .returning({ id: roomLinks.id, code: roomLinks.code });
           await writeAuditEntry(tx, {
@@ -146,14 +137,9 @@ export class RoomLinksService {
             spaceId,
             action: AuditAction.RoomLinkCreated,
             subject: { type: AuditSubjectType.RoomLink, id: link.id },
-            details: {
-              cohortId,
-              code: link.code,
-              title,
-              ...windowDetails(window),
-            },
+            details: { cohortId, code: link.code, title },
           });
-          return this.toDto(await this.find(link.code, tx));
+          return this.toDto(await this.find(link.code, tx), null);
         });
       } catch (err) {
         if (
@@ -190,7 +176,12 @@ export class RoomLinksService {
         ),
       )
       .orderBy(desc(roomLinks.createdAt), desc(roomLinks.id));
-    return rows.map((row) => this.toDto(row));
+    const runs = await nextRuns(
+      this.db,
+      rows.map((row) => row.id),
+      now,
+    );
+    return rows.map((row) => this.toDto(row, runs.get(row.id) ?? null));
   }
 
   /**
@@ -203,121 +194,56 @@ export class RoomLinksService {
     code: string,
     now: Date = new Date(),
   ): Promise<RoomLinkDto> {
-    return this.toDto((await this.forEntry(user, code, now)).link);
+    const { link } = await this.forEntry(user, code, now);
+    const runs = await nextRuns(this.db, [link.id], now);
+    return this.toDto(link, runs.get(link.id) ?? null);
   }
 
-  /** A link the caller may open, by the rules of `open`, ready to enter. */
-  async forEntry(
+  /**
+   * Opens the link to walk into its space. Somebody entering while a run is
+   * open (from ten minutes before it starts until it ends) gets a pass, which
+   * world honours whenever a run of the link is open. Admins enter anywhere.
+   */
+  async enter(
     user: AuthenticatedUser,
     code: string,
     now: Date = new Date(),
-  ): Promise<RoomLinkEntry> {
+  ): Promise<RoomLinkEntryDto> {
+    const { link, standing: held } = await this.forEntry(user, code, now);
+    const run = (await nextRuns(this.db, [link.id], now)).get(link.id) ?? null;
+    const open = run !== null && roomLinkOpen(run, now);
+    if (open && held !== 'admin') {
+      await this.db.transaction(async (tx) => {
+        await tx
+          .insert(roomLinkPasses)
+          .values({ roomLinkId: link.id, userId: user.id, createdAt: now })
+          .onConflictDoNothing();
+        await tellWorld(tx);
+      });
+    }
+    return {
+      ...this.toDto(link, run),
+      admitted: open || held === 'admin',
+    };
+  }
+
+  private async forEntry(
+    user: AuthenticatedUser,
+    code: string,
+    now: Date,
+  ): Promise<{ link: LinkRow; standing: Standing }> {
     const link = await this.find(code);
-    const [row] = await this.db
-      .select({ id: roomLinks.id, createdBy: roomLinks.createdBy })
-      .from(roomLinks)
-      .where(eq(roomLinks.code, code));
     try {
-      const held = await standing(this.db, user, link.cohortId, now);
-      return { id: row.id, createdBy: row.createdBy, standing: held, link };
+      return {
+        link,
+        standing: await standing(this.db, user, link.cohortId, now),
+      };
     } catch (err) {
       if (err instanceof RoomLinkForbiddenException) {
         throw notFound(code);
       }
       throw err;
     }
-  }
-
-  /**
-   * Opens the link to walk into its space. `found` is the event as the
-   * maker's calendar has it now, when it runs now; it moves the window there.
-   * Anybody opening the link while the window is open gets a pass, which
-   * world honours until the window ends. Admins enter anywhere already.
-   */
-  async enter(
-    user: AuthenticatedUser,
-    entry: RoomLinkEntry,
-    found: RoomLinkWindow | null,
-    now: Date = new Date(),
-  ): Promise<RoomLinkEntryDto> {
-    const { link } = entry;
-    const moved =
-      found !== null &&
-      (link.startsAt?.getTime() !== found.startsAt.getTime() ||
-        link.endsAt?.getTime() !== found.endsAt.getTime());
-    const window = found ?? link;
-    const open = roomLinkOpen(window, now);
-    const pass = open && entry.standing !== 'admin';
-    if (moved || pass) {
-      await this.db.transaction(async (tx) => {
-        if (moved) {
-          await tx
-            .update(roomLinks)
-            .set({ startsAt: found.startsAt, endsAt: found.endsAt })
-            .where(eq(roomLinks.id, entry.id));
-        }
-        if (pass) {
-          await tx
-            .insert(roomLinkPasses)
-            .values({ roomLinkId: entry.id, userId: user.id, createdAt: now })
-            .onConflictDoNothing();
-        }
-        await tellWorld(tx);
-      });
-    }
-    return {
-      ...this.toDto({
-        ...link,
-        startsAt: window.startsAt,
-        endsAt: window.endsAt,
-      }),
-      admitted: open || entry.standing === 'admin',
-    };
-  }
-
-  /** Sets when the link's event runs, or with null, that it has no window. */
-  async setWindow(
-    user: AuthenticatedUser,
-    code: string,
-    window: RoomLinkWindow | null,
-    audit: AuditContext,
-    now: Date = new Date(),
-  ): Promise<RoomLinkDto> {
-    requireOrdered(window);
-    const entry = await this.forEntry(user, code, now);
-    if (entry.standing === 'member') {
-      throw new RoomLinkForbiddenException(
-        "Only staff and admins may change a room link's window",
-        { code },
-      );
-    }
-    return this.db.transaction(async (tx) => {
-      await tx
-        .update(roomLinks)
-        .set({
-          startsAt: window?.startsAt ?? null,
-          endsAt: window?.endsAt ?? null,
-        })
-        .where(eq(roomLinks.id, entry.id));
-      await writeAuditEntry(tx, {
-        ...audit,
-        spaceId: entry.link.spaceId,
-        action: AuditAction.RoomLinkWindowChanged,
-        subject: { type: AuditSubjectType.RoomLink, id: entry.id },
-        details: {
-          cohortId: entry.link.cohortId,
-          code,
-          before: windowDetails(
-            entry.link.startsAt && entry.link.endsAt
-              ? { startsAt: entry.link.startsAt, endsAt: entry.link.endsAt }
-              : null,
-          ),
-          after: windowDetails(window),
-        },
-      });
-      await tellWorld(tx);
-      return this.toDto(await this.find(code, tx));
-    });
   }
 
   /**
@@ -436,28 +362,41 @@ export class RoomLinksService {
     return link;
   }
 
-  private toDto(row: LinkRow): RoomLinkDto {
+  private toDto({ id: _id, ...row }: LinkRow, run: Run | null): RoomLinkDto {
     return {
       ...row,
+      startsAt: run?.startsAt ?? null,
+      endsAt: run?.endsAt ?? null,
       url: appUrl(this.config, `${ROOM_LINK_PATH}${row.code}`),
     };
   }
 }
 
-function requireOrdered(window: RoomLinkWindow | null): void {
-  if (window && window.endsAt.getTime() <= window.startsAt.getTime()) {
-    throw new InvalidArgumentException('A window must end after it starts', {
-      startsAt: window.startsAt.toISOString(),
-      endsAt: window.endsAt.toISOString(),
-    });
+/** Each link's run going on now, else its next, leaving out cancelled ones. */
+async function nextRuns(
+  db: DbExecutor,
+  linkIds: string[],
+  now: Date,
+): Promise<Map<string, Run>> {
+  if (linkIds.length === 0) {
+    return new Map();
   }
-}
-
-function windowDetails(window: RoomLinkWindow | null) {
-  return {
-    startsAt: window?.startsAt.toISOString() ?? null,
-    endsAt: window?.endsAt.toISOString() ?? null,
-  };
+  const rows = await db
+    .selectDistinctOn([roomLinkInstances.roomLinkId], {
+      roomLinkId: roomLinkInstances.roomLinkId,
+      startsAt: roomLinkInstances.startsAt,
+      endsAt: roomLinkInstances.endsAt,
+    })
+    .from(roomLinkInstances)
+    .where(
+      and(
+        inArray(roomLinkInstances.roomLinkId, linkIds),
+        isNull(roomLinkInstances.cancelledAt),
+        gt(roomLinkInstances.endsAt, now),
+      ),
+    )
+    .orderBy(roomLinkInstances.roomLinkId, asc(roomLinkInstances.startsAt));
+  return new Map(rows.map(({ roomLinkId, ...run }) => [roomLinkId, run]));
 }
 
 function notFound(code: string): RoomLinkNotFoundException {

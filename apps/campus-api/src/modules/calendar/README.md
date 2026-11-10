@@ -130,20 +130,6 @@ event, and every event when the lookup fails, carries `room: null`. The
 video-conference link is not looked at: Google only ever puts a Meet link
 there.
 
-### When a room link's event runs
-
-Entering through a room link (`POST /v1/room-links/{code}/enter`) reads the
-calendar of whoever made the link, if they have connected one: one request
-for their events running now or starting within ten minutes. The first of
-those they organised themselves that carries the link sets the link's window
-to its times, so a meeting moved in Google opens its room at the new time.
-Events somebody else organised are left out, so inviting the maker to an
-event cannot move a window. Nothing else is kept.
-
-The read is held to three seconds. No grant, the calendar switched off,
-Google failing or slow, or no such event: the link's stored window stands.
-A grant Google has withdrawn is deleted, as for any read.
-
 ## Sync
 
 The calendars of people who manage room links (admins, and live professors
@@ -171,8 +157,10 @@ Nothing else of the event is kept.
   meanwhile leaves word, and the holder reads again before letting go.
 - **Reconciling.** Google's feed only returns events that changed, so each
   `calendar-sync` run also cancels, across every instance, the runs still to
-  come whose link was revoked or whose organiser no longer manages its
-  cohort. Past runs are kept.
+  come whose link was revoked, whose organiser no longer manages its cohort,
+  or whose organiser's calendar is no longer synced (disconnected, access
+  ended, or withdrawn at Google), since a cancellation could no longer reach
+  them. Past runs are kept.
 - **Push is not required.** A channel that cannot be opened is logged, and
   the calendar is synced anyway.
 - **Connecting** opens the channel and syncs straight away. Somebody who

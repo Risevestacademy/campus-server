@@ -286,7 +286,7 @@ export interface WorldSpace extends SpaceFacts {
   hysteresisFactor: number;
 }
 
-/** Somebody who entered through a room link, and when the link's event runs. */
+/** Somebody who entered through a room link, and one run of its event still to end. */
 export interface RoomLinkPass {
   cohortId: string;
   spaceKey: string;
@@ -295,16 +295,22 @@ export interface RoomLinkPass {
   endsAt: Date;
 }
 
-/** $1 the map's key, $2 now. */
+/**
+ * $1 the map's key, $2 now. One row per pass and run that is open or opens
+ * within the hour; the doors read again every heartbeat, long before then.
+ */
 export const ROOM_LINK_PASSES_QUERY = `select room_links.cohort_id, spaces.key as space_key, room_link_passes.user_id,
-    room_links.starts_at, room_links.ends_at
+    room_link_instances.starts_at, room_link_instances.ends_at
   from room_link_passes
   join room_links on room_links.id = room_link_passes.room_link_id
+  join room_link_instances on room_link_instances.room_link_id = room_links.id
   join spaces on spaces.id = room_links.space_id
   join maps on maps.id = spaces.map_id
   where maps.key = $1
     and room_links.revoked_at is null
-    and room_links.ends_at > $2`;
+    and room_link_instances.cancelled_at is null
+    and room_link_instances.ends_at > $2
+    and room_link_instances.starts_at <= $2::timestamptz + interval '1 hour'`;
 
 /** A `spaces` row as `SPACES_QUERY` reads it, before world decides what it means. */
 export interface SpaceRow {

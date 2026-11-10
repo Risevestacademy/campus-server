@@ -17,7 +17,6 @@ import {
   maps,
   spaces,
 } from '../maps/schema.js';
-import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import { SystemRole, users } from '../users/schema.js';
 import { ROOM_LINK_CODE } from './room-link-code.js';
 import {
@@ -25,7 +24,7 @@ import {
   RoomLinkNotFoundException,
 } from './room-links.exceptions.js';
 import { RoomLinksService } from './room-links.service.js';
-import { roomLinkPasses, roomLinks } from './schema.js';
+import { roomLinkInstances, roomLinkPasses, roomLinks } from './schema.js';
 
 const MIGRATIONS = fileURLToPath(
   new URL('../../infra/database/migrations', import.meta.url),
@@ -118,7 +117,6 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Design review',
-      null,
       { actorUserId: mentor.id },
     );
     const opened = await service.open(guest, made.code);
@@ -149,7 +147,6 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Retro',
-      null,
       { actorUserId: mentor.id },
       later,
     );
@@ -158,7 +155,6 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Standup',
-      null,
       { actorUserId: mentor.id },
       earlier,
     );
@@ -171,21 +167,14 @@ describe('RoomLinksService', () => {
   it('lets admins in without a place in the cohort, and only staff manage links', async () => {
     const { cohortId, mentor, guest, admin, pod } = await setting();
 
-    const made = await service.create(
-      admin,
-      cohortId,
-      pod.id,
-      'Town hall',
-      null,
-      {
-        actorUserId: admin.id,
-      },
-    );
+    const made = await service.create(admin, cohortId, pod.id, 'Town hall', {
+      actorUserId: admin.id,
+    });
     await expect(service.open(admin, made.code)).resolves.toMatchObject({
       cohortId,
     });
     await expect(
-      service.create(guest, cohortId, pod.id, 'Mine', null, {
+      service.create(guest, cohortId, pod.id, 'Mine', {
         actorUserId: guest.id,
       }),
     ).rejects.toThrow(RoomLinkForbiddenException);
@@ -202,7 +191,7 @@ describe('RoomLinksService', () => {
 
   it('is a 404 to anybody without a live place in its cohort', async () => {
     const { cohortId, mentor, guest, outsider, pod } = await setting();
-    const made = await service.create(mentor, cohortId, pod.id, 'Class', null, {
+    const made = await service.create(mentor, cohortId, pod.id, 'Class', {
       actorUserId: mentor.id,
     });
 
@@ -224,19 +213,12 @@ describe('RoomLinksService', () => {
 
   it('stops opening once revoked, and revoking again changes nothing', async () => {
     const { cohortId, mentor, guest, pod } = await setting();
-    const kept = await service.create(mentor, cohortId, pod.id, 'Kept', null, {
+    const kept = await service.create(mentor, cohortId, pod.id, 'Kept', {
       actorUserId: mentor.id,
     });
-    const dropped = await service.create(
-      mentor,
-      cohortId,
-      pod.id,
-      'Dropped',
-      null,
-      {
-        actorUserId: mentor.id,
-      },
-    );
+    const dropped = await service.create(mentor, cohortId, pod.id, 'Dropped', {
+      actorUserId: mentor.id,
+    });
 
     await service.revoke(mentor, dropped.code, { actorUserId: mentor.id });
     await service.revoke(mentor, dropped.code, { actorUserId: mentor.id });
@@ -253,7 +235,7 @@ describe('RoomLinksService', () => {
 
   it('leads nowhere once its space is retired, and is not made for a space not set up', async () => {
     const { cohortId, mentor, guest, pod } = await setting();
-    const made = await service.create(mentor, cohortId, pod.id, 'Lab', null, {
+    const made = await service.create(mentor, cohortId, pod.id, 'Lab', {
       actorUserId: mentor.id,
     });
     const unkinded = await space(unique(), null);
@@ -267,12 +249,12 @@ describe('RoomLinksService', () => {
       RoomLinkNotFoundException,
     );
     await expect(
-      service.create(mentor, cohortId, pod.id, 'Again', null, {
+      service.create(mentor, cohortId, pod.id, 'Again', {
         actorUserId: mentor.id,
       }),
     ).rejects.toThrow(RoomLinkNotFoundException);
     await expect(
-      service.create(mentor, cohortId, unkinded.id, 'Nope', null, {
+      service.create(mentor, cohortId, unkinded.id, 'Nope', {
         actorUserId: mentor.id,
       }),
     ).rejects.toThrow(RoomLinkNotFoundException);
@@ -283,7 +265,7 @@ describe('RoomLinksService', () => {
     const annexRoom = await space(unique(), SpaceKind.MeetingRoom, otherMapId);
 
     await expect(
-      service.create(mentor, cohortId, annexRoom.id, 'Off the map', null, {
+      service.create(mentor, cohortId, annexRoom.id, 'Off the map', {
         actorUserId: mentor.id,
       }),
     ).rejects.toThrow(RoomLinkNotFoundException);
@@ -316,7 +298,7 @@ describe('RoomLinksService', () => {
       .returning();
 
     await expect(
-      service.create(mentor, cohortId, corridors.id, 'Hallway chat', null, {
+      service.create(mentor, cohortId, corridors.id, 'Hallway chat', {
         actorUserId: mentor.id,
       }),
     ).rejects.toThrow(RoomLinkNotFoundException);
@@ -331,7 +313,6 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Sync',
-      null,
       { actorUserId: mentor.id },
       behind,
     );
@@ -355,12 +336,11 @@ describe('RoomLinksService', () => {
       cohortId,
       pod.id,
       'Office hours',
-      null,
       { actorUserId: mentor.id, correlationId: 'req-1' },
     );
     await service.open(guest, made.code);
     await expect(
-      service.create(guest, cohortId, pod.id, 'Mine', null, {
+      service.create(guest, cohortId, pod.id, 'Mine', {
         actorUserId: guest.id,
       }),
     ).rejects.toThrow(RoomLinkForbiddenException);
@@ -401,20 +381,12 @@ describe('RoomLinksService', () => {
   it('resolves many codes at once, to only the links the caller may open', async () => {
     const { cohortId, mentor, guest, outsider, admin, pod } = await setting();
     const audit = { actorUserId: mentor.id };
-    const kept = await service.create(
-      mentor,
-      cohortId,
-      pod.id,
-      'Kept',
-      null,
-      audit,
-    );
+    const kept = await service.create(mentor, cohortId, pod.id, 'Kept', audit);
     const dropped = await service.create(
       mentor,
       cohortId,
       pod.id,
       'Dropped',
-      null,
       audit,
     );
     await service.revoke(mentor, dropped.code, audit);
@@ -424,7 +396,6 @@ describe('RoomLinksService', () => {
       cohortId,
       retired.id,
       'Gone',
-      null,
       audit,
     );
     await db
@@ -449,7 +420,7 @@ describe('RoomLinksService', () => {
 
   it('resolves nothing for a member whose place has lapsed', async () => {
     const { cohortId, mentor, guest, pod } = await setting();
-    const made = await service.create(mentor, cohortId, pod.id, 'Later', null, {
+    const made = await service.create(mentor, cohortId, pod.id, 'Later', {
       actorUserId: mentor.id,
     });
     const afterExpiry = new Date(Date.now() + 2 * 86_400_000);
@@ -457,11 +428,11 @@ describe('RoomLinksService', () => {
     expect(await service.resolve(guest, [made.code], afterExpiry)).toEqual([]);
   }, 30_000);
 
-  describe('windows and entering', () => {
+  describe('runs and entering', () => {
     const MINUTE = 60_000;
     const now = new Date();
     const at = (minutes: number) => new Date(now.getTime() + minutes * MINUTE);
-    const window = { startsAt: at(15), endsAt: at(75) };
+    const run = { startsAt: at(15), endsAt: at(75) };
 
     const passesFor = (code: string) =>
       db
@@ -470,183 +441,117 @@ describe('RoomLinksService', () => {
         .innerJoin(roomLinks, eq(roomLinks.id, roomLinkPasses.roomLinkId))
         .where(eq(roomLinks.code, code));
 
-    const enter = async (
-      user: AuthenticatedUser,
+    const synced = async (
       code: string,
-      found: { startsAt: Date; endsAt: Date } | null,
-      when: Date,
-    ) =>
-      service.enter(
-        user,
-        await service.forEntry(user, code, when),
-        found,
-        when,
+      organizerId: string,
+      runs: { startsAt: Date; endsAt: Date; cancelledAt?: Date }[],
+    ) => {
+      const [link] = await db
+        .select({ id: roomLinks.id })
+        .from(roomLinks)
+        .where(eq(roomLinks.code, code));
+      await db.insert(roomLinkInstances).values(
+        runs.map((r, n) => ({
+          roomLinkId: link.id,
+          organizerId,
+          googleEventId: `${code}_${n}`,
+          ...r,
+        })),
       );
+    };
 
-    it('keeps the window a link is made with, and refuses one that ends first', async () => {
+    it('shows the run going on now, else the next, and none when none is coming', async () => {
       const { cohortId, mentor, guest, pod } = await setting();
+      const made = await service.create(mentor, cohortId, pod.id, 'Class', {
+        actorUserId: mentor.id,
+      });
+      expect(made).toMatchObject({ startsAt: null, endsAt: null });
 
-      const made = await service.create(
-        mentor,
-        cohortId,
-        pod.id,
-        'Class',
-        window,
-        {
-          actorUserId: mentor.id,
-        },
+      await synced(made.code, mentor.id, [
+        { startsAt: at(-120), endsAt: at(-60) },
+        { startsAt: at(-5), endsAt: at(1), cancelledAt: at(-30) },
+        run,
+        { startsAt: at(7 * 24 * 60), endsAt: at(7 * 24 * 60 + 60) },
+      ]);
+
+      expect(await service.open(guest, made.code)).toMatchObject(run);
+      expect((await service.list(mentor, cohortId, pod.id))[0]).toMatchObject(
+        run,
       );
-
-      expect(made).toMatchObject(window);
-      expect(await service.open(guest, made.code)).toMatchObject(window);
-      await expect(
-        service.create(
-          mentor,
-          cohortId,
-          pod.id,
-          'Backwards',
-          { startsAt: window.endsAt, endsAt: window.startsAt },
-          { actorUserId: mentor.id },
-        ),
-      ).rejects.toThrow(InvalidArgumentException);
-      await expect(
-        db.insert(roomLinks).values({
-          code: 'hAlFwInd0w',
-          cohortId,
-          spaceId: pod.id,
-          title: 'Half',
-          createdBy: mentor.id,
-          startsAt: window.startsAt,
-        }),
-      ).rejects.toThrow();
+      expect(await service.open(guest, made.code, at(76))).toMatchObject({
+        startsAt: at(7 * 24 * 60),
+      });
     }, 30_000);
 
-    it('gives a pass from ten minutes before the start until the end, once', async () => {
+    it('gives a pass from ten minutes before a run starts until it ends, once', async () => {
       const { cohortId, mentor, guest, pod } = await setting();
-      const made = await service.create(
-        mentor,
-        cohortId,
-        pod.id,
-        'Class',
-        window,
-        {
-          actorUserId: mentor.id,
-        },
-      );
+      const made = await service.create(mentor, cohortId, pod.id, 'Class', {
+        actorUserId: mentor.id,
+      });
+      await synced(made.code, mentor.id, [run]);
 
-      await expect(enter(guest, made.code, null, at(4))).resolves.toMatchObject(
+      await expect(
+        service.enter(guest, made.code, at(4)),
+      ).resolves.toMatchObject({ admitted: false });
+      expect(await passesFor(made.code)).toEqual([]);
+
+      await expect(
+        service.enter(guest, made.code, at(5)),
+      ).resolves.toMatchObject({ admitted: true, ...run });
+      await service.enter(guest, made.code, at(30));
+      expect(await passesFor(made.code)).toEqual([{ userId: guest.id }]);
+
+      await expect(
+        service.enter(guest, made.code, at(75)),
+      ).resolves.toMatchObject({ admitted: false });
+    }, 30_000);
+
+    it('admits nobody through a cancelled run', async () => {
+      const { cohortId, mentor, guest, pod } = await setting();
+      const made = await service.create(mentor, cohortId, pod.id, 'Off', {
+        actorUserId: mentor.id,
+      });
+      await synced(made.code, mentor.id, [
+        { startsAt: at(-5), endsAt: at(55), cancelledAt: at(-60) },
+      ]);
+
+      await expect(service.enter(guest, made.code, now)).resolves.toMatchObject(
         {
           admitted: false,
+          startsAt: null,
         },
       );
       expect(await passesFor(made.code)).toEqual([]);
+    }, 30_000);
 
-      await expect(enter(guest, made.code, null, at(5))).resolves.toMatchObject(
+    it('admits admins without a pass, and nobody through a link no event carries', async () => {
+      const { cohortId, mentor, guest, admin, pod } = await setting();
+      const made = await service.create(mentor, cohortId, pod.id, 'Open', {
+        actorUserId: mentor.id,
+      });
+
+      await expect(service.enter(admin, made.code, now)).resolves.toMatchObject(
         {
           admitted: true,
-          ...window,
         },
       );
-      await enter(guest, made.code, null, at(30));
-      expect(await passesFor(made.code)).toEqual([{ userId: guest.id }]);
-
-      await expect(
-        enter(guest, made.code, null, at(75)),
-      ).resolves.toMatchObject({
-        admitted: false,
-      });
-    }, 30_000);
-
-    it('moves the window to the event the maker’s calendar has running now', async () => {
-      const { cohortId, mentor, guest, pod } = await setting();
-      const made = await service.create(
-        mentor,
-        cohortId,
-        pod.id,
-        'Moved',
-        window,
+      await expect(service.enter(guest, made.code, now)).resolves.toMatchObject(
         {
-          actorUserId: mentor.id,
+          admitted: false,
+          startsAt: null,
         },
       );
-      const moved = { startsAt: at(-120), endsAt: at(60) };
-
-      await expect(enter(guest, made.code, moved, now)).resolves.toMatchObject({
-        admitted: true,
-        ...moved,
-      });
-      expect(await service.open(guest, made.code)).toMatchObject(moved);
-      expect(await passesFor(made.code)).toEqual([{ userId: guest.id }]);
-    }, 30_000);
-
-    it('admits admins without a pass, and nobody through a link with no window', async () => {
-      const { cohortId, mentor, guest, admin, pod } = await setting();
-      const made = await service.create(
-        mentor,
-        cohortId,
-        pod.id,
-        'Open',
-        null,
-        {
-          actorUserId: mentor.id,
-        },
-      );
-
-      await expect(enter(admin, made.code, null, now)).resolves.toMatchObject({
-        admitted: true,
-      });
-      await expect(enter(guest, made.code, null, now)).resolves.toMatchObject({
-        admitted: false,
-        startsAt: null,
-      });
       expect(await passesFor(made.code)).toEqual([]);
     }, 30_000);
 
-    it('lets staff set and clear a window, and writes down each change', async () => {
-      const { cohortId, mentor, guest, outsider, pod } = await setting();
-      const made = await service.create(
-        mentor,
-        cohortId,
-        pod.id,
-        'Moving',
-        null,
-        {
-          actorUserId: mentor.id,
-        },
-      );
+    it('is a 404 to enter for anybody without a live place in its cohort', async () => {
+      const { cohortId, mentor, outsider, pod } = await setting();
+      const made = await service.create(mentor, cohortId, pod.id, 'Class', {
+        actorUserId: mentor.id,
+      });
 
-      await expect(
-        service.setWindow(mentor, made.code, window, {
-          actorUserId: mentor.id,
-        }),
-      ).resolves.toMatchObject(window);
-      await expect(
-        service.setWindow(mentor, made.code, null, { actorUserId: mentor.id }),
-      ).resolves.toMatchObject({ startsAt: null, endsAt: null });
-      await expect(
-        service.setWindow(guest, made.code, window, { actorUserId: guest.id }),
-      ).rejects.toThrow(RoomLinkForbiddenException);
-      await expect(
-        service.setWindow(outsider, made.code, window, {
-          actorUserId: outsider.id,
-        }),
-      ).rejects.toThrow(RoomLinkNotFoundException);
-
-      const changes = await db
-        .select({ details: auditLog.details })
-        .from(auditLog)
-        .where(eq(auditLog.action, AuditAction.RoomLinkWindowChanged))
-        .orderBy(asc(auditLog.createdAt));
-      const iso = {
-        startsAt: window.startsAt.toISOString(),
-        endsAt: window.endsAt.toISOString(),
-      };
-      const none = { startsAt: null, endsAt: null };
-      expect(changes.map((c) => c.details)).toEqual(
-        expect.arrayContaining([
-          { cohortId, code: made.code, before: none, after: iso },
-          { cohortId, code: made.code, before: iso, after: none },
-        ]),
+      await expect(service.enter(outsider, made.code, now)).rejects.toThrow(
+        RoomLinkNotFoundException,
       );
     }, 30_000);
   });

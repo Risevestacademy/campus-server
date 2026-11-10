@@ -14,12 +14,9 @@ import { spaces } from '../maps/schema.js';
 import { users } from '../users/schema.js';
 
 /**
- * A short link to a space in one cohort's campus, made for one event. A space
- * may have any number of live links at once. Revoking sets revoked_at; the
- * row stays.
- *
- * The window is when the event runs. Whoever opens the link during it, or
- * shortly before, may enter the space until it ends.
+ * A short link to a space in one cohort's campus, made for one event. When
+ * the event runs comes from its synced runs, `room_link_instances`.
+ * Revoking sets revoked_at; the row stays.
  */
 export const roomLinks = pgTable(
   'room_links',
@@ -41,7 +38,9 @@ export const roomLinks = pgTable(
       .notNull()
       .defaultNow(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    /** No longer read; dropped once every world reads runs instead. */
     startsAt: timestamp('starts_at', { withTimezone: true }),
+    /** No longer read; dropped once every world reads runs instead. */
     endsAt: timestamp('ends_at', { withTimezone: true }),
   },
   (table) => [
@@ -59,9 +58,8 @@ export const roomLinks = pgTable(
 );
 
 /**
- * Somebody who opened a link while its window was open. World lets them into
- * the link's space, in the link's cohort, for as long as the window runs, so
- * a window moved later moves the pass with it.
+ * Somebody who opened a link while one of its runs was open. World lets them
+ * into the link's space, in the link's cohort, whenever a run is open.
  */
 export const roomLinkPasses = pgTable(
   'room_link_passes',

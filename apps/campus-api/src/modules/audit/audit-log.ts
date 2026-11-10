@@ -393,12 +393,13 @@ interface AuditEntryShapes {
       cohortId: string;
       code: string;
       title: string;
-    } & RoomLinkWindowDetails;
+    } & Partial<RoomLinkWindowDetails>;
   };
   [AuditAction.RoomLinkRevoked]: {
     subject: AuditSubjectType.RoomLink;
     details: { cohortId: string; code: string; title: string };
   };
+  /** No longer written: runs are synced from the calendar. Kept to read old entries. */
   [AuditAction.RoomLinkWindowChanged]: {
     subject: AuditSubjectType.RoomLink;
     details: {

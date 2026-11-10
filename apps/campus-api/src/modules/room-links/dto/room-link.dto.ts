@@ -1,22 +1,13 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
-  IsISO8601,
   IsNotEmpty,
   IsString,
   IsUUID,
   Matches,
   MaxLength,
-  ValidateIf,
 } from 'class-validator';
 
 import { ROOM_LINK_CODE } from '../room-link-code.js';
-
-const ZONED_INSTANT =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
-
-/** Left out is fine; null is not a time, so it is checked and refused. */
-const present = (_: object, value: unknown) => value !== undefined;
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -37,29 +28,7 @@ export class RoomLinkCodeParamDto {
   code: string;
 }
 
-/**
- * When the event runs: both times, or neither for a link with no window.
- * The window must end after it starts.
- */
-export class RoomLinkWindowDto {
-  /** @example 2026-11-05T10:00:00.000Z */
-  @ApiPropertyOptional({ format: 'date-time' })
-  @ValidateIf(present)
-  @IsISO8601({ strict: true })
-  @Matches(ZONED_INSTANT, {
-    message: 'startsAt must be a timestamp with a zone',
-  })
-  startsAt?: string;
-
-  /** @example 2026-11-05T11:00:00.000Z */
-  @ApiPropertyOptional({ format: 'date-time' })
-  @ValidateIf(present)
-  @IsISO8601({ strict: true })
-  @Matches(ZONED_INSTANT, { message: 'endsAt must be a timestamp with a zone' })
-  endsAt?: string;
-}
-
-export class CreateRoomLinkDto extends RoomLinkWindowDto {
+export class CreateRoomLinkDto {
   /**
    * The event the link is for.
    * @example "Design review"
@@ -98,7 +67,8 @@ export class RoomLinkDto {
   spaceName: string;
 
   /**
-   * When the event starts; null for a link with no window. The link lets
+   * When the run going on now, else the next one, starts, as synced from the
+   * organiser's Google Calendar; null when none is coming. The link lets
    * people in from ten minutes before.
    * @example 2026-11-05T10:00:00.000Z
    */
@@ -114,7 +84,7 @@ export class RoomLinkDto {
 /** A room link as entering it left it. */
 export class RoomLinkEntryDto extends RoomLinkDto {
   /**
-   * Whether world will let the caller into the space now: the window is open
+   * Whether world will let the caller into the space now: a run is open
    * (from ten minutes before it starts until it ends), or the caller is an
    * admin. When false, walk there anyway; a closed door can still be asked.
    * @example true

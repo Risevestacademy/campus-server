@@ -21,6 +21,7 @@ import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { timestamptz } from '../../infra/database/timestamptz.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortRole, cohortMembers } from '../cohorts/schema.js';
+import { tellWorld } from '../maps/tell-world.js';
 import {
   roomLinkInstances,
   roomLinks,
@@ -252,8 +253,9 @@ export class CalendarSyncService {
     }
 
     await this.db.transaction(async (tx) => {
+      let changed = false;
       if (keep.length > 0) {
-        await tx
+        const upserted = await tx
           .insert(roomLinkInstances)
           .values(keep)
           .onConflictDoUpdate({
@@ -268,7 +270,10 @@ export class CalendarSyncService {
               cancelledAt: null,
               updatedAt: now,
             },
-          });
+            setWhere: sql`${roomLinkInstances.roomLinkId} is distinct from excluded.room_link_id or ${roomLinkInstances.startsAt} is distinct from excluded.starts_at or ${roomLinkInstances.endsAt} is distinct from excluded.ends_at or ${roomLinkInstances.cancelledAt} is not null`,
+          })
+          .returning({ id: roomLinkInstances.id });
+        changed = upserted.length > 0;
       }
       const live = and(
         eq(roomLinkInstances.organizerId, organizerId),
@@ -298,10 +303,15 @@ export class CalendarSyncService {
         );
       }
       for (const where of stale) {
-        await tx
+        const cancelled = await tx
           .update(roomLinkInstances)
           .set({ cancelledAt: now, updatedAt: now })
-          .where(and(live, where));
+          .where(and(live, where))
+          .returning({ id: roomLinkInstances.id });
+        changed ||= cancelled.length > 0;
+      }
+      if (changed) {
+        await tellWorld(tx);
       }
       await tx
         .update(googleCalendarGrants)
@@ -312,8 +322,9 @@ export class CalendarSyncService {
 
   /**
    * Cancels runs still to come that no longer stand, whatever Google's feed
-   * says: the link was revoked, or its organiser no longer manages its cohort.
-   * The feed only returns events that changed, so these are checked here.
+   * says: the link was revoked, its organiser no longer manages its cohort,
+   * or their calendar is no longer synced, so a cancellation would never
+   * reach it.
    */
   async reconcile(now: Date): Promise<number> {
     const stillManages = this.db
@@ -341,6 +352,15 @@ export class CalendarSyncService {
           ),
         ),
       );
+    const stillSynced = this.db
+      .select({ one: sql`1` })
+      .from(googleCalendarGrants)
+      .where(
+        and(
+          eq(googleCalendarGrants.userId, roomLinkInstances.organizerId),
+          isNull(googleCalendarGrants.revokeRequestedAt),
+        ),
+      );
     const stale = this.db
       .select({ id: roomLinkInstances.id })
       .from(roomLinkInstances)
@@ -349,18 +369,28 @@ export class CalendarSyncService {
         and(
           isNull(roomLinkInstances.cancelledAt),
           gt(roomLinkInstances.endsAt, now),
-          or(isNotNull(roomLinks.revokedAt), notExists(stillManages)),
+          or(
+            isNotNull(roomLinks.revokedAt),
+            notExists(stillManages),
+            notExists(stillSynced),
+          ),
         ),
       );
-    const cancelled = await this.db
-      .update(roomLinkInstances)
-      .set({ cancelledAt: now, updatedAt: now })
-      .where(inArray(roomLinkInstances.id, stale))
-      .returning({ id: roomLinkInstances.id });
+    const cancelled = await this.db.transaction(async (tx) => {
+      const rows = await tx
+        .update(roomLinkInstances)
+        .set({ cancelledAt: now, updatedAt: now })
+        .where(inArray(roomLinkInstances.id, stale))
+        .returning({ id: roomLinkInstances.id });
+      if (rows.length > 0) {
+        await tellWorld(tx);
+      }
+      return rows;
+    });
     if (cancelled.length > 0) {
       this.logger.info(
         { count: cancelled.length },
-        'room link runs cancelled: link revoked or organiser no longer manages it',
+        'room link runs cancelled: link revoked, or organiser no longer manages it or syncs',
       );
     }
     return cancelled.length;

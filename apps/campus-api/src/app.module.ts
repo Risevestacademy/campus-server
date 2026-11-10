@@ -25,7 +25,6 @@ import { DesksModule } from './modules/desks/desks.module.js';
 import { MentorshipGroupsModule } from './modules/mentorship-groups/mentorship-groups.module.js';
 import { NoticesModule } from './modules/notices/notices.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
-import { RoomLinkEntryModule } from './modules/room-links/room-link-entry.module.js';
 import { RoomLinksModule } from './modules/room-links/room-links.module.js';
 import { TracksModule } from './modules/tracks/tracks.module.js';
 import { ProfileModule } from './modules/users/profile/profile.module.js';
@@ -58,7 +57,6 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     CalendarModule,
     DashboardModule,
     RoomLinksModule,
-    RoomLinkEntryModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],
   controllers: [AppController],
