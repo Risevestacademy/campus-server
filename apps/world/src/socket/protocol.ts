@@ -184,7 +184,7 @@ export const BroadcastCall = z
   });
 
 export const MoveOutcome = z
-  .enum(['moved', 'blocked', 'refused', 'too_fast'])
+  .enum(['moved', 'blocked', 'refused', 'full', 'too_fast'])
   .meta({
     id: 'MoveOutcome',
     description:
@@ -192,7 +192,9 @@ export const MoveOutcome = z
       'walkable; they turn to face it without moving. refused: the tile is ' +
       'floor, but in a space they may not enter (designated and not on its ' +
       'list, or locked); they turn to face it without moving, and may ask with ' +
-      '`requestEntry`. too_fast: over walking ' +
+      '`requestEntry`. full: the tile is floor, in a space they may enter ' +
+      'but that already holds as many people as its capacity allows; they ' +
+      'turn to face it without moving. Asking does not help. too_fast: over walking ' +
       'speed; nothing happens, not even the turn.',
   });
 
@@ -225,6 +227,7 @@ export const WalkEndReason = z
     'arrived',
     'stopped',
     'refused',
+    'full',
     'gone',
     'elsewhere',
     'no_way',
@@ -239,7 +242,11 @@ export const WalkEndReason = z
       'are on it. stopped: you sent `stopWalking` or a `move`. refused: a ' +
       'space you may not enter is in the way, or is where you were going, ' +
       'and you stopped beside the first one; `mayAsk` says whether asking ' +
-      'to enter it would be taken. gone: they left, or were not here. ' +
+      'to enter it would be taken. full: a space you may enter is in the ' +
+      'way, or is where you were going, but already holds as many people as ' +
+      'its capacity allows, and you stopped beside the first one; `mayAsk` ' +
+      'is false. Refused wins when a space is both closed to you and full. ' +
+      'gone: they left, or were not here. ' +
       'elsewhere: they are online, but connected to another world server, ' +
       'which a walk cannot reach. gone and elsewhere end only walks to ' +
       'somebody. no_way: no path reaches where you were going: walls, a ' +
@@ -749,6 +756,56 @@ export const ServerMessage = z
         description:
           'A space was renamed, or campus-api gained or lost a row for one: ' +
           'replaces `snapshot.spaces`. Sent to everybody.',
+      }),
+    z
+      .object({
+        type: z.literal('notification'),
+        id: z
+          .string()
+          .describe(
+            'The notification, as `GET /v1/notifications` lists it on ' +
+              'campus-api; mark it read with ' +
+              '`PATCH /v1/notifications/{id}/read`.',
+          ),
+        kind: z
+          .string()
+          .describe(
+            'What happened: `notice_posted`, `entry_request_admitted` or ' +
+              '`entry_request_declined`. More will be added: show a plain ' +
+              'alert for one you do not know.',
+          ),
+        referenceType: z
+          .string()
+          .describe(
+            'What `referenceId` names: `notice` or `entry_request`. Grows ' +
+              'with `kind`.',
+          ),
+        referenceId: z
+          .string()
+          .describe(
+            "The notice's id, to fetch from campus-api for its text; for an " +
+              'entry request, the `requestId` its `entryRequestEnded` carried.',
+          ),
+        context: z
+          .object({ cohortId: z.string(), spaceKey: z.string() })
+          .nullable()
+          .describe(
+            'For an entry request, the cohort and space it was for. Null ' +
+              'for a notice.',
+          ),
+        createdAt: z
+          .string()
+          .describe('When it was written, as an ISO timestamp.'),
+      })
+      .meta({
+        id: 'NotificationMessage',
+        description:
+          'Something happened that you are told about: enough to show a ' +
+          'badge or a toast without asking campus-api. One about a cohort ' +
+          'comes only on that cohort’s socket; one about no cohort, as a ' +
+          'campus-wide notice, on every socket you have open. Best effort: ' +
+          'one sent while you had no socket open, or that world missed, is ' +
+          'in the list all the same, so fetch it on arriving.',
       }),
     z
       .object({

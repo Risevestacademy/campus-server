@@ -40,7 +40,8 @@ try {
   await flushAll(console, [telemetry]);
   process.exit(1);
 }
-const { app, gateway, accounts, positions, presence, reporter } = world;
+const { app, gateway, accounts, positions, presence, notifications, reporter } =
+  world;
 
 /** Last, so it sends whatever the steps before it logged. */
 const flush = () => flushAll(app.log, [reporter, telemetry]);
@@ -60,6 +61,7 @@ async function shutdown(signal: string): Promise<void> {
     await accounts.close();
     await positions.close();
     await presence.close();
+    await notifications.close();
   } catch (err) {
     app.log.error({ err }, 'error during shutdown');
     failed = true;

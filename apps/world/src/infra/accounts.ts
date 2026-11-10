@@ -94,8 +94,13 @@ export interface AccountLookup {
    * listening; rejects if it could not start.
    */
   onDesksChanged(listener: (cohortId: string | null) => void): Promise<void>;
-  /** world's one write: the asker's notification. A repeat is a no-op. */
-  notifyEntryRequestAnswered(answer: EntryRequestAnswer): Promise<void>;
+  /**
+   * world's one write: the asker's notification, answered as written for
+   * the push. A repeat writes nothing and answers undefined.
+   */
+  notifyEntryRequestAnswered(
+    answer: EntryRequestAnswer,
+  ): Promise<WrittenNotification | undefined>;
   close(): Promise<void>;
 }
 
@@ -105,6 +110,15 @@ export interface EntryRequestAnswer {
   admitted: boolean;
   cohortId: string;
   spaceKey: string;
+}
+
+export interface WrittenNotification {
+  id: string;
+  kind: string;
+  referenceType: string;
+  referenceId: string;
+  context: { cohortId: string; spaceKey: string } | null;
+  createdAt: Date;
 }
 
 /**
@@ -244,12 +258,14 @@ export const ENTRY_REQUEST_DECLINED_KIND = 'entry_request_declined';
  * $1 the asker, $2 the kind, $3 the request's id, $4 campus-api's
  * `EntryRequestContext` as JSON. Requests have no row, so the reference is
  * world's own id for one and the context says where it was. The conflict
- * target is campus-api's notifications_recipient_kind_reference_unique.
+ * target is campus-api's notifications_recipient_kind_reference_unique. A
+ * repeat returns no row.
  */
 export const ENTRY_REQUEST_NOTIFICATION_QUERY = `insert into notifications
     (recipient_id, kind, reference_type, reference_id, context)
   values ($1, $2, 'entry_request', $3, $4::jsonb)
-  on conflict (recipient_id, kind, reference_type, reference_id) do nothing`;
+  on conflict (recipient_id, kind, reference_type, reference_id) do nothing
+  returning id, kind, reference_type, reference_id, context, created_at`;
 
 /** What hearing defaults to in a proximity space with no radius set, in tiles. */
 export const DEFAULT_AUDIBLE_RADIUS = 5;
@@ -262,6 +278,8 @@ export type SpaceAudioMode = 'proximity' | 'boundary';
 export interface WorldSpace extends SpaceFacts {
   id: string;
   name: string;
+  /** Null for no limit. */
+  capacity: number | null;
   audioMode: SpaceAudioMode;
   audibleRadius: number;
   subscribeRadius: number;
@@ -296,6 +314,7 @@ export interface SpaceRow {
   kind: string | null;
   access: string;
   retired_at: Date | null;
+  capacity: string | null;
   audio_mode: string;
   audible_radius: string | null;
   subscribe_radius: string | null;
@@ -326,6 +345,7 @@ export function toWorldSpace(
     retiredAt: row.retired_at,
     locked: false,
     grants,
+    capacity: row.capacity === null ? null : Number(row.capacity),
     audioMode: audioModeOf(row.audio_mode),
     audibleRadius:
       row.audible_radius === null
@@ -341,7 +361,7 @@ export function toWorldSpace(
 
 /** Every space on one map, retired ones included. $1 the map's key. */
 export const SPACES_QUERY = `select spaces.id, spaces.key, spaces.name, spaces.kind, spaces.access, spaces.retired_at,
-    spaces.audio_mode, spaces.audible_radius, spaces.subscribe_radius, spaces.hysteresis_factor
+    spaces.capacity, spaces.audio_mode, spaces.audible_radius, spaces.subscribe_radius, spaces.hysteresis_factor
   from spaces
   join maps on maps.id = spaces.map_id
   where maps.key = $1`;
@@ -592,8 +612,17 @@ export function createAccountLookup(env: Env): AccountLookup {
         () => (reconnected ? reconnected() : listener('')),
       );
     },
-    async notifyEntryRequestAnswered(answer): Promise<void> {
-      await sql.unsafe(ENTRY_REQUEST_NOTIFICATION_QUERY, [
+    async notifyEntryRequestAnswered(answer) {
+      const [row] = await sql.unsafe<
+        {
+          id: string;
+          kind: string;
+          reference_type: string;
+          reference_id: string;
+          context: { cohortId: string; spaceKey: string } | null;
+          created_at: Date;
+        }[]
+      >(ENTRY_REQUEST_NOTIFICATION_QUERY, [
         answer.askerId,
         answer.admitted
           ? ENTRY_REQUEST_ADMITTED_KIND
@@ -604,6 +633,16 @@ export function createAccountLookup(env: Env): AccountLookup {
           spaceKey: answer.spaceKey,
         }),
       ]);
+      return row
+        ? {
+            id: row.id,
+            kind: row.kind,
+            referenceType: row.reference_type,
+            referenceId: row.reference_id,
+            context: row.context,
+            createdAt: row.created_at,
+          }
+        : undefined;
     },
     async close(): Promise<void> {
       await sql.end();

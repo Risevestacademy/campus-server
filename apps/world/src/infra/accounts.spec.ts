@@ -828,9 +828,22 @@ describe("world's entry-request notification, against campus-api's schema", () =
   });
 
   it('writes the asker one notification per answer, and a repeat is a no-op', async () => {
-    await notify(ENTRY_REQUEST_ADMITTED_KIND);
-    await notify(ENTRY_REQUEST_ADMITTED_KIND);
+    const first = await notify(ENTRY_REQUEST_ADMITTED_KIND);
+    const repeat = await notify(ENTRY_REQUEST_ADMITTED_KIND);
     await notify(ENTRY_REQUEST_DECLINED_KIND);
+
+    // The row comes back for the push; a repeat returns none, so is not pushed.
+    expect(first.rows).toEqual([
+      {
+        id: expect.any(String),
+        kind: 'entry_request_admitted',
+        reference_type: 'entry_request',
+        reference_id: requestId,
+        context,
+        created_at: expect.any(Date),
+      },
+    ]);
+    expect(repeat.rows).toEqual([]);
 
     const rows = await db.query<{
       kind: string;

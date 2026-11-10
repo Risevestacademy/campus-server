@@ -105,7 +105,7 @@ describe('Players', () => {
     expect(
       world.move(at(), 'right', 0, (target) => {
         asked.push(target);
-        return false;
+        return 'refused';
       }),
     ).toMatchObject({
       outcome: 'refused',
@@ -127,7 +127,7 @@ describe('Players', () => {
     expect(
       world.move(at(), 'left', 0, () => {
         asked = true;
-        return false;
+        return 'refused';
       }),
     ).toMatchObject({ outcome: 'blocked' });
     expect(asked).toBe(false);

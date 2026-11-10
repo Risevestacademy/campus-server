@@ -1,4 +1,8 @@
-import { signSessionToken, SessionScope } from '@campus/session';
+import {
+  signSessionToken,
+  SessionScope,
+  type NotificationCreated,
+} from '@campus/session';
 import {
   SPACE_ACCESS,
   type CohortMembershipFacts,
@@ -113,7 +117,7 @@ export const accounts = {
     );
   },
   /** The spaces on the map as campus-api has them. See openLibrary. */
-  spaces: new Map<string, SpaceFacts>(),
+  spaces: new Map<string, SpaceFacts & { capacity?: number | null }>(),
   failSpaces: false,
   spacesOn: async () => {
     if (accounts.failSpaces) throw new Error('postgres is down');
@@ -147,8 +151,19 @@ export const accounts = {
     accounts.profileListeners.push(listener);
   },
   answered: [] as EntryRequestAnswer[],
+  /** Written as the real query writes it: once per answer, then nothing. */
   notifyEntryRequestAnswered: async (answer: EntryRequestAnswer) => {
     accounts.answered.push(answer);
+    return {
+      id: `notification-${accounts.answered.length}`,
+      kind: answer.admitted
+        ? 'entry_request_admitted'
+        : 'entry_request_declined',
+      referenceType: 'entry_request',
+      referenceId: answer.requestId,
+      context: { cohortId: answer.cohortId, spaceKey: answer.spaceKey },
+      createdAt: new Date(),
+    };
   },
   /** campus-api saving a new sprite or name: the row, then the notification. */
   changeLooks: (
@@ -273,6 +288,27 @@ export const presence = {
   },
 };
 
+/**
+ * Stands in for the notifications channel in Redis: what world published,
+ * each handed back as Redis would, and campus-api's own sent with `deliver`.
+ */
+export const notifications = {
+  published: [] as NotificationCreated[],
+  listeners: [] as ((created: NotificationCreated) => void)[],
+  onNotification: (listener: (created: NotificationCreated) => void) => {
+    notifications.listeners.push(listener);
+  },
+  publish: async (created: NotificationCreated) => {
+    notifications.published.push(created);
+    notifications.deliver(created);
+  },
+  /** A message on the channel, as from campus-api. */
+  deliver: (created: NotificationCreated) => {
+    for (const listener of notifications.listeners) listener(created);
+  },
+  close: async () => undefined,
+};
+
 export const env = loadEnv({
   AUTH_SESSION_SECRET: SECRET,
   DEPLOYMENT_ENVIRONMENT: 'development',
@@ -366,9 +402,9 @@ export function restoreMap(): void {
 
 /**
  * The library as a normal meeting room, which anybody walks into: how every
- * test finds it unless it says otherwise.
+ * test finds it unless it says otherwise. No capacity means no limit.
  */
-export function openLibrary(): void {
+export function openLibrary(capacity: number | null = null): void {
   accounts.spaces.clear();
   accounts.spaces.set('library', {
     name: 'Library',
@@ -377,6 +413,7 @@ export function openLibrary(): void {
     retiredAt: null,
     locked: false,
     grants: [],
+    capacity,
   });
 }
 
@@ -586,6 +623,7 @@ export function useWorld(): void {
     presence.entries.clear();
     presence.heldElsewhere.clear();
     presence.failing = false;
+    notifications.published.length = 0;
   });
 
   /**
@@ -613,6 +651,7 @@ export function useWorld(): void {
       accounts,
       positions: store,
       presence,
+      notifications,
       map,
       loadMap: async (mapKey?: string) => {
         mapSource.loads += 1;

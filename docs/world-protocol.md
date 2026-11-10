@@ -161,6 +161,17 @@ meanwhile. You cannot predict a refusal, so draw the step and let the
 `moveResult` correct it. If your saved place is in a space you may no longer
 enter, you arrive at the spawn.
 
+**Spaces can have a capacity.** A space with one holds at most that many
+people; a step into it once it is full is answered `full`, even for an
+admin or somebody let in by a yes to `requestEntry`. A space you may not
+enter at all is `refused`, full or not. No capacity means no limit, which is
+how every space starts. Lowering a space's capacity moves nobody already
+inside: it is only asked about on the way in, like the rest of the door. A
+saved place in a space that has filled up since sends you to the spawn, but
+your own place never counts against you, so reopening the app while you
+stand inside keeps you there. The count is per world server, which is all of
+it while world runs as one replica.
+
 In local development only, a server with no published map to load (none
 configured, none published, or Sanity out of reach) runs on a placeholder
 instead: `id` and `version` are both `"placeholder"`, there is nothing to
@@ -183,12 +194,13 @@ The client says which way, never where to. The server decides every position.
 3. **Every admitted move is answered with a `moveResult`**, in the order sent,
    carrying your `seq` and where the server has you:
 
-   | `outcome`  | Meaning                                                  | What to draw                  |
-   | ---------- | -------------------------------------------------------- | ----------------------------- |
-   | `moved`    | One tile, as you predicted                               | Nothing changes               |
-   | `blocked`  | Not walkable; you turn to face it without moving         | Snap back, facing the new way |
-   | `refused`  | Floor, in a space you may not enter; you turn to face it | Snap back, facing the new way |
-   | `too_fast` | Over walking speed; nothing happened, not even the turn  | Snap back                     |
+   | `outcome`  | Meaning                                                  | What to draw                                         |
+   | ---------- | -------------------------------------------------------- | ---------------------------------------------------- |
+   | `moved`    | One tile, as you predicted                               | Nothing changes                                      |
+   | `blocked`  | Not walkable; you turn to face it without moving         | Snap back, facing the new way                        |
+   | `refused`  | Floor, in a space you may not enter; you turn to face it | Snap back, facing the new way                        |
+   | `full`     | Floor, in a space at capacity; you turn to face it       | Snap back, facing the new way; say the space is full |
+   | `too_fast` | Over walking speed; nothing happened, not even the turn  | Snap back                                            |
 
 4. **Correct against the server, then replay what it has not answered yet.**
    By the time a `moveResult` arrives you may have predicted further steps.
@@ -235,6 +247,7 @@ connected to another ends the walk with `elsewhere`.
   | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                       | Nothing                                                             |
   | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
   | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
+  | `full`           | A space at capacity is in the way, theirs or another; you stopped beside the first one (`spaceKey`). `mayAsk` is `false`            | Say the space is full                                               |
   | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
   | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                   | Say they cannot be reached right now                                |
   | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit | Say so                                                              |
@@ -266,7 +279,7 @@ The same walk, to a place instead of a person: a room link's page sends
 - **`arrived`** means you stand on the tile the walk aimed at. **`refused`**
   works as for a person: a closed space in the way, or the space you were
   walking into or the tile is in, stops you beside it with `spaceKey` and
-  `mayAsk`. `gone` and `elsewhere` only end walks to somebody.
+  `mayAsk`; **`full`** does the same for a space at capacity. `gone` and `elsewhere` only end walks to somebody.
 - **Stopping and replacing** work as for `goTo`: `stopWalking`, a `move`, or
   any new `goTo`, `goToSpace` or `goToTile` ends the walk going.
 
@@ -549,7 +562,8 @@ a web tab, without taking its place. Connect with `enter=ifFree`:
 
 What a watcher gets: the `snapshot` and everything sent to the whole cohort —
 `joined`, `left`, `statusChanged`, `spaceChanged`, `appearance`, locks, desks
-and spaces — and every `said` that reaches the avatar. Never `moved`, `call`,
+and spaces — every `said` that reaches the avatar, and the account's
+`notification`s. Never `moved`, `call`,
 `nearby`, `broadcast`, walks or requests to enter. Find yourself in the
 players by `welcome.userId`: there means you are on campus elsewhere, absent
 means nobody stands for you.
@@ -644,6 +658,34 @@ routes too. world carries no desk state; it only says when to fetch again.
   random 0–2 seconds before fetching, so they don't all arrive together.
 - **Your own claim** answers with the desk as it now is, so you need not
   wait for the message to draw it.
+
+## Notifications
+
+A member's notifications live in campus-api: `GET /v1/notifications`
+(newest first, paginated; `?unread=true` for the badge), marked read with
+`PATCH /v1/notifications/{id}/read`, or all at once with
+`POST /v1/notifications/read-all`. world only tells you when a new one is
+written, so you need not poll.
+
+- **What arrives.** `{ "type": "notification", "id": "…", "kind": "…",
+"referenceType": "…", "referenceId": "…", "context": null, "createdAt": "…" }`,
+  the same fields the list has, less `read`: a new one is always unread.
+  Enough for a badge or a toast. For the text, fetch what `referenceId`
+  names: a notice from campus-api. For an entry request it is the
+  `requestId` its `entryRequestEnded` carried, which campus-api has nothing
+  behind, so `context` says where it was: `{ "cohortId": "…", "spaceKey":
+"…" }`.
+- **Kinds.** `notice_posted`, `entry_request_admitted`,
+  `entry_request_declined`. More will be added: show a plain alert for one
+  you do not know rather than dropping it.
+- **Which socket.** One about a cohort, as a cohort's notice or an answer to
+  a request to enter, comes only on that cohort's socket. One about no
+  cohort, as a campus-wide notice, comes on every socket you have open, one
+  per cohort, so with two tabs on two cohorts count it once, by `id`.
+  Watcher sockets get them as the avatar's socket does.
+- **Best effort.** One written while you had no socket open, or that world
+  missed, is not sent later. Fetch the list on arriving, and treat the
+  message as a nudge to update what you show, not the record of it.
 
 ## Staff: muting and removing
 

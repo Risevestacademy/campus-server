@@ -121,6 +121,7 @@ describe('OpenAPI shapes (e2e)', () => {
     ['/v1/users', 'UserListItemDto'],
     ['/v1/audit-log', 'AuditLogEntryDto'],
     ['/v1/feedback', 'FeedbackListItemDto'],
+    ['/v1/notifications', 'NotificationDto'],
   ])('types the page of %s directly, as %s', (path, item) => {
     const response = okSchema(path);
 

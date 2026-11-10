@@ -1,10 +1,11 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY, type NotificationCreated } from '@campus/session';
 import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 import type { FastifyInstance } from 'fastify';
 
 import { type AccountLookup } from '../infra/accounts.js';
 import { mediaCredentials, type Env } from '../infra/env.js';
 import { worldMetrics } from '../infra/metrics.js';
+import type { NotificationFeed } from '../infra/notifications.js';
 import type { PositionStore } from '../infra/positions.js';
 import type { PresenceStore } from '../infra/presence.js';
 import { nearestWalkable, walkable, type Tile } from '../movement/grid.js';
@@ -62,6 +63,13 @@ export interface Gateway {
    * null, in every cohort: tell the people there to fetch the desks again.
    */
   desksChanged(cohortId: string | null): void;
+  /**
+   * A notification was written: tell the recipient on the sockets this
+   * instance holds for them, avatar and watchers alike. Only the named
+   * cohort's sockets, or every one of theirs when it names none. Nobody
+   * here, nothing sent.
+   */
+  notify(created: NotificationCreated): void;
   stop(): Promise<void>;
   /**
    * Stops the gauges reading the sockets, for a test that builds world more
@@ -81,6 +89,7 @@ export function registerGateway(
   map: WorldMap,
   /** The same startup loading path, for a publish that happens later. */
   loadMap: (mapKey: string) => Promise<WorldMap>,
+  notifications: Pick<NotificationFeed, 'publish'>,
 ): Gateway {
   const connections = new Connections();
   const metrics = worldMetrics(connections);
@@ -149,6 +158,24 @@ export function registerGateway(
     );
   }
 
+  /**
+   * Whether a space already holds as many people as it may, not counting
+   * this socket's own person: somebody coming back to a place they never
+   * really left is not one more. The default space has no limit, as it is
+   * the way to everywhere else. Everyone is held to it, staff included.
+   * The count is this world server's, which is all of it while world runs
+   * one replica.
+   */
+  function isFull(connection: Connection, spaceKey: string): boolean {
+    if (spaceKey === DEFAULT_SPACE_KEY) return false;
+    const capacity = doors.get(spaceKey)?.capacity;
+    if (capacity === null || capacity === undefined) return false;
+    let others = connections.occupancy(connection.cohortId, spaceKey);
+    const own = connections.holderOf(connection);
+    if (own && own.spaceKey === spaceKey) others -= 1;
+    return others >= capacity;
+  }
+
   const requests = createEntryRequests(ctx, {
     doors,
     locks,
@@ -156,6 +183,7 @@ export function registerGateway(
       moderation.isRemoved(connection, spaceKey, now),
     mayStepInto,
     accounts,
+    notifications,
   });
 
   const media = mediaCredentials(env);
@@ -167,6 +195,7 @@ export function registerGateway(
     requests,
     media,
     mayStepInto,
+    isFull,
     movedOut(target, player) {
       noteMoved(target);
       arrivedAt(target, player);
@@ -178,6 +207,7 @@ export function registerGateway(
     readRoomLinkPasses: doors.readRoomLinkPasses,
     requests,
     mayStepInto,
+    isFull,
     noteMoved,
     arrivedAt,
   });
@@ -580,6 +610,7 @@ export function registerGateway(
     calls,
     broadcastRoom,
     mayStepInto,
+    isFull,
     drop,
     demote,
     listen,
@@ -601,6 +632,20 @@ export function registerGateway(
       const frame = encode({ type: 'desksChanged' });
       for (const connection of connections.everyone()) {
         sendFrame(connection.socket, frame);
+      }
+    },
+    notify({ recipientId, cohortId, ...notification }): void {
+      if (stopping) return;
+      const seat = cohortId === null ? null : { userId: recipientId, cohortId };
+      const open = seat
+        ? [connections.holderOf(seat), ...connections.watchersOf(seat)]
+        : [
+            ...connections.forUser(recipientId),
+            ...connections.watchersForUser(recipientId),
+          ];
+      const frame = encode({ type: 'notification', ...notification });
+      for (const connection of open) {
+        if (connection) sendFrame(connection.socket, frame);
       }
     },
     dispose: metrics.dispose,
