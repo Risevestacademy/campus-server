@@ -116,7 +116,7 @@ describe('a link written another way', () => {
         null,
         `https://campusbyrise.com/join/${CODE.toLowerCase()}`,
       ),
-    ).not.toBe(CODE);
+    ).toBe(CODE.toLowerCase());
   });
 
   it('refuses another port, or a host that only ends the same', () => {
@@ -158,6 +158,14 @@ describe('a link written another way', () => {
         `https://campusbyrise.com/%E0%A4%A/join/x then https://campusbyrise.com/join/${CODE}`,
       ),
     ).toBe(CODE);
+  });
+
+  it.each([
+    `https://www.google.com/url?q=https://campusbyrise.com/join/${CODE}&sa=D`,
+    `https://zoom.us/j/1,https://campusbyrise.com/join/${CODE}`,
+    `See:https://other.test/https://campusbyrise.com/join/${CODE}`,
+  ])('finds a link run into another one in %s', (text) => {
+    expect(extractRoomLinkCode(SITE, null, text)).toBe(CODE);
   });
 
   it('keeps a path on the app URL', () => {
