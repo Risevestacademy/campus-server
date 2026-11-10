@@ -114,6 +114,7 @@ export default defineRailway((ctx) => {
       WORLD_MAX_BUFFERED_BYTES: preserve(),
       WORLD_MAX_MESSAGE_BYTES: preserve(),
       WORLD_MAX_MESSAGES_PER_SECOND: preserve(),
+      WORLD_ONLINE_COUNTS_PER_MINUTE: preserve(),
       WORLD_POSITION_SAVE_SECONDS: preserve(),
       WORLD_POSITION_TTL_DAYS: preserve(),
       WORLD_PRESENCE_TTL_SECONDS: preserve(),

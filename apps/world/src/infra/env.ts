@@ -200,6 +200,12 @@ const schema = z
       .int()
       .min(1)
       .default(5),
+
+    /**
+     * Online counts one account may ask for per minute. The admin dashboard
+     * polls, so this caps what one open dashboard costs.
+     */
+    WORLD_ONLINE_COUNTS_PER_MINUTE: z.coerce.number().int().min(1).default(30),
   })
   .superRefine((env, ctx) => {
     const credentials = mediaCredentials(env);

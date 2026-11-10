@@ -212,6 +212,10 @@ describe('loadEnv', () => {
     it('defaults the connection-check budget', () => {
       expect(loadEnv(minimal).WORLD_CONNECTION_CHECKS_PER_MINUTE).toBe(5);
     });
+
+    it('defaults the online-count budget', () => {
+      expect(loadEnv(minimal).WORLD_ONLINE_COUNTS_PER_MINUTE).toBe(30);
+    });
   });
 });
 

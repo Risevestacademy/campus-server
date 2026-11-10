@@ -259,7 +259,9 @@ for this one.
   `Authorization: Bearer <token>`). CORS is answered here, preflight included.
 - **What:** `?cohortId=<uuid>` counts one cohort; without it, the whole
   campus, where somebody in two cohorts' campuses counts once. Read from
-  presence, so it covers every world instance.
+  presence, so it covers every world instance. The campus-wide count finds
+  cohorts through `world:presence:cohorts`, a set each presence write adds
+  its cohort to, so it never scans Redis's keys.
 - **Beside campus-api's figures** (`GET /v1/dashboard`): world does not know
   which cohorts exist, so a cohort that does not counts `0` here where
   campus-api answers 404. And campus-api counts suspended accounts as
@@ -267,12 +269,13 @@ for this one.
 - **What comes back** (`200`, `Cache-Control: no-store`): `{ "online": 12 }`.
 - **Errors**, in the same shape as the connection check's:
 
-  | Status | `code`                 | When                                                                                                           |
-  | ------ | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
-  | 400    | `INVALID_ARGUMENT`     | `cohortId` is not a UUID                                                                                       |
-  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal, as for the connection check                       |
-  | 403    | `FORBIDDEN`            | Signed in but not an admin, the page's origin is not in `CORS_ORIGINS`, or a cookie came with no origin at all |
-  | 503    | `PRESENCE_UNAVAILABLE` | Redis cannot be read. Try again shortly                                                                        |
+  | Status | `code`                 | When                                                                                                                          |
+  | ------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+  | 400    | `INVALID_ARGUMENT`     | `cohortId` is not a UUID                                                                                                      |
+  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal, as for the connection check                                      |
+  | 403    | `FORBIDDEN`            | Signed in but not an admin, the page's origin is not in `CORS_ORIGINS`, or a cookie came with no origin at all                |
+  | 429    | `RATE_LIMITED`         | More than `WORLD_ONLINE_COUNTS_PER_MINUTE` (default 30) for this account this minute. `Retry-After` gives the seconds to wait |
+  | 503    | `PRESENCE_UNAVAILABLE` | Redis cannot be read. Try again shortly                                                                                       |
 
 ## Tests
 

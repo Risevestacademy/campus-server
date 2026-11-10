@@ -10,6 +10,7 @@ import {
 import type { AccountLookup } from '../infra/accounts.js';
 import type { Env } from '../infra/env.js';
 import type { PresenceStore } from '../infra/presence.js';
+import { CheckBudget } from '../media/check-budget.js';
 
 export const ONLINE_COUNT_PATH = '/admin/online';
 
@@ -25,12 +26,39 @@ export function registerOnlineCount(
   env: Env,
   accounts: AccountLookup,
   presence: PresenceStore,
+  now: () => number = Date.now,
 ): void {
+  const budget = new CheckBudget(env.WORLD_ONLINE_COUNTS_PER_MINUTE, now());
+
   answerPreflight(app, env, ONLINE_COUNT_PATH, 'GET');
-  app.get(ONLINE_COUNT_PATH, { onRequest: grantOrigin(env) }, handle);
+  app.get(
+    ONLINE_COUNT_PATH,
+    { onRequest: grantOrigin(env, ['retry-after']) },
+    handle,
+  );
 
   async function handle(request: FastifyRequest, reply: FastifyReply) {
-    const caller = await signIn(env, accounts, request, reply, 'online count');
+    // Spent before the account lookups, so a flood costs no queries.
+    const caller = await signIn(
+      env,
+      accounts,
+      request,
+      reply,
+      'online count',
+      ({ userId }) => {
+        const retryAfter = budget.take(userId, now());
+        if (retryAfter === 0) return undefined;
+        return reply
+          .status(429)
+          .header('retry-after', String(retryAfter))
+          .send(
+            errorBody(
+              'RATE_LIMITED',
+              'Too many online counts. Wait a minute and try again.',
+            ),
+          );
+      },
+    );
     if (!caller.ok) {
       return caller.reply;
     }

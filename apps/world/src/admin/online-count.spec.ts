@@ -36,8 +36,12 @@ describe('GET /admin/online', () => {
   let world: World | undefined;
   let presence: MemoryPresenceStore;
 
-  async function ask(headers: Record<string, string>, query = '') {
-    world ??= await buildWorld({ env, accounts, presence });
+  async function ask(
+    headers: Record<string, string>,
+    query = '',
+    worldEnv = env,
+  ) {
+    world ??= await buildWorld({ env: worldEnv, accounts, presence });
     return world.app.inject({
       method: 'GET',
       url: `${ONLINE_COUNT_PATH}${query}`,
@@ -148,6 +152,68 @@ describe('GET /admin/online', () => {
 
       expect(response.statusCode).toBe(403);
       expect(response.headers['access-control-allow-origin']).toBeUndefined();
+    });
+  });
+
+  describe('rate limit', () => {
+    const limited = routeEnv({ WORLD_ONLINE_COUNTS_PER_MINUTE: '2' });
+    const askLimited = (headers: Record<string, string>) =>
+      ask(headers, '', limited);
+
+    it('refuses an account past its budget, saying when to come back', async () => {
+      const headers = { authorization: await bearer() };
+
+      expect((await askLimited(headers)).statusCode).toBe(200);
+      expect((await askLimited(headers)).statusCode).toBe(200);
+      const refused = await askLimited(headers);
+
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toMatchObject({
+        error: { code: 'RATE_LIMITED' },
+      });
+      expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
+      expect(Number(refused.headers['retry-after'])).toBeLessThanOrEqual(60);
+    });
+
+    it('counts per account, not for everybody', async () => {
+      accounts.admins.add('ada');
+      const root = { authorization: await bearer() };
+
+      await askLimited(root);
+      await askLimited(root);
+      expect((await askLimited(root)).statusCode).toBe(429);
+
+      expect(
+        (await askLimited({ authorization: await bearer('ada') })).statusCode,
+      ).toBe(200);
+    });
+
+    it('spends nothing on callers it refuses at the door', async () => {
+      for (let i = 0; i < 3; i++) {
+        expect(
+          (await askLimited({ authorization: 'Bearer nope' })).statusCode,
+        ).toBe(401);
+      }
+
+      expect(
+        (await askLimited({ authorization: await bearer() })).statusCode,
+      ).toBe(200);
+    });
+
+    it('lets the web app read Retry-After', async () => {
+      const headers = {
+        origin: ORIGIN,
+        cookie: `campus_session=${await sessionToken('root')}`,
+      };
+      await askLimited(headers);
+      await askLimited(headers);
+
+      const refused = await askLimited(headers);
+
+      expect(refused.statusCode).toBe(429);
+      expect(refused.headers['access-control-expose-headers']).toContain(
+        'retry-after',
+      );
     });
   });
 
