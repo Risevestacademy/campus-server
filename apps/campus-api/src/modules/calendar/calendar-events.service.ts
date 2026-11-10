@@ -1,4 +1,3 @@
-import { ROOM_LINK_OPENS_EARLY_MS } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 
@@ -6,19 +5,12 @@ import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import type { RoomLinkTargetDto } from '../room-links/dto/room-link.dto.js';
-import {
-  RoomLinksService,
-  type RoomLinkWindow,
-} from '../room-links/room-links.service.js';
+import { RoomLinksService } from '../room-links/room-links.service.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import {
   CalendarGrantsService,
   type CalendarGrant,
 } from './calendar-grants.service.js';
-import {
-  CalendarNotConfiguredError,
-  CalendarUnavailableError,
-} from './calendar.exceptions.js';
 import type {
   CalendarEventDto,
   CalendarEventsDto,
@@ -39,9 +31,6 @@ import { extractRoomLinkCode } from './room-link.js';
 const PAGE_SIZE = 250;
 export const MAX_PAGES = 4;
 export const READ_BUDGET_MS = 20_000;
-export const ENTRY_READ_BUDGET_MS = 3_000;
-const ENTRY_EVENT_FIELDS =
-  'items(status,start,end,location,description,organizer(self))';
 
 const DAY_MS = 86_400_000;
 export const DEFAULT_SPAN_DAYS = 7;
@@ -100,86 +89,6 @@ export class CalendarEventsService {
       }
       await this.withdrawn(grant);
       return NOT_CONNECTED;
-    }
-  }
-
-  /**
-   * The maker's own event carrying this link that runs now or opens within
-   * the early window. Null whenever it cannot be told quickly.
-   */
-  async runningRoomLinkEvent(
-    makerId: string,
-    code: string,
-    now: Date = new Date(),
-  ): Promise<RoomLinkWindow | null> {
-    let grant: CalendarGrant | null;
-    try {
-      grant = await this.grants.find(makerId);
-    } catch (err) {
-      if (err instanceof CalendarNotConfiguredError) {
-        return null;
-      }
-      throw err;
-    }
-    if (!grant) {
-      return null;
-    }
-    try {
-      const url = new URL(PRIMARY_EVENTS_URL);
-      url.search = new URLSearchParams({
-        timeMin: now.toISOString(),
-        timeMax: new Date(
-          now.getTime() + ROOM_LINK_OPENS_EARLY_MS + 1,
-        ).toISOString(),
-        singleEvents: 'true',
-        orderBy: 'startTime',
-        maxResults: String(PAGE_SIZE),
-        fields: ENTRY_EVENT_FIELDS,
-      }).toString();
-      const { items = [] } = await this.api.get<GoogleEventList>(
-        grant,
-        url,
-        AbortSignal.timeout(ENTRY_READ_BUDGET_MS),
-      );
-      for (const item of items) {
-        const startsAt = item.start?.dateTime;
-        const endsAt = item.end?.dateTime;
-        if (
-          item.status === 'cancelled' ||
-          item.organizer?.self !== true ||
-          !startsAt ||
-          !endsAt ||
-          extractRoomLinkCode(
-            this.appUrl,
-            item.location ?? null,
-            item.description ?? null,
-          ) !== code
-        ) {
-          continue;
-        }
-        const window = {
-          startsAt: new Date(startsAt),
-          endsAt: new Date(endsAt),
-        };
-        if (window.endsAt.getTime() > window.startsAt.getTime()) {
-          return window;
-        }
-      }
-      return null;
-    } catch (err) {
-      if (err instanceof GrantWithdrawnError) {
-        await this.withdrawn(grant);
-      } else if (err instanceof CalendarNotConfiguredError) {
-        return null;
-      } else if (err instanceof CalendarUnavailableError) {
-        this.logger.info(
-          { userId: makerId, code },
-          'room link maker’s calendar unread; the window stands',
-        );
-      } else {
-        throw err;
-      }
-      return null;
     }
   }
 

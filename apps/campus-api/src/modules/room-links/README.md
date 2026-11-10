@@ -7,14 +7,13 @@ the person to the space.
 
 Routes:
 
-- `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/links` with `{ title }`, and
-  optionally `{ startsAt, endsAt }`, makes one.
+- `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/links` with `{ title }`
+  makes one.
 - `GET /v1/cohorts/{cohortId}/spaces/{spaceId}/links` lists a space's live
   links in the cohort, newest first.
-- `GET /v1/room-links/{code}` opens one: its cohort, space, title and window.
+- `GET /v1/room-links/{code}` opens one: its cohort, space, title, and its
+  run going on now or next.
 - `POST /v1/room-links/{code}/enter` enters through one: see below.
-- `PUT /v1/room-links/{code}/window` with `{ startsAt, endsAt }`, or `{}` for
-  none, sets when its event runs.
 - `DELETE /v1/room-links/{code}` revokes one.
 
 ## Decisions
@@ -47,25 +46,24 @@ Routes:
 The `/join/{code}` page calls `POST /v1/room-links/{code}/enter`, then walks
 the person to `spaceKey` with world's `goToSpace`.
 
-- **A window is when the event runs.** Staff give one when they make the
-  link, or later through `PUT .../window`. A link without one only shows the
-  way.
-- **The maker's calendar moves it.** Entering first reads the calendar of
-  whoever made the link (see the calendar module's README). An event of
-  theirs carrying the link that runs now moves the window to its times.
-  Otherwise the stored window stands.
-- **Entering while the window is open gives a pass.** From ten minutes before
-  it starts until it ends (`roomLinkOpen` in `@campus/space-access`), the
+- **Runs are when the event happens.** Each run of a Google Calendar event
+  carrying the link, organised by somebody who manages the link's cohort, is
+  synced into `room_link_instances` (see the calendar module's README). A
+  link no synced event carries only shows the way. `startsAt` and `endsAt` on
+  a link are its run going on now, else its next; cancelled runs are left
+  out.
+- **Entering while a run is open gives a pass.** From ten minutes before a
+  run starts until it ends (`roomLinkOpen` in `@campus/space-access`), the
   caller gets a row in `room_link_passes`, and `admitted: true`. World lets
-  anybody holding a pass into the link's space, in the link's cohort, while
-  the window is open, whatever the space's list or a lock says. The rest of
+  anybody holding a pass into the link's space, in the link's cohort,
+  whenever a run of the link is open, whatever the space's list or a lock
+  says. The rest of
   the door still holds: a removal by staff, a space not yet set up, and a
   place in the cohort that has lapsed all keep them out. A walk about to be
   refused reads the passes once more first, in case one was made a moment
-  ago and world has not read it yet. Somebody inside when the window ends stays
+  ago and world has not read it yet. Somebody inside when a run ends stays
   until they leave, as at any door.
-- **A pass follows its link.** Moving the window moves every pass with it,
-  and revoking the link ends them. Every change tells world to read again.
+- **A pass follows its link.** A run moved or cancelled in Google moves or
+  ends what the pass allows, and revoking the link ends it. Every change
+  tells world to read again.
 - **Admins are always admitted**, and need no pass.
-- **Changing a window is audited** as `room_link_window_changed`; a move read
-  from the calendar is not, since nobody made it.

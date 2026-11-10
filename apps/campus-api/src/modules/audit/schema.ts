@@ -174,7 +174,7 @@ export enum AuditAction {
   NoticeRemoved = 'notice_removed',
   RoomLinkCreated = 'room_link_created',
   RoomLinkRevoked = 'room_link_revoked',
-  /** Staff set, moved or cleared when a room link's event runs. */
+  /** No longer written: runs are synced from the calendar. */
   RoomLinkWindowChanged = 'room_link_window_changed',
   /** An admin ended somebody else's claim on a desk. */
   DeskFreed = 'desk_freed',

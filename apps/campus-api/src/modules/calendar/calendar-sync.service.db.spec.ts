@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { randomBytes } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -541,6 +542,38 @@ describe('an incremental read', () => {
     expect(requestedUrl(2).searchParams.get('syncToken')).toBeNull();
     expect((await instances())[0].cancelledAt).toEqual(NOW);
     expect((await grantRow(mentorId)).syncToken).toBe('fresh');
+  });
+});
+
+describe('telling world', () => {
+  it('says so when runs change, and stays quiet when a read changes none', async () => {
+    const heard: string[] = [];
+    const stop = await db.$client.listen(SPACES_CHANGED_CHANNEL, (payload) =>
+      heard.push(payload),
+    );
+    const told = async () => {
+      await db.execute(sql`select 1`);
+      return heard.length;
+    };
+
+    google(answer(200, { items: [event()], nextSyncToken: 'sync-1' }));
+    await sync.sync(mentorId, NOW);
+    expect(await told()).toBe(1);
+
+    google(answer(200, { items: [event()], nextSyncToken: 'sync-2' }));
+    await sync.sync(mentorId, NOW);
+    expect(await told()).toBe(1);
+
+    google(
+      answer(200, {
+        items: [event({ status: 'cancelled' })],
+        nextSyncToken: 'sync-3',
+      }),
+    );
+    await sync.sync(mentorId, NOW);
+    expect(await told()).toBe(2);
+
+    await stop();
   });
 });
 

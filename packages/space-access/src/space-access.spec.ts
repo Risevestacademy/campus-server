@@ -505,10 +505,4 @@ describe('a room link’s window', () => {
     expect(roomLinkOpen({ startsAt, endsAt }, at(30 * 60_000))).toBe(true);
     expect(roomLinkOpen({ startsAt, endsAt }, endsAt)).toBe(false);
   });
-
-  it('admits nobody without a window', () => {
-    expect(roomLinkOpen({ startsAt: null, endsAt: null }, startsAt)).toBe(
-      false,
-    );
-  });
 });

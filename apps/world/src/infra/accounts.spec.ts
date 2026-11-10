@@ -943,7 +943,7 @@ describe("world's room link passes, against campus-api's schema", () => {
   const ADA = 'fffffff4-0000-4000-8000-000000000001';
   const GRACE = 'fffffff4-0000-4000-8000-000000000002';
 
-  it('reads the passes on this map whose window has not ended, revoked links left out', async () => {
+  it('reads the passes on this map with a run open or opening within the hour, revoked links and cancelled runs left out', async () => {
     for (const id of [ADA, GRACE]) {
       await db.query(`insert into users (id, email) values ($1, $2)`, [
         id,
@@ -973,34 +973,50 @@ describe("world's room link passes, against campus-api's schema", () => {
     const link = async (
       code: string,
       spaceId: string,
-      endsInHours: number,
+      runs: { endsInHours: number; cancelled?: boolean }[],
       revoked = false,
     ) => {
       const id = (
         await db.query<{ id: string }>(
-          `insert into room_links (code, cohort_id, space_id, title, created_by, created_at, starts_at, ends_at, revoked_at)
-           values ($1, $2, $3, $1, $4, $5, $6, $7, $8) returning id`,
+          `insert into room_links (code, cohort_id, space_id, title, created_by, created_at, revoked_at)
+           values ($1, $2, $3, $1, $4, $5, $6) returning id`,
           [
             code,
             COHORT,
             spaceId,
             ADA,
             new Date(NOW.getTime() - 3 * HOUR),
-            new Date(NOW.getTime() + (endsInHours - 1) * HOUR),
-            new Date(NOW.getTime() + endsInHours * HOUR),
             revoked ? new Date(NOW.getTime() - HOUR) : null,
           ],
         )
       ).rows[0].id;
+      for (const [n, run] of runs.entries()) {
+        await db.query(
+          `insert into room_link_instances (room_link_id, organizer_id, google_event_id, starts_at, ends_at, cancelled_at)
+           values ($1, $2, $3, $4, $5, $6)`,
+          [
+            id,
+            ADA,
+            `${code}_${n}`,
+            new Date(NOW.getTime() + (run.endsInHours - 1) * HOUR),
+            new Date(NOW.getTime() + run.endsInHours * HOUR),
+            run.cancelled ? NOW : null,
+          ],
+        );
+      }
       await db.query(
         `insert into room_link_passes (room_link_id, user_id) values ($1, $2), ($1, $3)`,
         [id, ADA, GRACE],
       );
     };
-    await link('LiveL1nk00', room, 1);
-    await link('EndedL1nk0', room, -1);
-    await link('Rev0kedL1n', room, 1, true);
-    await link('AnnexL1nk0', annex, 1);
+    await link('LiveL1nk00', room, [
+      { endsInHours: -1 },
+      { endsInHours: 1 },
+      { endsInHours: 3 },
+      { endsInHours: 25, cancelled: true },
+    ]);
+    await link('Rev0kedL1n', room, [{ endsInHours: 1 }], true);
+    await link('AnnexL1nk0', annex, [{ endsInHours: 1 }]);
 
     const rows = (
       await db.query<{
