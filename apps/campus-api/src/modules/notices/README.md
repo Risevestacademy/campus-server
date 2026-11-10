@@ -85,6 +85,9 @@ if the notice has gone, the transaction rolls back and nothing is written. If
 the notice vanished or became invisible, the answer is the same 404 as any
 invisible notice.
 
+Visibility is the only gate. An admin sees every non-removed notice, so an
+admin can comment on any non-removed notice, with or without a membership.
+
 Comments are not tied to a notice's lifecycle by a cascade. A notice is
 soft-removed (`removed_at`), never deleted by the API; its comments stay in the
 table and become unreachable while the notice is removed. A member who leaves

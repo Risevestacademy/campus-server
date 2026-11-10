@@ -80,7 +80,8 @@ export function ApiAddNoticeComment(): MethodDecorator {
         'Adds the caller’s comment under a notice they can see. The author ' +
         'comes from the session and the target from the URL; both are ' +
         'ignored in the body. The comment and its audit entry are written ' +
-        'together, or neither is written.',
+        'together, or neither is written. An admin sees every non-removed ' +
+        'notice, so an admin can comment on any of them.',
     }),
     ApiCreatedResponse({ type: NoticeCommentDto }),
     ApiBadRequestResponse({
