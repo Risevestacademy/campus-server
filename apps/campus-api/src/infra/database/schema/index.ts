@@ -13,3 +13,4 @@ export * from '../../../modules/notifications/schema.js';
 export * from '../../../modules/room-links/schema.js';
 export * from '../../../modules/tracks/schema.js';
 export * from '../../../modules/users/schema.js';
+export * from '../../scheduler/schema.js';

@@ -7,6 +7,7 @@ import { AppService } from './app.service.js';
 import { HealthModule } from './health/health.module.js';
 import { AppConfigModule } from './infra/config/config.module.js';
 import { DatabaseModule } from './infra/database/database.module.js';
+import { SchedulerModule } from './infra/scheduler/scheduler.module.js';
 import { EmailModule } from './infra/email/email.module.js';
 import { AnalyticsModule } from './infra/analytics/analytics.module.js';
 import { ErrorReportingModule } from './infra/error-reporting/error-reporting.module.js';
@@ -37,6 +38,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     AnalyticsModule,
     AppLoggerModule,
     DatabaseModule,
+    SchedulerModule,
     EmailModule,
     HealthModule,
     AuthModule,

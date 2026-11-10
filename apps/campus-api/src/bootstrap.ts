@@ -22,6 +22,7 @@ import {
 } from './infra/error-reporting/error-reporting.module.js';
 import { CORRELATION_ID_HEADER } from './infra/logger/logger.module.js';
 import { gracefulShutdown } from './infra/shutdown.js';
+import { Scheduler } from './infra/scheduler/scheduler.js';
 import { ValidationException } from './shared/exceptions/index.js';
 import {
   DomainExceptionFilter,
@@ -155,5 +156,17 @@ async function configureAndListen(
     res.json(document);
   });
 
+  if (!config.SCHEDULER_TIMER_ENABLED) {
+    const scheduler = app.get(Scheduler);
+    app.use((_req: unknown, _res: unknown, next: () => void) => {
+      scheduler.nudge();
+      next();
+    });
+  }
+
   await app.listen(process.env.PORT ?? config.PORT);
+
+  if (config.SCHEDULER_TIMER_ENABLED) {
+    app.get(Scheduler).start();
+  }
 }

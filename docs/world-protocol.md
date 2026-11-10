@@ -161,6 +161,17 @@ meanwhile. You cannot predict a refusal, so draw the step and let the
 `moveResult` correct it. If your saved place is in a space you may no longer
 enter, you arrive at the spawn.
 
+**Spaces can have a capacity.** A space with one holds at most that many
+people; a step into it once it is full is answered `full`, even for an
+admin or somebody let in by a yes to `requestEntry`. A space you may not
+enter at all is `refused`, full or not. No capacity means no limit, which is
+how every space starts. Lowering a space's capacity moves nobody already
+inside: it is only asked about on the way in, like the rest of the door. A
+saved place in a space that has filled up since sends you to the spawn, but
+your own place never counts against you, so reopening the app while you
+stand inside keeps you there. The count is per world server, which is all of
+it while world runs as one replica.
+
 In local development only, a server with no published map to load (none
 configured, none published, or Sanity out of reach) runs on a placeholder
 instead: `id` and `version` are both `"placeholder"`, there is nothing to
@@ -183,12 +194,13 @@ The client says which way, never where to. The server decides every position.
 3. **Every admitted move is answered with a `moveResult`**, in the order sent,
    carrying your `seq` and where the server has you:
 
-   | `outcome`  | Meaning                                                  | What to draw                  |
-   | ---------- | -------------------------------------------------------- | ----------------------------- |
-   | `moved`    | One tile, as you predicted                               | Nothing changes               |
-   | `blocked`  | Not walkable; you turn to face it without moving         | Snap back, facing the new way |
-   | `refused`  | Floor, in a space you may not enter; you turn to face it | Snap back, facing the new way |
-   | `too_fast` | Over walking speed; nothing happened, not even the turn  | Snap back                     |
+   | `outcome`  | Meaning                                                  | What to draw                                         |
+   | ---------- | -------------------------------------------------------- | ---------------------------------------------------- |
+   | `moved`    | One tile, as you predicted                               | Nothing changes                                      |
+   | `blocked`  | Not walkable; you turn to face it without moving         | Snap back, facing the new way                        |
+   | `refused`  | Floor, in a space you may not enter; you turn to face it | Snap back, facing the new way                        |
+   | `full`     | Floor, in a space at capacity; you turn to face it       | Snap back, facing the new way; say the space is full |
+   | `too_fast` | Over walking speed; nothing happened, not even the turn  | Snap back                                            |
 
 4. **Correct against the server, then replay what it has not answered yet.**
    By the time a `moveResult` arrives you may have predicted further steps.
@@ -235,6 +247,7 @@ connected to another ends the walk with `elsewhere`.
   | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                       | Nothing                                                             |
   | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
   | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
+  | `full`           | A space at capacity is in the way, theirs or another; you stopped beside the first one (`spaceKey`). `mayAsk` is `false`            | Say the space is full                                               |
   | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
   | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                   | Say they cannot be reached right now                                |
   | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit | Say so                                                              |
@@ -266,7 +279,7 @@ The same walk, to a place instead of a person: a room link's page sends
 - **`arrived`** means you stand on the tile the walk aimed at. **`refused`**
   works as for a person: a closed space in the way, or the space you were
   walking into or the tile is in, stops you beside it with `spaceKey` and
-  `mayAsk`. `gone` and `elsewhere` only end walks to somebody.
+  `mayAsk`; **`full`** does the same for a space at capacity. `gone` and `elsewhere` only end walks to somebody.
 - **Stopping and replacing** work as for `goTo`: `stopWalking`, a `move`, or
   any new `goTo`, `goToSpace` or `goToTile` ends the walk going.
 

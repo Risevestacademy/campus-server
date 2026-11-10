@@ -15,7 +15,6 @@ import {
   CalendarGrantsService,
   type CalendarGrant,
 } from './calendar-grants.service.js';
-import { CalendarRevocationService } from './calendar-revocation.service.js';
 import {
   CalendarNotConfiguredError,
   CalendarUnavailableError,
@@ -26,9 +25,10 @@ import type {
   CalendarEventsQueryDto,
 } from './dto/calendar-events.dto.js';
 import {
-  CALENDAR_FETCH,
-  GrantWithdrawnError,
-} from './google-calendar.client.js';
+  GoogleCalendarApi,
+  PRIMARY_EVENTS_URL,
+} from './google-calendar-api.js';
+import { GrantWithdrawnError } from './google-calendar.client.js';
 import {
   GOOGLE_EVENT_FIELDS,
   toCalendarEvent,
@@ -36,13 +36,9 @@ import {
 } from './google-event.js';
 import { extractRoomLinkCode } from './room-link.js';
 
-const EVENTS_URL =
-  'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 const PAGE_SIZE = 250;
 export const MAX_PAGES = 4;
-/** One read, however many requests it takes: the refresh and every page. */
 export const READ_BUDGET_MS = 20_000;
-/** Somebody is waiting to walk in, so a slow Google leaves the window be. */
 export const ENTRY_READ_BUDGET_MS = 3_000;
 const ENTRY_EVENT_FIELDS =
   'items(status,start,end,location,description,organizer(self))';
@@ -57,21 +53,12 @@ const NOT_CONNECTED: CalendarEventsDto = {
   truncated: false,
 };
 
-interface EventsRead {
-  events: CalendarEventDto[];
-  /** The room link code found in each event, by index. */
-  codes: (string | null)[];
-  truncated: boolean;
-}
-
 interface GoogleEventList {
   items?: GoogleEvent[];
   nextPageToken?: string;
 }
 
-class AccessTokenRejected extends Error {}
-
-/** A member's events, read from Google when asked and never stored. */
+/** A member's events, read from Google when asked. */
 @Injectable()
 export class CalendarEventsService {
   private readonly appUrl: string;
@@ -79,8 +66,7 @@ export class CalendarEventsService {
   constructor(
     private readonly grants: CalendarGrantsService,
     private readonly tokens: AccessTokenCache,
-    private readonly revocations: CalendarRevocationService,
-    @Inject(CALENDAR_FETCH) private readonly fetch: typeof globalThis.fetch,
+    private readonly api: GoogleCalendarApi,
     @Inject(CONFIG) config: Env,
     private readonly roomLinks: RoomLinksService,
     private readonly logger: PinoLogger,
@@ -93,17 +79,14 @@ export class CalendarEventsService {
     user: AuthenticatedUser,
     query: CalendarEventsQueryDto,
   ): Promise<CalendarEventsDto> {
-    const userId = user.id;
-    // First, so the sweep's timing does not depend on who is asking.
-    this.revocations.sweepIfDue();
-    const grant = await this.grants.find(userId);
+    const grant = await this.grants.find(user.id);
     const { from, to } = window(query);
     if (!grant) {
       return NOT_CONNECTED;
     }
     try {
       const signal = AbortSignal.timeout(READ_BUDGET_MS);
-      const { events, codes, truncated } = await this.read(
+      const { events, codes, truncated } = await this.list(
         grant,
         from,
         to,
@@ -115,19 +98,14 @@ export class CalendarEventsService {
       if (!(err instanceof GrantWithdrawnError)) {
         throw err;
       }
-      this.tokens.evict(userId);
-      await this.grants.forget(grant);
-      this.logger.info({ userId }, 'calendar access withdrawn at google');
+      await this.withdrawn(grant);
       return NOT_CONNECTED;
     }
   }
 
   /**
-   * The maker's own event carrying this room link that runs now, or starts
-   * within the link's early opening: its times. Null when there is none,
-   * when the maker has not connected a calendar, or when Google does not
-   * answer in time; the link's stored window then stands. Events somebody
-   * else organised are left out, so an invitation cannot move a window.
+   * The maker's own event carrying this link that runs now or opens within
+   * the early window. Null whenever it cannot be told quickly.
    */
   async runningRoomLinkEvent(
     makerId: string,
@@ -147,9 +125,21 @@ export class CalendarEventsService {
       return null;
     }
     try {
-      const signal = AbortSignal.timeout(ENTRY_READ_BUDGET_MS);
-      const items = await this.withToken(grant, signal, (token) =>
-        this.running(token, now, signal),
+      const url = new URL(PRIMARY_EVENTS_URL);
+      url.search = new URLSearchParams({
+        timeMin: now.toISOString(),
+        timeMax: new Date(
+          now.getTime() + ROOM_LINK_OPENS_EARLY_MS + 1,
+        ).toISOString(),
+        singleEvents: 'true',
+        orderBy: 'startTime',
+        maxResults: String(PAGE_SIZE),
+        fields: ENTRY_EVENT_FIELDS,
+      }).toString();
+      const { items = [] } = await this.api.get<GoogleEventList>(
+        grant,
+        url,
+        AbortSignal.timeout(ENTRY_READ_BUDGET_MS),
       );
       for (const item of items) {
         const startsAt = item.start?.dateTime;
@@ -178,12 +168,7 @@ export class CalendarEventsService {
       return null;
     } catch (err) {
       if (err instanceof GrantWithdrawnError) {
-        this.tokens.evict(makerId);
-        await this.grants.forget(grant);
-        this.logger.info(
-          { userId: makerId },
-          'calendar access withdrawn at google',
-        );
+        await this.withdrawn(grant);
       } else if (err instanceof CalendarNotConfiguredError) {
         return null;
       } else if (err instanceof CalendarUnavailableError) {
@@ -198,73 +183,30 @@ export class CalendarEventsService {
     }
   }
 
-  private async running(
-    token: string,
-    now: Date,
-    signal: AbortSignal,
-  ): Promise<GoogleEvent[]> {
-    const url = new URL(EVENTS_URL);
-    url.search = new URLSearchParams({
-      timeMin: now.toISOString(),
-      timeMax: new Date(
-        now.getTime() + ROOM_LINK_OPENS_EARLY_MS + 1,
-      ).toISOString(),
-      singleEvents: 'true',
-      orderBy: 'startTime',
-      maxResults: String(PAGE_SIZE),
-      fields: ENTRY_EVENT_FIELDS,
-    }).toString();
-    return (await this.get(url, token, signal)).items ?? [];
-  }
-
-  private read(
-    grant: CalendarGrant,
-    from: Date,
-    to: Date,
-    signal: AbortSignal,
-  ): Promise<EventsRead> {
-    return this.withToken(grant, signal, (token) =>
-      this.list(token, from, to, signal),
+  private async withdrawn(grant: CalendarGrant): Promise<void> {
+    this.tokens.evict(grant.userId);
+    await this.grants.forget(grant);
+    this.logger.info(
+      { userId: grant.userId },
+      'calendar access withdrawn at google',
     );
   }
 
-  /** With a fresh access token once, if Google rejects the cached one. */
-  private async withToken<T>(
-    grant: CalendarGrant,
-    signal: AbortSignal,
-    use: (token: string) => Promise<T>,
-  ): Promise<T> {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        const token = await this.tokens.get(grant, signal);
-        return await use(token);
-      } catch (err) {
-        if (!(err instanceof AccessTokenRejected)) {
-          throw err;
-        }
-        this.tokens.evict(grant.userId);
-        if (attempt === 2) {
-          this.logger.error(
-            { userId: grant.userId },
-            'google rejected a fresh access token',
-          );
-          throw new CalendarUnavailableError();
-        }
-      }
-    }
-  }
-
   private async list(
-    token: string,
+    grant: CalendarGrant,
     from: Date,
     to: Date,
     signal: AbortSignal,
-  ): Promise<EventsRead> {
+  ): Promise<{
+    events: CalendarEventDto[];
+    codes: (string | null)[];
+    truncated: boolean;
+  }> {
     const events: CalendarEventDto[] = [];
     const codes: (string | null)[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const url = new URL(EVENTS_URL);
+      const url = new URL(PRIMARY_EVENTS_URL);
       url.search = new URLSearchParams({
         timeMin: from.toISOString(),
         timeMax: to.toISOString(),
@@ -274,7 +216,7 @@ export class CalendarEventsService {
         fields: GOOGLE_EVENT_FIELDS,
         ...(pageToken ? { pageToken } : {}),
       }).toString();
-      const body = await this.get(url, token, signal);
+      const body = await this.api.get<GoogleEventList>(grant, url, signal);
       for (const item of body.items ?? []) {
         for (const event of toCalendarEvent(item)) {
           events.push(event);
@@ -295,52 +237,7 @@ export class CalendarEventsService {
     return { events, codes, truncated: pageToken !== undefined };
   }
 
-  private async get(
-    url: URL,
-    token: string,
-    signal: AbortSignal,
-  ): Promise<GoogleEventList> {
-    let res: Response;
-    try {
-      res = await this.fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal,
-      });
-    } catch (err) {
-      this.logger.error({ err }, 'google calendar unreachable');
-      throw new CalendarUnavailableError();
-    }
-
-    if (res.ok) {
-      try {
-        return (await res.json()) as GoogleEventList;
-      } catch (err) {
-        this.logger.error({ err }, 'google calendar answered unreadably');
-        throw new CalendarUnavailableError();
-      }
-    }
-    if (res.status === 401) {
-      throw new AccessTokenRejected();
-    }
-    const text = await res.text().catch(() => '');
-    if (
-      res.status === 403 &&
-      /insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT/.test(text)
-    ) {
-      throw new GrantWithdrawnError();
-    }
-    this.logger.error(
-      { status: res.status, body: text.slice(0, 500) },
-      'google calendar refused a read',
-    );
-    throw new CalendarUnavailableError();
-  }
-
-  /**
-   * Sets `room` on the events whose links the member may open, in one lookup
-   * after the read. The events are worth more than the rooms, so a failed
-   * lookup leaves every `room` null rather than failing the answer.
-   */
+  /** A failed lookup leaves every room null rather than failing the read. */
   private async placeInRooms(
     user: AuthenticatedUser,
     events: CalendarEventDto[],

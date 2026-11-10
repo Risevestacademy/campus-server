@@ -28,6 +28,7 @@ export interface ModerationDeps {
   requests: Pick<EntryRequestsFeature, 'dropPass' | 'review'>;
   media: ReturnType<typeof mediaCredentials>;
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
+  isFull(connection: Connection, spaceKey: string): boolean;
   /** Put outside by staff: what a step onto that tile would do, and the end of any walk. */
   movedOut(target: Connection, player: Player): void;
 }
@@ -36,7 +37,7 @@ export type Moderation = ReturnType<typeof createModeration>;
 
 export function createModeration(
   ctx: ModerationContext,
-  { doors, requests, media, mayStepInto, movedOut }: ModerationDeps,
+  { doors, requests, media, mayStepInto, isFull, movedOut }: ModerationDeps,
 ) {
   const { app, map, connections, players, send, sendFrame } = ctx;
   const muteMicrophone = media ? microphoneMuter(media) : undefined;
@@ -131,8 +132,14 @@ export function createModeration(
     const standing = players.get(target);
     const outside =
       standing &&
-      nearestOutside(map.grid, map.spaces, standing, spaceKey, (into) =>
-        mayStepInto(target, into, new Date(now)),
+      nearestOutside(
+        map.grid,
+        map.spaces,
+        standing,
+        spaceKey,
+        // Not into a full space either: capacity holds for a move by staff.
+        (into) =>
+          mayStepInto(target, into, new Date(now)) && !isFull(target, into),
       );
     const player = outside && players.place(target, outside);
     if (!player) {

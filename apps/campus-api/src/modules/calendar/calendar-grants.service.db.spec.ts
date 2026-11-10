@@ -10,7 +10,7 @@ import type { Env } from '../../infra/config/config.module.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import { SystemRole, UserStatus, users } from '../users/schema.js';
 import { CalendarGrantsService } from './calendar-grants.service.js';
-import { googleCalendarGrants } from './schema.js';
+import { googleCalendarChannels, googleCalendarGrants } from './schema.js';
 
 const MIGRATIONS = fileURLToPath(
   new URL('../../infra/database/migrations', import.meta.url),
@@ -364,5 +364,53 @@ describe('requestLapsedRevocations', () => {
     await grants.requestLapsedRevocations(NOW);
 
     await expect(grants.requestLapsedRevocations(NOW)).resolves.toBe(0);
+  });
+});
+
+describe('watchable', () => {
+  async function connected(
+    email: string,
+    overrides: Partial<typeof users.$inferInsert> = {},
+  ): Promise<string> {
+    const id = await person(email, overrides);
+    await grants.save(id, `token-of-${email}`);
+    return id;
+  }
+
+  it('picks those who manage room links, and any still watched, never-synced first', async () => {
+    const mentor = await connected('mentor@campus.local');
+    await member(mentor);
+    const professor = await connected('professor@campus.local');
+    await member(professor, { role: CohortRole.Professor });
+    await db
+      .update(googleCalendarGrants)
+      .set({ syncedAt: new Date(NOW.getTime() - DAY) });
+    const admin = await connected('admin@campus.local', {
+      systemRole: SystemRole.Admin,
+    });
+    const student = await connected('student@campus.local');
+    const formerMentor = await connected('former@campus.local');
+    await member(formerMentor, { leftAt: new Date(NOW.getTime() - DAY) });
+    await db.insert(googleCalendarChannels).values({
+      id: '11111111-1111-4111-8111-111111111111',
+      userId: formerMentor,
+      resourceId: 'res',
+      tokenHash: 'x'.repeat(64),
+      expiresAt: NOW,
+    });
+
+    const picked = (await grants.watchable(NOW, 10)).map((g) => g.userId);
+
+    expect(picked.slice(0, 2).sort()).toEqual([admin, formerMentor].sort());
+    expect(picked.slice(2).sort()).toEqual([mentor, professor].sort());
+    expect(picked).not.toContain(student);
+  });
+
+  it('leaves out grants on their way out', async () => {
+    const mentor = await connected('mentor@campus.local');
+    await member(mentor);
+    await grants.requestRevocation(mentor, NOW);
+
+    await expect(grants.watchable(NOW, 10)).resolves.toEqual([]);
   });
 });
