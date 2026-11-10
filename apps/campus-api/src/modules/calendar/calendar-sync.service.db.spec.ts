@@ -10,7 +10,7 @@ import type { Env } from '../../infra/config/config.module.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import { AudioMode, SpaceAccess, maps, spaces } from '../maps/schema.js';
 import { roomLinkInstances, roomLinks } from '../room-links/schema.js';
-import { SystemRole, users } from '../users/schema.js';
+import { SystemRole, UserStatus, users } from '../users/schema.js';
 import type { AccessTokenCache } from './access-token-cache.js';
 import { CalendarGrantsService } from './calendar-grants.service.js';
 import { CalendarSyncService } from './calendar-sync.service.js';
@@ -329,26 +329,101 @@ describe('one read', () => {
   });
 });
 
-describe('forgetOrganizer', () => {
-  it('cancels the runs still to come, and leaves the past alone', async () => {
-    google(
-      answer(200, {
-        items: [
-          event({
-            id: 'standup_20261108T100000Z',
-            start: { dateTime: '2026-11-08T10:00:00Z' },
-            end: { dateTime: '2026-11-08T11:00:00Z' },
-          }),
-          event(),
-        ],
-        nextSyncToken: 's',
-      }),
-    );
+describe('reconcile', () => {
+  const past = event({
+    id: 'standup_20261108T100000Z',
+    start: { dateTime: '2026-11-08T10:00:00Z' },
+    end: { dateTime: '2026-11-08T11:00:00Z' },
+  });
+
+  async function synced(items: GoogleEvent[]) {
+    google(answer(200, { items, nextSyncToken: 's' }));
     await sync.sync(mentorId, NOW);
+  }
 
-    await sync.forgetOrganizer(mentorId, NOW);
+  const cancelled = async () => (await instances()).map((i) => i.cancelledAt);
 
-    expect((await instances()).map((i) => i.cancelledAt)).toEqual([null, NOW]);
+  it('leaves alone runs whose organiser still manages the link', async () => {
+    await synced([past, event()]);
+
+    await expect(sync.reconcile(NOW)).resolves.toBe(0);
+    expect(await cancelled()).toEqual([null, null]);
+  });
+
+  it('cancels the runs to come of an organiser who left, and keeps the past', async () => {
+    await synced([past, event()]);
+    await db
+      .update(cohortMembers)
+      .set({ leftAt: NOW })
+      .where(eq(cohortMembers.userId, mentorId));
+
+    await expect(sync.reconcile(NOW)).resolves.toBe(1);
+    expect(await cancelled()).toEqual([null, NOW]);
+  });
+
+  it('cancels only the cohort an organiser stopped managing', async () => {
+    const otherLink = await link(OTHER_CODE, otherCohortId);
+    await db.insert(cohortMembers).values({
+      cohortId: otherCohortId,
+      userId: mentorId,
+      role: CohortRole.Mentor,
+    });
+    await synced([
+      event(),
+      event({
+        id: 'review_20261111T100000Z',
+        start: { dateTime: '2026-11-11T10:00:00Z' },
+        end: { dateTime: '2026-11-11T11:00:00Z' },
+        location: `${APP_URL}/join/${OTHER_CODE}`,
+      }),
+    ]);
+    await db
+      .update(cohortMembers)
+      .set({ leftAt: NOW })
+      .where(eq(cohortMembers.cohortId, otherCohortId));
+
+    await sync.reconcile(NOW);
+
+    const rows = await instances();
+    expect(
+      rows.map((r) => [r.roomLinkId, r.cancelledAt === null ? 'live' : 'gone']),
+    ).toEqual([
+      [linkId, 'live'],
+      [otherLink, 'gone'],
+    ]);
+  });
+
+  it('cancels the runs to come of a revoked link', async () => {
+    await synced([event()]);
+    await db
+      .update(roomLinks)
+      .set({ revokedAt: new Date() })
+      .where(eq(roomLinks.id, linkId));
+
+    await sync.reconcile(NOW);
+
+    expect(await cancelled()).toEqual([NOW]);
+  });
+
+  it('cancels the runs to come of a suspended organiser', async () => {
+    await synced([event()]);
+    await db
+      .update(users)
+      .set({ status: UserStatus.Suspended })
+      .where(eq(users.id, mentorId));
+
+    await sync.reconcile(NOW);
+
+    expect(await cancelled()).toEqual([NOW]);
+  });
+
+  it('keeps an admin’s runs in any cohort', async () => {
+    const adminId = await person('admin@campus.local', SystemRole.Admin);
+    await grants.save(adminId, 'admin-refresh');
+    google(answer(200, { items: [event()], nextSyncToken: 's' }));
+    await sync.sync(adminId, NOW);
+
+    await expect(sync.reconcile(NOW)).resolves.toBe(0);
   });
 });
 

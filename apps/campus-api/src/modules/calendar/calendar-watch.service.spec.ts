@@ -17,7 +17,7 @@ const channels = { ensure: vi.fn(), stopAll: vi.fn() };
 const sync = {
   managesRoomLinks: vi.fn(),
   sync: vi.fn(),
-  forgetOrganizer: vi.fn(),
+  reconcile: vi.fn(),
 };
 const revocations = { sweep: vi.fn() };
 const logger = { error: vi.fn(), setContext: vi.fn() };
@@ -65,14 +65,31 @@ describe('watchAll', () => {
     ]);
   });
 
-  it('stops watching somebody who no longer manages room links, and cancels their runs to come', async () => {
+  it('reconciles every run to come first', async () => {
+    grants.watchable.mockResolvedValue([]);
+
+    await watch().watchAll(NOW);
+
+    expect(sync.reconcile).toHaveBeenCalledWith(NOW);
+  });
+
+  it('still syncs a calendar whose channel could not be opened', async () => {
+    grants.watchable.mockResolvedValue([{ userId: 'user-1', syncedAt: null }]);
+    channels.ensure.mockRejectedValue(new Error('push refused'));
+
+    await watch().watchAll(NOW);
+
+    expect(sync.sync).toHaveBeenCalledWith('user-1', NOW);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops watching somebody who no longer manages room links', async () => {
     grants.watchable.mockResolvedValue([{ userId: 'user-1', syncedAt: null }]);
     sync.managesRoomLinks.mockResolvedValue(false);
 
     await watch().watchAll(NOW);
 
     expect(channels.stopAll).toHaveBeenCalledWith(grant);
-    expect(sync.forgetOrganizer).toHaveBeenCalledWith('user-1', NOW);
     expect(channels.ensure).not.toHaveBeenCalled();
     expect(sync.sync).not.toHaveBeenCalled();
   });
@@ -85,8 +102,8 @@ describe('watchAll', () => {
     grants.find.mockImplementation((userId: string) =>
       Promise.resolve({ ...grant, userId }),
     );
-    channels.ensure.mockImplementation((g: { userId: string }) =>
-      g.userId === 'a'
+    sync.sync.mockImplementation((userId: string) =>
+      userId === 'a'
         ? Promise.reject(new Error('google down'))
         : Promise.resolve(),
     );

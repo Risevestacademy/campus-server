@@ -50,6 +50,7 @@ export class CalendarWatchService implements OnModuleInit {
     if (!this.config.FF_GOOGLE_CALENDAR_ENABLED) {
       return;
     }
+    await this.sync.reconcile(now);
     const grants = await this.grants.watchable(now, GRANTS_PER_RUN);
     for (let i = 0; i < grants.length; i += PARALLEL_GRANTS) {
       await Promise.all(
@@ -86,10 +87,16 @@ export class CalendarWatchService implements OnModuleInit {
     }
     if (!(await this.sync.managesRoomLinks(userId, now))) {
       await this.channels.stopAll(grant);
-      await this.sync.forgetOrganizer(userId, now);
       return;
     }
-    await this.channels.ensure(grant, now);
+    try {
+      await this.channels.ensure(grant, now);
+    } catch (err) {
+      this.logger.error(
+        { err, userId },
+        'calendar channel not opened; syncing without push',
+      );
+    }
     if (syncNow) {
       await this.sync.sync(userId, now);
     }

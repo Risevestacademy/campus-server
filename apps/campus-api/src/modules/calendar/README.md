@@ -165,6 +165,12 @@ Nothing else of the event is kept.
   minutes, takes the 100 synced longest ago).
 - **One at a time.** A sync holds a lease on the grant. A change arriving
   meanwhile leaves word, and the holder reads again before letting go.
+- **Reconciling.** Google's feed only returns events that changed, so each
+  `calendar-sync` run also cancels, across every instance, the runs still to
+  come whose link was revoked or whose organiser no longer manages its
+  cohort. Past runs are kept.
+- **Push is not required.** A channel that cannot be opened is logged, and
+  the calendar is synced anyway.
 - **Connecting** opens the channel and syncs straight away. Somebody who
   stops managing room links has their channels stopped.
 

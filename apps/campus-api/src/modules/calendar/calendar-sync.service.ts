@@ -2,10 +2,15 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   and,
   eq,
+  exists,
   gt,
   inArray,
+  isNotNull,
   isNull,
+  ne,
+  notExists,
   notInArray,
+  or,
   sql,
   type SQL,
 } from 'drizzle-orm';
@@ -21,7 +26,12 @@ import {
   roomLinks,
   type NewRoomLinkInstance,
 } from '../room-links/schema.js';
-import { UserStatus, hasAdminPowers, users } from '../users/schema.js';
+import {
+  SystemRole,
+  UserStatus,
+  hasAdminPowers,
+  users,
+} from '../users/schema.js';
 import { AccessTokenCache } from './access-token-cache.js';
 import {
   CalendarGrantsService,
@@ -46,6 +56,7 @@ export const FULL_SYNC_LOOKBACK_MS = 86_400_000;
 const SYNC_FIELDS =
   'nextPageToken,nextSyncToken,items(id,status,start,end,location,description,organizer(self))';
 const LINK_MANAGER_ROLES = [CohortRole.Professor, CohortRole.Mentor];
+const ADMIN_ROLES = Object.values(SystemRole).filter(hasAdminPowers);
 
 interface SyncPage {
   items?: GoogleEvent[];
@@ -299,18 +310,60 @@ export class CalendarSyncService {
     });
   }
 
-  /** Somebody no longer managing links: their runs still to come are cancelled. */
-  async forgetOrganizer(organizerId: string, now: Date): Promise<void> {
-    await this.db
-      .update(roomLinkInstances)
-      .set({ cancelledAt: now, updatedAt: now })
+  /**
+   * Cancels runs still to come that no longer stand, whatever Google's feed
+   * says: the link was revoked, or its organiser no longer manages its cohort.
+   * The feed only returns events that changed, so these are checked here.
+   */
+  async reconcile(now: Date): Promise<number> {
+    const stillManages = this.db
+      .select({ one: sql`1` })
+      .from(users)
       .where(
         and(
-          eq(roomLinkInstances.organizerId, organizerId),
-          isNull(roomLinkInstances.cancelledAt),
-          gt(roomLinkInstances.endsAt, now),
+          eq(users.id, roomLinkInstances.organizerId),
+          ne(users.status, UserStatus.Suspended),
+          or(
+            inArray(users.systemRole, ADMIN_ROLES),
+            exists(
+              this.db
+                .select({ one: sql`1` })
+                .from(cohortMembers)
+                .where(
+                  and(
+                    eq(cohortMembers.userId, users.id),
+                    eq(cohortMembers.cohortId, roomLinks.cohortId),
+                    inArray(cohortMembers.role, LINK_MANAGER_ROLES),
+                    isLiveMembership(now),
+                  ),
+                ),
+            ),
+          ),
         ),
       );
+    const stale = this.db
+      .select({ id: roomLinkInstances.id })
+      .from(roomLinkInstances)
+      .innerJoin(roomLinks, eq(roomLinks.id, roomLinkInstances.roomLinkId))
+      .where(
+        and(
+          isNull(roomLinkInstances.cancelledAt),
+          gt(roomLinkInstances.endsAt, now),
+          or(isNotNull(roomLinks.revokedAt), notExists(stillManages)),
+        ),
+      );
+    const cancelled = await this.db
+      .update(roomLinkInstances)
+      .set({ cancelledAt: now, updatedAt: now })
+      .where(inArray(roomLinkInstances.id, stale))
+      .returning({ id: roomLinkInstances.id });
+    if (cancelled.length > 0) {
+      this.logger.info(
+        { count: cancelled.length },
+        'room link runs cancelled: link revoked or organiser no longer manages it',
+      );
+    }
+    return cancelled.length;
   }
 
   private async liveLinks(
