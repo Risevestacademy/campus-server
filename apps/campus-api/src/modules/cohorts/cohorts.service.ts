@@ -15,6 +15,7 @@ import {
 } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { releaseTrackGrants } from '../maps/space-memberships.service.js';
+import { releaseTrackLinks } from '../room-links/link-audience.js';
 import { tracks } from '../tracks/schema.js';
 import { TrackNotFoundException } from '../tracks/tracks.exceptions.js';
 import {
@@ -251,6 +252,14 @@ export class CohortsService {
           );
         }
 
+        const links = await releaseTrackLinks(tx, link.id);
+        if (!links.released) {
+          throw new CohortConflictException(
+            'Track cannot be detached while a room link is aimed at it; revoke those links first',
+            { cohortId, trackId, roomLinkIds: links.liveLinkIds },
+          );
+        }
+
         await tx.delete(cohortTracks).where(eq(cohortTracks.id, link.id));
 
         await writeAuditEntry(tx, {
@@ -261,6 +270,7 @@ export class CohortsService {
             cohortId,
             trackId,
             clearedSpaceMembershipIds: grants.clearedIds,
+            clearedRoomLinkIds: links.clearedLinkIds,
           },
         });
       });

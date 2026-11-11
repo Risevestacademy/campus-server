@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   check,
+  foreignKey,
   index,
   pgTable,
   timestamp,
@@ -9,9 +10,17 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
-import { cohorts } from '../cohorts/schema.js';
+import { cohortTracks, cohorts } from '../cohorts/schema.js';
 import { spaces } from '../maps/schema.js';
+import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import { users } from '../users/schema.js';
+
+/** Whose event a link is for: the students expected at it. */
+export enum RoomLinkAudience {
+  Cohort = 'cohort',
+  CohortTrack = 'cohort-track',
+  MentorshipGroup = 'mentorship-group',
+}
 
 /**
  * A short link to a space in one cohort's campus, made for one event. When
@@ -38,21 +47,51 @@ export const roomLinks = pgTable(
       .notNull()
       .defaultNow(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
-    /** No longer read; dropped once every world reads runs instead. */
-    startsAt: timestamp('starts_at', { withTimezone: true }),
-    /** No longer read; dropped once every world reads runs instead. */
-    endsAt: timestamp('ends_at', { withTimezone: true }),
+    audience: varchar('audience', { length: 16 })
+      .$type<RoomLinkAudience>()
+      .notNull()
+      .default(RoomLinkAudience.Cohort),
+    /** Set for `cohort-track`; cleared on a revoked link when its track is detached. */
+    cohortTrackId: uuid('cohort_track_id'),
+    /** Set for `mentorship-group`; cleared on a revoked link when its group is deleted. */
+    mentorshipGroupId: uuid('mentorship_group_id'),
   },
   (table) => [
+    foreignKey({
+      columns: [table.cohortTrackId, table.cohortId],
+      foreignColumns: [cohortTracks.id, cohortTracks.cohortId],
+      name: 'room_links_cohort_track_fk',
+    }),
+    foreignKey({
+      columns: [table.mentorshipGroupId, table.cohortId],
+      foreignColumns: [mentorshipGroups.id, mentorshipGroups.cohortId],
+      name: 'room_links_mentorship_group_fk',
+    }),
+    check(
+      'room_links_audience_known',
+      sql`${table.audience} in (${sql.raw(
+        Object.values(RoomLinkAudience)
+          .map((a) => `'${a}'`)
+          .join(', '),
+      )})`,
+    ),
+    // A live link aimed at a track or a pod names it. A revoked one may have
+    // lost it to a detach or a delete.
+    check(
+      'room_links_track_matches_audience',
+      sql`(${table.cohortTrackId} is null or ${table.audience} = ${sql.raw(`'${RoomLinkAudience.CohortTrack}'`)}) and (${table.audience} <> ${sql.raw(`'${RoomLinkAudience.CohortTrack}'`)} or ${table.cohortTrackId} is not null or ${table.revokedAt} is not null)`,
+    ),
+    check(
+      'room_links_group_matches_audience',
+      sql`(${table.mentorshipGroupId} is null or ${table.audience} = ${sql.raw(`'${RoomLinkAudience.MentorshipGroup}'`)}) and (${table.audience} <> ${sql.raw(`'${RoomLinkAudience.MentorshipGroup}'`)} or ${table.mentorshipGroupId} is not null or ${table.revokedAt} is not null)`,
+    ),
+    index('room_links_cohort_track_idx').on(table.cohortTrackId),
+    index('room_links_mentorship_group_idx').on(table.mentorshipGroupId),
     uniqueIndex('room_links_code_unique').on(table.code),
     index('room_links_cohort_space_idx').on(table.cohortId, table.spaceId),
     check(
       'room_links_revoke_window',
       sql`${table.revokedAt} is null or ${table.revokedAt} >= ${table.createdAt}`,
-    ),
-    check(
-      'room_links_window',
-      sql`(${table.startsAt} is null and ${table.endsAt} is null) or (${table.startsAt} is not null and ${table.endsAt} is not null and ${table.endsAt} > ${table.startsAt})`,
     ),
   ],
 );

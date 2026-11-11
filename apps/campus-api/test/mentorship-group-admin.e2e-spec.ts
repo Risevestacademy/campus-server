@@ -811,6 +811,63 @@ describe('mentorship group admin routes (e2e)', () => {
       });
     });
 
+    it('refuses while a live room link is aimed at the group, and clears revoked ones', async () => {
+      const w = await world();
+      const group = (await createGroup(w.cohort.id, w.mentor1.id).expect(201))
+        .body;
+      const [map] = await db
+        .insert(schema.maps)
+        .values({ key: `group-links-${group.id}`, name: 'Campus' })
+        .returning();
+      const [room] = await db
+        .insert(schema.spaces)
+        .values({
+          mapId: map.id,
+          key: 'pod-room',
+          name: 'Pod Room',
+          audioMode: schema.AudioMode.Proximity,
+          access: schema.SpaceAccess.Normal,
+        })
+        .returning();
+      const [roomLink] = await db
+        .insert(schema.roomLinks)
+        .values({
+          code: `g${group.id.slice(0, 9)}`,
+          cohortId: w.cohort.id,
+          spaceId: room.id,
+          title: 'Pod check-in',
+          createdBy: adminId,
+          audience: schema.RoomLinkAudience.MentorshipGroup,
+          mentorshipGroupId: group.id,
+        })
+        .returning();
+
+      const res = await deleteGroup(w.cohort.id, group.id).expect(409);
+      expect(res.body.error).toMatchObject({
+        code: 'CONFLICT',
+        details: { groupId: group.id, roomLinkIds: [roomLink.id] },
+      });
+
+      await db
+        .update(schema.roomLinks)
+        .set({ revokedAt: new Date() })
+        .where(eq(schema.roomLinks.id, roomLink.id));
+      await deleteGroup(w.cohort.id, group.id).expect(204);
+
+      const [after] = await db
+        .select()
+        .from(schema.roomLinks)
+        .where(eq(schema.roomLinks.id, roomLink.id));
+      expect(after).toMatchObject({
+        audience: schema.RoomLinkAudience.MentorshipGroup,
+        mentorshipGroupId: null,
+      });
+      const deleted = await deleteEntries();
+      expect(deleted[0].details).toMatchObject({
+        clearedRoomLinkIds: [roomLink.id],
+      });
+    });
+
     it('puts an accepted group invite’s student into the group', async () => {
       const w = await world();
       const group = (await createGroup(w.cohort.id, w.mentor1.id).expect(201))

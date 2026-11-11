@@ -20,7 +20,9 @@ import {
   type Db,
   type DbExecutor,
 } from '../../infra/database/database.constants.js';
+import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
 import { isUniqueViolation } from '../../infra/database/unique-violation.js';
+import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { appUrl } from '../../shared/http/app-url.js';
 import { writeAuditEntry, type AuditContext } from '../audit/audit-log.js';
@@ -45,9 +47,20 @@ import {
   RoomLinkForbiddenException,
   RoomLinkNotFoundException,
 } from './room-links.exceptions.js';
-import { roomLinkInstances, roomLinkPasses, roomLinks } from './schema.js';
+import {
+  RoomLinkAudience,
+  roomLinkInstances,
+  roomLinkPasses,
+  roomLinks,
+} from './schema.js';
 
 type Standing = 'admin' | 'staff' | 'member';
+
+export interface LinkAudience {
+  audience?: RoomLinkAudience;
+  cohortTrackId?: string;
+  mentorshipGroupId?: string;
+}
 
 /** One run of a link's event. */
 interface Run {
@@ -78,6 +91,9 @@ const linkColumns = {
   spaceId: roomLinks.spaceId,
   spaceKey: spaces.key,
   spaceName: spaces.name,
+  audience: roomLinks.audience,
+  cohortTrackId: roomLinks.cohortTrackId,
+  mentorshipGroupId: roomLinks.mentorshipGroupId,
   createdAt: roomLinks.createdAt,
 };
 
@@ -114,9 +130,11 @@ export class RoomLinksService {
     title: string,
     audit: AuditContext,
     now: Date = new Date(),
+    target: LinkAudience = {},
   ): Promise<RoomLinkDto> {
     await requireStaff(this.db, user, cohortId, now);
     await requireLiveSpace(this.db, spaceId);
+    const audience = audienceColumns(target);
 
     for (let attempt = 1; ; attempt++) {
       try {
@@ -130,6 +148,7 @@ export class RoomLinksService {
               title,
               createdBy: user.id,
               createdAt: now,
+              ...audience,
             })
             .returning({ id: roomLinks.id, code: roomLinks.code });
           await writeAuditEntry(tx, {
@@ -137,7 +156,7 @@ export class RoomLinksService {
             spaceId,
             action: AuditAction.RoomLinkCreated,
             subject: { type: AuditSubjectType.RoomLink, id: link.id },
-            details: { cohortId, code: link.code, title },
+            details: { cohortId, code: link.code, title, ...audience },
           });
           return this.toDto(await this.find(link.code, tx), null);
         });
@@ -147,6 +166,15 @@ export class RoomLinksService {
           isUniqueViolation(err, 'room_links_code_unique')
         ) {
           continue;
+        }
+        if (
+          isForeignKeyViolation(err, 'room_links_cohort_track_fk') ||
+          isForeignKeyViolation(err, 'room_links_mentorship_group_fk')
+        ) {
+          throw new RoomLinkNotFoundException(
+            'No such track or pod in this cohort',
+            { cohortId, ...audience },
+          );
         }
         throw err;
       }
@@ -370,6 +398,29 @@ export class RoomLinksService {
       url: appUrl(this.config, `${ROOM_LINK_PATH}${row.code}`),
     };
   }
+}
+
+function audienceColumns(target: LinkAudience) {
+  const audience = target.audience ?? RoomLinkAudience.Cohort;
+  const track = audience === RoomLinkAudience.CohortTrack;
+  const group = audience === RoomLinkAudience.MentorshipGroup;
+  if (track !== Boolean(target.cohortTrackId)) {
+    throw new InvalidArgumentException(
+      'cohortTrackId is given with, and only with, the cohort-track audience',
+      { audience },
+    );
+  }
+  if (group !== Boolean(target.mentorshipGroupId)) {
+    throw new InvalidArgumentException(
+      'mentorshipGroupId is given with, and only with, the mentorship-group audience',
+      { audience },
+    );
+  }
+  return {
+    audience,
+    cohortTrackId: target.cohortTrackId ?? null,
+    mentorshipGroupId: target.mentorshipGroupId ?? null,
+  };
 }
 
 /** Each link's run going on now, else its next, leaving out cancelled ones. */

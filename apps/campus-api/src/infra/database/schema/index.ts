@@ -1,3 +1,4 @@
+export * from '../../../modules/attendance/schema.js';
 export * from '../../../modules/audit/schema.js';
 export * from '../../../modules/calendar/schema.js';
 export * from '../../../modules/calls/schema.js';

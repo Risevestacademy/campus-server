@@ -13,6 +13,7 @@ import { AnalyticsModule } from './infra/analytics/analytics.module.js';
 import { ErrorReportingModule } from './infra/error-reporting/error-reporting.module.js';
 import { AppLoggerModule } from './infra/logger/logger.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
+import { AttendanceModule } from './modules/attendance/attendance.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { CalendarModule } from './modules/calendar/calendar.module.js';
@@ -53,6 +54,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     ProfileModule,
     AuditModule,
     AdminModule,
+    AttendanceModule,
     MapsModule,
     FeedbackModule,
     CallsModule,

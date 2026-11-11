@@ -24,6 +24,7 @@ import { CohortMemberNotFoundException } from '../cohorts/cohorts.exceptions.js'
 import { CohortRole, StudentStatus, cohortMembers } from '../cohorts/schema.js';
 import { InviteStatus, invites } from '../invites/schema.js';
 import { releaseGroupGrants } from '../maps/space-memberships.service.js';
+import { releaseGroupLinks } from '../room-links/link-audience.js';
 import { users } from '../users/schema.js';
 import type { ChangeMentorDto } from './dto/change-mentor.dto.js';
 import type { CreateMentorshipGroupDto } from './dto/create-mentorship-group.dto.js';
@@ -350,6 +351,14 @@ export class MentorshipGroupsService {
           );
         }
 
+        const links = await releaseGroupLinks(tx, groupId);
+        if (!links.released) {
+          throw new MentorshipGroupConflictException(
+            'Mentorship group cannot be deleted while a room link is aimed at it; revoke those links first',
+            { cohortId, groupId, roomLinkIds: links.liveLinkIds },
+          );
+        }
+
         // Settled invites keep their row and every other column; only the
         // pointer to the group goes, so the history stays readable. Setting
         // updated_at to itself stops $onUpdate rewriting a settled row.
@@ -386,6 +395,7 @@ export class MentorshipGroupsService {
             description: group.description,
             mentorMemberId: group.mentorMemberId,
             clearedSpaceMembershipIds: grants.clearedIds,
+            clearedRoomLinkIds: links.clearedLinkIds,
           },
         });
       });
