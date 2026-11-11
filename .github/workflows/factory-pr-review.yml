@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: Risevestacademy/campus-software-factory/.github/actions/factory-pr-review@f20aefcb601a863273d9b5140cabd0b86fc657ce
+      - uses: Risevestacademy/campus-software-factory/.github/actions/factory-pr-review@c765c84cd0266682df3d06c98a98bff8bf7ccb29
         with:
           repository: ${{ github.repository }}
           workflow-run-id: ${{ github.event.workflow_run.id }}
