@@ -42,6 +42,31 @@ at least five minutes ago, so late word from LiveKit of who left has arrived.
 - **A track or pod that has gone** (detached or deleted after the link was
   revoked) leaves a re-tally expecting whoever the last tally expected.
 
+## Reading and correcting
+
+| Route                                                     | What                                                                            |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `GET /v1/cohorts/{cohortId}/attendance/classes`           | Tallied runs, newest first, paged, with counts; `from` and `to` filter by start |
+| `GET /v1/attendance/classes/{instanceId}`                 | One run with every expected student                                             |
+| `GET /v1/cohorts/{cohortId}/attendance/students`          | Per student: classes, present, partial, absent, percentage                      |
+| `GET /v1/cohorts/{cohortId}/attendance/students/{userId}` | One student's summary and each class                                            |
+| `PUT /v1/attendance/{attendanceId}`                       | Correct a status: `{ status, reason }`                                          |
+
+- **Who:** by the class's audience. Admins read and correct every class.
+  A track's classes are for the cohort's live professors on that track, a
+  pod's for its mentor. Whole-cohort classes are for admins only. A student
+  reads their own attendance, every class, and nobody else's.
+- **Percentage** is time in the call as a share of the class, rounded down,
+  so it agrees with the status the tally gave (75 and over is present). For a
+  class or a summary it is the time across the rows as a share of the time
+  they could have had. A corrected status leaves the time as measured.
+- **A correction** sets the status and `source = override`, appends to
+  `attendance_overrides` with who and why, and writes an
+  `attendance_corrected` audit entry, all in one transaction. The row is
+  locked while it is corrected, and the tally only overwrites a status while
+  `source` is `derived`, so the two cannot interleave. Setting the status it
+  already has is a 400.
+
 ## Rules the database enforces
 
 | Rule                                            | Constraint                                                               |
@@ -57,4 +82,5 @@ at least five minutes ago, so late word from LiveKit of who left has arrived.
 | A link's track or pod belongs to its cohort     | `room_links_cohort_track_fk`, `room_links_mentorship_group_fk`           |
 
 Tested against PGlite with the committed migrations applied, in
-`schema.db.spec.ts` and `attendance-tally.service.db.spec.ts`.
+`schema.db.spec.ts`, `attendance-tally.service.db.spec.ts` and
+`attendance.service.db.spec.ts`; over HTTP in `test/attendance.e2e-spec.ts`.
