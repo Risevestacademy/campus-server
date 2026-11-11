@@ -423,6 +423,17 @@ interface AuditEntryShapes {
       deleted: number;
     };
   };
+  [AuditAction.AttendanceCorrected]: {
+    subject: AuditSubjectType.Attendance;
+    details: {
+      cohortId: string;
+      instanceId: string;
+      studentUserId: string;
+      from: string;
+      to: string;
+      reason: string;
+    };
+  };
 }
 
 /** When a room link's event runs, as ISO timestamps; both null for none. */

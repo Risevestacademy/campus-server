@@ -183,6 +183,8 @@ export enum AuditAction {
    * are gone, so `details` keeps the table, the cutoff and how many went.
    */
   RetentionSwept = 'retention_swept',
+  /** Staff set a student's status at one class; the reason is in `details`. */
+  AttendanceCorrected = 'attendance_corrected',
 }
 
 export enum AuditSubjectType {
@@ -203,6 +205,8 @@ export enum AuditSubjectType {
   RoomLink = 'room_link',
   /** One row of `desk_claims`: somebody holding a desk in a cohort. */
   DeskClaim = 'desk_claim',
+  /** One row of `attendance`: a student at one run. */
+  Attendance = 'attendance',
 }
 
 /**
