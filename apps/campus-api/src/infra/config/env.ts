@@ -29,6 +29,12 @@ const LOG_LEVELS = [
   'fatal',
 ] as const;
 
+/**
+ * The shortest retention anything may ask for, configured or passed to a
+ * one-off sweep: no sweep ever deletes a row younger than this.
+ */
+export const MIN_RETENTION_DAYS = 30;
+
 const LIVEKIT_WEBHOOK_KEYS_MESSAGE =
   'set both LIVEKIT_WEBHOOK_API_KEY and LIVEKIT_WEBHOOK_API_SECRET, or neither';
 
@@ -532,4 +538,21 @@ export class Env {
   @IsInt()
   @Min(1)
   INVITE_TTL_DAYS: number = 7;
+
+  // Retention ------------------------------------------------------------
+  // How long the retention sweep keeps rows, in days. Nothing deletes on a
+  // timer: the sweep runs when POST /v1/admin/retention/sweep is called.
+
+  /** Read notifications older than this go. Unread ones are kept at any age. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(MIN_RETENTION_DAYS)
+  NOTIFICATION_RETENTION_DAYS: number = 90;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(MIN_RETENTION_DAYS)
+  AUDIT_LOG_RETENTION_DAYS: number = 365;
 }

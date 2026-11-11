@@ -68,7 +68,9 @@ exists only for the [read route](#reading-it).
 Entries are append-only, and the database enforces it. A trigger on
 `audit_log` (`audit_log_append_only`, migration `0008`) rejects every row
 `UPDATE` and `DELETE`, for every role including the table's owner. The only
-thing a row can do is be inserted.
+thing a row can do is be inserted. The one exception is the
+[retention sweep](#retention), which lifts the trigger inside its own
+transaction.
 
 `TRUNCATE` is not covered: it is not a row operation and needs ownership of
 the table. The test suites use it to reset between tests.
@@ -78,9 +80,9 @@ the table. The test suites use it to reset between tests.
 | Column           | Meaning                                                                                                                                                                                   |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`             | The entry's own id.                                                                                                                                                                       |
-| `actor_user_id`  | The account that did it. Null when no person did: the seed, a migration, a sweep. A foreign key to `users`.                                                                               |
+| `actor_user_id`  | The account that did it. Null when no person did: the seed, a migration. A foreign key to `users`.                                                                                        |
 | `action`         | What happened: one of `AuditAction`. A `varchar`, not a Postgres enum, so a new action is a code change and not a migration.                                                              |
-| `subject_type`   | The kind of thing it happened to: one of `AuditSubjectType`.                                                                                                                              |
+| `subject_type`   | The kind of thing it happened to: one of `AuditSubjectType`. Null, with `subject_id`, for an action about no one row: `retention_swept`.                                                  |
 | `subject_id`     | That thing's id. Not a foreign key, on purpose: an entry outlives the row it is about, which is the point of recording a delete.                                                          |
 | `space_id`       | The space the entry is about, when it has one — a grant of access to a space, or a change to its settings — and a foreign key to `spaces`.                                                |
 | `details`        | What the action needs beyond its subject, as JSON. The shape is fixed per action (see [Actions](#actions)). Dates are stored as ISO 8601 strings.                                         |
@@ -144,6 +146,7 @@ actor (`actor_user_id, created_at`) and by subject
 | `room_link_revoked`                | `room_link`        | admin, professor, mentor  | `cohortId`, `code`, `title`                                                                                                                                                                                                                                                                                                       | Staff revoke a link to a space in a cohort's campus. `space_id` names the space. No entry for revoking one already revoked.                                                                                                                                                                                                                 |
 | `room_link_window_changed`         | `room_link`        | admin, professor, mentor  | `cohortId`, `code`, `before`, `after`, each `{ startsAt, endsAt }`                                                                                                                                                                                                                                                                | Staff set, move or clear when a link's event runs. `space_id` names the space. A move read from the maker's calendar on entry writes nothing. No longer written since runs are synced from the organiser's calendar.                                                                                                                        |
 | `desk_freed`                       | `desk_claim`       | admin                     | `cohortId`, `deskKey`, and `holderId`, whose claim it was                                                                                                                                                                                                                                                                         | An admin ends somebody else's claim on a desk. The claim row keeps when and why it ended (`freed_by_admin`); a holder letting go of their own desk, and claims ended by a membership ending, a suspension, a demotion or a desk leaving its map, write no entry: those are recorded by the action that ended them.                          |
+| `retention_swept`                  | none               | super admin               | `table` (`notifications` or `audit_log`), `retentionDays`, `cutoff` (rows created before it were deleted), `deleted` (how many)                                                                                                                                                                                                   | The retention sweep runs on one table, even when it deletes nothing. One entry per table swept. Written in the sweep's transaction; for `audit_log`, after the trigger is back on. See [Retention](#retention).                                                                                                                             |
 
 What is not recorded, so nobody goes looking for it:
 
@@ -204,14 +207,16 @@ that reads it, `GET /v1/audit-log`, is admin-only, the same as `GET /v1/users`.
 
 ## Retention
 
-**How long entries are kept is not decided.** They are kept indefinitely:
-nothing deletes or archives them, and there is no sweep job. Before real
-members' data accumulates here, someone needs to decide a retention period.
+Entries are kept for `AUDIT_LOG_RETENTION_DAYS`, 365 by default and never
+fewer than 30. After that, the retention sweep deletes them. It is the one
+thing that deletes from this table. It lifts the trigger for its own
+transaction only, and turns it back on before it commits. It runs when a
+super admin calls `POST /v1/admin/retention/sweep`, which should happen on a
+schedule. How it works, and the lock it takes, are in the
+[admin module's README](../admin/README.md#how-the-audit-log-is-swept).
 
-Whatever is decided has to work with the trigger: entries cannot be deleted
-by an ordinary query. A retention sweep would be a deliberate, reviewed
-operation that lifts the trigger for its own transaction
-(`ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only`).
+Each sweep writes a `retention_swept` entry, so the log records what was
+removed from it and who removed it.
 
 ### Deleting an account
 
@@ -252,7 +257,8 @@ Four things the stripping has to cover when it is built:
 - **Migrations.** `0006_audit_log` creates the table and its indexes.
   `0008_audit_log_append_only` adds the trigger that refuses updates and
   deletes. Both are additive and touch no other table. There is no feature
-  flag and no environment variable.
+  flag. The one environment variable, `AUDIT_LOG_RETENTION_DAYS`, is read
+  only by the retention sweep.
 - **Order.** Migrate before seeding. The seed writes a
   `system_role_changed` entry when it creates or promotes a super admin, so it
   fails without the table. The deploy command already runs `db:migrate` then
