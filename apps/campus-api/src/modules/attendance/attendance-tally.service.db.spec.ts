@@ -30,6 +30,7 @@ import {
   AttendanceTallyService,
   TALLY_DELAY_MS,
   attendanceStatus,
+  coveredMs,
 } from './attendance-tally.service.js';
 import {
   AttendanceSource,
@@ -51,10 +52,13 @@ const tally = new AttendanceTallyService(
 );
 
 const MINUTE = 60_000;
-const START = new Date('2026-11-10T10:00:00Z');
+const START = new Date(
+  Math.floor(Date.now() / MINUTE) * MINUTE - 3 * 60 * MINUTE,
+);
 const END = new Date(START.getTime() + 60 * MINUTE);
-const AFTER = new Date(END.getTime() + TALLY_DELAY_MS);
 const at = (minutes: number) => new Date(START.getTime() + minutes * MINUTE);
+/** Tallies happen now, after every row a test writes, as they would. */
+const tallyNow = () => tally.tallyDue(new Date());
 
 let cohortId: string;
 let otherCohortId: string;
@@ -212,6 +216,20 @@ beforeEach(async () => {
     .values({ cohortId, userId: mentorId, role: CohortRole.Mentor });
 });
 
+it('counts overlapping and touching stretches once', () => {
+  const t = (m: number) => new Date(m * MINUTE);
+  expect(
+    coveredMs([
+      { from: t(10), to: t(40) },
+      { from: t(0), to: t(30) },
+      { from: t(40), to: t(45) },
+      { from: t(50), to: t(50) },
+      { from: t(55), to: t(60) },
+    ]),
+  ).toBe(50 * MINUTE);
+  expect(coveredMs([])).toBe(0);
+});
+
 it('marks present at three quarters of the run, partial above none, absent at none', () => {
   expect(attendanceStatus(2700, 3600)).toBe(AttendanceStatus.Present);
   expect(attendanceStatus(2699, 3600)).toBe(AttendanceStatus.Partial);
@@ -229,7 +247,7 @@ describe('tallying a run', () => {
     await inCall(grace.userId, 0, 10);
     await inCall(grace.userId, 30, 40);
 
-    await tally.tallyDue(AFTER);
+    await tallyNow();
 
     const got = await byUser(instanceId);
     expect(got.get(ada.userId)).toMatchObject({
@@ -246,19 +264,21 @@ describe('tallying a run', () => {
       status: AttendanceStatus.Absent,
     });
     const [kept] = await db.select().from(attendanceTallies);
-    expect(kept).toMatchObject({
-      instanceId,
-      startsAt: START,
-      endsAt: END,
-      talliedAt: AFTER,
-    });
+    expect(kept).toMatchObject({ instanceId, startsAt: START, endsAt: END });
   });
 
   it('waits until a few minutes after the run ends, for late word of who left', async () => {
     await student('ada');
-    await run();
+    const endedJustNow = new Date(Date.now() - TALLY_DELAY_MS + MINUTE);
+    await run(
+      {},
+      {
+        startsAt: new Date(endedJustNow.getTime() - 60 * MINUTE),
+        endsAt: endedJustNow,
+      },
+    );
 
-    await tally.tallyDue(new Date(AFTER.getTime() - 1));
+    await tallyNow();
 
     expect(await db.select().from(attendanceTallies)).toEqual([]);
   });
@@ -268,24 +288,30 @@ describe('tallying a run', () => {
     const instanceId = await run();
     await inCall(ada.userId, 15, null);
 
-    await tally.tallyDue(AFTER);
+    await tallyNow();
 
     expect((await byUser(instanceId)).get(ada.userId)?.presentSeconds).toBe(
       45 * 60,
     );
   });
 
-  it('never counts more than the run, even across overlapping stretches', async () => {
+  it('counts overlapping stretches once', async () => {
     const ada = await student('ada');
+    const grace = await student('grace');
     const instanceId = await run();
-    await inCall(ada.userId, 0, 60);
-    await inCall(ada.userId, 59, 60);
+    await inCall(ada.userId, 0, 30);
+    await inCall(ada.userId, 10, 40);
+    await inCall(grace.userId, 0, 60);
+    await inCall(grace.userId, 59, 60);
 
-    await tally.tallyDue(AFTER);
+    await tallyNow();
 
-    expect((await byUser(instanceId)).get(ada.userId)?.presentSeconds).toBe(
-      3600,
-    );
+    const got = await byUser(instanceId);
+    expect(got.get(ada.userId)).toMatchObject({
+      presentSeconds: 2400,
+      status: AttendanceStatus.Partial,
+    });
+    expect(got.get(grace.userId)?.presentSeconds).toBe(3600);
   });
 
   it('counts only this cohort’s call in this space', async () => {
@@ -294,7 +320,7 @@ describe('tallying a run', () => {
     await inCall(ada.userId, 0, 60, { space: otherSpaceId });
     await inCall(ada.userId, 0, 60, { cohort: otherCohortId });
 
-    await tally.tallyDue(AFTER);
+    await tallyNow();
 
     expect((await byUser(instanceId)).get(ada.userId)?.status).toBe(
       AttendanceStatus.Absent,
@@ -317,7 +343,7 @@ describe('tallying a run', () => {
     const instanceId = await run();
     await inCall(mentorId, 0, 60);
 
-    await tally.tallyDue(AFTER);
+    await tallyNow();
 
     expect([...(await byUser(instanceId)).keys()].sort()).toEqual(
       [ada.userId, leftLater.userId].sort(),
@@ -333,7 +359,7 @@ describe('tallying a run', () => {
       cohortTrackId: trackA,
     });
 
-    await tally.tallyDue(AFTER);
+    await tallyNow();
 
     expect([...(await byUser(instanceId)).keys()]).toEqual([ada.userId]);
   });
@@ -359,7 +385,7 @@ describe('tallying a run', () => {
       mentorshipGroupId: pod.id,
     });
 
-    await tally.tallyDue(AFTER);
+    await tallyNow();
 
     expect([...(await byUser(instanceId)).keys()]).toEqual([ada.userId]);
   });
@@ -373,13 +399,13 @@ describe('tallying a run', () => {
       .set({ cancelledAt: at(-60) })
       .where(eq(roomLinkInstances.id, cancelled));
 
-    await tally.tallyDue(AFTER);
-    await tally.tallyDue(new Date(AFTER.getTime() + MINUTE));
+    await tallyNow();
+    const [first] = await db.select().from(attendanceTallies);
+    await tallyNow();
 
     const tallies = await db.select().from(attendanceTallies);
-    expect(tallies.map((t) => [t.instanceId, t.talliedAt])).toEqual([
-      [instanceId, AFTER],
-    ]);
+    expect(tallies).toEqual([first]);
+    expect(first.instanceId).toBe(instanceId);
   });
 });
 
@@ -393,7 +419,7 @@ describe('after a tally', () => {
     grace = await student('grace');
     instanceId = await run();
     await inCall(ada.userId, 0, 60);
-    await tally.tallyDue(AFTER);
+    await tallyNow();
   });
 
   async function correct(userId: string, status: AttendanceStatus) {
@@ -421,7 +447,7 @@ describe('after a tally', () => {
       .set({ startsAt: at(30), endsAt: at(90) })
       .where(eq(roomLinkInstances.id, instanceId));
 
-    await tally.tallyDue(new Date(at(90).getTime() + TALLY_DELAY_MS));
+    await tallyNow();
 
     const got = await byUser(instanceId);
     expect(got.get(ada.userId)).toMatchObject({
@@ -434,14 +460,95 @@ describe('after a tally', () => {
     });
   });
 
+  it('tallies a run again when Google restores it after a cancellation', async () => {
+    await db
+      .update(roomLinkInstances)
+      .set({ cancelledAt: new Date() })
+      .where(eq(roomLinkInstances.id, instanceId));
+    await tallyNow();
+    expect(await rows(instanceId)).toEqual([]);
+
+    await db
+      .update(roomLinkInstances)
+      .set({ cancelledAt: null })
+      .where(eq(roomLinkInstances.id, instanceId));
+    await tallyNow();
+
+    expect((await byUser(instanceId)).get(ada.userId)).toMatchObject({
+      presentSeconds: 3600,
+      status: AttendanceStatus.Present,
+    });
+  });
+
+  it('tallies a run again when its event moves to another link', async () => {
+    const elsewhere = await run({ spaceId: otherSpaceId });
+    const [moved] = await db
+      .select({ roomLinkId: roomLinkInstances.roomLinkId })
+      .from(roomLinkInstances)
+      .where(eq(roomLinkInstances.id, elsewhere));
+    await db
+      .update(roomLinkInstances)
+      .set({ roomLinkId: moved.roomLinkId })
+      .where(eq(roomLinkInstances.id, instanceId));
+
+    await tallyNow();
+
+    expect((await byUser(instanceId)).get(ada.userId)).toMatchObject({
+      presentSeconds: 0,
+      status: AttendanceStatus.Absent,
+    });
+  });
+
+  it('keeps who it expected when the link’s pod is gone before a re-tally', async () => {
+    const [mentor] = await db
+      .select({ id: cohortMembers.id })
+      .from(cohortMembers)
+      .where(eq(cohortMembers.userId, mentorId));
+    const [pod] = await db
+      .insert(mentorshipGroups)
+      .values({ cohortId, mentorMemberId: mentor.id, name: 'Pod B' })
+      .returning();
+    await db.insert(mentorshipGroupStudents).values({
+      mentorshipGroupId: pod.id,
+      cohortId,
+      cohortMemberId: ada.memberId,
+    });
+    const podRun = await run({
+      audience: RoomLinkAudience.MentorshipGroup,
+      mentorshipGroupId: pod.id,
+    });
+    await tallyNow();
+    expect([...(await byUser(podRun)).keys()]).toEqual([ada.userId]);
+
+    const [{ roomLinkId }] = await db
+      .select({ roomLinkId: roomLinkInstances.roomLinkId })
+      .from(roomLinkInstances)
+      .where(eq(roomLinkInstances.id, podRun));
+    await db
+      .update(roomLinks)
+      .set({ revokedAt: new Date(), mentorshipGroupId: null })
+      .where(eq(roomLinks.id, roomLinkId));
+    await db
+      .update(roomLinkInstances)
+      .set({ startsAt: at(10), endsAt: at(70) })
+      .where(eq(roomLinkInstances.id, podRun));
+
+    await tallyNow();
+
+    expect((await byUser(podRun)).get(ada.userId)).toMatchObject({
+      presentSeconds: 50 * 60,
+      status: AttendanceStatus.Present,
+    });
+  });
+
   it('voids a run cancelled afterwards, keeping corrections', async () => {
     await correct(grace.userId, AttendanceStatus.Present);
     await db
       .update(roomLinkInstances)
-      .set({ cancelledAt: AFTER })
+      .set({ cancelledAt: new Date() })
       .where(eq(roomLinkInstances.id, instanceId));
 
-    await tally.tallyDue(new Date(AFTER.getTime() + MINUTE));
+    await tallyNow();
 
     expect(await rows(instanceId)).toEqual([
       expect.objectContaining({

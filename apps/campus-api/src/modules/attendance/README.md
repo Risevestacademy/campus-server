@@ -19,14 +19,18 @@ at least five minutes ago, so late word from LiveKit of who left has arrived.
   pod's, as the link's audience says. Staff and guests get no rows.
 - **Time** is time in the cohort's call in the link's space between the
   run's start and end: arriving early or staying on does not count, camera and
-  microphone do not matter, and it never comes to more than the run.
+  microphone do not matter, and stretches that overlap (a reconnect, or
+  webhooks out of order) count once.
 - **Status:** present at 75% of the run or more, partial above none, absent
   at none. Reads give the percentage from `present_seconds` and the tally's
   window.
-- **A run moved after its tally is tallied again.** Seconds are measured
+- **A run that changes after its tally is tallied again:** moved, bound to
+  another link, or restored after a cancellation. Seconds are measured
   afresh; a corrected row keeps its status.
 - **A run cancelled after its tally no longer counts:** its derived rows are
   deleted, corrected ones kept.
+- **A track or pod that has gone** (detached or deleted after the link was
+  revoked) leaves a re-tally expecting whoever the last tally expected.
 
 ## Rules the database enforces
 
