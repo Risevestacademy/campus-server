@@ -5,6 +5,7 @@ import {
   eq,
   exists,
   gt,
+  gte,
   inArray,
   isNull,
   lt,
@@ -31,13 +32,19 @@ import {
   AttendanceSource,
   AttendanceStatus,
   attendance,
+  attendanceOverrides,
   attendanceTallies,
+  attendanceTallyFailures,
 } from './schema.js';
 
 export const TALLY_JOB_MS = 5 * 60_000;
 /** Late webhooks from LiveKit have arrived by then. */
 export const TALLY_DELAY_MS = 5 * 60_000;
 export const PRESENT_SHARE = 0.75;
+/** An open call row older than this is taken as stuck: its leave was lost. */
+export const STUCK_ROW_MS = 12 * 60 * 60_000;
+export const FIRST_RETRY_MS = 5 * 60_000;
+const LAST_RETRY_MS = 24 * 60 * 60_000;
 const RUNS_PER_TALLY = 100;
 
 interface DueRun {
@@ -51,6 +58,12 @@ interface DueRun {
   cohortTrackId: string | null;
   mentorshipGroupId: string | null;
 }
+
+/** Derived and never corrected: the only rows a tally may delete. */
+const uncorrected = and(
+  eq(attendance.source, AttendanceSource.Derived),
+  sql`not exists (select 1 from ${attendanceOverrides} where ${attendanceOverrides.attendanceId} = ${attendance.id})`,
+);
 
 export function attendanceStatus(
   presentSeconds: number,
@@ -89,8 +102,9 @@ export function coveredMs(stretches: { from: Date; to: Date }[]): number {
  * Works out attendance for runs that have ended: every student expected at
  * the run, and their time in the space's call inside it. A run is tallied
  * again whenever it changed after its last tally (moved, cancelled,
- * restored, or bound to another link); a cancelled one loses its derived
- * rows. Corrections by staff keep their status throughout.
+ * restored, or bound to another link). Only a run cancelled before it ended
+ * loses its derived rows: one cancelled afterwards took place. Corrections
+ * by staff keep their status throughout.
  */
 @Injectable()
 export class AttendanceTallyService implements OnModuleInit {
@@ -129,6 +143,10 @@ export class AttendanceTallyService implements OnModuleInit {
         attendanceTallies,
         eq(attendanceTallies.instanceId, roomLinkInstances.id),
       )
+      .leftJoin(
+        attendanceTallyFailures,
+        eq(attendanceTallyFailures.instanceId, roomLinkInstances.id),
+      )
       .where(
         and(
           lte(
@@ -138,24 +156,53 @@ export class AttendanceTallyService implements OnModuleInit {
           or(
             and(
               isNull(attendanceTallies.instanceId),
-              isNull(roomLinkInstances.cancelledAt),
+              or(
+                isNull(roomLinkInstances.cancelledAt),
+                gte(roomLinkInstances.cancelledAt, roomLinkInstances.endsAt),
+              ),
             ),
             lt(attendanceTallies.talliedAt, roomLinkInstances.updatedAt),
           ),
+          or(
+            isNull(attendanceTallyFailures.instanceId),
+            sql`${attendanceTallyFailures.lastFailedAt} <= ${timestamptz(now)} - least(${FIRST_RETRY_MS} * power(2, ${attendanceTallyFailures.attempts} - 1), ${LAST_RETRY_MS}) * interval '1 millisecond'`,
+          ),
         ),
       )
-      .orderBy(asc(roomLinkInstances.endsAt))
+      .orderBy(
+        sql`${attendanceTallyFailures.lastFailedAt} asc nulls first`,
+        asc(roomLinkInstances.endsAt),
+      )
       .limit(RUNS_PER_TALLY);
     for (const run of due) {
       try {
-        await (run.cancelledAt ? this.void(run, now) : this.tally(run, now));
+        const voided =
+          run.cancelledAt !== null &&
+          run.cancelledAt.getTime() < run.endsAt.getTime();
+        await (voided ? this.void(run, now) : this.tally(run, now));
       } catch (err) {
         this.logger.error(
           { err, instanceId: run.instanceId },
           'attendance tally failed',
         );
+        await this.failed(run.instanceId, now).catch((e: unknown) =>
+          this.logger.error({ err: e }, 'attendance tally failure not kept'),
+        );
       }
     }
+  }
+
+  private async failed(instanceId: string, now: Date): Promise<void> {
+    await this.db
+      .insert(attendanceTallyFailures)
+      .values({ instanceId, lastFailedAt: now })
+      .onConflictDoUpdate({
+        target: attendanceTallyFailures.instanceId,
+        set: {
+          attempts: sql`${attendanceTallyFailures.attempts} + 1`,
+          lastFailedAt: now,
+        },
+      });
   }
 
   private async tally(run: DueRun, now: Date): Promise<void> {
@@ -177,11 +224,14 @@ export class AttendanceTallyService implements OnModuleInit {
           set: { startsAt: run.startsAt, endsAt: run.endsAt, talliedAt: now },
         });
       await tx
+        .delete(attendanceTallyFailures)
+        .where(eq(attendanceTallyFailures.instanceId, run.instanceId));
+      await tx
         .delete(attendance)
         .where(
           and(
             eq(attendance.instanceId, run.instanceId),
-            eq(attendance.source, AttendanceSource.Derived),
+            uncorrected,
             expected.length > 0
               ? notInArray(attendance.userId, expected)
               : undefined,
@@ -251,7 +301,11 @@ export class AttendanceTallyService implements OnModuleInit {
     return rows.map((r) => r.userId);
   }
 
-  /** Each student's time in the cohort's call in the space, inside the run. */
+  /**
+   * Each student's time in the cohort's call in the space, inside the run.
+   * A row still open long after it began lost its leave and its call's end,
+   * so it is left out rather than counted to now.
+   */
   private async timeInCall(
     run: DueRun,
     userIds: string[],
@@ -270,6 +324,10 @@ export class AttendanceTallyService implements OnModuleInit {
         to: sql<Date>`least(${until}, ${timestamptz(run.endsAt)})`.mapWith(
           (v: string | Date) => new Date(v),
         ),
+        joinedAt: sessionParticipants.joinedAt,
+        open: sql<boolean>`${sessionParticipants.leftAt} is null and ${sessions.closedAt} is null`.mapWith(
+          Boolean,
+        ),
       })
       .from(sessionParticipants)
       .innerJoin(sessions, eq(sessions.id, sessionParticipants.sessionId))
@@ -282,8 +340,21 @@ export class AttendanceTallyService implements OnModuleInit {
           sql`${until} > ${timestamptz(run.startsAt)}`,
         ),
       );
+    const stuckBefore = run.endsAt.getTime() - STUCK_ROW_MS;
+    const counted = stretches.filter(
+      (s) => !(s.open && s.joinedAt.getTime() < stuckBefore),
+    );
+    if (counted.length < stretches.length) {
+      this.logger.warn(
+        {
+          instanceId: run.instanceId,
+          stuck: stretches.length - counted.length,
+        },
+        'call rows open since long before the run left out of attendance',
+      );
+    }
     const byUser = new Map<string, { from: Date; to: Date }[]>();
-    for (const s of stretches) {
+    for (const s of counted) {
       byUser.set(s.userId, [...(byUser.get(s.userId) ?? []), s]);
     }
     return new Map(
@@ -315,17 +386,15 @@ export class AttendanceTallyService implements OnModuleInit {
     }
   }
 
-  /** A run cancelled after its tally no longer counts; corrections stay. */
+  /** A run cancelled before it ended did not take place; corrections stay. */
   private async void(run: DueRun, now: Date): Promise<void> {
     await this.db.transaction(async (tx) => {
       await tx
+        .delete(attendanceTallyFailures)
+        .where(eq(attendanceTallyFailures.instanceId, run.instanceId));
+      await tx
         .delete(attendance)
-        .where(
-          and(
-            eq(attendance.instanceId, run.instanceId),
-            eq(attendance.source, AttendanceSource.Derived),
-          ),
-        );
+        .where(and(eq(attendance.instanceId, run.instanceId), uncorrected));
       await tx
         .update(attendanceTallies)
         .set({ talliedAt: now })

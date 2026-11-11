@@ -509,6 +509,22 @@ describe('RoomLinksService', () => {
       ).rejects.toThrow(InvalidArgumentException);
     }, 30_000);
 
+    it('refuses somebody who may not make links before looking at the audience', async () => {
+      const { cohortId, guest, pod } = await setting();
+
+      await expect(
+        service.create(
+          guest,
+          cohortId,
+          pod.id,
+          'Mine',
+          { actorUserId: guest.id },
+          new Date(),
+          { audience: RoomLinkAudience.CohortTrack },
+        ),
+      ).rejects.toThrow(RoomLinkForbiddenException);
+    }, 30_000);
+
     it('is a 404 for a track of another cohort', async () => {
       const { cohortId, mentor, pod } = await setting();
       const other = await setting();

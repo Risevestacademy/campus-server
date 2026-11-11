@@ -27,8 +27,18 @@ at least five minutes ago, so late word from LiveKit of who left has arrived.
 - **A run that changes after its tally is tallied again:** moved, bound to
   another link, or restored after a cancellation. Seconds are measured
   afresh; a corrected row keeps its status.
-- **A run cancelled after its tally no longer counts:** its derived rows are
-  deleted, corrected ones kept.
+- **Only a run cancelled before it ended is voided:** its derived rows are
+  deleted, corrected ones kept. A run cancelled after its end took place and
+  keeps its attendance; the calendar sync cancels past runs too, when a link
+  is revoked, its organiser stops managing the cohort, or an old event is
+  deleted.
+- **A call row still open since long before the run** (12 hours before its
+  end) lost both its leave and its call's end, so it is left out and logged
+  rather than counted to now. Somebody staying on after a class still counts.
+- **A tally that fails is recorded** in `attendance_tally_failures` and tried
+  again after five minutes, doubling each time up to a day; runs that never
+  failed go first.
+- **No tally deletes a row a correction was written for.**
 - **A track or pod that has gone** (detached or deleted after the link was
   revoked) leaves a re-tally expecting whoever the last tally expected.
 
@@ -37,6 +47,7 @@ at least five minutes ago, so late word from LiveKit of who left has arrived.
 | Rule                                            | Constraint                                                               |
 | ----------------------------------------------- | ------------------------------------------------------------------------ |
 | A tally's window ends after it starts           | `attendance_tallies_window`                                              |
+| One failure record per run                      | `attendance_tally_failures` primary key                                  |
 | A run is tallied no earlier than its end        | `attendance_tallies_after_end`                                           |
 | One row per student per run                     | `attendance_instance_user_unique`                                        |
 | Time in the call is never negative              | `attendance_present_seconds`                                             |

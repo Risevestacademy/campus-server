@@ -129,6 +129,15 @@ export const attendanceOverrides = pgTable(
   ],
 );
 
+/** A run whose tally failed, so it waits longer each time before another try. */
+export const attendanceTallyFailures = pgTable('attendance_tally_failures', {
+  instanceId: uuid('instance_id')
+    .primaryKey()
+    .references(() => roomLinkInstances.id),
+  attempts: integer('attempts').notNull().default(1),
+  lastFailedAt: timestamp('last_failed_at', { withTimezone: true }).notNull(),
+});
+
 export type AttendanceTally = typeof attendanceTallies.$inferSelect;
 export type Attendance = typeof attendance.$inferSelect;
 export type NewAttendance = typeof attendance.$inferInsert;

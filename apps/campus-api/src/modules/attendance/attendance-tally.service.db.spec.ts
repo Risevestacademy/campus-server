@@ -28,6 +28,7 @@ import { tracks } from '../tracks/schema.js';
 import { users } from '../users/schema.js';
 import {
   AttendanceTallyService,
+  FIRST_RETRY_MS,
   TALLY_DELAY_MS,
   attendanceStatus,
   coveredMs,
@@ -38,13 +39,19 @@ import {
   attendance,
   attendanceOverrides,
   attendanceTallies,
+  attendanceTallyFailures,
 } from './schema.js';
 
 const MIGRATIONS = fileURLToPath(
   new URL('../../infra/database/migrations', import.meta.url),
 );
 const db = drizzle(new PGlite());
-const logger = { info: vi.fn(), error: vi.fn(), setContext: vi.fn() };
+const logger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  setContext: vi.fn(),
+};
 const tally = new AttendanceTallyService(
   db as never,
   { register: vi.fn() } as unknown as Scheduler,
@@ -170,7 +177,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.resetAllMocks();
   await db.execute(
-    sql`truncate attendance_overrides, attendance, attendance_tallies, room_link_instances, room_links, session_participants, sessions, mentorship_group_students, mentorship_groups, cohort_members, cohort_tracks, tracks, spaces, maps, cohorts, users cascade`,
+    sql`truncate attendance_overrides, attendance, attendance_tally_failures, attendance_tallies, room_link_instances, room_links, session_participants, sessions, mentorship_group_students, mentorship_groups, cohort_members, cohort_tracks, tracks, spaces, maps, cohorts, users cascade`,
   );
   [{ id: cohortId }] = await db
     .insert(cohorts)
@@ -390,7 +397,47 @@ describe('tallying a run', () => {
     expect([...(await byUser(instanceId)).keys()]).toEqual([ada.userId]);
   });
 
-  it('tallies a run once, and leaves cancelled ones alone', async () => {
+  it('tallies a run cancelled after it ended but before its first tally', async () => {
+    const ada = await student('ada');
+    const instanceId = await run();
+    await inCall(ada.userId, 0, 60);
+    await db
+      .update(roomLinkInstances)
+      .set({ cancelledAt: at(62) })
+      .where(eq(roomLinkInstances.id, instanceId));
+
+    await tallyNow();
+
+    expect((await byUser(instanceId)).get(ada.userId)?.status).toBe(
+      AttendanceStatus.Present,
+    );
+  });
+
+  it('leaves out a call row open since long before the run, but not one opened during it', async () => {
+    const ada = await student('ada');
+    const grace = await student('grace');
+    const instanceId = await run();
+    await inCall(ada.userId, -13 * 60, null);
+    const [stuck] = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.spaceId, spaceId));
+    await db.insert(sessionParticipants).values({
+      sessionId: stuck.id,
+      userId: grace.userId,
+      providerIdentity: `${grace.userId}:late`,
+      joinedAt: at(30),
+    });
+
+    await tallyNow();
+
+    const got = await byUser(instanceId);
+    expect(got.get(ada.userId)?.presentSeconds).toBe(0);
+    expect(got.get(grace.userId)?.presentSeconds).toBe(30 * 60);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('tallies a run once, and leaves runs cancelled before they ended alone', async () => {
     await student('ada');
     const instanceId = await run();
     const cancelled = await run();
@@ -463,7 +510,7 @@ describe('after a tally', () => {
   it('tallies a run again when Google restores it after a cancellation', async () => {
     await db
       .update(roomLinkInstances)
-      .set({ cancelledAt: new Date() })
+      .set({ cancelledAt: at(30) })
       .where(eq(roomLinkInstances.id, instanceId));
     await tallyNow();
     expect(await rows(instanceId)).toEqual([]);
@@ -541,11 +588,11 @@ describe('after a tally', () => {
     });
   });
 
-  it('voids a run cancelled afterwards, keeping corrections', async () => {
+  it('voids a run cancelled before it ended, keeping corrections', async () => {
     await correct(grace.userId, AttendanceStatus.Present);
     await db
       .update(roomLinkInstances)
-      .set({ cancelledAt: new Date() })
+      .set({ cancelledAt: at(30) })
       .where(eq(roomLinkInstances.id, instanceId));
 
     await tallyNow();
@@ -556,5 +603,102 @@ describe('after a tally', () => {
         source: AttendanceSource.Override,
       }),
     ]);
+  });
+
+  it('keeps the attendance of a run cancelled after it ended, which took place', async () => {
+    const before = await rows(instanceId);
+    await db
+      .update(roomLinkInstances)
+      .set({ cancelledAt: new Date() })
+      .where(eq(roomLinkInstances.id, instanceId));
+
+    await tallyNow();
+
+    expect(await rows(instanceId)).toEqual(before);
+  });
+
+  it('never deletes a row a correction was written for, whatever its source', async () => {
+    const [row] = await db
+      .select()
+      .from(attendance)
+      .where(eq(attendance.userId, grace.userId));
+    await db.insert(attendanceOverrides).values({
+      attendanceId: row.id,
+      changedBy: mentorId,
+      oldStatus: row.status,
+      newStatus: row.status,
+      reason: 'Checked, and right',
+    });
+    await db
+      .update(roomLinkInstances)
+      .set({ cancelledAt: at(30) })
+      .where(eq(roomLinkInstances.id, instanceId));
+
+    await tallyNow();
+
+    expect((await rows(instanceId)).map((r) => r.userId)).toEqual([
+      grace.userId,
+    ]);
+  });
+});
+
+describe('failures', () => {
+  it('records a run whose tally fails, and tries it again later and later', async () => {
+    await student('ada');
+    const instanceId = await run();
+    const failing = vi
+      .spyOn(tally as unknown as { tally: () => Promise<void> }, 'tally')
+      .mockRejectedValue(new Error('boom'));
+
+    await tally.tallyDue(new Date());
+    await tally.tallyDue(new Date());
+    const [first] = await db.select().from(attendanceTallyFailures);
+    expect(first).toMatchObject({ instanceId, attempts: 1 });
+    expect(failing).toHaveBeenCalledTimes(1);
+
+    await tally.tallyDue(
+      new Date(first.lastFailedAt.getTime() + FIRST_RETRY_MS),
+    );
+    const [second] = await db.select().from(attendanceTallyFailures);
+    expect(second.attempts).toBe(2);
+
+    await tally.tallyDue(
+      new Date(second.lastFailedAt.getTime() + FIRST_RETRY_MS),
+    );
+    expect(failing).toHaveBeenCalledTimes(2);
+
+    failing.mockRestore();
+    await tally.tallyDue(
+      new Date(second.lastFailedAt.getTime() + 2 * FIRST_RETRY_MS),
+    );
+    expect(await db.select().from(attendanceTallyFailures)).toEqual([]);
+    expect(await db.select().from(attendanceTallies)).toHaveLength(1);
+  });
+
+  it('tries runs that never failed before ones that keep failing', async () => {
+    await student('ada');
+    const failingRun = await run({}, { startsAt: at(-120), endsAt: at(-60) });
+    const fresh = await run();
+    await db.insert(attendanceTallyFailures).values({
+      instanceId: failingRun,
+      attempts: 1,
+      lastFailedAt: new Date(Date.now() - 60 * MINUTE),
+    });
+    const order: string[] = [];
+    const spy = vi
+      .spyOn(
+        tally as unknown as {
+          tally: (r: { instanceId: string }) => Promise<void>;
+        },
+        'tally',
+      )
+      .mockImplementation(async (r) => {
+        order.push(r.instanceId);
+      });
+
+    await tallyNow();
+
+    expect(order).toEqual([fresh, failingRun]);
+    spy.mockRestore();
   });
 });

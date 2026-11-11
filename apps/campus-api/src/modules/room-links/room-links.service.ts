@@ -132,9 +132,9 @@ export class RoomLinksService {
     now: Date = new Date(),
     target: LinkAudience = {},
   ): Promise<RoomLinkDto> {
-    const audience = audienceColumns(target);
     await requireStaff(this.db, user, cohortId, now);
     await requireLiveSpace(this.db, spaceId);
+    const audience = audienceColumns(target);
 
     for (let attempt = 1; ; attempt++) {
       try {
