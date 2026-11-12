@@ -7,6 +7,7 @@ The record of calls held in spaces, written from LiveKit's webhooks
 | ---------------------- | ------------------------------------------------------------------------------------------------------- |
 | `sessions`             | One call in a cohort's space: which cohort and space, the provider's room id, when it opened and closed |
 | `session_participants` | One person's time in a call: when they joined, when they left, and whether they turned their video on   |
+| `recordings`           | One video recording of a call: who started and stopped it, where its file is, and how it went           |
 
 A session is open while `closed_at` is null, and a participant is still in
 the call while `left_at` is null. There is no status column beside them.
@@ -63,3 +64,39 @@ identity is their user id, a colon and a suffix world makes fresh for each
 entry (`provider_identity`). Somebody who walks out and straight back in can
 have a new identity join before LiveKit says the old one left; the old row
 is closed then, so a person has one open row per call.
+
+## Video recordings
+
+Staff record a space's call as one video of the whole room. LiveKit records
+it and uploads the MP4 straight to a private Cloudflare R2 bucket; nothing
+passes through campus-api. Unset recording variables (see
+`docs/deployment.md`) make these routes answer 503.
+
+| Route                                                      | Does                                     |
+| ---------------------------------------------------------- | ---------------------------------------- |
+| `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/recording`   | Starts recording the space's call (201)  |
+| `DELETE /v1/cohorts/{cohortId}/spaces/{spaceId}/recording` | Stops the recording going on in it (200) |
+
+**Who:** the same people who may mute and remove. Admins, in any space of
+the cohort's campus; the cohort's live professors and mentors only in a
+designated space whose list names them (checked with `mayEnter` from
+`@campus/space-access`, at the moment they ask). Not in a normal space.
+
+**Telling everyone:** LiveKit does. While a recording runs, the room's
+recording flag is on, and every client in it gets LiveKit's
+`RecordingStatusChanged` event; nothing goes through world.
+
+**One file per recording:** the row and its file key,
+`cohorts/<cohort>/spaces/<space>/<recording id>.mp4`, are written before
+LiveKit is asked, so a call is recorded once at a time
+(`recordings_one_live_per_session`) and a webhook that beats the start's
+answer still finds its row by the file key. A start LiveKit refuses, such
+as when the plan's recording minutes are used up, leaves the row `failed`
+and answers 503; staff can try again.
+
+**Progress:** LiveKit's `egress_*` webhooks move a row from `starting` to
+`active`, then `complete` (with its length and size) or `failed` (with
+LiveKit's reason). A finished row stays finished, whatever arrives late.
+A recording stops by itself when the call ends.
+
+Recordings are never deleted.

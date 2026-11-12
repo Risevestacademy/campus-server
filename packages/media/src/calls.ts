@@ -6,6 +6,7 @@ import {
   WebhookReceiver,
 } from 'livekit-server-sdk';
 
+import { readRecordingEvent, type RecordingEvent } from './recording.js';
 import { assertMediaCredentials, type MediaCredentials } from './room-token.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -163,6 +164,8 @@ export interface VerifiedCallEvent {
   at: Date;
   /** Null for an event nothing here records. */
   event: CallEvent | null;
+  /** A recording's progress, from LiveKit's egress events; null otherwise. */
+  recording: RecordingEvent | null;
 }
 
 export class InvalidWebhookError extends Error {}
@@ -235,7 +238,11 @@ export async function verifyCallWebhook(
         return null;
     }
   })();
-  return { id: received.id, at, event };
+  const recording =
+    received.event.startsWith('egress_') && received.egressInfo
+      ? readRecordingEvent(received.egressInfo)
+      : null;
+  return { id: received.id, at, event, recording };
 }
 
 /** A protobuf time as a Date: milliseconds when given, else seconds; null when neither. */

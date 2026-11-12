@@ -6,7 +6,7 @@ import {
   type CallEvent,
   type SpaceRoom,
 } from '@campus/media';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { and, asc, eq, gt, isNull, lte, ne, sql, type SQL } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
@@ -23,6 +23,7 @@ import {
   CallWebhookUnverifiedException,
   CallWebhooksNotConfiguredException,
 } from './calls.exceptions.js';
+import { RecordingsService } from './recordings.service.js';
 import { sessionParticipants, sessions } from './schema.js';
 
 /** `at`, or the row's join if that is later: a row never leaves before it joined. */
@@ -49,6 +50,7 @@ export class CallsService {
     @Inject(DRIZZLE) private readonly db: Db,
     @Inject(CONFIG) private readonly config: Env,
     private readonly logger: PinoLogger,
+    @Optional() private readonly recordings?: RecordingsService,
   ) {
     this.logger.setContext(CallsService.name);
   }
@@ -80,6 +82,9 @@ export class CallsService {
     }
     if (verified.event) {
       await this.record(verified.event, verified.at, verified.id);
+    }
+    if (verified.recording && this.recordings) {
+      await this.recordings.record(verified.recording, verified.at);
     }
   }
 

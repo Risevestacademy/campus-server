@@ -1,10 +1,13 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   check,
   index,
+  integer,
   pgEnum,
   pgTable,
+  text,
   timestamp,
   uniqueIndex,
   uuid,
@@ -118,8 +121,75 @@ export const sessionParticipants = pgTable(
   ],
 );
 
+export enum RecordingStatus {
+  /** Asked of LiveKit, not yet heard to be under way. */
+  Starting = 'starting',
+  Active = 'active',
+  /** Over, with its file in the bucket. */
+  Complete = 'complete',
+  /** Over with nothing usable saved, or never started. */
+  Failed = 'failed',
+}
+
+export const recordingStatusEnum = pgEnum('recording_status', RecordingStatus);
+
+/**
+ * A recording of a call: one video of the whole room, which LiveKit uploads
+ * to the bucket under `file_key`. Started and stopped by staff; never
+ * deleted.
+ */
+export const recordings = pgTable(
+  'recordings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id),
+    startedBy: uuid('started_by')
+      .notNull()
+      .references(() => users.id),
+    /** Null when nobody stopped it: the call ended, or it failed. */
+    stoppedBy: uuid('stopped_by').references(() => users.id),
+    /** LiveKit's id for it; null until LiveKit has answered the start. */
+    providerEgressId: varchar('provider_egress_id', { length: 128 }),
+    /** Where the file is in the bucket. Fixed before LiveKit is asked. */
+    fileKey: varchar('file_key', { length: 512 }).notNull(),
+    status: recordingStatusEnum('status')
+      .notNull()
+      .default(RecordingStatus.Starting),
+    requestedAt: timestamp('requested_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    durationMs: integer('duration_ms'),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }),
+    /** LiveKit's reason, for a recording that failed. */
+    error: text('error'),
+  },
+  (table) => [
+    index('recordings_session_idx').on(table.sessionId),
+    uniqueIndex('recordings_provider_egress_unique').on(table.providerEgressId),
+    uniqueIndex('recordings_file_key_unique').on(table.fileKey),
+    // One recording of a call at a time: a second would be the same video.
+    uniqueIndex('recordings_one_live_per_session')
+      .on(table.sessionId)
+      .where(sql`${table.status} in ('starting', 'active')`),
+    check(
+      'recordings_ended_after_started',
+      sql`${table.endedAt} is null or ${table.startedAt} is null or ${table.endedAt} >= ${table.startedAt}`,
+    ),
+    check(
+      'recordings_measures_not_negative',
+      sql`coalesce(${table.durationMs}, 0) >= 0 and coalesce(${table.sizeBytes}, 0) >= 0`,
+    ),
+  ],
+);
+
 // Named for calls, not sessions: a session elsewhere in the API is a sign-in.
 export type CallSession = typeof sessions.$inferSelect;
 export type NewCallSession = typeof sessions.$inferInsert;
 export type CallParticipant = typeof sessionParticipants.$inferSelect;
 export type NewCallParticipant = typeof sessionParticipants.$inferInsert;
+export type CallRecording = typeof recordings.$inferSelect;
+export type NewCallRecording = typeof recordings.$inferInsert;
