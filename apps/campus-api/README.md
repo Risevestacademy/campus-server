@@ -25,7 +25,6 @@ NestJS backend for the campus application.
 - [Integration guide](#integration-guide)
 - [Documenting DTOs](#documenting-dtos)
 - [Run tests](#run-tests)
-- [License](#license)
 
 ## Prerequisites
 
@@ -443,7 +442,3 @@ slowly; drop and recreate it whenever you like.
 The files run side by side, so each keeps to its own rows. The map sync's
 test cannot, since it retires every map: `vitest.config.ts` runs it on its
 own once the rest have finished.
-
-## License
-
-MIT
