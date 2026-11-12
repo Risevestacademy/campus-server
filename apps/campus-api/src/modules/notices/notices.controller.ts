@@ -2,20 +2,25 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
+import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
+import { ApiListNotices } from './docs/notices.docs.js';
 import { CreateNoticeDto } from './dto/create-notice.dto.js';
+import { ListNoticesQueryDto } from './dto/list-notices.dto.js';
 import { PinNoticeDto } from './dto/pin-notice.dto.js';
 import { NoticeIdParamDto, UpdateNoticeDto } from './dto/update-notice.dto.js';
 import type { NoticeResponseDto } from './dto/notice-response.dto.js';
@@ -27,6 +32,15 @@ import { NoticesService } from './notices.service.js';
 @Controller('notices')
 export class NoticesController {
   constructor(private readonly notices: NoticesService) {}
+
+  @Get()
+  @ApiListNotices()
+  list(
+    @CurrentUser() viewer: AuthenticatedUser,
+    @Query() query: ListNoticesQueryDto,
+  ): Promise<PaginatedResponseDto<NoticeResponseDto>> {
+    return this.notices.list(viewer, query);
+  }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)

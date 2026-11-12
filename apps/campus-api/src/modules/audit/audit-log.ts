@@ -434,6 +434,11 @@ interface AuditEntryShapes {
       reason: string;
     };
   };
+  [AuditAction.CommentCreated]: {
+    subject: AuditSubjectType.Comment;
+    /** The notice only; what the member wrote stays on the comment. */
+    details: { noticeId: string };
+  };
 }
 
 /** When a room link's event runs, as ISO timestamps; both null for none. */
