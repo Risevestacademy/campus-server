@@ -189,6 +189,7 @@ export default defineRailway((ctx) => {
       LIVEKIT_URL: preserve(),
       LIVEKIT_WEBHOOK_API_KEY: preserve(),
       LIVEKIT_WEBHOOK_API_SECRET: preserve(),
+      MEDIA_PUBLIC_URL: preserve(),
       NODE_ENV: preserve(),
       OTEL_EXPORTER_OTLP_ENDPOINT: preserve(),
       OTEL_EXPORTER_OTLP_HEADERS: preserve(),
@@ -199,6 +200,7 @@ export default defineRailway((ctx) => {
       R2_ACCESS_KEY_ID: preserve(),
       R2_ACCOUNT_ID: preserve(),
       R2_BUCKET: preserve(),
+      R2_PUBLIC_BUCKET: preserve(),
       R2_SECRET_ACCESS_KEY: preserve(),
       // The same Redis world reads, set by hand as world's is.
       REDIS_URL: preserve(),

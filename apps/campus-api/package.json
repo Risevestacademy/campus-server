@@ -26,12 +26,14 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts"
   },
   "dependencies": {
-    "@campus/session": "workspace:*",
+    "@aws-sdk/client-s3": "^3.1168.0",
+    "@aws-sdk/s3-request-presigner": "^3.1168.0",
     "@campus/analytics": "workspace:*",
     "@campus/error-reporting": "workspace:*",
-    "@campus/telemetry": "workspace:*",
     "@campus/media": "workspace:*",
+    "@campus/session": "workspace:*",
     "@campus/space-access": "workspace:*",
+    "@campus/telemetry": "workspace:*",
     "@nestjs/common": "^12.0.1",
     "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^12.0.1",

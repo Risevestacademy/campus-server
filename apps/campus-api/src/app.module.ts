@@ -23,6 +23,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { FeedbackModule } from './modules/feedback/feedback.module.js';
 import { InvitesModule } from './modules/invites/invites.module.js';
 import { MapsModule } from './modules/maps/maps.module.js';
+import { MediaModule } from './modules/media/media.module.js';
 import { DesksModule } from './modules/desks/desks.module.js';
 import { MentorshipGroupsModule } from './modules/mentorship-groups/mentorship-groups.module.js';
 import { NoticesModule } from './modules/notices/notices.module.js';
@@ -58,6 +59,7 @@ import { UserAdminModule } from './modules/users/user-admin.module.js';
     MapsModule,
     FeedbackModule,
     CallsModule,
+    MediaModule,
     CalendarModule,
     DashboardModule,
     RoomLinksModule,

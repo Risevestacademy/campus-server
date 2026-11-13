@@ -46,19 +46,39 @@ function livekitWebhookKeysGiven(o: Env): boolean {
   );
 }
 
-const RECORDING_VARIABLES = [
-  'LIVEKIT_URL',
+const STORAGE_VARIABLES = [
   'R2_ACCOUNT_ID',
   'R2_ACCESS_KEY_ID',
   'R2_SECRET_ACCESS_KEY',
   'R2_BUCKET',
 ] as const;
 
-const RECORDING_MESSAGE = `set all of ${RECORDING_VARIABLES.join(', ')} and the webhook key pair, or none of them`;
+const UPLOAD_VARIABLES = ['R2_PUBLIC_BUCKET', 'MEDIA_PUBLIC_URL'] as const;
+
+const STORAGE_MESSAGE = `set all of ${STORAGE_VARIABLES.join(', ')}, or none of them; recording and uploads need them`;
+
+const RECORDING_MESSAGE =
+  'LIVEKIT_URL needs the R2 variables and the webhook key pair';
+
+const UPLOAD_MESSAGE = `set both ${UPLOAD_VARIABLES.join(' and ')}, with the R2 variables, or neither`;
 
 function recordingGiven(o: Env): boolean {
-  return RECORDING_VARIABLES.some((key) => o[key] !== undefined);
+  return o.LIVEKIT_URL !== undefined;
 }
+
+function uploadsGiven(o: Env): boolean {
+  return UPLOAD_VARIABLES.some((key) => o[key] !== undefined);
+}
+
+function storageGiven(o: Env): boolean {
+  return (
+    STORAGE_VARIABLES.some((key) => o[key] !== undefined) ||
+    recordingGiven(o) ||
+    uploadsGiven(o)
+  );
+}
+
+const R2_BUCKET_NAME = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 
 function blankAsUnset({ value }: { value: unknown }): unknown {
   return value === '' ? undefined : value;
@@ -545,10 +565,38 @@ export class Env {
   @Transform(blankAsUnset)
   LIVEKIT_WEBHOOK_API_SECRET?: string;
 
+  // Cloudflare R2 -----------------------------------------------------------
+  // One API token for both buckets. R2_BUCKET is private: recordings and
+  // attachments. All four, or none: unset, recording and uploads answer 503.
+
+  @ValidateIf(storageGiven)
+  @Matches(/^[0-9a-f]{32}$/, {
+    message: `R2_ACCOUNT_ID must be a Cloudflare account id; ${STORAGE_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  R2_ACCOUNT_ID?: string;
+
+  @ValidateIf(storageGiven)
+  @IsNotEmpty({ message: STORAGE_MESSAGE })
+  @Transform(blankAsUnset)
+  R2_ACCESS_KEY_ID?: string;
+
+  @ValidateIf(storageGiven)
+  @IsNotEmpty({ message: STORAGE_MESSAGE })
+  @Transform(blankAsUnset)
+  R2_SECRET_ACCESS_KEY?: string;
+
+  @ValidateIf(storageGiven)
+  @Matches(R2_BUCKET_NAME, {
+    message: `R2_BUCKET must be an R2 bucket name; ${STORAGE_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  R2_BUCKET?: string;
+
   // Call recordings --------------------------------------------------------
   // Staff start a recording through LiveKit's egress API, signed with the
-  // webhook key pair above, and LiveKit uploads the video to a private
-  // Cloudflare R2 bucket. All of these, or none: unset, recording answers 503.
+  // webhook key pair above, and LiveKit uploads the video to R2_BUCKET.
+  // Unset, recording answers 503.
 
   @ValidateIf(recordingGiven)
   @Matches(/^wss?:\/\//, {
@@ -557,29 +605,29 @@ export class Env {
   @Transform(blankAsUnset)
   LIVEKIT_URL?: string;
 
-  @ValidateIf(recordingGiven)
-  @Matches(/^[0-9a-f]{32}$/, {
-    message: `R2_ACCOUNT_ID must be a Cloudflare account id; ${RECORDING_MESSAGE}`,
+  // Uploads ----------------------------------------------------------------
+  // Clients upload straight to R2 with presigned URLs. Profile pictures go
+  // to a public bucket served from MEDIA_PUBLIC_URL, its custom domain.
+  // Both, or neither: unset, uploads answer 503.
+
+  @ValidateIf(uploadsGiven)
+  @Matches(R2_BUCKET_NAME, {
+    message: `R2_PUBLIC_BUCKET must be an R2 bucket name; ${UPLOAD_MESSAGE}`,
   })
   @Transform(blankAsUnset)
-  R2_ACCOUNT_ID?: string;
+  R2_PUBLIC_BUCKET?: string;
 
-  @ValidateIf(recordingGiven)
-  @IsNotEmpty({ message: RECORDING_MESSAGE })
-  @Transform(blankAsUnset)
-  R2_ACCESS_KEY_ID?: string;
-
-  @ValidateIf(recordingGiven)
-  @IsNotEmpty({ message: RECORDING_MESSAGE })
-  @Transform(blankAsUnset)
-  R2_SECRET_ACCESS_KEY?: string;
-
-  @ValidateIf(recordingGiven)
-  @Matches(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/, {
-    message: `R2_BUCKET must be an R2 bucket name; ${RECORDING_MESSAGE}`,
-  })
-  @Transform(blankAsUnset)
-  R2_BUCKET?: string;
+  @ValidateIf(uploadsGiven)
+  @IsUrl(
+    { protocols: ['https'], require_protocol: true, require_tld: false },
+    { message: `MEDIA_PUBLIC_URL must be an https URL; ${UPLOAD_MESSAGE}` },
+  )
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && value !== ''
+      ? value.replace(/\/+$/, '')
+      : undefined,
+  )
+  MEDIA_PUBLIC_URL?: string;
 
   // require_tld: false keeps http://localhost:3000 valid for local dev;
   // require_protocol: true still rejects bare words like "not-a-url".

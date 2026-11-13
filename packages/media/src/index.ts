@@ -8,3 +8,4 @@
 export * from './room-token.js';
 export * from './calls.js';
 export * from './recording.js';
+export * from './r2.js';

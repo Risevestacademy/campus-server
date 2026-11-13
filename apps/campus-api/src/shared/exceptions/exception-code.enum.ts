@@ -22,6 +22,10 @@ export enum ExceptionCode {
   InviteRequired = 'INVITE_REQUIRED',
   AccountSuspended = 'ACCOUNT_SUSPENDED',
   RateLimited = 'RATE_LIMITED',
+  UploadTooLarge = 'UPLOAD_TOO_LARGE',
+  UploadTypeNotAllowed = 'UPLOAD_TYPE_NOT_ALLOWED',
+  /** The uploaded file is missing, or is not what its upload was signed for. */
+  UploadMismatch = 'UPLOAD_MISMATCH',
   /**
    * The API is up and the request was sound, but something it depends on is
    * not there to answer: not configured on this deployment, or not reachable
@@ -56,6 +60,12 @@ export function mapExceptionCodeToStatus(code: ExceptionCode): number {
     case ExceptionCode.InviteRevoked:
     case ExceptionCode.SpaceAtCapacity:
       return 409;
+    case ExceptionCode.UploadTooLarge:
+      return 413;
+    case ExceptionCode.UploadTypeNotAllowed:
+      return 415;
+    case ExceptionCode.UploadMismatch:
+      return 422;
     case ExceptionCode.RateLimited:
       return 429;
     case ExceptionCode.ServiceUnavailable:

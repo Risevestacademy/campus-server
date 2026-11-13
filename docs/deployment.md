@@ -409,11 +409,42 @@ staff, through LiveKit's egress API with the same key pair, so it needs the
 project's `LIVEKIT_URL` too. LiveKit records the whole room into one MP4 and
 uploads it straight to a private Cloudflare R2 bucket, then tells the same
 webhook how it went. Set `LIVEKIT_URL`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY` and `R2_BUCKET` on the api service, all or none,
-beside the webhook key pair; unset, the recording routes answer 503. The R2
-key is an API token with Object Read & Write on that bucket only. The bucket
-stays private: no public access, no `r2.dev` URL. Recordings are never
-deleted, so the bucket has no lifecycle rule.
+`R2_SECRET_ACCESS_KEY` and `R2_BUCKET` on the api service, beside the
+webhook key pair; unset, the recording routes answer 503. The bucket stays
+private: no public access, no `r2.dev` URL. Recordings are never deleted, so
+no lifecycle rule may match their `cohorts/` prefix.
+
+**Clients upload files straight to R2** with URLs campus-api signs, so the
+same R2 variables serve uploads too, with two more: `R2_PUBLIC_BUCKET` and
+`MEDIA_PUBLIC_URL`. Without both, uploads answer 503. Set up in Cloudflare:
+
+1. A second bucket, public, for profile pictures (`campus-media`;
+   `campus-media-staging` on staging). Connect it to a custom domain such as
+   `media.<domain>` and set that as `MEDIA_PUBLIC_URL`. Not its `r2.dev`
+   URL, which is rate limited.
+2. One R2 API token with Object Read & Write on both buckets, and nothing
+   else, for `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`.
+3. A CORS policy on the **private** bucket, so browsers may PUT to it.
+   Uploads land there first; the public bucket is only written by
+   campus-api.
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://<app host>"],
+       "AllowedMethods": ["PUT", "GET"],
+       "AllowedHeaders": ["content-type"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+   Add `http://localhost:3000` to the staging bucket's origins for local
+   frontend work.
+
+4. A lifecycle rule on the private bucket deleting objects under the
+   `incoming/` prefix after 1 day. campus-api deletes uploads itself; the
+   rule catches a PUT made to an upload URL after its file was checked.
 
 The minting itself lives in `packages/media` (`@campus/media`). Its secret
 must be at least 32 characters, and it refuses anything shorter. world reads
