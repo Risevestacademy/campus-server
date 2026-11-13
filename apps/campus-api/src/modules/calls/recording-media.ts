@@ -31,7 +31,7 @@ export function recordingMediaFrom(config: Env): RecordingMedia | null {
     R2_ACCOUNT_ID: accountId,
     R2_ACCESS_KEY_ID: accessKeyId,
     R2_SECRET_ACCESS_KEY: secretAccessKey,
-    R2_BUCKET: bucket,
+    R2_PRIVATE_BUCKET: bucket,
   } = config;
   if (
     !url ||
