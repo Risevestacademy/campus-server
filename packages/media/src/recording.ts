@@ -20,21 +20,42 @@ export interface RecordingStore {
 
 function egressClient(credentials: MediaCredentials): EgressClient {
   assertMediaCredentials(credentials);
+  // Failover would send a start that got no answer to another region, which
+  // could start a second recording of the room.
   return new EgressClient(
     credentials.url.replace(/^ws(s?):\/\//, 'http$1://'),
     credentials.apiKey,
     credentials.apiSecret,
+    { failover: false },
   );
+}
+
+/** LiveKit answered a start and would not do it: nothing was started. */
+export class RecordingRefusedError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'RecordingRefusedError';
+  }
+}
+
+export interface StartedRecording {
+  egressId: string;
+  /** LiveKit's id for the run of the room being recorded. */
+  roomId: string | null;
 }
 
 /**
  * Records a whole room into one MP4, uploaded by LiveKit straight to the
- * bucket under `fileKey`. Resolves to LiveKit's id for the recording.
+ * bucket under `fileKey`. Throws `RecordingRefusedError` when LiveKit says
+ * no; any other failure leaves it unknown whether the recording started.
  */
 export function recordingStarter(
   credentials: MediaCredentials,
   store: RecordingStore,
-): (room: string, fileKey: string) => Promise<string> {
+): (room: string, fileKey: string) => Promise<StartedRecording> {
   const client = egressClient(credentials);
   return async (room, fileKey) => {
     const output = new EncodedFileOutput({
@@ -51,10 +72,36 @@ export function recordingStarter(
         }),
       },
     });
-    const info = await client.startRoomCompositeEgress(room, output, {
-      layout: 'grid',
-    });
-    return info.egressId;
+    let info: EgressInfo;
+    try {
+      info = await client.startRoomCompositeEgress(room, output, {
+        layout: 'grid',
+      });
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status !== undefined && status >= 400 && status < 500) {
+        throw new RecordingRefusedError((err as Error).message, status);
+      }
+      throw err;
+    }
+    return { egressId: info.egressId, roomId: info.roomId || null };
+  };
+}
+
+/**
+ * What LiveKit knows of the recording of `room` into `fileKey`, or null if
+ * it knows of none. One still going is preferred to one that is over.
+ */
+export function recordingFinder(
+  credentials: MediaCredentials,
+): (room: string, fileKey: string) => Promise<RecordingEvent | null> {
+  const client = egressClient(credentials);
+  return async (room, fileKey) => {
+    const found = (await client.listEgress({ roomName: room }))
+      .filter((info) => fileKeyOf(info) === fileKey)
+      .map(readRecordingEvent)
+      .filter((event): event is RecordingEvent => event !== null);
+    return found.find((event) => event.state === 'active') ?? found[0] ?? null;
   };
 }
 
@@ -80,6 +127,8 @@ export interface RecordingEvent {
   kind: 'recording_updated';
   egressId: string;
   room: string;
+  /** LiveKit's id for the run of the room it records. */
+  roomId: string | null;
   /** The file key the recording was started with, which names our row. */
   fileKey: string | null;
   state: RecordingState | null;
@@ -129,6 +178,7 @@ export function readRecordingEvent(info: EgressInfo): RecordingEvent | null {
     kind: 'recording_updated',
     egressId: info.egressId,
     room: info.roomName,
+    roomId: info.roomId || null,
     fileKey: fileKeyOf(info),
     state: state(info),
     startedAt: nanos(info.startedAt),

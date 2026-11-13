@@ -3,7 +3,12 @@ import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 
 import { verifyCallWebhook } from './calls.js';
-import { recordingStarter, recordingStopper } from './recording.js';
+import {
+  RecordingRefusedError,
+  recordingFinder,
+  recordingStarter,
+  recordingStopper,
+} from './recording.js';
 import { signCallWebhook } from './testing.js';
 
 const ROOM =
@@ -53,12 +58,12 @@ describe('recordingStarter', () => {
   it('records the whole room as one MP4 uploaded straight to the bucket', async () => {
     const api = await livekit();
 
-    const egressId = await recordingStarter(api.credentials, STORE)(
+    const started = await recordingStarter(api.credentials, STORE)(
       ROOM,
       'recordings/a.mp4',
     );
 
-    expect(egressId).toBe('EG_1');
+    expect(started).toEqual({ egressId: 'EG_1', roomId: null });
     expect(api.calls).toHaveLength(1);
     expect(api.calls[0].path).toContain('StartRoomCompositeEgress');
     expect(api.calls[0].body).toMatchObject({
@@ -80,6 +85,76 @@ describe('recordingStarter', () => {
         },
       ],
     });
+    await api.close();
+  });
+
+  it('names the run of the room it records', async () => {
+    const api = await livekit(200, { egressId: 'EG_1', roomId: 'RM_1' });
+
+    await expect(
+      recordingStarter(api.credentials, STORE)(ROOM, 'recordings/a.mp4'),
+    ).resolves.toEqual({ egressId: 'EG_1', roomId: 'RM_1' });
+    await api.close();
+  });
+
+  it('tells a refusal from a failure that may have started it', async () => {
+    const refused = await livekit(412);
+    await expect(
+      recordingStarter(refused.credentials, STORE)(ROOM, 'recordings/a.mp4'),
+    ).rejects.toBeInstanceOf(RecordingRefusedError);
+    await refused.close();
+
+    const broken = await livekit(503);
+    const failure = recordingStarter(broken.credentials, STORE)(
+      ROOM,
+      'recordings/a.mp4',
+    );
+    await expect(failure).rejects.toThrow();
+    await expect(failure).rejects.not.toBeInstanceOf(RecordingRefusedError);
+    expect(broken.calls).toHaveLength(1);
+    await broken.close();
+  });
+});
+
+describe('recordingFinder', () => {
+  const egress = (egressId: string, filepath: string, status: string) => ({
+    egressId,
+    roomId: 'RM_1',
+    roomName: ROOM,
+    status,
+    roomComposite: { roomName: ROOM, fileOutputs: [{ filepath }] },
+  });
+
+  it('finds the room’s recording into a file, preferring one still going', async () => {
+    const api = await livekit(200, {
+      items: [
+        egress('EG_1', 'recordings/a.mp4', 'EGRESS_FAILED'),
+        egress('EG_2', 'recordings/a.mp4', 'EGRESS_ACTIVE'),
+        egress('EG_3', 'recordings/b.mp4', 'EGRESS_ACTIVE'),
+      ],
+    });
+
+    const found = await recordingFinder(api.credentials)(
+      ROOM,
+      'recordings/a.mp4',
+    );
+
+    expect(api.calls[0].path).toContain('ListEgress');
+    expect(api.calls[0].body).toMatchObject({ roomName: ROOM });
+    expect(found).toMatchObject({
+      egressId: 'EG_2',
+      roomId: 'RM_1',
+      state: 'active',
+    });
+    await api.close();
+  });
+
+  it('finds nothing where LiveKit knows of no such recording', async () => {
+    const api = await livekit(200, { items: [] });
+
+    await expect(
+      recordingFinder(api.credentials)(ROOM, 'recordings/a.mp4'),
+    ).resolves.toBeNull();
     await api.close();
   });
 });
@@ -154,6 +229,7 @@ describe('a recording’s webhook', () => {
       kind: 'recording_updated',
       egressId: 'EG_1',
       room: ROOM,
+      roomId: 'RM_1',
       fileKey: 'recordings/a.mp4',
       state: 'complete',
       startedAt: new Date(1_792_500_000_000),

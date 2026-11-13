@@ -1,4 +1,8 @@
-import { spaceRoomName, type RecordingEvent } from '@campus/media';
+import {
+  RecordingRefusedError,
+  spaceRoomName,
+  type RecordingEvent,
+} from '@campus/media';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -23,7 +27,7 @@ import {
   RecordingUnavailableException,
 } from './calls.exceptions.js';
 import type { RecordingMedia } from './recording-media.js';
-import { RecordingsService } from './recordings.service.js';
+import { RecordingsService, START_SETTLE_MS } from './recordings.service.js';
 import { RecordingStatus, recordings, sessions } from './schema.js';
 
 const MIGRATIONS = fileURLToPath(
@@ -37,7 +41,15 @@ const later = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
 let media: RecordingMedia & {
   started: { room: string; fileKey: string }[];
   stopped: string[];
+  /** LiveKit says no. */
   refuse: boolean;
+  /** LiveKit starts it, and its answer is lost. */
+  loseAnswer: boolean;
+  /** LiveKit gets the start and records nothing; its answer is lost. */
+  dropStart: boolean;
+  /** The run LiveKit says it records. */
+  roomId: string | null;
+  known: Map<string, RecordingEvent>;
 };
 let service: RecordingsService;
 let cohortId: string;
@@ -77,13 +89,38 @@ beforeEach(async () => {
     started: [],
     stopped: [],
     refuse: false,
+    loseAnswer: false,
+    dropStart: false,
+    roomId: null,
+    known: new Map(),
     async start(room, fileKey) {
-      if (this.refuse) throw new Error('egress limit reached');
+      if (this.refuse) {
+        throw new RecordingRefusedError('egress limit reached', 412);
+      }
+      if (this.dropStart) throw new Error('fetch failed');
       this.started.push({ room, fileKey });
-      return `EG_${this.started.length}`;
+      const egressId = `EG_${this.started.length}`;
+      this.known.set(fileKey, {
+        kind: 'recording_updated',
+        egressId,
+        room,
+        roomId: this.roomId,
+        fileKey,
+        state: null,
+        startedAt: null,
+        endedAt: null,
+        durationMs: null,
+        sizeBytes: null,
+        error: null,
+      });
+      if (this.loseAnswer) throw new Error('fetch failed');
+      return { egressId, roomId: this.roomId };
     },
     async stop(egressId) {
       this.stopped.push(egressId);
+    },
+    async find(_room, fileKey) {
+      return this.known.get(fileKey) ?? null;
     },
   };
   service = new RecordingsService(db as never, media, logger as never);
@@ -225,6 +262,161 @@ describe('starting a recording', () => {
     ).resolves.toMatchObject({ status: RecordingStatus.Starting });
   });
 
+  it('keeps a recording whose start LiveKit took but whose answer was lost', async () => {
+    await openCall(classroom);
+    media.loseAnswer = true;
+
+    const row = await service.start(professor, cohortId, classroom, NOW);
+
+    expect(row).toMatchObject({
+      status: RecordingStatus.Starting,
+      providerEgressId: 'EG_1',
+    });
+    await expect(
+      service.start(admin, cohortId, classroom, later(1)),
+    ).rejects.toThrow(RecordingConflictException);
+    await service.stop(admin, cohortId, classroom, later(5));
+    expect(media.stopped).toEqual(['EG_1']);
+  });
+
+  it('holds the call after an unanswered start until LiveKit is asked, then lets go of one it never started', async () => {
+    await openCall(classroom);
+    media.dropStart = true;
+
+    await expect(
+      service.start(professor, cohortId, classroom, NOW),
+    ).rejects.toThrow(RecordingUnavailableException);
+    expect(await rows()).toMatchObject([
+      { status: RecordingStatus.Starting, providerEgressId: null },
+    ]);
+    media.dropStart = false;
+    await expect(
+      service.start(professor, cohortId, classroom, later(1)),
+    ).rejects.toThrow(RecordingConflictException);
+    expect(media.started).toEqual([]);
+
+    const settled = new Date(NOW.getTime() + START_SETTLE_MS);
+    await expect(
+      service.start(professor, cohortId, classroom, settled),
+    ).resolves.toMatchObject({ providerEgressId: 'EG_1' });
+    expect(await rows()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: RecordingStatus.Failed,
+          error: 'LiveKit has no record of it',
+        }),
+      ]),
+    );
+  });
+
+  it('lets a late webhook take up a start whose answer was lost', async () => {
+    await openCall(classroom);
+    media.dropStart = true;
+    await expect(
+      service.start(professor, cohortId, classroom, NOW),
+    ).rejects.toThrow(RecordingUnavailableException);
+    const [row] = await rows();
+
+    await service.record(
+      {
+        kind: 'recording_updated',
+        egressId: 'EG_9',
+        room: spaceRoomName({ cohortId, spaceId: classroom }),
+        roomId: `RM_${classroom}`,
+        fileKey: row.fileKey,
+        state: 'active',
+        startedAt: later(1),
+        endedAt: null,
+        durationMs: null,
+        sizeBytes: null,
+        error: null,
+      },
+      later(1),
+    );
+
+    await service.stop(professor, cohortId, classroom, later(5));
+    expect(media.stopped).toEqual(['EG_9']);
+  });
+
+  it('follows the call into the run LiveKit records, when it turned over as the recording started', async () => {
+    await openCall(classroom);
+    const [before] = await db.select().from(sessions);
+    await db
+      .update(sessions)
+      .set({ closedAt: NOW })
+      .where(eq(sessions.id, before.id));
+    const [after] = await db
+      .insert(sessions)
+      .values({
+        cohortId,
+        spaceId: classroom,
+        providerRoomId: 'RM_next',
+        openedAt: NOW,
+      })
+      .returning();
+    // The start saw the old run; LiveKit recorded the new one.
+    const [row] = await db
+      .insert(recordings)
+      .values({
+        sessionId: before.id,
+        startedBy: professor,
+        fileKey: 'cohorts/x/spaces/y/z.mp4',
+        providerEgressId: 'EG_7',
+      })
+      .returning();
+    media.known.set(row.fileKey, {
+      kind: 'recording_updated',
+      egressId: 'EG_7',
+      room: spaceRoomName({ cohortId, spaceId: classroom }),
+      roomId: 'RM_next',
+      fileKey: row.fileKey,
+      state: 'active',
+      startedAt: NOW,
+      endedAt: null,
+      durationMs: null,
+      sizeBytes: null,
+      error: null,
+    });
+
+    await expect(
+      service.start(admin, cohortId, classroom, later(1)),
+    ).rejects.toThrow(RecordingConflictException);
+    expect(await rows()).toMatchObject([
+      { id: row.id, sessionId: after.id, status: RecordingStatus.Active },
+    ]);
+
+    await service.stop(admin, cohortId, classroom, later(5));
+    expect(media.stopped).toEqual(['EG_7']);
+  });
+
+  it('moves a recording to the run LiveKit names when it starts', async () => {
+    await db.insert(sessions).values({
+      cohortId,
+      spaceId: classroom,
+      providerRoomId: 'RM_old',
+      openedAt: later(-30),
+      closedAt: later(-1),
+    });
+    await openCall(classroom);
+    const [old] = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.providerRoomId, 'RM_old'));
+    const [current] = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.providerRoomId, `RM_${classroom}`));
+    media.roomId = 'RM_old';
+
+    const row = await service.start(professor, cohortId, classroom, NOW);
+
+    expect(row.sessionId).toBe(old.id);
+    expect(current.id).not.toBe(old.id);
+    // The recording's run is closed; stop still reaches it.
+    await service.stop(professor, cohortId, classroom, later(5));
+    expect(media.stopped).toEqual(['EG_1']);
+  });
+
   it('answers 503 where recording is not configured', async () => {
     await openCall(classroom);
     const unconfigured = new RecordingsService(
@@ -276,6 +468,7 @@ describe('what LiveKit says of a recording', () => {
     kind: 'recording_updated',
     egressId: 'EG_1',
     room: spaceRoomName({ cohortId, spaceId: classroom }),
+    roomId: null,
     fileKey: null,
     startedAt: null,
     endedAt: null,

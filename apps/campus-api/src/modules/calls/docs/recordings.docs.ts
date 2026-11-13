@@ -56,7 +56,7 @@ export function ApiStartRecording(): MethodDecorator {
     ApiServiceUnavailableResponse({
       type: ApiErrorResponseDto,
       description:
-        'Recording is not configured here, or LiveKit would not start it (for example, the plan’s recording minutes are used up).',
+        'Recording is not configured here; LiveKit would not start it (for example, the plan’s recording minutes are used up); or LiveKit did not answer. After no answer the recording may have started: starting again answers 409 for a couple of minutes, until LiveKit has been asked.',
     }),
   );
 }
@@ -66,7 +66,8 @@ export function ApiStopRecording(): MethodDecorator {
     ApiOperation({
       summary: "Stop recording a space's call",
       description:
-        'Stops the recording going on in the space. The video is saved ' +
+        'Stops the recording going on in the space, including one started ' +
+        'as its call ended and began again. The video is saved ' +
         'once LiveKit finishes uploading it; `status` turns `complete` then.',
     }),
     ApiOkResponse({ type: RecordingDto }),
