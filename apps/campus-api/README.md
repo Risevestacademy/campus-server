@@ -25,7 +25,6 @@ NestJS backend for the campus application.
 - [Integration guide](#integration-guide)
 - [Documenting DTOs](#documenting-dtos)
 - [Run tests](#run-tests)
-- [License](#license)
 
 ## Prerequisites
 
@@ -90,7 +89,12 @@ a clear error.
 | `SANITY_PROJECT_ID`               | _(unset)_                                              | The Sanity project the campus maps are published to. Read only by the map sync, with no token. Unset, the API runs and the sync answers 503                                                                                                                                                                                                                                                                                                |
 | `SANITY_DATASET`                  | `production`                                           | The dataset the sync reads (`staging` on staging). Keep it the same as world's                                                                                                                                                                                                                                                                                                                                                             |
 | `LIVEKIT_WEBHOOK_API_KEY`         | _(unset)_                                              | The key LiveKit signs its webhooks with. Both or neither with the secret; unset, `POST /v1/calls/webhook` answers 503                                                                                                                                                                                                                                                                                                                      |
-| `LIVEKIT_WEBHOOK_API_SECRET`      | _(unset)_                                              | Its secret, at least 32 characters. Only verifies webhooks; world holds the key pair that mints tokens                                                                                                                                                                                                                                                                                                                                     |
+| `LIVEKIT_WEBHOOK_API_SECRET`      | _(unset)_                                              | Its secret, at least 32 characters. Verifies webhooks and, with the recording variables below, signs the requests that start and stop recordings; world holds the key pair that mints tokens                                                                                                                                                                                                                                               |
+| `LIVEKIT_URL`                     | _(unset)_                                              | The LiveKit project's `wss://` URL, for starting and stopping recordings. Set with the four `R2_*` values and the webhook key pair, all or none; unset, the recording routes answer 503                                                                                                                                                                                                                                                    |
+| `R2_ACCOUNT_ID`                   | _(unset)_                                              | The Cloudflare account the recordings bucket is in                                                                                                                                                                                                                                                                                                                                                                                         |
+| `R2_ACCESS_KEY_ID`                | _(unset)_                                              | An R2 API token's access key, with Object Read & Write on the recordings bucket only                                                                                                                                                                                                                                                                                                                                                       |
+| `R2_SECRET_ACCESS_KEY`            | _(unset)_                                              | That token's secret                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `R2_BUCKET`                       | _(unset)_                                              | The private bucket LiveKit uploads recordings to (`campus-recordings`; `campus-recordings-staging` on staging)                                                                                                                                                                                                                                                                                                                             |
 | `FF_LOG_LEVEL`                    | `info`                                                 | Minimum pino level: `trace` / `debug` / `info` / `warn` / `error` / `fatal`                                                                                                                                                                                                                                                                                                                                                                |
 | `FF_LOG_PRETTY`                   | `false`                                                | Enable human-readable pino-pretty output (`true`) or JSON lines (`false`)                                                                                                                                                                                                                                                                                                                                                                  |
 | `DEPLOYMENT_ENVIRONMENT`          | `development`                                          | Label sent with traces (`deployment.environment`)                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -209,6 +213,10 @@ records the calls from LiveKit's webhooks: when each run of a space's room
 opens and closes, who joins and leaves, and whether a camera came on. The
 webhook route, how events that arrive late or twice are handled, and the
 tables are in [src/modules/calls/README.md](src/modules/calls/README.md).
+
+Staff can also record a space's call as one video, which LiveKit uploads to a
+private Cloudflare R2 bucket. Who may start and stop a recording, and how its
+progress is tracked, are in the same README, under "Video recordings".
 
 ## Calendar
 
@@ -443,7 +451,3 @@ slowly; drop and recreate it whenever you like.
 The files run side by side, so each keeps to its own rows. The map sync's
 test cannot, since it retires every map: `vitest.config.ts` runs it on its
 own once the rest have finished.
-
-## License
-
-MIT

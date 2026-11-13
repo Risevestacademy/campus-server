@@ -400,9 +400,20 @@ So the key pair world mints with belongs to world.
 **campus-api records the calls**, from LiveKit's webhooks: when a space's
 call opens and closes, who joins and leaves it, and whether their camera
 came on (`sessions`, `session_participants`). It holds a key pair of its
-own, `LIVEKIT_WEBHOOK_API_KEY` and `LIVEKIT_WEBHOOK_API_SECRET`, used only to
-check a webhook came from LiveKit; unset, `POST /v1/calls/webhook` answers 503. In the LiveKit project, create a key pair for it and point a webhook at
+own, `LIVEKIT_WEBHOOK_API_KEY` and `LIVEKIT_WEBHOOK_API_SECRET`, which checks
+a webhook came from LiveKit and also signs the recording requests below; unset, `POST /v1/calls/webhook` answers 503. In the LiveKit project, create a key pair for it and point a webhook at
 `https://<api host>/v1/calls/webhook` signed with that key.
+
+**campus-api also starts and stops recordings** of a space's call, for
+staff, through LiveKit's egress API with the same key pair, so it needs the
+project's `LIVEKIT_URL` too. LiveKit records the whole room into one MP4 and
+uploads it straight to a private Cloudflare R2 bucket, then tells the same
+webhook how it went. Set `LIVEKIT_URL`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY` and `R2_BUCKET` on the api service, all or none,
+beside the webhook key pair; unset, the recording routes answer 503. The R2
+key is an API token with Object Read & Write on that bucket only. The bucket
+stays private: no public access, no `r2.dev` URL. Recordings are never
+deleted, so the bucket has no lifecycle rule.
 
 The minting itself lives in `packages/media` (`@campus/media`). Its secret
 must be at least 32 characters, and it refuses anything shorter. world reads

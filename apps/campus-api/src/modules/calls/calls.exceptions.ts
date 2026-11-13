@@ -9,3 +9,26 @@ export class CallWebhooksNotConfiguredException extends DomainException {
 export class CallWebhookUnverifiedException extends DomainException {
   readonly code = ExceptionCode.Unauthorized;
 }
+
+/** Recording is not set up here: no LiveKit URL or bucket configured. */
+export class RecordingNotConfiguredException extends DomainException {
+  readonly code = ExceptionCode.ServiceUnavailable;
+}
+
+/** LiveKit would not start the recording, such as when the plan's minutes are used up. */
+export class RecordingUnavailableException extends DomainException {
+  readonly code = ExceptionCode.ServiceUnavailable;
+}
+
+export class RecordingForbiddenException extends DomainException {
+  readonly code = ExceptionCode.Forbidden;
+}
+
+export class RecordingNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
+
+/** No call to record, one already recording, or one not yet under way to stop. */
+export class RecordingConflictException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}

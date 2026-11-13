@@ -186,6 +186,7 @@ export default defineRailway((ctx) => {
       GOOGLE_CLIENT_SECRET: preserve(),
       GOOGLE_MOBILE_CLIENT_IDS: preserve(),
       INVITE_TTL_DAYS: preserve(),
+      LIVEKIT_URL: preserve(),
       LIVEKIT_WEBHOOK_API_KEY: preserve(),
       LIVEKIT_WEBHOOK_API_SECRET: preserve(),
       NODE_ENV: preserve(),
@@ -195,6 +196,10 @@ export default defineRailway((ctx) => {
       PORT: preserve(),
       POSTHOG_HOST: preserve(),
       POSTHOG_PROJECT_TOKEN: preserve(),
+      R2_ACCESS_KEY_ID: preserve(),
+      R2_ACCOUNT_ID: preserve(),
+      R2_BUCKET: preserve(),
+      R2_SECRET_ACCESS_KEY: preserve(),
       // The same Redis world reads, set by hand as world's is.
       REDIS_URL: preserve(),
       RESEND_API_KEY: preserve(),

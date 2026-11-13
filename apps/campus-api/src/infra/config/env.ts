@@ -41,8 +41,23 @@ const LIVEKIT_WEBHOOK_KEYS_MESSAGE =
 function livekitWebhookKeysGiven(o: Env): boolean {
   return (
     o.LIVEKIT_WEBHOOK_API_KEY !== undefined ||
-    o.LIVEKIT_WEBHOOK_API_SECRET !== undefined
+    o.LIVEKIT_WEBHOOK_API_SECRET !== undefined ||
+    recordingGiven(o)
   );
+}
+
+const RECORDING_VARIABLES = [
+  'LIVEKIT_URL',
+  'R2_ACCOUNT_ID',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+  'R2_BUCKET',
+] as const;
+
+const RECORDING_MESSAGE = `set all of ${RECORDING_VARIABLES.join(', ')} and the webhook key pair, or none of them`;
+
+function recordingGiven(o: Env): boolean {
+  return RECORDING_VARIABLES.some((key) => o[key] !== undefined);
 }
 
 function blankAsUnset({ value }: { value: unknown }): unknown {
@@ -512,8 +527,10 @@ export class Env {
   RESEND_INVITE_GUEST_TEMPLATE_ID?: string;
 
   // LiveKit webhooks ------------------------------------------------------
-  // A key pair of the LiveKit project's, used only to check that a webhook
-  // came from it. Both or neither: unset, the webhook route answers 503.
+  // A key pair of the LiveKit project's. It checks that a webhook came from
+  // LiveKit, and, with the recording variables below, signs the requests that
+  // start and stop recordings. Both or neither: unset, the webhook route
+  // answers 503.
 
   @ValidateIf(livekitWebhookKeysGiven)
   @IsNotEmpty({ message: LIVEKIT_WEBHOOK_KEYS_MESSAGE })
@@ -527,6 +544,42 @@ export class Env {
   })
   @Transform(blankAsUnset)
   LIVEKIT_WEBHOOK_API_SECRET?: string;
+
+  // Call recordings --------------------------------------------------------
+  // Staff start a recording through LiveKit's egress API, signed with the
+  // webhook key pair above, and LiveKit uploads the video to a private
+  // Cloudflare R2 bucket. All of these, or none: unset, recording answers 503.
+
+  @ValidateIf(recordingGiven)
+  @Matches(/^wss?:\/\//, {
+    message: `LIVEKIT_URL must start with ws:// or wss://; ${RECORDING_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  LIVEKIT_URL?: string;
+
+  @ValidateIf(recordingGiven)
+  @Matches(/^[0-9a-f]{32}$/, {
+    message: `R2_ACCOUNT_ID must be a Cloudflare account id; ${RECORDING_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  R2_ACCOUNT_ID?: string;
+
+  @ValidateIf(recordingGiven)
+  @IsNotEmpty({ message: RECORDING_MESSAGE })
+  @Transform(blankAsUnset)
+  R2_ACCESS_KEY_ID?: string;
+
+  @ValidateIf(recordingGiven)
+  @IsNotEmpty({ message: RECORDING_MESSAGE })
+  @Transform(blankAsUnset)
+  R2_SECRET_ACCESS_KEY?: string;
+
+  @ValidateIf(recordingGiven)
+  @Matches(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/, {
+    message: `R2_BUCKET must be an R2 bucket name; ${RECORDING_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  R2_BUCKET?: string;
 
   // require_tld: false keeps http://localhost:3000 valid for local dev;
   // require_protocol: true still rejects bare words like "not-a-url".

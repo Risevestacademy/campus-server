@@ -415,3 +415,38 @@ describe('loadEnv email (Resend)', () => {
     });
   });
 });
+
+describe('loadEnv call recordings', () => {
+  const recording = {
+    LIVEKIT_WEBHOOK_API_KEY: 'APIkey',
+    LIVEKIT_WEBHOOK_API_SECRET: 's'.repeat(32),
+    LIVEKIT_URL: 'wss://campus.livekit.cloud',
+    R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+    R2_ACCESS_KEY_ID: 'r2-key',
+    R2_SECRET_ACCESS_KEY: 'r2-secret',
+    R2_BUCKET: 'campus-recordings',
+  };
+
+  it('loads with all of them, or none', () => {
+    expect(testEnv(recording).R2_BUCKET).toBe('campus-recordings');
+    expect(testEnv().R2_BUCKET).toBeUndefined();
+  });
+
+  it('refuses some without the rest', () => {
+    expect(() => testEnv({ R2_BUCKET: 'campus-recordings' })).toThrow(
+      /LIVEKIT_URL/,
+    );
+    expect(() =>
+      testEnv({ ...recording, LIVEKIT_WEBHOOK_API_KEY: undefined }),
+    ).toThrow(/LIVEKIT_WEBHOOK_API_KEY/);
+  });
+
+  it('refuses a bucket or account that cannot be R2’s', () => {
+    expect(() =>
+      testEnv({ ...recording, R2_BUCKET: 'Campus_Recordings' }),
+    ).toThrow(/R2_BUCKET/);
+    expect(() => testEnv({ ...recording, R2_ACCOUNT_ID: 'acc' })).toThrow(
+      /R2_ACCOUNT_ID/,
+    );
+  });
+});

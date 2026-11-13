@@ -97,6 +97,7 @@ describe('verifying a webhook', () => {
           identity: `${USER}:x`,
           joinedAt: new Date(1792499999456),
         },
+        recording: null,
       },
     );
   });
