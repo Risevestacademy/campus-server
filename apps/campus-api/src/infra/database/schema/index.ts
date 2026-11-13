@@ -9,6 +9,7 @@ export * from '../../../modules/feedback/schema.js';
 export * from '../../../modules/auth/schema.js';
 export * from '../../../modules/invites/schema.js';
 export * from '../../../modules/maps/schema.js';
+export * from '../../../modules/media/schema.js';
 export * from '../../../modules/mentorship-groups/schema.js';
 export * from '../../../modules/notices/schema.js';
 export * from '../../../modules/notifications/schema.js';

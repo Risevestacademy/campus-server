@@ -434,11 +434,25 @@ describe('loadEnv call recordings', () => {
 
   it('refuses some without the rest', () => {
     expect(() => testEnv({ R2_BUCKET: 'campus-recordings' })).toThrow(
-      /LIVEKIT_URL/,
+      /R2_ACCOUNT_ID/,
+    );
+    expect(() => testEnv({ LIVEKIT_URL: recording.LIVEKIT_URL })).toThrow(
+      /R2_BUCKET/,
     );
     expect(() =>
       testEnv({ ...recording, LIVEKIT_WEBHOOK_API_KEY: undefined }),
     ).toThrow(/LIVEKIT_WEBHOOK_API_KEY/);
+  });
+
+  it('loads the R2 variables without LiveKit, for uploads', () => {
+    expect(
+      testEnv({
+        R2_ACCOUNT_ID: recording.R2_ACCOUNT_ID,
+        R2_ACCESS_KEY_ID: recording.R2_ACCESS_KEY_ID,
+        R2_SECRET_ACCESS_KEY: recording.R2_SECRET_ACCESS_KEY,
+        R2_BUCKET: recording.R2_BUCKET,
+      }).LIVEKIT_URL,
+    ).toBeUndefined();
   });
 
   it('refuses a bucket or account that cannot be R2’s', () => {
@@ -448,5 +462,43 @@ describe('loadEnv call recordings', () => {
     expect(() => testEnv({ ...recording, R2_ACCOUNT_ID: 'acc' })).toThrow(
       /R2_ACCOUNT_ID/,
     );
+  });
+});
+
+describe('loadEnv uploads', () => {
+  const uploads = {
+    R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
+    R2_ACCESS_KEY_ID: 'r2-key',
+    R2_SECRET_ACCESS_KEY: 'r2-secret',
+    R2_BUCKET: 'campus-private',
+    R2_PUBLIC_BUCKET: 'campus-public',
+    MEDIA_PUBLIC_URL: 'https://media.campus.example.com/',
+  };
+
+  it('loads with all of them, without a trailing slash on the URL', () => {
+    const env = testEnv(uploads);
+    expect(env.R2_PUBLIC_BUCKET).toBe('campus-public');
+    expect(env.MEDIA_PUBLIC_URL).toBe('https://media.campus.example.com');
+  });
+
+  it('refuses the public bucket without its URL, or without R2', () => {
+    expect(() => testEnv({ ...uploads, MEDIA_PUBLIC_URL: undefined })).toThrow(
+      /MEDIA_PUBLIC_URL/,
+    );
+    expect(() =>
+      testEnv({
+        R2_PUBLIC_BUCKET: uploads.R2_PUBLIC_BUCKET,
+        MEDIA_PUBLIC_URL: uploads.MEDIA_PUBLIC_URL,
+      }),
+    ).toThrow(/R2_ACCOUNT_ID/);
+  });
+
+  it('refuses a URL that is not https', () => {
+    expect(() =>
+      testEnv({
+        ...uploads,
+        MEDIA_PUBLIC_URL: 'http://media.campus.example.com',
+      }),
+    ).toThrow(/MEDIA_PUBLIC_URL/);
   });
 });

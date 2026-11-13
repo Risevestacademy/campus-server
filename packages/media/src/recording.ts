@@ -7,6 +7,7 @@ import {
   type EgressInfo,
 } from 'livekit-server-sdk';
 
+import { r2Connection } from './r2.js';
 import { assertMediaCredentials, type MediaCredentials } from './room-token.js';
 
 /** A private Cloudflare R2 bucket, reached through its S3 API. */
@@ -15,12 +16,6 @@ export interface RecordingStore {
   accessKeyId: string;
   secretAccessKey: string;
   bucket: string;
-}
-
-export function recordingStoreEndpoint({
-  accountId,
-}: Pick<RecordingStore, 'accountId'>): string {
-  return `https://${accountId}.r2.cloudflarestorage.com`;
 }
 
 function egressClient(credentials: MediaCredentials): EgressClient {
@@ -70,12 +65,10 @@ export function recordingStarter(
       output: {
         case: 's3',
         value: new S3Upload({
+          ...r2Connection(store.accountId),
           accessKey: store.accessKeyId,
           secret: store.secretAccessKey,
-          region: 'auto',
-          endpoint: recordingStoreEndpoint(store),
           bucket: store.bucket,
-          forcePathStyle: true,
         }),
       },
     });
