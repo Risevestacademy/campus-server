@@ -1,4 +1,10 @@
-import { recordingStarter, recordingStopper } from '@campus/media';
+import {
+  recordingFinder,
+  recordingStarter,
+  recordingStopper,
+  type RecordingEvent,
+  type StartedRecording,
+} from '@campus/media';
 
 import type { Env } from '../../infra/config/env.js';
 
@@ -6,9 +12,14 @@ import type { Env } from '../../infra/config/env.js';
 export const RECORDING_MEDIA = Symbol('RECORDING_MEDIA');
 
 export interface RecordingMedia {
-  /** Starts recording `room` into `fileKey`; resolves to LiveKit's id for it. */
-  start(room: string, fileKey: string): Promise<string>;
+  /**
+   * Starts recording `room` into `fileKey`. Throws `RecordingRefusedError`
+   * when LiveKit says no; after any other failure it may have started.
+   */
+  start(room: string, fileKey: string): Promise<StartedRecording>;
   stop(egressId: string): Promise<void>;
+  /** What LiveKit knows of the recording of `room` into `fileKey`, if anything. */
+  find(room: string, fileKey: string): Promise<RecordingEvent | null>;
 }
 
 /** Null unless every recording variable is set. */
@@ -42,5 +53,6 @@ export function recordingMediaFrom(config: Env): RecordingMedia | null {
       bucket,
     }),
     stop: recordingStopper(credentials),
+    find: recordingFinder(credentials),
   };
 }

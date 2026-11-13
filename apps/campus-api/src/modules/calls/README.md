@@ -94,6 +94,24 @@ answer still finds its row by the file key. A start LiveKit refuses, such
 as when the plan's recording minutes are used up, leaves the row `failed`
 and answers 503; staff can try again.
 
+**A start with no answer** (a timeout, a dropped connection, a 5xx) may
+have started, so its row stays `starting` and holds the call; the API
+answers 503. Its webhooks take it up as usual. If none have given it
+LiveKit's id two minutes later (`START_SETTLE_MS`), the next start or
+stop asks LiveKit (`ListEgress` for the room, matched by file key): a
+recording LiveKit has is applied as its webhook would be, and one it has
+no record of is marked `failed`, which frees the call. The LiveKit client
+does not fail over to another region, so a start is never sent twice.
+
+**When the call turns over:** a start races the call ending and
+reopening, so the row may be attached to the run before the one LiveKit
+records. Stop therefore reaches every live recording in the space, in
+any run. When LiveKit names the run it records (in its answer or a
+webhook), the row moves to that run's session. A live row whose session
+has closed is checked with LiveKit before a start or stop, the same way
+as an unanswered start, and new starts in a space are taken one at a
+time.
+
 **Progress:** LiveKit's `egress_*` webhooks move a row from `starting` to
 `active`, then `complete` (with its length and size) or `failed` (with
 LiveKit's reason). A finished row stays finished, whatever arrives late.
