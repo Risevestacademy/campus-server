@@ -58,7 +58,7 @@ describe('verifyIdToken', () => {
       firstName: 'Ada',
       lastName: 'Lovelace',
       displayName: 'Ada Lovelace',
-      avatarUrl: null,
+      pictureUrl: null,
     });
   });
 

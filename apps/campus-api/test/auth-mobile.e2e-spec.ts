@@ -45,7 +45,7 @@ const IDENTITY = {
   firstName: 'Ada',
   lastName: 'Lovelace',
   displayName: 'Ada Lovelace',
-  avatarUrl: null,
+  pictureUrl: null,
 };
 
 /** Stands in for Google: the app's id_token is taken as already checked. */

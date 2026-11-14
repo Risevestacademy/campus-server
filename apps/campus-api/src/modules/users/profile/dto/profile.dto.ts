@@ -130,8 +130,9 @@ export class OwnProfileDto {
   bio: string | null;
 
   /**
-   * The picture Google gave at first sign-in. Null when it gave none.
-   * @example https://lh3.googleusercontent.com/a/example
+   * The picture they uploaded, else the one Google gave at first sign-in.
+   * Null for initials: none was ever set, or they removed it.
+   * @example https://media.campusbyrise.com/avatars/3f6c…/9b1e….webp
    */
   avatarUrl: string | null;
 
@@ -171,6 +172,13 @@ export class SetAnalyticsConsentDto {
   })
   @IsIn(Object.values(AnalyticsConsent))
   consent: AnalyticsConsent;
+}
+
+export class SetAvatarDto {
+  /** From `POST /v1/uploads` with kind `avatar`, after the file was PUT. */
+  @ApiProperty({ format: 'uuid' })
+  @IsUUID()
+  mediaId: string;
 }
 
 /** A place on a roster, as much of it as a profile card shows. */

@@ -1,7 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 
+import { CONFIG } from '../../infra/config/config.constants.js';
+import type { Env } from '../../infra/config/env.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import { avatarUrl } from './avatar-url.js';
 import type { GoogleIdentity } from './google-identity.js';
 import { GoogleIdentityMismatchError } from './users.exceptions.js';
 import {
@@ -33,7 +36,19 @@ export function hasGoogleIdentity(user: User): boolean {
 
 @Injectable()
 export class UsersService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    @Inject(CONFIG) private readonly config?: Pick<Env, 'MEDIA_PUBLIC_URL'>,
+  ) {}
+
+  /** The picture they show; null for initials. */
+  async avatarUrlOf(id: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ url: avatarUrl(this.config?.MEDIA_PUBLIC_URL) })
+      .from(users)
+      .where(eq(users.id, id));
+    return row?.url ?? null;
+  }
 
   /**
    * The account behind a Google identity, read-only: by subject first, since
@@ -75,7 +90,7 @@ export class UsersService {
         firstName: coalesce(users.firstName, identity.firstName),
         lastName: coalesce(users.lastName, identity.lastName),
         displayName: coalesce(users.displayName, identity.displayName),
-        avatarUrl: coalesce(users.avatarUrl, identity.avatarUrl),
+        googlePictureUrl: coalesce(users.googlePictureUrl, identity.pictureUrl),
       })
       .where(
         and(
@@ -139,7 +154,7 @@ export class UsersService {
         firstName: identity.firstName,
         lastName: identity.lastName,
         displayName: identity.displayName,
-        avatarUrl: identity.avatarUrl,
+        googlePictureUrl: identity.pictureUrl,
         systemRole: SystemRole.User,
         status: UserStatus.Active,
       })

@@ -48,7 +48,7 @@ function verifiedIdentity(
     firstName: 'Ada',
     lastName: 'Lovelace',
     displayName: 'Ada Lovelace',
-    avatarUrl: null,
+    pictureUrl: null,
     ...overrides,
   };
 }
@@ -62,7 +62,8 @@ function user(overrides: Partial<User> = {}): User {
     firstName: null,
     lastName: null,
     displayName: null,
-    avatarUrl: null,
+    googlePictureUrl: null,
+    avatarMediaId: null,
     systemRole: SystemRole.User,
     status: UserStatus.Active,
     lastLoginAt: null,

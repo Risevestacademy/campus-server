@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { SessionModule } from '../../auth/session.module.js';
+import { MediaModule } from '../../media/media.module.js';
 import { CohortProfilesController } from './cohort-profiles.controller.js';
 import { ProfileController } from './profile.controller.js';
 import { ProfileService } from './profile.service.js';
@@ -11,7 +12,7 @@ import { ProfileService } from './profile.service.js';
  * SessionModule's guard.
  */
 @Module({
-  imports: [SessionModule],
+  imports: [SessionModule, MediaModule],
   controllers: [ProfileController, CohortProfilesController],
   providers: [ProfileService],
 })

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -15,13 +16,16 @@ import { SessionGuard } from '../../auth/session.guard.js';
 import {
   ApiGetOwnProfile,
   ApiGetProfileCard,
+  ApiRemoveAvatar,
   ApiSetAnalyticsConsent,
+  ApiSetAvatar,
   ApiUpdateOwnProfile,
 } from './docs/profile.docs.js';
 import {
   OwnProfileDto,
   ProfileCardDto,
   SetAnalyticsConsentDto,
+  SetAvatarDto,
   UpdateProfileDto,
   UserIdParamDto,
 } from './dto/profile.dto.js';
@@ -63,6 +67,21 @@ export class ProfileController {
     @Body() dto: SetAnalyticsConsentDto,
   ): Promise<OwnProfileDto> {
     return this.profiles.setAnalyticsConsent(user.id, dto.consent);
+  }
+
+  @Put('me/avatar')
+  @ApiSetAvatar()
+  setAvatar(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SetAvatarDto,
+  ): Promise<OwnProfileDto> {
+    return this.profiles.setAvatar(user.id, dto.mediaId);
+  }
+
+  @Delete('me/avatar')
+  @ApiRemoveAvatar()
+  removeAvatar(@CurrentUser() user: AuthenticatedUser): Promise<OwnProfileDto> {
+    return this.profiles.removeAvatar(user.id);
   }
 
   @Get(':id/profile')

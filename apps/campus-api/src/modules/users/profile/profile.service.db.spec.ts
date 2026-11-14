@@ -13,6 +13,13 @@ import {
   cohortTracks,
   cohorts,
 } from '../../cohorts/schema.js';
+import {
+  UploadMismatchException,
+  UploadNotFoundException,
+} from '../../media/media.exceptions.js';
+import type { MediaStorage } from '../../media/media-storage.js';
+import { MediaService } from '../../media/media.service.js';
+import { MediaKind, MediaStatus, media } from '../../media/schema.js';
 import { tracks } from '../../tracks/schema.js';
 import { ProfileService } from './profile.service.js';
 import { AnalyticsConsent, SystemRole, UserStatus, users } from '../schema.js';
@@ -29,7 +36,61 @@ const db = drizzle(new PGlite(), {
   schema: { users, tracks, cohorts, cohortTracks, cohortMembers },
 });
 
-const service = new ProfileService(db as never);
+const WEBP = Uint8Array.from([
+  0x52, 0x49, 0x46, 0x46, 0x10, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+]);
+
+/** R2 as a map of `bucket:key` to bytes. */
+const objects = new Map<string, Uint8Array>();
+const storage: MediaStorage = {
+  async signUpload(key) {
+    return { url: `https://r2.test/${key}`, headers: {} };
+  },
+  async copyUpload(uploadKey, to) {
+    const bytes = objects.get(`private:${uploadKey}`);
+    if (!bytes) throw new Error('NoSuchKey');
+    objects.set(`${to.bucket}:${to.key}`, bytes);
+  },
+  async head(bucket, key) {
+    const bytes = objects.get(`${bucket}:${key}`);
+    return bytes
+      ? { sizeBytes: bytes.length, contentType: 'image/webp' }
+      : null;
+  },
+  async readStart(bucket, key, length) {
+    return (
+      objects.get(`${bucket}:${key}`)?.subarray(0, length) ?? new Uint8Array()
+    );
+  },
+  async delete(bucket, key) {
+    objects.delete(`${bucket}:${key}`);
+  },
+  publicUrl: (key) => `https://media.test/${key}`,
+};
+const mediaService = new MediaService(
+  db as never,
+  storage,
+  { register: () => undefined } as never,
+  { setContext: () => undefined, error: () => undefined } as never,
+);
+const service = new ProfileService(db as never, mediaService, {
+  MEDIA_PUBLIC_URL: 'https://media.test',
+});
+
+/** Asks for an avatar upload as `userId` and PUTs `bytes` to it. */
+async function uploaded(userId: string, bytes = WEBP): Promise<string> {
+  const { mediaId } = await mediaService.createUpload(
+    userId,
+    {
+      kind: MediaKind.Avatar,
+      contentType: 'image/webp',
+      sizeBytes: bytes.length,
+    },
+    new Date(),
+  );
+  objects.set(`private:incoming/${mediaId}`, bytes);
+  return mediaId;
+}
 
 let c1: string;
 let c2: string;
@@ -74,8 +135,9 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await db.execute(
-    sql`truncate cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
+    sql`truncate cohort_members, cohort_tracks, cohorts, tracks, media, users cascade`,
   );
+  objects.clear();
 
   const [track] = await db
     .insert(tracks)
@@ -560,5 +622,104 @@ describe("a cohort's people", () => {
         '99999999-9999-4999-8999-999999999999',
       ),
     ).rejects.toBeInstanceOf(CohortNotFoundException);
+  });
+});
+
+describe('profile picture', () => {
+  const GOOGLE = 'https://lh3.googleusercontent.com/a/ada';
+  const mediaRow = async (id: string) =>
+    (await db.select().from(media).where(eq(media.id, id)))[0];
+
+  it('shows Google’s picture until they upload one, then theirs, to them and to others', async () => {
+    const ada = await person('ada@campus.local', { googlePictureUrl: GOOGLE });
+    expect((await service.getOwn(ada.id)).avatarUrl).toBe(GOOGLE);
+
+    const mediaId = await uploaded(ada.id);
+    const profile = await service.setAvatar(ada.id, mediaId);
+
+    const { key } = await mediaRow(mediaId);
+    expect(key).toMatch(new RegExp(`^avatars/${ada.id}/[0-9a-f-]+\\.webp$`));
+    expect(profile.avatarUrl).toBe(`https://media.test/${key}`);
+    expect(objects.has(`public:${key}`)).toBe(true);
+    expect((await service.getCard(viewerOf(ada), ada.id)).avatarUrl).toBe(
+      `https://media.test/${key}`,
+    );
+    expect(await mediaRow(mediaId)).toMatchObject({
+      status: MediaStatus.Ready,
+    });
+  });
+
+  it('lets go of the picture it replaces, to be deleted with no grace', async () => {
+    const ada = await person('ada@campus.local');
+    const first = await uploaded(ada.id);
+    await service.setAvatar(ada.id, first);
+    const second = await uploaded(ada.id);
+
+    const now = new Date();
+    await service.setAvatar(ada.id, second, now);
+
+    expect(await mediaRow(first)).toMatchObject({
+      status: MediaStatus.Removed,
+      purgeAfter: now,
+    });
+    const [row] = await db.select().from(users).where(eq(users.id, ada.id));
+    expect(row.avatarMediaId).toBe(second);
+  });
+
+  it('leaves initials on removal, Google’s picture gone too', async () => {
+    const ada = await person('ada@campus.local', { googlePictureUrl: GOOGLE });
+    const mediaId = await uploaded(ada.id);
+    await service.setAvatar(ada.id, mediaId);
+
+    const profile = await service.removeAvatar(ada.id);
+
+    expect(profile.avatarUrl).toBeNull();
+    const [row] = await db.select().from(users).where(eq(users.id, ada.id));
+    expect(row).toMatchObject({ avatarMediaId: null, googlePictureUrl: null });
+    expect(await mediaRow(mediaId)).toMatchObject({
+      status: MediaStatus.Removed,
+    });
+  });
+
+  it('removes Google’s picture when nothing was uploaded', async () => {
+    const ada = await person('ada@campus.local', { googlePictureUrl: GOOGLE });
+
+    await expect(service.removeAvatar(ada.id)).resolves.toMatchObject({
+      avatarUrl: null,
+    });
+  });
+
+  it('refuses someone else’s upload and a file that is not the image it claimed', async () => {
+    const ada = await person('ada@campus.local', { googlePictureUrl: GOOGLE });
+    const bob = await person('bob@campus.local');
+
+    await expect(
+      service.setAvatar(ada.id, await uploaded(bob.id)),
+    ).rejects.toThrow(UploadNotFoundException);
+    await expect(
+      service.setAvatar(
+        ada.id,
+        await uploaded(ada.id, new Uint8Array(WEBP.length).fill(0x41)),
+      ),
+    ).rejects.toThrow(UploadMismatchException);
+    expect((await service.getOwn(ada.id)).avatarUrl).toBe(GOOGLE);
+  });
+
+  it('cannot take the same upload twice', async () => {
+    const ada = await person('ada@campus.local');
+    const mediaId = await uploaded(ada.id);
+    await service.setAvatar(ada.id, mediaId);
+
+    await expect(service.setAvatar(ada.id, mediaId)).rejects.toThrow(
+      UploadNotFoundException,
+    );
+  });
+
+  it('shows Google’s picture where uploads are not configured', async () => {
+    const unconfigured = new ProfileService(db as never, mediaService);
+    const ada = await person('ada@campus.local', { googlePictureUrl: GOOGLE });
+    await service.setAvatar(ada.id, await uploaded(ada.id));
+
+    expect((await unconfigured.getOwn(ada.id)).avatarUrl).toBe(GOOGLE);
   });
 });

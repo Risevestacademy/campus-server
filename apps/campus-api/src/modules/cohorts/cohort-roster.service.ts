@@ -1,9 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, eq, sql, type SQL } from 'drizzle-orm';
 
+import { CONFIG } from '../../infra/config/config.constants.js';
+import type { Env } from '../../infra/config/env.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import { tracks } from '../tracks/schema.js';
+import { avatarUrl } from '../users/avatar-url.js';
 import { users } from '../users/schema.js';
 import {
   isLiveMembership,
@@ -25,7 +28,10 @@ import { CohortRole, cohortMembers, cohortTracks } from './schema.js';
  */
 @Injectable()
 export class CohortRosterService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    @Inject(CONFIG) private readonly config?: Pick<Env, 'MEDIA_PUBLIC_URL'>,
+  ) {}
 
   /**
    * One page of a cohort's memberships: by role, then by name.
@@ -64,7 +70,7 @@ export class CohortRosterService {
             firstName: users.firstName,
             lastName: users.lastName,
             displayName: users.displayName,
-            avatarUrl: users.avatarUrl,
+            avatarUrl: avatarUrl(this.config?.MEDIA_PUBLIC_URL),
             status: users.status,
           },
           role: cohortMembers.role,

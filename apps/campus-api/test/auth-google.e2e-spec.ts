@@ -44,7 +44,7 @@ const IDENTITY = {
   firstName: 'Ada',
   lastName: 'Lovelace',
   displayName: 'Ada Lovelace',
-  avatarUrl: null,
+  pictureUrl: null,
 };
 
 /** Stands in for Google, and for the token minting that has not landed yet. */

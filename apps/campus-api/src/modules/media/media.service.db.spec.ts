@@ -53,6 +53,7 @@ let signed: { key: string; terms: UploadTerms }[];
 let deleted: string[];
 let failDeletes: boolean;
 let failSigning: boolean;
+let pauseNextCopy: { arrived: () => void; resume: Promise<void> } | null;
 let service: MediaService;
 let alice: string;
 let bob: string;
@@ -106,6 +107,7 @@ beforeEach(async () => {
   deleted = [];
   failDeletes = false;
   failSigning = false;
+  pauseNextCopy = null;
   const storage: MediaStorage = {
     async signUpload(key, terms) {
       if (failSigning) throw new Error('cannot sign');
@@ -116,6 +118,12 @@ beforeEach(async () => {
       };
     },
     async copyUpload(uploadKey, to: ServedFile) {
+      const pause = pauseNextCopy;
+      if (pause) {
+        pauseNextCopy = null;
+        pause.arrived();
+        await pause.resume;
+      }
       const from = objects.get(at2(PRIVATE, uploadKey));
       if (!from) throw new Error('NoSuchKey');
       objects.set(at2(to.bucket, to.key), {
@@ -271,25 +279,90 @@ describe('verify and claim', () => {
     expect(served(row.key!)!.bytes).toEqual(WEBP);
   });
 
-  it('will not claim while a retried verify has failed', async () => {
+  it('keeps the checked copy when a retried verify fails', async () => {
     const { mediaId, uploadKey } = await uploaded();
     await verify(mediaId);
+    const { key } = await rowOf(mediaId);
 
     upload(uploadKey, NOT_AN_IMAGE);
     await expect(verify(mediaId)).rejects.toThrow(UploadMismatchException);
 
-    await expect(claim(mediaId)).rejects.toThrow(UploadMismatchException);
+    const row = await claim(mediaId);
+    expect(row.key).toBe(key);
+    expect(served(key!)!.bytes).toEqual(WEBP);
   });
 
-  it('checks again, under the same key, when verify is retried', async () => {
+  it('keeps the same copy when verify is retried after the upload is gone', async () => {
     const { mediaId } = await uploaded();
 
     await verify(mediaId);
     const { key } = await rowOf(mediaId);
     await verify(mediaId);
 
-    expect((await rowOf(mediaId)).key).toBe(key);
     expect((await claim(mediaId)).key).toBe(key);
+  });
+
+  it('serves a fresh copy, and deletes the old one, when a new file is put and checked', async () => {
+    const { mediaId, uploadKey } = await uploaded();
+    await verify(mediaId);
+    const { key: first } = await rowOf(mediaId);
+
+    upload(uploadKey, OTHER_WEBP);
+    await verify(mediaId);
+
+    const row = await claim(mediaId);
+    expect(row.key).not.toBe(first);
+    expect(served(row.key!)!.bytes).toEqual(OTHER_WEBP);
+    expect(served(first!)).toBeUndefined();
+  });
+
+  it('never lets a slower verify write over a copy that was accepted', async () => {
+    const { mediaId, uploadKey } = await uploaded();
+    let resume!: () => void;
+    const arrived = new Promise<void>((arrive) => {
+      pauseNextCopy = {
+        arrived: arrive,
+        resume: new Promise((go) => (resume = go)),
+      };
+    });
+    const slower = verify(mediaId);
+    await arrived;
+
+    await verify(mediaId);
+    const { key } = await claim(mediaId);
+    upload(uploadKey, NOT_AN_IMAGE);
+    resume();
+
+    await expect(slower).rejects.toThrow(UploadMismatchException);
+    expect(served(key!)!.bytes).toEqual(WEBP);
+    expect((await rowOf(mediaId)).key).toBe(key);
+    expect([...objects.keys()].filter((at) => at.startsWith(PUBLIC))).toEqual([
+      at2(PUBLIC, key!),
+    ]);
+  });
+
+  it('drops its copy when the upload was claimed while it checked', async () => {
+    const { mediaId, uploadKey } = await uploaded();
+    let resume!: () => void;
+    const arrived = new Promise<void>((arrive) => {
+      pauseNextCopy = {
+        arrived: arrive,
+        resume: new Promise((go) => (resume = go)),
+      };
+    });
+    const slower = verify(mediaId);
+    await arrived;
+
+    await verify(mediaId);
+    const { key } = await claim(mediaId);
+    upload(uploadKey, OTHER_WEBP);
+    resume();
+
+    await expect(slower).rejects.toThrow(UploadNotFoundException);
+    expect(served(key!)!.bytes).toEqual(WEBP);
+    expect([...objects.keys()].filter((at) => at.startsWith(PUBLIC))).toEqual([
+      at2(PUBLIC, key!),
+    ]);
   });
 
   it('refuses when nothing was uploaded, and keeps the row pending', async () => {
@@ -303,9 +376,9 @@ describe('verify and claim', () => {
     const { mediaId, uploadKey } = await uploaded(NOT_AN_IMAGE);
 
     await expect(verify(mediaId)).rejects.toThrow(UploadMismatchException);
-    const { key } = await rowOf(mediaId);
+    expect(await rowOf(mediaId)).toMatchObject({ key: null, verifiedAt: null });
     expect(objects.has(at2(PRIVATE, uploadKey))).toBe(false);
-    expect(served(key!)).toBeUndefined();
+    expect([...objects.keys()].some((at) => at.startsWith(PUBLIC))).toBe(false);
     await expect(claim(mediaId)).rejects.toThrow(UploadMismatchException);
   });
 

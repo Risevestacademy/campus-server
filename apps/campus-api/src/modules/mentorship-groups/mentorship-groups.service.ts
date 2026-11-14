@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, eq, inArray, ne, sql } from 'drizzle-orm';
 
+import { CONFIG } from '../../infra/config/config.constants.js';
+import type { Env } from '../../infra/config/env.js';
 import {
   DRIZZLE,
   type Db,
@@ -25,6 +27,7 @@ import { CohortRole, StudentStatus, cohortMembers } from '../cohorts/schema.js';
 import { InviteStatus, invites } from '../invites/schema.js';
 import { releaseGroupGrants } from '../maps/space-memberships.service.js';
 import { releaseGroupLinks } from '../room-links/link-audience.js';
+import { avatarUrl } from '../users/avatar-url.js';
 import { users } from '../users/schema.js';
 import type { ChangeMentorDto } from './dto/change-mentor.dto.js';
 import type { CreateMentorshipGroupDto } from './dto/create-mentorship-group.dto.js';
@@ -47,15 +50,15 @@ import {
 /** The fields a PATCH may move, and so what an update entry compares. */
 const EDITABLE_FIELDS = ['name', 'description'] as const;
 
-const userFields = {
+const userFields = (publicUrl: string | undefined) => ({
   id: users.id,
   email: users.email,
   firstName: users.firstName,
   lastName: users.lastName,
   displayName: users.displayName,
-  avatarUrl: users.avatarUrl,
+  avatarUrl: avatarUrl(publicUrl),
   status: users.status,
-};
+});
 
 type GroupRow = typeof mentorshipGroups.$inferSelect;
 
@@ -66,7 +69,10 @@ type GroupRow = typeof mentorshipGroups.$inferSelect;
  */
 @Injectable()
 export class MentorshipGroupsService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    @Inject(CONFIG) private readonly config?: Pick<Env, 'MEDIA_PUBLIC_URL'>,
+  ) {}
 
   async create(
     cohortId: string,
@@ -432,7 +438,10 @@ export class MentorshipGroupsService {
 
     const [mentors, students] = await Promise.all([
       executor
-        .select({ cohortMemberId: cohortMembers.id, user: userFields })
+        .select({
+          cohortMemberId: cohortMembers.id,
+          user: userFields(this.config?.MEDIA_PUBLIC_URL),
+        })
         .from(cohortMembers)
         .innerJoin(users, eq(users.id, cohortMembers.userId))
         .where(inArray(cohortMembers.id, mentorIds)),
@@ -441,7 +450,7 @@ export class MentorshipGroupsService {
           mentorshipGroupId: mentorshipGroupStudents.mentorshipGroupId,
           cohortMemberId: mentorshipGroupStudents.cohortMemberId,
           joinedAt: mentorshipGroupStudents.joinedAt,
-          user: userFields,
+          user: userFields(this.config?.MEDIA_PUBLIC_URL),
         })
         .from(mentorshipGroupStudents)
         .innerJoin(

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
-import { and, asc, count, eq, gt, inArray, isNull, lte } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, lte } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import {
@@ -136,10 +136,12 @@ export class MediaService implements OnModuleInit {
   }
 
   /**
-   * Copies the caller's upload to a key of its own, picked fresh, and checks
-   * the copy: the client cannot write there, so what is checked is what is
-   * served. Run it before the owner's transaction, then `claim` inside it.
-   * A file that fails is deleted.
+   * Copies the caller's upload to a fresh key and checks the copy: the client
+   * cannot write there, so what is checked is what is served. Each attempt
+   * gets its own key and is recorded only while the upload is still pending,
+   * so a slower attempt never writes over a copy that was accepted. Run it
+   * before the owner's transaction, then `claim` inside it. A file that fails
+   * is deleted.
    */
   async verify(
     mediaId: string,
@@ -154,23 +156,26 @@ export class MediaService implements OnModuleInit {
         `No ${kind} upload of yours with that id is waiting`,
       );
     }
-    const rule = MEDIA_RULES[kind];
-    const key = row.key ?? (await this.reserveKey(row));
-    const served = { bucket: row.bucket, key };
-
-    if (await storage.head(MediaBucket.Private, row.uploadKey)) {
-      await this.unverify(row.id);
-      await storage.copyUpload(row.uploadKey, {
-        ...served,
-        contentType: row.contentType,
-        cacheControl: rule.cacheControl,
-      });
-    }
-    const copy = await storage.head(served.bucket, served.key);
-    if (!copy) {
+    if (!(await storage.head(MediaBucket.Private, row.uploadKey))) {
+      if (row.verifiedAt) return;
       throw new UploadMismatchException('Nothing was uploaded for that id');
     }
+    const rule = MEDIA_RULES[kind];
+    const served = {
+      bucket: row.bucket,
+      key: rule.key(
+        { fileId: randomUUID(), userId: row.uploadedBy },
+        extensionOf(row.contentType),
+      ),
+    };
+    await storage.copyUpload(row.uploadKey, {
+      ...served,
+      contentType: row.contentType,
+      cacheControl: rule.cacheControl,
+    });
+    const copy = await storage.head(served.bucket, served.key);
     const fits =
+      copy !== null &&
       copy.sizeBytes === row.sizeBytes &&
       contentMatches(
         row.contentType,
@@ -178,30 +183,36 @@ export class MediaService implements OnModuleInit {
       );
     await storage.delete(MediaBucket.Private, row.uploadKey);
     if (!fits) {
-      await this.unverify(row.id);
       await storage.delete(served.bucket, served.key);
       throw new UploadMismatchException(
         `The uploaded file is not the ${row.contentType} of ${row.sizeBytes} bytes it was signed for`,
       );
     }
-    await this.db
-      .update(media)
-      .set({ verifiedAt: now })
-      .where(and(eq(media.id, row.id), eq(media.status, MediaStatus.Pending)));
-  }
 
-  /**
-   * Before the served copy is overwritten or deleted, so a claim cannot take
-   * it meanwhile. Refuses once the upload has been claimed: its copy is fixed.
-   */
-  private async unverify(id: string): Promise<void> {
-    const [row] = await this.db
-      .update(media)
-      .set({ verifiedAt: null })
-      .where(and(eq(media.id, id), eq(media.status, MediaStatus.Pending)))
-      .returning({ id: media.id });
-    if (!row) {
+    const replaced = await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ key: media.key })
+        .from(media)
+        .where(and(eq(media.id, row.id), eq(media.status, MediaStatus.Pending)))
+        .for('update');
+      if (!current) return null;
+      await tx
+        .update(media)
+        .set({ key: served.key, verifiedAt: now })
+        .where(eq(media.id, row.id));
+      return current;
+    });
+    if (!replaced) {
+      await storage.delete(served.bucket, served.key);
       throw new UploadNotFoundException('That upload has already been used');
+    }
+    if (replaced.key) {
+      await storage.delete(served.bucket, replaced.key).catch((err) => {
+        this.logger.error(
+          { err, mediaId: row.id },
+          'deleting a replaced copy failed',
+        );
+      });
     }
   }
 
@@ -253,25 +264,6 @@ export class MediaService implements OnModuleInit {
       );
     }
     return row;
-  }
-
-  /** Never the media id, nor anything an earlier file was served from. */
-  private async reserveKey(row: Media): Promise<string> {
-    const key = MEDIA_RULES[row.kind].key(
-      { fileId: randomUUID(), userId: row.uploadedBy },
-      extensionOf(row.contentType),
-    );
-    const [reserved] = await this.db
-      .update(media)
-      .set({ key })
-      .where(and(eq(media.id, row.id), isNull(media.key)))
-      .returning({ key: media.key });
-    if (reserved?.key) return reserved.key;
-    const [current] = await this.db
-      .select({ key: media.key })
-      .from(media)
-      .where(eq(media.id, row.id));
-    return current.key!;
   }
 
   /** Lets go of ready media; each is deleted once its kind's grace has passed. */
