@@ -4,5 +4,5 @@ export interface GoogleIdentity {
   firstName: string | null;
   lastName: string | null;
   displayName: string | null;
-  avatarUrl: string | null;
+  pictureUrl: string | null;
 }

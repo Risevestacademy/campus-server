@@ -282,6 +282,8 @@ describe('profile routes (e2e)', () => {
           systemRole: 'admin',
           status: 'suspended',
           avatarUrl: 'https://evil.example/x.png',
+          googlePictureUrl: 'https://evil.example/x.png',
+          avatarMediaId: '00000000-0000-4000-8000-000000000000',
         })
         .expect(200);
 
@@ -290,7 +292,8 @@ describe('profile routes (e2e)', () => {
         email: 'ada@campus.local',
         systemRole: SystemRole.User,
         status: 'active',
-        avatarUrl: null,
+        googlePictureUrl: null,
+        avatarMediaId: null,
       });
     });
   });

@@ -230,8 +230,9 @@ export class AuthController {
     @CurrentUser() current: AuthenticatedUser,
   ): Promise<SessionResponseDto> {
     const fullAccess = session.scope === SessionScope.FullAccess;
-    const [user, memberships, inviteId] = await Promise.all([
+    const [user, avatarUrl, memberships, inviteId] = await Promise.all([
       this.users.findById(current.id),
+      this.users.avatarUrlOf(current.id),
       fullAccess ? this.members.listActiveMemberships(current.id) : [],
       // A member can be invited to another cohort; the web app sends them to
       // answer it, the same as a provisional session. A provisional session's
@@ -260,7 +261,7 @@ export class AuthController {
         firstName: user.firstName,
         lastName: user.lastName,
         displayName: user.displayName,
-        avatarUrl: user.avatarUrl,
+        avatarUrl,
         systemRole: user.systemRole,
       },
       membership: memberships[0]

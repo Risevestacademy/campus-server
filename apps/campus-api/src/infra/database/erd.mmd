@@ -22,7 +22,8 @@ erDiagram
         varchar display_name
         varchar phone
         text bio
-        varchar avatar_url "profile photo"
+        varchar google_picture_url "Google's picture"
+        uuid avatar_media_id FK "uploaded picture"
         varchar sprite_key "Which sprite walks around the map — deliberately distinct…"
         system_role_enum system_role "user | admin | super_admin"
         user_status_enum status "active | suspended"

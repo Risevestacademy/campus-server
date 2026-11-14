@@ -76,7 +76,7 @@ export class GoogleOAuthService {
       firstName: payload.given_name ?? null,
       lastName: payload.family_name ?? null,
       displayName: payload.name ?? null,
-      avatarUrl: payload.picture ?? null,
+      pictureUrl: payload.picture ?? null,
     };
   }
 

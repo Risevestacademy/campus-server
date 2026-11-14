@@ -60,7 +60,7 @@ describe('POST /v1/users/:id/suspend (e2e)', () => {
       firstName: null,
       lastName: null,
       displayName: null,
-      avatarUrl: null,
+      pictureUrl: null,
     });
     const res = await request(app.getHttpServer())
       .post('/v1/auth/google/token')

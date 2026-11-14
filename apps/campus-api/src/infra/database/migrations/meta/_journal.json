@@ -281,6 +281,13 @@
       "when": 1794563144634,
       "tag": "0039_media",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1794610373466,
+      "tag": "0040_profile_pictures",
+      "breakpoints": true
     }
   ]
 }
