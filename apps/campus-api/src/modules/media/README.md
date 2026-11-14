@@ -51,6 +51,21 @@ Only keys are stored, never URLs. A public file's URL is
 Every served file has a key of its own, so public files are cached as
 immutable.
 
+## Profile pictures
+
+`PUT /v1/users/me/avatar` with `{ mediaId }` takes an `avatar` upload
+(verify, then claim with `users.avatar_media_id` set in one transaction)
+and releases the picture it replaces, which the next sweep deletes.
+`DELETE /v1/users/me/avatar` releases it and clears
+`users.google_picture_url` as well, so the person is left with initials and
+a later Google sign-in does not bring the old picture back.
+
+Every response that carries `avatarUrl` (session, own profile, profile
+card, roster, directory, mentorship groups) builds it with
+`avatarUrl()` in `users/avatar-url.ts`: `MEDIA_PUBLIC_URL/<key>` of the
+uploaded picture, else Google's picture, else null. Without
+`MEDIA_PUBLIC_URL` it is Google's picture alone.
+
 ## Deleting
 
 An owner that lets go of a file calls `MediaService.release` in the same

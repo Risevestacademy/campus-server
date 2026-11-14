@@ -44,7 +44,7 @@ const IDENTITY = {
   firstName: 'Ada',
   lastName: 'Lovelace',
   displayName: 'Ada Lovelace',
-  avatarUrl: null,
+  pictureUrl: null,
 };
 
 /** Sign-in stands in whole; the calendar is real up to Google's endpoints. */

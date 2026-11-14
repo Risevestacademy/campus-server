@@ -5,7 +5,9 @@ import {
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiServiceUnavailableResponse,
   ApiUnauthorizedResponse,
+  ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 
 import { ApiErrorResponseDto } from '../../../../shared/dto/api-error-response.dto.js';
@@ -72,6 +74,55 @@ export function ApiSetAnalyticsConsent(): MethodDecorator {
       type: ApiErrorResponseDto,
       description: '`consent` is not `granted` or `denied`.',
     }),
+    noSession,
+  );
+}
+
+export function ApiSetAvatar(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Set your profile picture',
+      description:
+        'Takes a picture already uploaded: ask `POST /v1/uploads` for kind ' +
+        '`avatar`, PUT the cropped file to the URL it returns, then send its ' +
+        '`mediaId` here. The file is checked against the type and size it ' +
+        'was signed for before it is shown. The picture it replaces is ' +
+        'deleted within minutes.',
+    }),
+    ApiOkResponse({ type: OwnProfileDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: '`mediaId` is not a UUID.',
+    }),
+    noSession,
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'No picture of yours with that id is waiting: it was never asked ' +
+        'for, is someone else’s, was already used, or is over 30 minutes old.',
+    }),
+    ApiUnprocessableEntityResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'Nothing was uploaded, or the file is not the type and size it was ' +
+        'signed for (`UPLOAD_MISMATCH`). Upload it again.',
+    }),
+    ApiServiceUnavailableResponse({
+      type: ApiErrorResponseDto,
+      description: 'Uploads are not configured here.',
+    }),
+  );
+}
+
+export function ApiRemoveAvatar(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Remove your profile picture',
+      description:
+        'Leaves initials. Removes an uploaded picture and the one Google ' +
+        'gave, which is not brought back by signing in again.',
+    }),
+    ApiOkResponse({ type: OwnProfileDto }),
     noSession,
   );
 }

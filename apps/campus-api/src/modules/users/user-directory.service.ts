@@ -12,6 +12,8 @@ import {
   type SQL,
 } from 'drizzle-orm';
 
+import { CONFIG } from '../../infra/config/config.constants.js';
+import type { Env } from '../../infra/config/env.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
@@ -19,6 +21,7 @@ import { cohortMembers, cohortTracks } from '../cohorts/schema.js';
 import type { ListUsersQueryDto } from './dto/list-users.dto.js';
 import { loadLiveMemberships } from './live-memberships.js';
 import type { UserListItemDto } from './dto/user-list-item.dto.js';
+import { avatarUrl } from './avatar-url.js';
 import { users } from './schema.js';
 
 /**
@@ -29,7 +32,10 @@ import { users } from './schema.js';
  */
 @Injectable()
 export class UserDirectoryService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    @Inject(CONFIG) private readonly config?: Pick<Env, 'MEDIA_PUBLIC_URL'>,
+  ) {}
 
   /**
    * One page of users, newest first, each with their live memberships.
@@ -62,7 +68,7 @@ export class UserDirectoryService {
           firstName: users.firstName,
           lastName: users.lastName,
           displayName: users.displayName,
-          avatarUrl: users.avatarUrl,
+          avatarUrl: avatarUrl(this.config?.MEDIA_PUBLIC_URL),
           systemRole: users.systemRole,
           status: users.status,
           lastLoginAt: users.lastLoginAt,

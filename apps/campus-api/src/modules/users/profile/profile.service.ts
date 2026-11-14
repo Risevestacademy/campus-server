@@ -1,7 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/session';
-import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, ne, sql } from 'drizzle-orm';
 
+import { CONFIG } from '../../../infra/config/config.constants.js';
+import type { Env } from '../../../infra/config/env.js';
 import {
   DRIZZLE,
   type Db,
@@ -16,6 +18,9 @@ import type {
   ProfileCardDto,
   UpdateProfileDto,
 } from './dto/profile.dto.js';
+import { MediaService } from '../../media/media.service.js';
+import { MediaKind } from '../../media/schema.js';
+import { avatarUrl } from '../avatar-url.js';
 import { loadLiveMemberships } from '../live-memberships.js';
 import {
   hasAdminPowers,
@@ -39,6 +44,8 @@ const EDITABLE = [
   'spriteKey',
 ] as const;
 
+type ShownUser = User & { avatarUrl: string | null };
+
 /** The editable fields world shows to everybody in somebody's cohort. */
 const SEEN_BY_OTHERS = ['displayName', 'spriteKey'] as const;
 
@@ -49,7 +56,11 @@ const SEEN_BY_OTHERS = ['displayName', 'spriteKey'] as const;
  */
 @Injectable()
 export class ProfileService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    private readonly media: MediaService,
+    @Inject(CONFIG) private readonly config?: Pick<Env, 'MEDIA_PUBLIC_URL'>,
+  ) {}
 
   async getOwn(userId: string, now: Date = new Date()): Promise<OwnProfileDto> {
     return this.toOwnProfile(await this.findUser(userId), now);
@@ -93,7 +104,69 @@ export class ProfileService {
       }
       return updated;
     });
-    return this.toOwnProfile(row, now);
+    return this.getOwn(row.id, now);
+  }
+
+  /**
+   * Makes an uploaded picture theirs. The file is checked before the
+   * transaction; the picture it replaces is deleted on the next sweep.
+   */
+  async setAvatar(
+    userId: string,
+    mediaId: string,
+    now: Date = new Date(),
+  ): Promise<OwnProfileDto> {
+    await this.media.verify(mediaId, MediaKind.Avatar, userId, now);
+    await this.db.transaction(async (tx) => {
+      const ready = await this.media.claim(
+        tx,
+        mediaId,
+        MediaKind.Avatar,
+        userId,
+        now,
+      );
+      const [before] = await tx
+        .select({ avatarMediaId: users.avatarMediaId })
+        .from(users)
+        .where(eq(users.id, userId))
+        .for('update');
+      await tx
+        .update(users)
+        .set({ avatarMediaId: ready.id })
+        .where(eq(users.id, userId));
+      if (before?.avatarMediaId) {
+        await this.media.release(tx, [before.avatarMediaId], now);
+      }
+    });
+    return this.getOwn(userId, now);
+  }
+
+  /**
+   * Leaves them with initials: their upload goes, and so does Google's
+   * picture, which never comes back on a later sign-in.
+   */
+  async removeAvatar(
+    userId: string,
+    now: Date = new Date(),
+  ): Promise<OwnProfileDto> {
+    await this.db.transaction(async (tx) => {
+      const [before] = await tx
+        .select({ avatarMediaId: users.avatarMediaId })
+        .from(users)
+        .where(eq(users.id, userId))
+        .for('update');
+      if (!before) {
+        throw new ProfileNotFoundException('No such profile', { userId });
+      }
+      await tx
+        .update(users)
+        .set({ avatarMediaId: null, googlePictureUrl: null })
+        .where(eq(users.id, userId));
+      if (before.avatarMediaId) {
+        await this.media.release(tx, [before.avatarMediaId], now);
+      }
+    });
+    return this.getOwn(userId, now);
   }
 
   /** Records the person's choice, and when they made it. */
@@ -106,11 +179,11 @@ export class ProfileService {
       .update(users)
       .set({ analyticsConsent: consent, analyticsConsentAt: now })
       .where(eq(users.id, userId))
-      .returning();
+      .returning({ id: users.id });
     if (!row) {
       throw new ProfileNotFoundException('No such profile', { userId });
     }
-    return this.toOwnProfile(row, now);
+    return this.getOwn(userId, now);
   }
 
   /**
@@ -132,11 +205,7 @@ export class ProfileService {
     const notFound = () =>
       new ProfileNotFoundException('No such profile', { userId: targetId });
 
-    const [target] = await this.db
-      .select()
-      .from(users)
-      .where(eq(users.id, targetId))
-      .limit(1);
+    const target = await this.findShown(targetId);
     if (!target) {
       throw notFound();
     }
@@ -241,19 +310,30 @@ export class ProfileService {
     }));
   }
 
-  private async findUser(userId: string): Promise<User> {
-    const [row] = await this.db
-      .select()
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
+  private async findUser(userId: string): Promise<ShownUser> {
+    const row = await this.findShown(userId);
     if (!row) {
       throw new ProfileNotFoundException('No such profile', { userId });
     }
     return row;
   }
 
-  private async toOwnProfile(row: User, now: Date): Promise<OwnProfileDto> {
+  private async findShown(userId: string): Promise<ShownUser | undefined> {
+    const [row] = await this.db
+      .select({
+        ...getTableColumns(users),
+        avatarUrl: avatarUrl(this.config?.MEDIA_PUBLIC_URL),
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return row;
+  }
+
+  private async toOwnProfile(
+    row: ShownUser,
+    now: Date,
+  ): Promise<OwnProfileDto> {
     const memberships = await loadLiveMemberships(this.db, [row.id], now);
     return {
       id: row.id,

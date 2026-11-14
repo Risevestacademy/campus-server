@@ -29,7 +29,7 @@ function identity(overrides: Partial<GoogleIdentity> = {}): GoogleIdentity {
     firstName: 'Ada',
     lastName: 'Lovelace',
     displayName: 'Ada Lovelace',
-    avatarUrl: 'https://example.test/ada.png',
+    pictureUrl: 'https://example.test/ada.png',
     ...overrides,
   };
 }
@@ -87,7 +87,7 @@ describe('findForGoogleIdentity and linkGoogleIdentity', () => {
 
     expect(linked?.displayName).toBe('Campus Admin');
     expect(linked?.firstName).toBe('Ada');
-    expect(linked?.avatarUrl).toBe('https://example.test/ada.png');
+    expect(linked?.googlePictureUrl).toBe('https://example.test/ada.png');
   });
 
   it('refuses to move an address already owned by another subject', async () => {

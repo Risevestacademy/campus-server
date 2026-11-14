@@ -14,6 +14,8 @@ import {
 
 import { SystemRole, hasAdminPowers } from '@campus/session';
 
+import { media } from '../media/schema.js';
+
 // The role vocabulary and the "is this an admin" rule live in the shared
 // package: world reads the same column and has to answer the same way.
 export { SystemRole, hasAdminPowers };
@@ -48,7 +50,16 @@ export const users = pgTable(
     displayName: varchar('display_name'),
     phone: varchar('phone'),
     bio: text('bio'),
-    avatarUrl: varchar('avatar_url'),
+    /**
+     * The picture Google gave at first sign-in, shown until they upload one
+     * of their own. Cleared when they remove their picture, so removing it
+     * leaves initials rather than bringing this back.
+     */
+    googlePictureUrl: varchar('google_picture_url'),
+    /** The picture they uploaded; its URL is built from its key when read. */
+    avatarMediaId: uuid('avatar_media_id').references(
+      (): AnyPgColumn => media.id,
+    ),
     spriteKey: varchar('sprite_key'),
     systemRole: systemRoleEnum('system_role')
       .notNull()
