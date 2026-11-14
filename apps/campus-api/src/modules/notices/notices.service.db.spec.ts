@@ -21,6 +21,7 @@ import type { NotificationPush } from '../notifications/notification-push.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
 import { NoticeCommentsService } from './notice-comments.service.js';
 import { NoticeNotFoundException } from './notices.exceptions.js';
 import { NoticesService } from './notices.service.js';
@@ -37,6 +38,7 @@ const noticesService = new NoticesService(
   db as never,
   new NotificationsService(db as never),
   noPush,
+  mediaWithoutStorage(db),
 );
 const commentsService = new NoticeCommentsService(db as never);
 

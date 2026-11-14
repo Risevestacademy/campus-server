@@ -15,6 +15,8 @@ import {
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../shared/dto/pagination-query.dto.js';
+import { AttachmentDto } from '../../media/dto/upload.dto.js';
+import { AttachmentIds } from '../../media/dto/attachment-ids.decorator.js';
 import {
   FEEDBACK_ABOUT_MAX_LENGTH,
   FEEDBACK_DETAILS_MAX_LENGTH,
@@ -155,6 +157,13 @@ export class CreateFeedbackDto {
   @ValidateNested()
   @Type(() => FeedbackContextDto)
   context?: FeedbackContextDto;
+
+  /**
+   * Screenshots or files, in this order: `feedback_attachment` uploads of
+   * yours. Only admins can open them.
+   */
+  @AttachmentIds()
+  attachmentIds?: string[];
 }
 
 /** What the member gets back: that it arrived, and nothing to act on. */
@@ -257,6 +266,9 @@ export class FeedbackDto extends FeedbackListItemDto {
 
   /** @example 2026-10-13T11:00:00.000Z */
   resolvedAt: Date | null;
+
+  @ApiProperty({ type: [AttachmentDto] })
+  attachments: AttachmentDto[];
 }
 
 export class UpdateFeedbackStatusDto {

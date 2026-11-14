@@ -26,3 +26,8 @@ export class UploadNotFoundException extends DomainException {
 export class UploadMismatchException extends DomainException {
   readonly code = ExceptionCode.UploadMismatch;
 }
+
+/** No file this person may read has that id. */
+export class MediaNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}

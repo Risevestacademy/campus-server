@@ -15,6 +15,8 @@ import { users } from '../users/schema.js';
 
 export enum MediaKind {
   Avatar = 'avatar',
+  NoticeAttachment = 'notice_attachment',
+  FeedbackAttachment = 'feedback_attachment',
 }
 
 export enum MediaBucket {
@@ -59,6 +61,8 @@ export const media = pgTable(
       .references(() => users.id),
     contentType: varchar('content_type', { length: 128 }).notNull(),
     sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    /** The name the client gave, cleaned; attachments only. */
+    fileName: varchar('file_name', { length: 255 }),
     status: mediaStatusEnum('status').notNull().default(MediaStatus.Pending),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

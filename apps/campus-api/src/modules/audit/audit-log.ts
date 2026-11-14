@@ -373,7 +373,10 @@ interface AuditEntryShapes {
   };
   [AuditAction.NoticeUpdated]: {
     subject: AuditSubjectType.Notice;
-    details: { changes: FieldChanges<NoticeSnapshot> };
+    details: {
+      changes: FieldChanges<NoticeSnapshot>;
+      attachments?: { added: string[]; removed: string[] };
+    };
   };
   [AuditAction.NoticePinned]: {
     subject: AuditSubjectType.Notice;

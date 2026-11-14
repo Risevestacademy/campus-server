@@ -71,6 +71,7 @@ const storage: MediaStorage = {
     objects.delete(`${bucket}:${key}`);
   },
   publicUrl: (key) => `${config.MEDIA_PUBLIC_URL}/${key}`,
+  signRead: async (key) => `https://r2.test/${key}?read`,
 };
 
 describe('profile picture (e2e)', () => {

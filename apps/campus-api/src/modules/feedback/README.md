@@ -25,6 +25,11 @@ from the better.
   about, or where a bug happened. It is offered on every type and required on
   none; blank is taken as not given.
 
+- `attachmentIds`: up to ten screenshots or files, `feedback_attachment`
+  uploads of the sender's (see `src/modules/media/README.md`). Only admins
+  can open them, and an admin a report names cannot. They are kept as long
+  as the feedback.
+
 And three things the client fills in, not the member:
 
 - `reportedUserId`: the account a report is about, when the member picked a
@@ -109,6 +114,8 @@ A report is one member's words about another, by name. So:
 
 - Only admins can read feedback.
 - Nothing of its text goes into the audit log, an email or a log line.
+- Its attachments are read through short-lived links, signed only for an
+  admin who may read the feedback.
 - `submitted_by`, `reported_user_id` and `resolved_by` are foreign keys to
   `users`. When deleting an account is built, it has to decide what happens
   to what that person sent, and to what was sent about them.
@@ -128,7 +135,6 @@ migrations applied, in `feedback.service.db.spec.ts`.
 
 ## Not here
 
-- **Screenshots.** They need somewhere to be stored, which is not chosen.
 - **In-app notifications** for admins. Email is the only channel until
   notifications exist.
 - **A link straight to the one report** in the email. It links to the

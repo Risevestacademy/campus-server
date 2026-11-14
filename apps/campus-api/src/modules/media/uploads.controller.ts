@@ -11,7 +11,7 @@ import {
   UploadDto,
   UploadLimitsDto,
 } from './dto/upload.dto.js';
-import { MEDIA_RULES } from './media-rules.js';
+import { MAX_ATTACHMENTS, MEDIA_RULES } from './media-rules.js';
 import { MediaService } from './media.service.js';
 import type { MediaKind } from './schema.js';
 
@@ -42,6 +42,7 @@ export class UploadsController {
         contentTypes: [...rule.contentTypes],
         maxBytes: rule.maxBytes,
       })),
+      maxAttachments: MAX_ATTACHMENTS,
     };
   }
 }

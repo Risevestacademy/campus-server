@@ -312,6 +312,12 @@ erDiagram
         timestamptz updated_at
     }
 
+    NOTICE_ATTACHMENTS {
+        uuid media_id PK,FK
+        uuid notice_id FK "cascade"
+        smallint position
+    }
+
     %% ----------------------------------------------------- resources
 
     RESOURCE_CENTERS {
@@ -426,6 +432,27 @@ erDiagram
         timestamptz updated_at
     }
 
+    FEEDBACK_ATTACHMENTS {
+        uuid media_id PK,FK
+        uuid feedback_id FK "cascade"
+        smallint position
+    }
+
+    MEDIA {
+        uuid id PK
+        media_kind_enum kind "avatar | notice_attachment | feedback_attachment"
+        media_bucket_enum bucket "public | private"
+        varchar upload_key UK "incoming/<id>, private"
+        varchar key UK "where it is served from"
+        uuid uploaded_by FK
+        varchar content_type
+        bigint size_bytes
+        varchar file_name "attachments only"
+        media_status_enum status "pending | ready | removed | purged"
+        timestamptz verified_at
+        timestamptz purge_after
+    }
+
     %% ----------------------------------------------------- relationships
 
     COHORTS ||--o{ COHORT_TRACKS : "runs"
@@ -499,6 +526,12 @@ erDiagram
     USERS ||--o{ FEEDBACK : "reported_in"
     USERS ||--o{ FEEDBACK : "resolves"
     COHORTS ||--o{ FEEDBACK : "sent_from"
+    USERS ||--o{ MEDIA : "uploads"
+    USERS |o--o| MEDIA : "avatar"
+    NOTICES ||--o{ NOTICE_ATTACHMENTS : "carries"
+    MEDIA ||--o| NOTICE_ATTACHMENTS : "attached_as"
+    FEEDBACK ||--o{ FEEDBACK_ATTACHMENTS : "carries"
+    MEDIA ||--o| FEEDBACK_ATTACHMENTS : "attached_as"
     SPACES ||--o{ AUDIT_LOG : "subject_of"
 
 %% =====================================================================

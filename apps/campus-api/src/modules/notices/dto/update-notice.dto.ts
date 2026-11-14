@@ -3,6 +3,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsString, IsUUID, MaxLength } from 'class-validator';
 
 import { IsOptionalNotNull } from '../../../shared/dto/optional-not-null.js';
+import { AttachmentIds } from '../../media/dto/attachment-ids.decorator.js';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() : value;
@@ -22,6 +23,13 @@ export class UpdateNoticeDto {
   @IsString()
   @IsNotEmpty()
   body?: string;
+
+  /**
+   * The whole list of files to show with it, in this order. Files left out
+   * are removed; new ones are `notice_attachment` uploads of yours.
+   */
+  @AttachmentIds()
+  attachmentIds?: string[];
 }
 
 export class NoticeIdParamDto {

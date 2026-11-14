@@ -1,7 +1,7 @@
 import { CopyObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { r2Connection } from '@campus/media';
 
-import { r2Storage } from './media-storage.js';
+import { contentDisposition, r2Storage } from './media-storage.js';
 import { MediaBucket } from './schema.js';
 
 const client = new S3Client({
@@ -64,9 +64,42 @@ describe('r2Storage', () => {
     send.mockRestore();
   });
 
+  it('signs a short GET of a private file that downloads under its name', async () => {
+    const url = new URL(
+      await storage.signRead(
+        'notices/f',
+        { inline: false, fileName: 'plan.pdf' },
+        900,
+      ),
+    );
+
+    expect(url.pathname).toBe('/campus-private/notices/f');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('900');
+    expect(url.searchParams.get('response-content-disposition')).toBe(
+      `attachment; filename="plan.pdf"; filename*=UTF-8''plan.pdf`,
+    );
+  });
+
   it('builds public URLs from the configured domain', () => {
     expect(storage.publicUrl('avatars/u/m.webp')).toBe(
       'https://media.campus.test/avatars/u/m.webp',
+    );
+  });
+});
+
+describe('contentDisposition', () => {
+  it('opens an image in place, and downloads anything else', () => {
+    expect(contentDisposition({ inline: true, fileName: null })).toBe('inline');
+    expect(contentDisposition({ inline: false, fileName: null })).toBe(
+      'attachment',
+    );
+  });
+
+  it('keeps a name that is not ASCII, and cannot be broken out of', () => {
+    expect(
+      contentDisposition({ inline: false, fileName: 'Café "notes"\\.txt' }),
+    ).toBe(
+      `attachment; filename="Caf_ _notes__.txt"; filename*=UTF-8''Caf%C3%A9%20%22notes%22%5C.txt`,
     );
   });
 });

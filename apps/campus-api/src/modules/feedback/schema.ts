@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   check,
   index,
+  smallint,
   jsonb,
   pgEnum,
   pgTable,
@@ -12,6 +13,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { cohorts } from '../cohorts/schema.js';
+import { media } from '../media/schema.js';
 import { users } from '../users/schema.js';
 
 /**
@@ -141,3 +143,20 @@ export const feedback = pgTable(
 
 export type Feedback = typeof feedback.$inferSelect;
 export type NewFeedback = typeof feedback.$inferInsert;
+
+/** A file shown with a feedback, in the order its author gave. */
+export const feedbackAttachments = pgTable(
+  'feedback_attachments',
+  {
+    mediaId: uuid('media_id')
+      .primaryKey()
+      .references(() => media.id),
+    feedbackId: uuid('feedback_id')
+      .notNull()
+      .references(() => feedback.id, { onDelete: 'cascade' }),
+    position: smallint('position').notNull(),
+  },
+  (table) => [index('feedback_attachments_feedback_idx').on(table.feedbackId)],
+);
+
+export type FeedbackAttachment = typeof feedbackAttachments.$inferSelect;

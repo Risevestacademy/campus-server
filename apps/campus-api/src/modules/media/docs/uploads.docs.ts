@@ -2,6 +2,7 @@ import { applyDecorators } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiPayloadTooLargeResponse,
@@ -12,7 +13,11 @@ import {
 } from '@nestjs/swagger';
 
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
-import { UploadDto, UploadLimitsDto } from '../dto/upload.dto.js';
+import {
+  SignedReadDto,
+  UploadDto,
+  UploadLimitsDto,
+} from '../dto/upload.dto.js';
 
 const unauthorized = ApiUnauthorizedResponse({
   type: ApiErrorResponseDto,
@@ -68,5 +73,33 @@ export function ApiUploadLimits(): MethodDecorator {
     }),
     ApiOkResponse({ type: UploadLimitsDto }),
     unauthorized,
+  );
+}
+
+export function ApiReadMedia(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'A fresh link to an attachment',
+      description:
+        'For refreshing an attachment link that has expired or answered 403. ' +
+        'The link lasts 15 minutes. Images open in the browser; anything ' +
+        'else downloads. Only for someone who can see what the file is ' +
+        'attached to: a notice they can see, or feedback an admin may read.',
+    }),
+    ApiOkResponse({ type: SignedReadDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'An id that is not a UUID.',
+    }),
+    unauthorized,
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'No such file, or not one you may read: the same answer either way.',
+    }),
+    ApiServiceUnavailableResponse({
+      type: ApiErrorResponseDto,
+      description: 'Uploads are not configured here.',
+    }),
   );
 }
