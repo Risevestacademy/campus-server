@@ -18,7 +18,7 @@ const STORE = {
   accountId: 'acc123',
   accessKeyId: 'r2-key',
   secretAccessKey: 'r2-secret',
-  bucket: 'campus-recordings',
+  bucket: 'campus-private',
 };
 
 /** Stands in for LiveKit's egress API, answering each call with `status` and `reply`. */
@@ -79,7 +79,7 @@ describe('recordingStarter', () => {
             secret: 'r2-secret',
             region: 'auto',
             endpoint: 'https://acc123.r2.cloudflarestorage.com',
-            bucket: 'campus-recordings',
+            bucket: 'campus-private',
             forcePathStyle: true,
           },
         },

@@ -66,7 +66,7 @@ export function mediaStorageFrom(config: Env): MediaStorage | null {
     R2_ACCOUNT_ID: accountId,
     R2_ACCESS_KEY_ID: accessKeyId,
     R2_SECRET_ACCESS_KEY: secretAccessKey,
-    R2_BUCKET: privateBucket,
+    R2_PRIVATE_BUCKET: privateBucket,
     R2_PUBLIC_BUCKET: publicBucket,
     MEDIA_PUBLIC_URL: publicUrl,
   } = config;

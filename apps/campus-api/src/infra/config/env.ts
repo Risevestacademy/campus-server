@@ -50,7 +50,7 @@ const STORAGE_VARIABLES = [
   'R2_ACCOUNT_ID',
   'R2_ACCESS_KEY_ID',
   'R2_SECRET_ACCESS_KEY',
-  'R2_BUCKET',
+  'R2_PRIVATE_BUCKET',
 ] as const;
 
 const UPLOAD_VARIABLES = ['R2_PUBLIC_BUCKET', 'MEDIA_PUBLIC_URL'] as const;
@@ -566,7 +566,7 @@ export class Env {
   LIVEKIT_WEBHOOK_API_SECRET?: string;
 
   // Cloudflare R2 -----------------------------------------------------------
-  // One API token for both buckets. R2_BUCKET is private: recordings and
+  // One API token for both buckets. R2_PRIVATE_BUCKET holds recordings and
   // attachments. All four, or none: unset, recording and uploads answer 503.
 
   @ValidateIf(storageGiven)
@@ -588,14 +588,14 @@ export class Env {
 
   @ValidateIf(storageGiven)
   @Matches(R2_BUCKET_NAME, {
-    message: `R2_BUCKET must be an R2 bucket name; ${STORAGE_MESSAGE}`,
+    message: `R2_PRIVATE_BUCKET must be an R2 bucket name; ${STORAGE_MESSAGE}`,
   })
   @Transform(blankAsUnset)
-  R2_BUCKET?: string;
+  R2_PRIVATE_BUCKET?: string;
 
   // Call recordings --------------------------------------------------------
   // Staff start a recording through LiveKit's egress API, signed with the
-  // webhook key pair above, and LiveKit uploads the video to R2_BUCKET.
+  // webhook key pair above, and LiveKit uploads the video to R2_PRIVATE_BUCKET.
   // Unset, recording answers 503.
 
   @ValidateIf(recordingGiven)

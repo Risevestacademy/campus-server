@@ -49,7 +49,7 @@ const storage = r2Storage(
   {
     buckets: {
       [MediaBucket.Public]: 'campus-media',
-      [MediaBucket.Private]: 'campus-recordings',
+      [MediaBucket.Private]: 'campus-private',
     },
     publicUrl: 'https://media.campus.test',
   },
@@ -138,9 +138,7 @@ describe('uploads (e2e)', () => {
       expiresAt: expect.any(String),
     });
     const url = new URL(res.body.uploadUrl);
-    expect(url.pathname).toBe(
-      `/campus-recordings/incoming/${res.body.mediaId}`,
-    );
+    expect(url.pathname).toBe(`/campus-private/incoming/${res.body.mediaId}`);
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe(
       'content-length;content-type;host',
     );
