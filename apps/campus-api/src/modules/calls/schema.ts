@@ -16,6 +16,7 @@ import {
 
 import { cohorts } from '../cohorts/schema.js';
 import { spaces } from '../maps/schema.js';
+import { media } from '../media/schema.js';
 import { users } from '../users/schema.js';
 
 /*
@@ -184,6 +185,20 @@ export const recordings = pgTable(
       sql`coalesce(${table.durationMs}, 0) >= 0 and coalesce(${table.sizeBytes}, 0) >= 0`,
     ),
   ],
+);
+
+/** A file somebody sent in a call's chat. It opens until the call ends. */
+export const callChatAttachments = pgTable(
+  'call_chat_attachments',
+  {
+    mediaId: uuid('media_id')
+      .primaryKey()
+      .references(() => media.id),
+    sessionId: uuid('session_id')
+      .notNull()
+      .references(() => sessions.id),
+  },
+  (table) => [index('call_chat_attachments_session_idx').on(table.sessionId)],
 );
 
 // Named for calls, not sessions: a session elsewhere in the API is a sign-in.

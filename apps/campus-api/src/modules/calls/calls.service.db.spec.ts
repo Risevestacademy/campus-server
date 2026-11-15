@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { cohorts } from '../cohorts/schema.js';
 import { AudioMode, SpaceAccess, maps, spaces } from '../maps/schema.js';
 import { users } from '../users/schema.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
+import { CallChatService } from './call-chat.service.js';
 import { CallsService } from './calls.service.js';
 import { sessionParticipants, sessions } from './schema.js';
 
@@ -16,7 +18,12 @@ const MIGRATIONS = fileURLToPath(
 );
 const db = drizzle(new PGlite());
 const logger = { setContext: () => undefined, warn: () => undefined };
-const service = new CallsService(db as never, {} as never, logger as never);
+const service = new CallsService(
+  db as never,
+  {} as never,
+  logger as never,
+  new CallChatService(db as never, mediaWithoutStorage(db)),
+);
 
 const T0 = new Date('2026-10-21T09:00:00.000Z');
 const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);

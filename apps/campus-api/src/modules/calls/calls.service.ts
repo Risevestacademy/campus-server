@@ -23,6 +23,7 @@ import {
   CallWebhookUnverifiedException,
   CallWebhooksNotConfiguredException,
 } from './calls.exceptions.js';
+import { CallChatService } from './call-chat.service.js';
 import { RecordingsService } from './recordings.service.js';
 import { sessionParticipants, sessions } from './schema.js';
 
@@ -50,6 +51,7 @@ export class CallsService {
     @Inject(DRIZZLE) private readonly db: Db,
     @Inject(CONFIG) private readonly config: Env,
     private readonly logger: PinoLogger,
+    private readonly chat: CallChatService,
     @Optional() private readonly recordings?: RecordingsService,
   ) {
     this.logger.setContext(CallsService.name);
@@ -216,7 +218,10 @@ export class CallsService {
     return Boolean(row);
   }
 
-  /** Closes a run and everybody still in it, at `at` or after they joined. */
+  /**
+   * Closes a run and everybody still in it, at `at` or after they joined,
+   * and lets go of the files sent in its chat.
+   */
   private async closeRun(tx: Tx, sessionId: string, at: Date): Promise<void> {
     await tx
       .update(sessions)
@@ -233,6 +238,7 @@ export class CallsService {
           isNull(sessionParticipants.leftAt),
         ),
       );
+    await this.chat.release(tx, sessionId, at);
   }
 
   /**

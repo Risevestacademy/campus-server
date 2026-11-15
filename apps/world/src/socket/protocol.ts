@@ -291,6 +291,27 @@ export type ServerErrorCode =
   (typeof ServerErrorCode)[keyof typeof ServerErrorCode];
 
 /**
+ * A file sent with a line of chat, as campus-api's attach answered it. World
+ * passes it on unchecked: opening it asks campus-api, which checks access.
+ */
+const ChatAttachment = z
+  .object({
+    mediaId: z
+      .string()
+      .uuid()
+      .describe('Open it with `GET /v1/media/{mediaId}/url` on campus-api.'),
+    fileName: z.string().max(255).nullable(),
+    contentType: z.string().min(1).max(255),
+    sizeBytes: z.number().int().positive(),
+  })
+  .meta({
+    id: 'ChatAttachment',
+    description:
+      'A file sent in a call’s chat, from ' +
+      '`POST /v1/cohorts/{cohortId}/spaces/{spaceId}/call/attachments`.',
+  });
+
+/**
  * Every frame is one JSON envelope: a type, and a payload the type decides.
  * Parsed at the edge, so nothing past this file handles a shape it did not
  * ask for. JSON while the traffic is small; the envelope leaves room to move
@@ -410,7 +431,12 @@ export const ClientMessage = z
     z
       .object({
         type: z.literal('say'),
-        text: z.string().trim().min(1).max(MAX_SAY_LENGTH),
+        text: z.string().trim().max(MAX_SAY_LENGTH).default(''),
+        attachment: ChatAttachment.optional(),
+      })
+      .refine((say) => say.text !== '' || say.attachment !== undefined, {
+        message: 'say something, or send a file',
+        path: ['text'],
       })
       .meta({
         id: 'SayMessage',
@@ -419,7 +445,8 @@ export const ClientMessage = z
           'space, or the people within its subscribe radius in a proximity ' +
           'space, measured when you send it, without the hysteresis `nearby` ' +
           'keeps, so the two need not match at the edge. Up to ' +
-          `${MAX_SAY_LENGTH} characters, trimmed. ` +
+          `${MAX_SAY_LENGTH} characters, trimmed; may be empty when it ` +
+          'carries an `attachment`. ' +
           'Answered by the `said` you and they get; five lines at once, then ' +
           'one a second, after which a NOT_ALLOWED error. Never stored. ' +
           'Counts as activity.',
@@ -851,7 +878,10 @@ export const ServerMessage = z
           .describe(
             'The space they said it in, so a meeting’s chat can be kept apart.',
           ),
-        text: z.string(),
+        text: z.string().describe('Empty when the line is only a file.'),
+        attachment: ChatAttachment.nullable().describe(
+          'The file sent with it, as the speaker gave it; null for none.',
+        ),
         at: z.string().describe('When world relayed it, as an ISO timestamp.'),
       })
       .meta({

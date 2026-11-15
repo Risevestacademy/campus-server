@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
-import { and, asc, count, eq, gt, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, lte, ne, sql } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import {
@@ -13,6 +13,7 @@ import {
 import { Scheduler } from '../../infra/scheduler/scheduler.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import {
+  MediaGoneException,
   MediaNotConfiguredException,
   MediaNotFoundException,
   TooManyPendingUploadsException,
@@ -377,10 +378,13 @@ export class MediaService implements OnModuleInit {
     const [row] = await this.db
       .select()
       .from(media)
-      .where(and(eq(media.id, mediaId), eq(media.status, MediaStatus.Ready)));
+      .where(and(eq(media.id, mediaId), ne(media.status, MediaStatus.Pending)));
     const reader = row && this.readers.get(row.kind);
     if (!row || !reader || !(await reader(viewer, mediaId, now))) {
       throw new MediaNotFoundException(`File ${mediaId} not found`);
+    }
+    if (row.status !== MediaStatus.Ready) {
+      throw new MediaGoneException(`File ${mediaId} is no longer available`);
     }
     return this.signRead(row, now);
   }

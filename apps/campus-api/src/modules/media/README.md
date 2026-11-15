@@ -46,11 +46,12 @@ Only keys are stored, never URLs. A public file's URL is
 
 ## Kinds
 
-| Kind                  | Served from | Types                    | Max   | Key                                   | Kept after release |
-| --------------------- | ----------- | ------------------------ | ----- | ------------------------------------- | ------------------ |
-| `avatar`              | public      | jpeg, png, webp          | 2 MB  | `avatars/<user id>/<random id>.<ext>` | No                 |
-| `notice_attachment`   | private     | images, documents, text¹ | 25 MB | `notices/<random id>`                 | 7 days             |
-| `feedback_attachment` | private     | images, documents, text¹ | 25 MB | `feedback/<random id>`                | 7 days             |
+| Kind                   | Served from | Types                    | Max   | Key                                   | Kept after release |
+| ---------------------- | ----------- | ------------------------ | ----- | ------------------------------------- | ------------------ |
+| `avatar`               | public      | jpeg, png, webp          | 2 MB  | `avatars/<user id>/<random id>.<ext>` | No                 |
+| `notice_attachment`    | private     | images, documents, text¹ | 25 MB | `notices/<random id>`                 | 7 days             |
+| `feedback_attachment`  | private     | images, documents, text¹ | 25 MB | `feedback/<random id>`                | 7 days             |
+| `call_chat_attachment` | private     | images, documents, text¹ | 25 MB | `call-chat/<random id>`               | 7 days             |
 
 ¹ jpeg, png, webp, gif, pdf, docx, xlsx, pptx, doc, xls, ppt, txt, csv. The
 content check knows each by its first bytes: docx, xlsx and pptx as a ZIP,
@@ -82,7 +83,9 @@ uploaded picture, else Google's picture, else null. Without
 Notices and feedback take `attachmentIds`, a list of uploads of the
 caller's, in the order to show them. They are verified before the owner's
 transaction and claimed inside it, like a profile picture, and linked
-through `notice_attachments` and `feedback_attachments`.
+through `notice_attachments` and `feedback_attachments`. A file for a
+call's chat is attached one at a time to the call going on in a space (see
+the calls README), through `call_chat_attachments`.
 
 Their payloads embed each file as `{id, fileName, contentType, sizeBytes,
 url, urlExpiresAt}`. The url is a presigned GET of the private file that
@@ -97,17 +100,20 @@ the type that was checked: a text file sent as `fix.bat` downloads as
 one is the owner's to say, through a reader it registers with
 `MediaService.registerReader`:
 
-| Kind                  | Who may read                                                         |
-| --------------------- | -------------------------------------------------------------------- |
-| `notice_attachment`   | whoever can see the notice (`noticesVisibleTo`), until it is removed |
-| `feedback_attachment` | admins, except one that a report names                               |
+| Kind                   | Who may read                                                         |
+| ---------------------- | -------------------------------------------------------------------- |
+| `notice_attachment`    | whoever can see the notice (`noticesVisibleTo`), until it is removed |
+| `feedback_attachment`  | admins, except one that a report names                               |
+| `call_chat_attachment` | whoever may enter the call's space (`mayEnter`)                      |
 
-Anyone else, and a file that is not ready, gets the same 404.
+Anyone else gets the same 404, whether or not the file exists. Somebody the
+reader lets in, asking for a file its owner has released (a call's file once
+the call ends), gets 410 `MEDIA_GONE`.
 
 Editing a notice with `attachmentIds` replaces its list: new uploads are
 claimed and dropped files released. Removing a notice releases all its
-files. Feedback files are never released; deleting an account, once that
-exists, will release them.
+files. A call's files are released when the call ends. Feedback files are
+never released; deleting an account, once that exists, will release them.
 
 ## Deleting
 
