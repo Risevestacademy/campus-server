@@ -1,6 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/session';
-import { and, asc, eq, getTableColumns, ne, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  getTableColumns,
+  inArray,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 
 import { CONFIG } from '../../../infra/config/config.constants.js';
 import type { Env } from '../../../infra/config/env.js';
@@ -23,6 +33,7 @@ import { MediaKind } from '../../media/schema.js';
 import { avatarUrl } from '../avatar-url.js';
 import { loadLiveMemberships } from '../live-memberships.js';
 import {
+  SystemRole,
   hasAdminPowers,
   UserStatus,
   users,
@@ -229,7 +240,7 @@ export class ProfileService {
         (memberships.get(viewer.id) ?? []).map((m) => m.cohort.id),
       );
       shown = shown.filter((m) => mine.has(m.cohort.id));
-      if (shown.length === 0) {
+      if (shown.length === 0 && !hasAdminPowers(target.systemRole)) {
         throw notFound();
       }
     }
@@ -279,12 +290,27 @@ export class ProfileService {
         displayName: users.displayName,
         spriteKey: users.spriteKey,
       })
-      .from(cohortMembers)
-      .innerJoin(users, eq(users.id, cohortMembers.userId))
+      .from(users)
       .where(
         and(
-          eq(cohortMembers.cohortId, cohortId),
-          isLiveMembership(now),
+          or(
+            inArray(users.systemRole, [
+              SystemRole.Admin,
+              SystemRole.SuperAdmin,
+            ]),
+            exists(
+              this.db
+                .select({ one: sql`1` })
+                .from(cohortMembers)
+                .where(
+                  and(
+                    eq(cohortMembers.userId, users.id),
+                    eq(cohortMembers.cohortId, cohortId),
+                    isLiveMembership(now),
+                  ),
+                ),
+            ),
+          ),
           admin ? undefined : ne(users.status, UserStatus.Suspended),
         ),
       )
