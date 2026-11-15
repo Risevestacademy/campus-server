@@ -82,6 +82,15 @@ describe('cleanFileName', () => {
     expect(cleanFileName(name, type)).toBe(clean);
   });
 
+  it('stays fast on a long run of spaces that is not at the end', () => {
+    const started = performance.now();
+
+    const clean = cleanFileName(`a${' '.repeat(50_000)}b. . `, 'text/plain');
+
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(clean).toHaveLength(255);
+  });
+
   it('keeps at most 255 characters, the extension included', () => {
     const clean = cleanFileName('a'.repeat(300) + '.pdf', 'application/pdf');
     expect(clean).toHaveLength(255);

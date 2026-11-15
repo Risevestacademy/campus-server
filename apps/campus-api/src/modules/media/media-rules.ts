@@ -157,10 +157,12 @@ export function cleanFileName(
 ): string | null {
   if (!name) return null;
   const extension = `.${extensionOf(contentType)}`;
-  const base = (name.split(/[\\/]/).pop() ?? '')
+  let base = (name.split(/[\\/]/).pop() ?? '')
     .replace(UNSAFE_IN_NAMES, '')
-    .trim()
-    .replace(/[. ]+$/, '');
+    .trim();
+  let end = base.length;
+  while (end > 0 && (base[end - 1] === '.' || base[end - 1] === ' ')) end--;
+  base = base.slice(0, end);
   const dot = base.lastIndexOf('.');
   const stem = (dot > 0 ? base.slice(0, dot) : base)
     .trimEnd()

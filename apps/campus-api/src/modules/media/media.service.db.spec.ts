@@ -433,6 +433,31 @@ describe('verify and claim', () => {
   });
 });
 
+describe('claimAll', () => {
+  it('locks in id order and returns the uploads in the order given', async () => {
+    const ids = [];
+    for (let i = 0; i < 3; i += 1) {
+      const { mediaId } = await uploaded();
+      await verify(mediaId);
+      ids.push(mediaId);
+    }
+    const given = [...ids].sort().reverse();
+    const locked: string[] = [];
+    const claim = service.claim.bind(service);
+    service.claim = (tx, id, ...rest) => {
+      locked.push(id);
+      return claim(tx, id, ...rest);
+    };
+
+    const rows = await db.transaction((tx) =>
+      service.claimAll(tx as never, given, MediaKind.Avatar, alice, at(2000)),
+    );
+
+    expect(locked).toEqual([...ids].sort());
+    expect(rows.map((row) => row.id)).toEqual(given);
+  });
+});
+
 describe('release and sweep', () => {
   it('deletes a released avatar on the next sweep', async () => {
     const { mediaId, key } = await accepted();

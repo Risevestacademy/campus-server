@@ -284,7 +284,10 @@ export class MediaService implements OnModuleInit {
     );
   }
 
-  /** `claim` for each of a list of uploads, in the order given. */
+  /**
+   * `claim` for each of a list of uploads, returned in the order given. Rows
+   * are locked in id order, so two requests sharing uploads cannot deadlock.
+   */
   async claimAll(
     tx: Tx,
     mediaIds: readonly string[],
@@ -292,11 +295,12 @@ export class MediaService implements OnModuleInit {
     userId: string,
     now: Date,
   ): Promise<Media[]> {
-    const claimed: Media[] = [];
-    for (const id of new Set(mediaIds)) {
-      claimed.push(await this.claim(tx, id, kind, userId, now));
+    const ids = [...new Set(mediaIds)];
+    const claimed = new Map<string, Media>();
+    for (const id of [...ids].sort()) {
+      claimed.set(id, await this.claim(tx, id, kind, userId, now));
     }
-    return claimed;
+    return ids.map((id) => claimed.get(id)!);
   }
 
   private async pendingUpload(
