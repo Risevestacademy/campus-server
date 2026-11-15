@@ -199,7 +199,7 @@ export default defineRailway((ctx) => {
       POSTHOG_PROJECT_TOKEN: preserve(),
       R2_ACCESS_KEY_ID: preserve(),
       R2_ACCOUNT_ID: preserve(),
-      R2_BUCKET: preserve(),
+      R2_PRIVATE_BUCKET: preserve(),
       R2_PUBLIC_BUCKET: preserve(),
       R2_SECRET_ACCESS_KEY: preserve(),
       // The same Redis world reads, set by hand as world's is.

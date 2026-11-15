@@ -424,20 +424,20 @@ describe('loadEnv call recordings', () => {
     R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
     R2_ACCESS_KEY_ID: 'r2-key',
     R2_SECRET_ACCESS_KEY: 'r2-secret',
-    R2_BUCKET: 'campus-recordings',
+    R2_PRIVATE_BUCKET: 'campus-private',
   };
 
   it('loads with all of them, or none', () => {
-    expect(testEnv(recording).R2_BUCKET).toBe('campus-recordings');
-    expect(testEnv().R2_BUCKET).toBeUndefined();
+    expect(testEnv(recording).R2_PRIVATE_BUCKET).toBe('campus-private');
+    expect(testEnv().R2_PRIVATE_BUCKET).toBeUndefined();
   });
 
   it('refuses some without the rest', () => {
-    expect(() => testEnv({ R2_BUCKET: 'campus-recordings' })).toThrow(
+    expect(() => testEnv({ R2_PRIVATE_BUCKET: 'campus-private' })).toThrow(
       /R2_ACCOUNT_ID/,
     );
     expect(() => testEnv({ LIVEKIT_URL: recording.LIVEKIT_URL })).toThrow(
-      /R2_BUCKET/,
+      /R2_PRIVATE_BUCKET/,
     );
     expect(() =>
       testEnv({ ...recording, LIVEKIT_WEBHOOK_API_KEY: undefined }),
@@ -450,15 +450,15 @@ describe('loadEnv call recordings', () => {
         R2_ACCOUNT_ID: recording.R2_ACCOUNT_ID,
         R2_ACCESS_KEY_ID: recording.R2_ACCESS_KEY_ID,
         R2_SECRET_ACCESS_KEY: recording.R2_SECRET_ACCESS_KEY,
-        R2_BUCKET: recording.R2_BUCKET,
+        R2_PRIVATE_BUCKET: recording.R2_PRIVATE_BUCKET,
       }).LIVEKIT_URL,
     ).toBeUndefined();
   });
 
   it('refuses a bucket or account that cannot be R2’s', () => {
     expect(() =>
-      testEnv({ ...recording, R2_BUCKET: 'Campus_Recordings' }),
-    ).toThrow(/R2_BUCKET/);
+      testEnv({ ...recording, R2_PRIVATE_BUCKET: 'Campus_Recordings' }),
+    ).toThrow(/R2_PRIVATE_BUCKET/);
     expect(() => testEnv({ ...recording, R2_ACCOUNT_ID: 'acc' })).toThrow(
       /R2_ACCOUNT_ID/,
     );
@@ -470,7 +470,7 @@ describe('loadEnv uploads', () => {
     R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef',
     R2_ACCESS_KEY_ID: 'r2-key',
     R2_SECRET_ACCESS_KEY: 'r2-secret',
-    R2_BUCKET: 'campus-private',
+    R2_PRIVATE_BUCKET: 'campus-private',
     R2_PUBLIC_BUCKET: 'campus-public',
     MEDIA_PUBLIC_URL: 'https://media.campus.example.com/',
   };
