@@ -8,7 +8,11 @@ import { App } from 'supertest/types';
 
 import { PaginationQueryDto } from './../src/shared/dto/index.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
-import { DomainExceptionFilter, GlobalExceptionFilter, ValidationExceptionFilter } from './../src/shared/filters/index.js';
+import {
+  DomainExceptionFilter,
+  GlobalExceptionFilter,
+  ValidationExceptionFilter,
+} from './../src/shared/filters/index.js';
 
 @Controller('list')
 class ListController {
@@ -45,8 +49,15 @@ describe('API contract (e2e)', () => {
         exceptionFactory: (errors) => new ValidationException(errors),
       }),
     );
-    app.useGlobalFilters(new GlobalExceptionFilter(), new DomainExceptionFilter(), new ValidationExceptionFilter());
-    await app.init();
+    app.useGlobalFilters(
+      new GlobalExceptionFilter(),
+      new DomainExceptionFilter(),
+      new ValidationExceptionFilter(),
+    );
+    // Listening once, rather than app.init(): supertest otherwise opens a
+    // server on a new port for every request, and files running in parallel
+    // collide on them.
+    await app.listen(0);
   });
 
   it('GET /v1/list applies pagination defaults', () => {
@@ -61,6 +72,23 @@ describe('API contract (e2e)', () => {
       .get('/v1/list?page=2&perPage=50')
       .expect(200)
       .expect({ page: 2, perPage: 50 });
+  });
+
+  it('GET /v1/list rejects a page past the last it will fetch', () => {
+    return request(app.getHttpServer())
+      .get('/v1/list?page=1e30')
+      .expect(400)
+      .expect({
+        error: {
+          code: 'INVALID_ARGUMENT',
+          message: 'Request validation failed',
+          details: {
+            fields: {
+              page: 'page must not be greater than 10000',
+            },
+          },
+        },
+      });
   });
 
   it('GET /v1/list rejects out-of-range perPage with our error contract', () => {

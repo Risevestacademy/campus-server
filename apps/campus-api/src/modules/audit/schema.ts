@@ -1,0 +1,272 @@
+import {
+  index,
+  jsonb,
+  pgTable,
+  timestamp,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
+
+import { CORRELATION_ID_MAX_LENGTH } from '../../shared/http/correlation-id.js';
+// Tables, for the two foreign keys, and nothing else from other modules: see
+// "How an entry is written" in this module's README.
+import { spaces } from '../maps/schema.js';
+import { users } from '../users/schema.js';
+
+/**
+ * What happened. Stored as varchar rather than a Postgres enum so adding an
+ * action is a code change, not a migration — the log outlives any one list
+ * of things worth recording.
+ */
+export enum AuditAction {
+  /**
+   * A membership that had ended was brought back by an accepted invite.
+   * `details.previous` keeps the row as it stood, dismissal reason included,
+   * because the revive clears it from cohort_members.
+   */
+  MembershipRevived = 'membership_revived',
+  /** An account's system_role changed; `details` has `from` and `to`. */
+  SystemRoleChanged = 'system_role_changed',
+  /**
+   * An admin suspended an account. `details` keeps what the admin wrote,
+   * when they wrote anything, because nowhere else on the account does —
+   * the status itself says only that it is suspended now.
+   */
+  UserSuspended = 'user_suspended',
+  /**
+   * An admin put a suspended account back to active. Sessions are not
+   * restored with it: the person signs in again.
+   */
+  UserReinstated = 'user_reinstated',
+  /**
+   * An admin offered somebody a place. `details` has what was offered — the
+   * cohort, the roles — and never the address, which stays on the invite.
+   */
+  InviteCreated = 'invite_created',
+  /**
+   * The three below are the admin setup an invite depends on. None of their
+   * tables names who created the row, so the entry is the only record of it.
+   */
+  CohortCreated = 'cohort_created',
+  CohortTrackAttached = 'cohort_track_attached',
+  /**
+   * An admin stopped a cohort running a track. The link row is gone, so
+   * `details` keeps which cohort and which track it joined.
+   */
+  CohortTrackDetached = 'cohort_track_detached',
+  TrackCreated = 'track_created',
+  /**
+   * An admin edited a cohort or a track. `details.changes` maps each field
+   * that actually moved to its `from` and `to`; an edit that moved nothing
+   * writes no entry.
+   */
+  CohortUpdated = 'cohort_updated',
+  TrackUpdated = 'track_updated',
+  /**
+   * An admin deleted a cohort or a track. The row is gone, so `details`
+   * keeps what it was — the entry is the only trace left of it.
+   */
+  CohortDeleted = 'cohort_deleted',
+  TrackDeleted = 'track_deleted',
+  /**
+   * An admin withdrew a pending invite. The invite's own revoked_by and
+   * revoked_at say who and when; the entry adds the request it came from
+   * and keeps the revoke in the same history as the create.
+   */
+  InviteRevoked = 'invite_revoked',
+  /**
+   * The invitee flagged a mistake on their invite. The actor is the invitee,
+   * and what they wrote stays on the invite, not here.
+   */
+  InviteFlagged = 'invite_flagged',
+  /**
+   * An admin gave an invite a new link, replacing a live one or bringing
+   * back an invite that had lapsed. `details` has the deadline before and
+   * after, and never the address or anything of the token.
+   */
+  InviteResent = 'invite_resent',
+  /**
+   * An admin moved a guest's visit deadline forward. `details` has the
+   * deadline before and after; the subject says which membership, so who
+   * and where are read from the row rather than repeated here.
+   */
+  GuestVisitExtended = 'guest_visit_extended',
+  /**
+   * An admin's sync changed what the database holds of a map: the map was
+   * new, came back, became or stopped being the entry map, or gained, lost
+   * or regained spaces. `details` says which, by key, and the published
+   * version the sync read. A sync that changed nothing writes nothing.
+   */
+  MapSynced = 'map_synced',
+  /**
+   * A sync found a map no longer published and retired it, with every space
+   * on it. The rows stay; `details` lists the spaces that went with it.
+   */
+  MapRetired = 'map_retired',
+  /**
+   * An admin made a synced map live for world. `details` keeps the map's key
+   * and the publication timestamp before and after; a republish writes
+   * another entry, so the history of when each version went live is kept.
+   */
+  MapPublished = 'map_published',
+  /**
+   * An admin ended a membership: dismissed, withdrew, deferred or graduated
+   * a student, or removed any member. `details` keeps the role, the student
+   * status it was given (null for a removal, which carries none) and the
+   * reason the admin wrote, or null. The subject says which membership.
+   */
+  MembershipEnded = 'membership_ended',
+  /**
+   * An admin moved a student to another track the same cohort runs.
+   * `details` has the track before and after, as catalogue ids; the subject
+   * says which membership, so who and where are read from the row.
+   */
+  MemberTrackChanged = 'member_track_changed',
+  /**
+   * An admin marked a piece of feedback dealt with, or put it back to open.
+   * `details` is empty: what a member wrote is theirs, and often about
+   * somebody else, so it stays on the feedback and never comes here.
+   */
+  FeedbackResolved = 'feedback_resolved',
+  FeedbackReopened = 'feedback_reopened',
+  /**
+   * An admin gave a person, or everybody on a cohort's track, standing
+   * access to a space. The subject is the grant's own row; `details` keeps
+   * who it was to and the span it runs for, and `space_id` names the space.
+   */
+  SpaceMembershipGranted = 'space_membership_granted',
+  /**
+   * An admin brought a grant to a space to an end. The row stays as the
+   * record that it existed, so `details` keeps only when access stopped;
+   * the subject says which grant, `space_id` which space.
+   */
+  SpaceMembershipEnded = 'space_membership_ended',
+  /**
+   * An admin edited a space's settings. `details.changes` maps each field
+   * that actually moved to its `from` and `to`; an edit that moved nothing
+   * writes no entry. The subject is the space, and `space_id` names it too.
+   */
+  SpaceUpdated = 'space_updated',
+  /**
+   * An admin created a mentorship group. `details` has the cohort, the name,
+   * the mentor membership and the room it was given.
+   */
+  MentorshipGroupCreated = 'mentorship_group_created',
+  /**
+   * An admin edited a group's name, description or room. `details.changes`
+   * maps each field that moved to its `from` and `to`.
+   */
+  MentorshipGroupUpdated = 'mentorship_group_updated',
+  /** An admin replaced the mentor. `details` has the membership before and after. */
+  MentorshipGroupMentorChanged = 'mentorship_group_mentor_changed',
+  /** An admin put a student in a group. */
+  MentorshipGroupStudentAdded = 'mentorship_group_student_added',
+  /** An admin took a student out of a group. */
+  MentorshipGroupStudentRemoved = 'mentorship_group_student_removed',
+  /**
+   * An admin deleted a group. The row is gone, so `details` keeps what it was.
+   */
+  MentorshipGroupDeleted = 'mentorship_group_deleted',
+  NoticeCreated = 'notice_created',
+  NoticeUpdated = 'notice_updated',
+  NoticePinned = 'notice_pinned',
+  NoticeUnpinned = 'notice_unpinned',
+  NoticeRemoved = 'notice_removed',
+  RoomLinkCreated = 'room_link_created',
+  RoomLinkRevoked = 'room_link_revoked',
+  /** No longer written: runs are synced from the calendar. */
+  RoomLinkWindowChanged = 'room_link_window_changed',
+  /** An admin ended somebody else's claim on a desk. */
+  DeskFreed = 'desk_freed',
+  /**
+   * A super admin ran the retention sweep on one table. No subject: the rows
+   * are gone, so `details` keeps the table, the cutoff and how many went.
+   */
+  RetentionSwept = 'retention_swept',
+  /** Staff set a student's status at one class; the reason is in `details`. */
+  AttendanceCorrected = 'attendance_corrected',
+  /**
+   * A member commented on a notice. `details` keeps the notice id only; what
+   * the member wrote stays on the comment and never comes here.
+   */
+  CommentCreated = 'comment_created',
+}
+
+export enum AuditSubjectType {
+  CohortMember = 'cohort_member',
+  User = 'user',
+  Invite = 'invite',
+  Cohort = 'cohort',
+  CohortTrack = 'cohort_track',
+  Track = 'track',
+  Map = 'map',
+  /** A space's own settings, not a grant of access to it. */
+  Space = 'space',
+  Feedback = 'feedback',
+  /** One row of `space_memberships`: a grant of access to a space. */
+  SpaceMembership = 'space_membership',
+  MentorshipGroup = 'mentorship_group',
+  Notice = 'notice',
+  RoomLink = 'room_link',
+  /** One row of `desk_claims`: somebody holding a desk in a cohort. */
+  DeskClaim = 'desk_claim',
+  /** One row of `attendance`: a student at one run. */
+  Attendance = 'attendance',
+  /** One row of `comments`, whatever it is attached to. */
+  Comment = 'comment',
+}
+
+/**
+ * The trigger that refuses every UPDATE and DELETE (migration 0008). Named
+ * here because the retention sweep lifts it for its own transaction, and
+ * that statement has to name it.
+ */
+export const AUDIT_LOG_APPEND_ONLY_TRIGGER = 'audit_log_append_only';
+
+/**
+ * Append-only: nothing updates or deletes a row. Written in the same
+ * transaction as the change it records, so a change is never committed
+ * without its entry, nor an entry without its change.
+ */
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Null when no person did it: a migration, the seed. */
+    actorUserId: uuid('actor_user_id').references(() => users.id),
+    action: varchar('action', { length: 64 }).notNull(),
+    subjectType: varchar('subject_type', { length: 64 }),
+    subjectId: uuid('subject_id'),
+    /**
+     * The space an entry is about, when it is about one: a grant of access
+     * to it, its settings changed. A space is retired, never deleted, so an
+     * entry keeps pointing at one that exists.
+     */
+    spaceId: uuid('space_id').references(() => spaces.id),
+    details: jsonb('details'),
+    /**
+     * The request's correlation id, so an entry leads to its log lines. As
+     * wide as the longest id a request may bring, so it is stored whole.
+     */
+    correlationId: varchar('correlation_id', {
+      length: CORRELATION_ID_MAX_LENGTH,
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('audit_log_created_idx').on(table.createdAt),
+    index('audit_log_actor_idx').on(table.actorUserId, table.createdAt),
+    // "Everything that happened to this membership" is the question a
+    // subject's history is read for.
+    index('audit_log_subject_idx').on(
+      table.subjectType,
+      table.subjectId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export type AuditLogEntry = typeof auditLog.$inferSelect;
+export type NewAuditLogEntry = typeof auditLog.$inferInsert;

@@ -1,0 +1,350 @@
+{
+  "uid": "campus-database",
+  "title": "Campus database",
+  "description": "Postgres queries from campus-api and world, from their spans.",
+  "tags": ["campus", "database"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "schemaVersion": 41,
+  "version": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "traces",
+        "label": "Traces",
+        "type": "datasource",
+        "query": "tempo",
+        "regex": "/-traces$/",
+        "hide": 0,
+        "current": {}
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "custom",
+        "query": "All : .+,campus-api : campus-api,world : world",
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "All",
+          "value": ".+"
+        },
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "Campus dashboards",
+      "type": "dashboards",
+      "tags": ["campus"],
+      "asDropdown": true,
+      "includeVars": false,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Postgres",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Queries by operation",
+      "description": "",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${traces}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${traces}"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ span.db.system.name = \"postgresql\" && resource.service.name =~ \"${service}\" } | rate() by (resource.service.name, span.db.operation.name)",
+          "metricsQueryType": "range",
+          "limit": 20,
+          "tableType": "traces"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 by operation",
+      "description": "",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${traces}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${traces}"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ span.db.system.name = \"postgresql\" && resource.service.name =~ \"${service}\" } | quantile_over_time(duration, .95) by (resource.service.name, span.db.operation.name)",
+          "metricsQueryType": "range",
+          "limit": 20,
+          "tableType": "traces"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Failed queries by code",
+      "description": "A SQLSTATE such as 23505 came from Postgres; a name such as CONNECTION_CLOSED came from postgres.js.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${traces}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${traces}"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ span.db.system.name = \"postgresql\" && resource.service.name =~ \"${service}\" && status = error } | rate() by (span.error.type)",
+          "metricsQueryType": "range",
+          "limit": 20,
+          "tableType": "traces"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "noValue": "None in this period"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Query latency",
+      "description": "",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${traces}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${traces}"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ span.db.system.name = \"postgresql\" && resource.service.name =~ \"${service}\" } | quantile_over_time(duration, .5, .95, .99)",
+          "metricsQueryType": "range",
+          "limit": 20,
+          "tableType": "traces"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["mean", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Queries over 100 ms",
+      "description": "The statement as sent, with $n placeholders and never the values.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "${traces}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${traces}"
+          },
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ span.db.system.name = \"postgresql\" && resource.service.name =~ \"${service}\" && duration > 100ms } | select(span.db.query.text)",
+          "limit": 50,
+          "spss": 3,
+          "tableType": "spans"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 10
+      }
+    }
+  ]
+}

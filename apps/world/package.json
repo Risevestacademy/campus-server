@@ -6,17 +6,41 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
-    "start": "node dist/index.js",
+    "start": "node --env-file=.env dist/index.js",
     "lint": "oxlint src/",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "start:dev": "node --env-file=.env --watch dist/index.js",
+    "start:prod": "node dist/index.js",
+    "protocol:schema": "vitest run src/socket/protocol.schema.spec.ts -u"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "oxlint": "^1.58.0",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "@electric-sql/pglite": "^0.5.8",
+    "@opentelemetry/context-async-hooks": "^2.11.0",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
+    "@opentelemetry/sdk-trace": "^2.11.0",
+    "@types/node": "catalog:",
+    "@types/ws": "^8.18.1",
+    "json-schema-to-typescript": "15.0.4",
+    "oxlint": "catalog:",
+    "pino-pretty": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "ws": "^8.22.0"
   },
   "dependencies": {
-    "fastify": "^5.12.3"
+    "@campus/error-reporting": "workspace:*",
+    "@campus/media": "workspace:*",
+    "@campus/session": "workspace:*",
+    "@campus/space-access": "workspace:*",
+    "@campus/telemetry": "workspace:*",
+    "@fastify/otel": "0.21.2",
+    "@fastify/websocket": "^11.3.1",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/instrumentation-ioredis": "^0.70.0",
+    "campus-world-map": "^0.2.0",
+    "fastify": "^5.12.3",
+    "ioredis": "^6.0.0",
+    "postgres": "catalog:",
+    "zod": "^4.6.5"
   }
 }

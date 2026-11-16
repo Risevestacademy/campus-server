@@ -7,3 +7,6 @@ dist/
 .env.local
 .env.*.local
 .husky/_
+personal/
+apps/campus-api/email-templates/
+apps/campus-api/scripts/

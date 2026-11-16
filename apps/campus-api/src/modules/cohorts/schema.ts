@@ -1,0 +1,188 @@
+import { sql } from 'drizzle-orm';
+import {
+  check,
+  date,
+  foreignKey,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
+
+import { tracks } from '../tracks/schema.js';
+import { users } from '../users/schema.js';
+
+export enum CohortRole {
+  Student = 'student',
+  Professor = 'professor',
+  Mentor = 'mentor',
+  /**
+   * Invited to one cohort and scoped to it — a visiting speaker, an alum at
+   * a demo day. A cohort role like any other, which is what keeps a guest
+   * out of cohorts nobody invited them to, but always with an end date:
+   * access_expires_at below.
+   */
+  Guest = 'guest',
+}
+
+export enum CohortStatus {
+  Upcoming = 'upcoming',
+  Active = 'active',
+  Completed = 'completed',
+}
+
+export enum StudentStatus {
+  Active = 'active',
+  Dismissed = 'dismissed',
+  Graduated = 'graduated',
+  Withdrawn = 'withdrawn',
+  Deferred = 'deferred',
+}
+
+export const cohortRoleEnum = pgEnum('cohort_role', CohortRole);
+export const studentStatusEnum = pgEnum('student_status', StudentStatus);
+export const cohortStatusEnum = pgEnum('cohort_status', CohortStatus);
+
+export const cohorts = pgTable(
+  'cohorts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 128 }).notNull(),
+    code: varchar('code', { length: 32 }).notNull(),
+    startDate: date('start_date'),
+    endDate: date('end_date'),
+    status: cohortStatusEnum('status').notNull().default(CohortStatus.Upcoming),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('cohorts_code_unique').on(table.code),
+    check('cohorts_code_uppercase', sql`${table.code} = upper(${table.code})`),
+    // Either date may be missing; given both, the cohort cannot end before
+    // it starts. The service checks this under a row lock, which is what
+    // gives the caller a clean 400. This is the backstop for any write that
+    // does not go through it.
+    check(
+      'cohorts_dates_in_order',
+      sql`${table.startDate} is null or ${table.endDate} is null or ${table.endDate} >= ${table.startDate}`,
+    ),
+  ],
+);
+
+export const cohortTracks = pgTable(
+  'cohort_tracks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    cohortId: uuid('cohort_id')
+      .notNull()
+      .references(() => cohorts.id),
+    trackId: uuid('track_id')
+      .notNull()
+      .references(() => tracks.id),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique('cohort_tracks_track_id_cohort_id_key').on(
+      table.trackId,
+      table.cohortId,
+    ),
+    unique('cohort_tracks_id_cohort_id_key').on(table.id, table.cohortId),
+  ],
+);
+
+export const cohortMembers = pgTable(
+  'cohort_members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    cohortId: uuid('cohort_id')
+      .notNull()
+      .references(() => cohorts.id),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    /** Required for students — see the CHECK below. */
+    cohortTrackId: uuid('cohort_track_id'),
+    role: cohortRoleEnum('role').notNull(),
+    status: studentStatusEnum('status'),
+    dismissalReason: text('dismissal_reason'),
+    joinedAt: timestamp('joined_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    leftAt: timestamp('left_at', { withTimezone: true }),
+    accessExpiresAt: timestamp('access_expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    // The track has to belong to the cohort the membership is in.
+    foreignKey({
+      columns: [table.cohortTrackId, table.cohortId],
+      foreignColumns: [cohortTracks.id, cohortTracks.cohortId],
+      name: 'cohort_members_cohort_track_fk',
+    }),
+    // One row per person per cohort, ever: returning after leaving clears
+    // left_at on the existing row rather than adding a second one.
+    uniqueIndex('cohort_members_unique').on(table.cohortId, table.userId),
+    // Target for the composite foreign keys that keep a mentorship group's
+    // mentor a mentor of its cohort, and its students students of it.
+    unique('cohort_members_id_cohort_id_role_key').on(
+      table.id,
+      table.cohortId,
+      table.role,
+    ),
+    check(
+      'cohort_members_student_requires_track',
+      sql`${table.role} is distinct from ${sql.raw(`'${CohortRole.Student}'`)} or ${table.cohortTrackId} is not null`,
+    ),
+
+    // status belongs to students. Left as the spec states it: a student may
+    // still be status-less, so enrolment does not have to pick one up front.
+    check(
+      'cohort_members_student_status',
+      sql`${table.role} = ${sql.raw(`'${CohortRole.Student}'`)} or ${table.status} is null`,
+    ),
+    // A reason explains why a membership ended and nothing else. It is
+    // written whenever a membership is ended by an admin — dismissed,
+    // withdrawn, deferred, graduated, or removed — and the column keeps its
+    // dismissal-era name. Keyed to `left_at` rather than a list of statuses,
+    // because a removal carries no student status at all. Reviving a
+    // membership clears it, and this is what stops the next writer
+    // forgetting: without it a student ended for cause and later re-invited
+    // keeps the old reason on a live row, where any roster view would read
+    // it as current.
+    check(
+      'cohort_members_dismissal_reason',
+      sql`${table.dismissalReason} is null or ${table.leftAt} is not null`,
+    ),
+    // An end date is what makes a guest a guest: they always have one, and
+    // nobody else does. A visiting speaker who is never removed is a hole
+    // that stays open, so the schema refuses to record one.
+    check(
+      'cohort_members_guest_expiry',
+      sql`(${table.role}::text = ${sql.raw(`'${CohortRole.Guest}'`)}) = (${table.accessExpiresAt} is not null)`,
+    ),
+  ],
+);
+
+export type Cohort = typeof cohorts.$inferSelect;
+export type NewCohort = typeof cohorts.$inferInsert;
+export type CohortTrack = typeof cohortTracks.$inferSelect;
+export type NewCohortTrack = typeof cohortTracks.$inferInsert;
+export type CohortMember = typeof cohortMembers.$inferSelect;
+export type NewCohortMember = typeof cohortMembers.$inferInsert;

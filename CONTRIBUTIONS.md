@@ -2,11 +2,11 @@
 
 ## Branches
 
-| Branch                              | Purpose                                       | Merges via    |
-| ----------------------------------- | --------------------------------------------- | ------------- |
-| `main`                              | Production. Tagged releases.                  | PR from `dev` |
-| `dev`                               | Default branch. Staging. Branch from here.    | Squashed PRs  |
-| `feat/*` `fix/*` `chore/*` `docs/*` | Branch out for Your work with this convention | PR into `dev` |
+| Branch                                           | Purpose                                       | Merges via    |
+| ------------------------------------------------ | --------------------------------------------- | ------------- |
+| `main`                                           | Production. Tagged releases.                  | PR from `dev` |
+| `dev`                                            | Default branch. Staging. Branch from here.    | Squashed PRs  |
+| `feat/*` `fix/*` `refactor/*` `chore/*` `docs/*` | Branch out for Your work with this convention | PR into `dev` |
 
 Nobody pushes directly to `dev` or `main`, branch off dev then create a pr
 

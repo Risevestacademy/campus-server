@@ -1,0 +1,1 @@
+ALTER TYPE "public"."system_role" ADD VALUE 'super_admin';

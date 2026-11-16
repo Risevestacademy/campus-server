@@ -1,0 +1,481 @@
+# Deployment
+
+Single Railway project, two Environments (`staging`, `production`), each
+with its own independent services and Postgres database — nothing shared
+across environments.
+
+## Infrastructure as code
+
+Staging's backend services are described in
+[`.railway/railway.ts`](../.railway/railway.ts) and changed through it, not
+through the dashboard:
+
+```bash
+railway config plan    # what would change; touches nothing
+railway config apply   # the same plan, applied after confirmation
+```
+
+- The file is a named partial, `campus-backend`. It owns `campus-api`,
+  `campus-world`, Postgres, Redis and their volumes. The web app and
+  storybook belong to campus-web's partial, `campus-frontends`, and are not
+  declared here; a partial only touches what it declares.
+- Variable names are listed, values are not: each is `preserve()`, which
+  keeps whatever Railway already holds. Set or rotate a value in Railway.
+- Staging only. The file refuses to plan for any other environment, because
+  production has a different shape that it does not describe yet.
+- A dashboard edit to something the file declares shows up as a difference
+  in the next plan, and the next apply puts the file's value back.
+
+Config as code (`railway.json`, `railway.toml`) is deprecated by Railway and
+stops being read on 2026-12-01; do not add either.
+
+## Services
+
+| Service                          | Public domain?                       |
+| -------------------------------- | ------------------------------------ |
+| `campus-api` (`apps/campus-api`) | Yes                                  |
+| `world` (`apps/world`)           | Yes                                  |
+| `frontend` (separate repo)       | Yes                                  |
+| `postgres` (Railway plugin)      | No — internal + admin proxy URL only |
+| `redis` (Railway Redis)          | No — internal only                   |
+
+All app services use **Root Directory `/`** (repo root), not their
+subfolder — required so Railway's builder (Railpack) sees the shared pnpm
+workspace lockfile. Railpack takes the Node version from `engines.node` in
+the root `package.json` (`26.x`), the same major CI runs.
+
+Every build command ends in `--filter <app>... build`. The trailing `...`
+builds the workspace packages the app depends on (`@campus/session`) first;
+they ship compiled output, so without it the build fails with
+`Cannot find module '@campus/session'`.
+
+Each service should set these **watch paths**, so a commit redeploys only
+what it can affect. Both include the shared package and the root workspace files, since a
+change to either reaches both apps:
+
+```
+/apps/<app>/**
+/packages/session/**
+/package.json
+/pnpm-lock.yaml
+/pnpm-workspace.yaml
+```
+
+## campus-api
+
+- Build: `pnpm install --frozen-lockfile && pnpm --filter campus-api... build`
+  — the trailing `...` builds the workspace packages campus-api depends on
+  (`@campus/session`), which ship compiled output. Without it the API starts
+  and then cannot resolve them.
+- Start: `node --max-old-space-size=128 --max-semi-space-size=2 apps/campus-api/dist/main.js`
+  — `node` directly, because started through pnpm the wrapper stays alive as
+  the parent and holds about as much memory as the API. The flags cap V8's
+  heap, which otherwise grows to fit a container far larger than the API
+  needs; on the command rather than in `NODE_OPTIONS` so the pre-deploy step
+  does not run under them. If the logs ever show `Reached heap limit`, raise
+  the first one.
+- Serverless on staging: the API sleeps once it has sent nothing for a few
+  minutes and wakes on the next request, from the internet or from the web
+  app over the private network. The first request after a sleep is slow and
+  may answer 502. Anything that keeps sending keeps it awake, which is why
+  the database pool closes idle connections and why nothing here should
+  poll; a signed-in browser refreshing its token also wakes it.
+  `SCHEDULER_TIMER_ENABLED=false` there: scheduled jobs (calendar sync,
+  grant revocations, the retention sweep) then run on the back of requests, at most once a
+  minute, instead of on a timer that would keep it awake.
+- Healthcheck path: `/v1/health`
+- Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
+  `FF_LOG_PRETTY=false`, `FF_OTEL_ENABLED`, `FF_OTEL_METRICS_ENABLED`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` (see
+  [grafana.md](./grafana.md)),
+  `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST` (see
+  [posthog.md](./posthog.md)),
+  `DEFAULT_ADMIN_EMAIL` (the super admins the pre-deploy seed creates or promotes:
+  one Google address, or several separated by commas; set it per
+  environment before the first deploy, or the seed step fails),
+  `CORS_ORIGINS` (the frontend origin for that environment — without it every
+  browser call is blocked), `TRUST_PROXY_HOPS=1` (Railway runs one proxy;
+  without it the rate limiter treats all traffic as a single client),
+  `APP_PUBLIC_URL` (invite-link base, `{base}/invitation?token=<raw>` — set it to
+  the frontend origin for that environment; required, boot fails without it),
+  `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7),
+  `NOTIFICATION_RETENTION_DAYS` and `AUDIT_LOG_RETENTION_DAYS` (what the
+  retention sweep keeps; optional, default 90 and 365, at least 30; the sweep
+  runs daily on the scheduler — see `apps/campus-api/src/modules/admin/README.md`),
+  `FF_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM` (the invite
+  email, e.g. `Campus by Rise <invites@campusbyrise.com>`),
+  `RESEND_INVITE_TEMPLATE_ID`, `RESEND_INVITE_ADMIN_TEMPLATE_ID` and
+  `RESEND_INVITE_GUEST_TEMPLATE_ID` (the Resend templates the invite email is
+  sent with, by id or alias; optional, unset sends the email built into the
+  API).
+  `PORT` is injected by Railway, not set manually.
+  `REDIS_URL` (the Redis service's internal URL, the same one world reads):
+  each new notification is published there for world to push to the
+  recipient's open sockets. Optional: unset, notifications are still written
+  and listed, and simply not pushed. The connection is made for a publish and
+  closed once idle, as the database pool's are, so it never keeps the API
+  awake.
+  `SANITY_PROJECT_ID` and `SANITY_DATASET` (`production` unless set; staging
+  reads `staging`) are what the map sync, `POST /v1/maps/sync`, reads the
+  published maps from, with no token. Both are optional: the API starts
+  without them, and the sync answers 503 until the project id is set. They
+  should match world's, or the database will describe a different campus
+  from the one people walk around.
+- Google sign-in stays off unless `FF_GOOGLE_AUTH_ENABLED=true`, which then
+  requires `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
+  (this API, matching a registered redirect URI byte for byte) and two
+  different 32-character secrets: `AUTH_STATE_SECRET` and
+  `AUTH_SESSION_SECRET`. Lifetimes: access tokens `AUTH_SESSION_TTL_MINUTES`
+  (15), refresh tokens `AUTH_REFRESH_TTL_DAYS` (30), provisional sessions
+  `AUTH_PROVISIONAL_TTL_MINUTES` (30). See [auth-flow.md](./auth-flow.md) for
+  refresh and sign-out. The access-token lifetime is capped at 15 minutes by
+  the shared session policy in `@campus/session`: campus-api refuses to boot
+  above it, and world refuses a refresh window shorter than it plus two
+  minutes, since world relies on sign-ins being refreshed that often.
+- `GOOGLE_MOBILE_CLIENT_IDS` (optional): the Google client ids of the native
+  apps, comma-separated, from the same Google project as `GOOGLE_CLIENT_ID`.
+  A native app signs in by posting an id_token to `/v1/auth/google/token`.
+  A token is accepted when it is addressed to one of the clients named here
+  or to the web client, and refused otherwise. Unset, only the web client's
+  tokens are accepted.
+- Google Calendar stays off unless `FF_GOOGLE_CALENDAR_ENABLED=true`, which
+  needs Google sign-in on, `GOOGLE_CALENDAR_TOKEN_KEY` (32 bytes in base64:
+  `openssl rand -base64 32`, the key the refresh tokens are sealed with;
+  changing it makes every member reconnect) and `GOOGLE_CALENDAR_CALLBACK_URL`
+  (this API's `/v1/calendar/connect/callback`, through campus-web's proxy like
+  `GOOGLE_CALLBACK_URL`, registered on the same Google client). The scope,
+  `calendar.events.readonly`, has to be added to the Google consent screen.
+  It is a sensitive scope: until Google has verified the app, only the
+  consent screen's test users can connect, and while the app's publishing
+  status is Testing their refresh tokens lapse after 7 days. Sign-in never
+  asks for it. See the calendar module's
+  [README](../apps/campus-api/src/modules/calendar/README.md).
+- Calendar push needs `GOOGLE_CALENDAR_WEBHOOK_URL`, this API's
+  `https://<api host>/v1/calendar/notifications`. Unset, room-link calendars
+  are only synced by the hourly backstop.
+- `AUTH_COOKIE_DOMAIN` (optional): the parent domain the access cookie is
+  shared under, so world on its own subdomain receives it — for example
+  `campus.example`. Only `campus_session` gets it; the refresh and state
+  cookies stay host-only. Boot fails if it does not cover both
+  `APP_PUBLIC_URL` and `GOOGLE_CALLBACK_URL`, because a browser would drop the
+  cookie without saying so. campus-web's proxy must pass the `Domain`
+  attribute through rather than strip it.
+- `APP_PUBLIC_URL` is also where sign-in lands: `/`, `/invitation` or
+  `/sign-in?error=<code>`. The frontend needs all three routes.
+- Where the frontend and the API live decides whether the session cookie
+  works at all — see [Domains and cookies](#domains-and-cookies) before
+  choosing hostnames.
+- Migrations and seeding run via a pre-deploy step:
+  `pnpm --filter campus-api db:migrate && pnpm --filter campus-api db:seed`.
+  Seeding is deliberately **not** part of app boot — the API must not need a
+  writable database to report healthy, and two replicas starting at once must
+  not race each other.
+- `/docs` and `/docs-json` are unauthenticated by decision.
+
+## Domains and cookies
+
+The session lives in httpOnly cookies set by campus-api. They only reach the
+API from the frontend's `fetch` calls if the browser considers the two the
+same site, or is willing to send third-party cookies — and Safari and
+Firefox are not.
+
+**Railway's own domains are separate sites.** `up.railway.app` is on the
+public-suffix list, exactly like `github.io`, so `campus-web.up.railway.app`
+and `campus-api.up.railway.app` are as unrelated to a browser as two
+different companies. campus-api detects this and marks the cookie
+`SameSite=None`, which gives:
+
+| Browser             | Cookie on the frontend's calls           | Result                                       |
+| ------------------- | ---------------------------------------- | -------------------------------------------- |
+| Chrome              | Sent (third-party cookies still allowed) | Works                                        |
+| Safari              | Blocked outright                         | Every call 401s after a "successful" sign-in |
+| Firefox             | Partitioned away, never sent             | Same as Safari                               |
+| Any, private window | Usually blocked                          | Same as Safari                               |
+
+So the browser must never call campus-api on its own Railway domain. It
+doesn't: campus-web proxies every call through its own host.
+
+### How campus-web reaches the API: its own proxy
+
+campus-web never calls campus-api from the browser. Its route handler at
+`app/api/[...path]/route.ts` forwards `/api/*` on the frontend's host to
+`API_BASE_URL` (campus-api's Railway private URL), so `/api/v1/auth/me` in the
+browser is `/v1/auth/me` here. The browser only ever talks to one host, the
+cookies are first-party, and it works on Railway's domains today.
+
+campus-api's settings for this:
+
+| Variable              | Value                                                                                                                                                                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_PUBLIC_URL`      | `https://<web>.up.railway.app`                                                                                                                                                                                                                 |
+| `GOOGLE_CALLBACK_URL` | `https://<web>.up.railway.app/api/v1/auth/google/callback` — through the proxy, not campus-api's own host. Register the same URI on the Google client. Because this host matches `APP_PUBLIC_URL`, campus-api picks `SameSite=Lax` on its own. |
+| `CORS_ORIGINS`        | `https://<web>.up.railway.app`                                                                                                                                                                                                                 |
+| `TRUST_PROXY_HOPS`    | `1`, provided the proxy forwards `X-Forwarded-For` — see below.                                                                                                                                                                                |
+
+campus-api's public domain is then only needed for `/docs`.
+
+The proxy has to carry the auth flow through, not just JSON. It must:
+
+- **Forward the three auth cookies** upstream — `campus_session`,
+  `campus_refresh`, `campus_oauth_state` — and pass each one's `Set-Cookie`
+  back to the browser, not only one named cookie.
+- **Re-scope cookie paths under `/api`.** campus-api scopes the refresh and
+  state cookies to `Path=/v1/auth`, but the browser sees `/api/v1/auth`, so the
+  proxy must rewrite them to `Path=/api/v1/auth` (and a clearing
+  `Set-Cookie` the same way, or logout leaves them behind). `campus_session`
+  is `Path=/` and needs nothing.
+- **Pass `Location` through on redirects.** `GET /v1/auth/google` answers 302
+  to `accounts.google.com`, and the callback answers 302 to `APP_PUBLIC_URL`;
+  `GET /v1/calendar/connect` and its callback do the same.
+  Without `Location` the browser has nowhere to go. Allowing those two
+  destinations keeps the existing guard against open redirects.
+- **Forward `X-Forwarded-For`** as it arrived from Railway's edge. Otherwise
+  every request reaches campus-api from the proxy's own address, and the rate
+  limiter (100 requests a minute per client) treats all users as one.
+
+The proxy already refuses cross-origin writes itself and does not forward
+`Origin`, so campus-api's own Origin checks see no `Origin` and stand aside.
+That is safe only as long as campus-api is not reachable from browsers
+directly; keep `CORS_ORIGINS` set for when it is.
+
+### Once the domain exists
+
+Put the API **under** the frontend's host: `campus.example` for the web app,
+`api.campus.example` for campus-api, both as Railway custom domains.
+campus-api recognises one host nested under the other as the same site and
+uses `SameSite=Lax`. Sibling hosts (`app.campus.example` with
+`api.campus.example`) also work, since they are the same site, but campus-api
+cannot prove that without a public-suffix list, so it falls back to
+`SameSite=None` and loses the Lax protection.
+
+With campus-web's proxy in place nothing about that split matters: the
+browser still only sees the frontend's host. Moving to the domain means
+updating `APP_PUBLIC_URL`, `GOOGLE_CALLBACK_URL` (and the Google client's
+redirect URIs) and `CORS_ORIGINS` to the new host together.
+
+## postgres
+
+- One instance per environment. `campus-api` uses the **internal**
+  connection string; the public/proxy one is for local admin tasks only
+  (`drizzle-kit studio`, manual migrations) — never the deployed app.
+
+## redis
+
+- One instance per environment, like Postgres. `world` connects, and
+  `campus-api` too, only to publish new notifications; both over the
+  **internal** URL.
+- It holds state that is cheap to lose but should not vanish on every
+  restart: each player's last position between visits, who is online where
+  (presence, which the admin dashboard's online count also reads), and the
+  messages between world instances. Notifications pass through it as
+  pub/sub messages only (`notifications:created`), so nothing about them is
+  stored; the rows are in Postgres.
+- **Persistence on.** A restart that empties Redis sends everyone back to
+  the spawn tile. Snapshots (RDB) are enough; append-only is fine too.
+- **Eviction `noeviction` (Redis's default).** Any other policy would drop
+  positions and presence to make room under memory pressure, silently —
+  `volatile-*` included, since every key world writes carries a TTL
+  (positions ~90 days, presence a minute).
+- Locally, the `redis` container in `docker-compose.local.yml` already runs
+  this way: append-only on, default eviction.
+- world reads it as `REDIS_URL`. Unset, world still runs and keeps nothing
+  between visits, and keeps presence in memory — fine for one instance, wrong
+  for more. Redis going down never keeps anybody out: a position that cannot
+  be read means starting at the spawn, one that cannot be written is lost,
+  and somebody whose presence cannot be written, or whose change of space
+  cannot, is put right by the next renewal once Redis returns. Only the
+  admin's online count (`GET /admin/online`) stops: it answers `503
+PRESENCE_UNAVAILABLE` until Redis is back.
+
+## world
+
+- Build: `pnpm install --frozen-lockfile && pnpm --filter world... build`
+- Start: `node --max-old-space-size=96 --max-semi-space-size=2 apps/world/dist/index.js`
+  — for the same reasons as campus-api's. Never serverless: it holds sockets
+  open, and a sleep would drop everybody.
+- Healthcheck path: `/health` (no `/v1`). It answers while the process is
+  up; it does not check the database.
+- Reads campus-api's tables with its own SQL (`users`, `refresh_tokens`,
+  `cohort_members`, `maps`, `spaces`, `space_memberships`), so a campus-api
+  migration that adds a column world selects has to be applied before the
+  world build that selects it starts. campus-api's pre-deploy step runs the
+  migrations; when a change touches both, let campus-api finish deploying
+  first. `users.session_epoch` was the first such column: world's account
+  lookup fails on every socket without it. `space_memberships.cohort_role`
+  and `system_role` (migration `0018`) are the latest: without them world
+  cannot read the spaces, and every drawn space is admins only, normal or
+  designated, until it can (saved places are kept).
+- Writes one table, `notifications`: the asker's alert when an entry request
+  is answered. It needs migration `0032` (`notifications.context`); without
+  it the alert is not written and world logs a warning, nothing else breaks.
+- Env vars: `AUTH_SESSION_SECRET` (**the same value campus-api signs with**, or
+  no socket can authenticate), `CORS_ORIGINS` (a WebSocket upgrade is exempt
+  from CORS, so unset means no browser can connect), `DATABASE_URL` (reads,
+  and inserts into `notifications`, so a read-only role is not enough:
+  world re-checks that the account behind a token still exists and is not
+  suspended, so a ban reaches open sockets instead of waiting out the token).
+  `PORT` is injected by Railway. `REDIS_URL` (the Redis service's internal
+  URL) keeps where each player last stood between visits, and presence, and
+  carries new notifications to push to open sockets.
+  `FF_POSTHOG_ENABLED=true` + `POSTHOG_PROJECT_TOKEN` + `POSTHOG_HOST`, the
+  same project as campus-api (see [posthog.md](./posthog.md)).
+  `FF_OTEL_ENABLED`, `FF_OTEL_METRICS_ENABLED`, `OTEL_SERVICE_NAME=world`,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` (see
+  [grafana.md](./grafana.md)).
+- Tuning, all defaulted — see `apps/world/.env.example`: `WORLD_DB_POOL`,
+  `WORLD_HEARTBEAT_SECONDS`, the inbound limits `WORLD_MAX_MESSAGE_BYTES` and
+  `WORLD_MAX_MESSAGES_PER_SECOND`, the outbound limit
+  `WORLD_MAX_BUFFERED_BYTES`, movement `WORLD_STEP_MS` and `WORLD_TICK_MS`,
+  the `goTo` cap `WORLD_WALK_MAX_STEPS` (unset: the map's width × height),
+  the reconnect grace `WORLD_RECONNECT_GRACE_SECONDS`, saved positions
+  `WORLD_POSITION_SAVE_SECONDS` and `WORLD_POSITION_TTL_DAYS`, presence
+  `WORLD_PRESENCE_TTL_SECONDS`, going Away when idle
+  `WORLD_AWAY_AFTER_SECONDS`, the session refresh
+  window `WORLD_SESSION_REFRESH_WINDOW_SECONDS` (at least 1020 — see below),
+  and `SANITY_DATASET` (`production` unless set; staging reads `staging`).
+- `SANITY_PROJECT_ID`: the Sanity project the campus maps are published to,
+  `sj3zsz66`. Required outside development. world loads the entry map from
+  it once, at startup, with no token (the dataset is public), and refuses to
+  start if it cannot: an unset variable, Sanity unreachable, nothing
+  published, not exactly one entry map, or an entry map without a spawn. A
+  newly published map is picked up by restarting world, not before.
+- `DEPLOYMENT_ENVIRONMENT`: required, with no default. `development` is the
+  only value that lets world run without a published map, on an open
+  placeholder, so a service that lost the variable refuses to boot rather
+  than run with no walls. Staging sets `staging`.
+- **Before the first release to production**, which `.railway/railway.ts`
+  does not describe: set `SANITY_PROJECT_ID`, `SANITY_DATASET=production` and
+  `DEPLOYMENT_ENVIRONMENT` on world by hand, and publish an entry map with a
+  spawn to the `production` dataset. world will not start there without all
+  four.
+- Live positions are per-process state. A reconnect within the grace resumes
+  from memory; otherwise a player starts where they last stood, read from
+  Redis. Positions are written when somebody's last tab closes, every
+  `WORLD_POSITION_SAVE_SECONDS` for anyone who moved, and for everybody on a
+  graceful shutdown — so a redeploy puts people back where they were, and a
+  crash loses at most one save interval.
+- Sockets are per-process state too, but presence is in Redis: each
+  account's entry for a cohort names its live connection, the instance
+  holding it and the space they stand in, so two tabs on the same cohort on
+  different instances still leave one, and the older one is closed with
+  `entered_elsewhere`. More than one instance therefore needs `REDIS_URL`.
+  What is still per-process is the live map: players on one instance do not
+  see players on another yet, and somebody moving instance starts from their
+  last saved position.
+- Browsers reach world on its own hostname with the access cookie, once
+  campus-api's `AUTH_COOKIE_DOMAIN` covers that hostname. World's
+  `CORS_ORIGINS` must name the web app's origin.
+
+## LiveKit
+
+Decided: the container in `docker-compose.local.yml` for local development,
+**LiveKit Cloud** for staging and production. Railway's edge proxy does not
+expose the UDP self-hosted LiveKit needs for real WebRTC media, so
+self-hosting there would give working signalling and broken audio.
+
+That means media configuration differs by environment, and the code must not
+assume otherwise:
+
+|             | Local                                               | Staging / production               |
+| ----------- | --------------------------------------------------- | ---------------------------------- |
+| Server      | `livekit/livekit-server` container                  | LiveKit Cloud project              |
+| URL         | `ws://localhost:7880`                               | the project's `wss://` URL         |
+| Credentials | the dev key pair in `livekit.yaml`                  | per-environment API key and secret |
+| Media       | UDP `7882`, one port for everybody (`rtc.udp_port`) | LiveKit Cloud's own                |
+
+A Cloud project per environment (`campus-dev`, `campus-staging`,
+`campus-production`), so a staging room can never collide with a production
+one. The key and secret are server-side only: clients get a short-lived room
+token, never the credentials themselves.
+
+**world mints the room tokens.** A token is permission to hear a room, and
+only world knows who is actually standing in which space: campus-api could
+check that someone _may_ enter a space, not that they did. world also sees
+the exit, so it can remove the participant through LiveKit's server API at
+once instead of waiting for the token to run out, and it owns the lifecycle
+of a space's room. Every removal, from a space's call or the broadcast
+room, also revokes that identity's tokens, so nobody rejoins with one, and
+one LiveKit does not confirm is tried again at every heartbeat until it is.
+So the key pair world mints with belongs to world.
+
+**campus-api records the calls**, from LiveKit's webhooks: when a space's
+call opens and closes, who joins and leaves it, and whether their camera
+came on (`sessions`, `session_participants`). It holds a key pair of its
+own, `LIVEKIT_WEBHOOK_API_KEY` and `LIVEKIT_WEBHOOK_API_SECRET`, which checks
+a webhook came from LiveKit and also signs the recording requests below; unset, `POST /v1/calls/webhook` answers 503. In the LiveKit project, create a key pair for it and point a webhook at
+`https://<api host>/v1/calls/webhook` signed with that key.
+
+**campus-api also starts and stops recordings** of a space's call, for
+staff, through LiveKit's egress API with the same key pair, so it needs the
+project's `LIVEKIT_URL` too. LiveKit records the whole room into one MP4 and
+uploads it straight to a private Cloudflare R2 bucket, then tells the same
+webhook how it went. Set `LIVEKIT_URL`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY` and `R2_PRIVATE_BUCKET` on the api service, beside the
+webhook key pair; unset, the recording routes answer 503. The bucket stays
+private: no public access, no `r2.dev` URL. Recordings are never deleted, so
+no lifecycle rule may match their `cohorts/` prefix.
+
+**Clients upload files straight to R2** with URLs campus-api signs, so the
+same R2 variables serve uploads too, with two more: `R2_PUBLIC_BUCKET` and
+`MEDIA_PUBLIC_URL`. Without both, uploads answer 503. Set up in Cloudflare:
+
+1. A second bucket, public, for profile pictures (`campus-media`;
+   `campus-media-staging` on staging). Connect it to a custom domain such as
+   `media.<domain>` and set that as `MEDIA_PUBLIC_URL`. Not its `r2.dev`
+   URL, which is rate limited.
+2. One R2 API token with Object Read & Write on both buckets, and nothing
+   else, for `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`.
+3. A CORS policy on the **private** bucket, so browsers may PUT to it.
+   Uploads land there first; the public bucket is only written by
+   campus-api.
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://<app host>"],
+       "AllowedMethods": ["PUT", "GET"],
+       "AllowedHeaders": ["content-type"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+   Add `http://localhost:3000` to the staging bucket's origins for local
+   frontend work.
+
+4. A lifecycle rule on the private bucket deleting objects under the
+   `incoming/` prefix after 1 day. campus-api deletes uploads itself; the
+   rule catches a PUT made to an upload URL after its file was checked.
+
+The minting itself lives in `packages/media` (`@campus/media`). Its secret
+must be at least 32 characters, and it refuses anything shorter. world reads
+`LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` for the pre-join
+connection check (`POST /media/connection-check`, see
+[world's README](../apps/world/README.md#the-connection-check)) and for each
+space's call and the broadcast room, where it also takes somebody out of a
+room they left, or one an admin no longer speaks in. All
+three or none: world refuses to boot with only some set. With none, it
+boots, the check answers `503 MEDIA_NOT_CONFIGURED`, and nobody is handed a
+call.
+
+To try the media server by hand, mint a token and join from any LiveKit
+client, such as LiveKit's hosted Meet page:
+
+```bash
+pnpm --filter @campus/media build
+pnpm --filter @campus/media room-token --identity ada --room spike
+```
+
+It defaults to the local server and the dev key in `livekit.yaml`; point it
+at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET` — all three, or none.
+
+## Open items
+
+- Production is not described in `.railway/railway.ts`. It has no Redis, no
+  variables on campus-api or world, and older build settings; bring it in
+  line before the file is taught about it. Without Redis there, notifications
+  are listed but never pushed to open sockets.
+- World on Railway's own domain cannot get the cookie: `up.railway.app` is a
+  public suffix, so no `Domain` can span two services there. It works once
+  both sit under the custom domain with `AUTH_COOKIE_DOMAIN` set.

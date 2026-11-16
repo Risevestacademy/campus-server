@@ -7,14 +7,62 @@ import { AppService } from './app.service.js';
 import { HealthModule } from './health/health.module.js';
 import { AppConfigModule } from './infra/config/config.module.js';
 import { DatabaseModule } from './infra/database/database.module.js';
+import { SchedulerModule } from './infra/scheduler/scheduler.module.js';
+import { EmailModule } from './infra/email/email.module.js';
+import { AnalyticsModule } from './infra/analytics/analytics.module.js';
+import { ErrorReportingModule } from './infra/error-reporting/error-reporting.module.js';
 import { AppLoggerModule } from './infra/logger/logger.module.js';
+import { AdminModule } from './modules/admin/admin.module.js';
+import { AttendanceModule } from './modules/attendance/attendance.module.js';
+import { AuditModule } from './modules/audit/audit.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
+import { CalendarModule } from './modules/calendar/calendar.module.js';
+import { CallsModule } from './modules/calls/calls.module.js';
+import { CohortAdminModule } from './modules/cohorts/cohort-admin.module.js';
+import { DashboardModule } from './modules/dashboard/dashboard.module.js';
+import { FeedbackModule } from './modules/feedback/feedback.module.js';
+import { InvitesModule } from './modules/invites/invites.module.js';
+import { MapsModule } from './modules/maps/maps.module.js';
+import { MediaModule } from './modules/media/media.module.js';
+import { DesksModule } from './modules/desks/desks.module.js';
+import { MentorshipGroupsModule } from './modules/mentorship-groups/mentorship-groups.module.js';
+import { NoticesModule } from './modules/notices/notices.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
+import { RoomLinksModule } from './modules/room-links/room-links.module.js';
+import { TracksModule } from './modules/tracks/tracks.module.js';
+import { ProfileModule } from './modules/users/profile/profile.module.js';
+import { UserAdminModule } from './modules/users/user-admin.module.js';
 
 @Module({
   imports: [
     AppConfigModule,
+    ErrorReportingModule,
+    AnalyticsModule,
     AppLoggerModule,
     DatabaseModule,
+    SchedulerModule,
+    EmailModule,
     HealthModule,
+    AuthModule,
+    InvitesModule,
+    TracksModule,
+    CohortAdminModule,
+    MentorshipGroupsModule,
+    NoticesModule,
+    NotificationsModule,
+    DesksModule,
+    UserAdminModule,
+    ProfileModule,
+    AuditModule,
+    AdminModule,
+    AttendanceModule,
+    MapsModule,
+    FeedbackModule,
+    CallsModule,
+    MediaModule,
+    CalendarModule,
+    DashboardModule,
+    RoomLinksModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],
   controllers: [AppController],

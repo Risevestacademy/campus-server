@@ -1,0 +1,380 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/session';
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  getTableColumns,
+  inArray,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
+
+import { CONFIG } from '../../../infra/config/config.constants.js';
+import type { Env } from '../../../infra/config/env.js';
+import {
+  DRIZZLE,
+  type Db,
+} from '../../../infra/database/database.constants.js';
+import type { AuthenticatedUser } from '../../../shared/auth/authenticated-user.js';
+import { isLiveMembership } from '../../cohorts/cohort-members.service.js';
+import { CohortNotFoundException } from '../../cohorts/cohorts.exceptions.js';
+import { cohortMembers, cohorts } from '../../cohorts/schema.js';
+import type {
+  CohortProfileDto,
+  OwnProfileDto,
+  ProfileCardDto,
+  UpdateProfileDto,
+} from './dto/profile.dto.js';
+import { MediaService } from '../../media/media.service.js';
+import { MediaKind } from '../../media/schema.js';
+import { avatarUrl } from '../avatar-url.js';
+import { loadLiveMemberships } from '../live-memberships.js';
+import {
+  SystemRole,
+  hasAdminPowers,
+  UserStatus,
+  users,
+  type AnalyticsConsent,
+  type User,
+} from '../schema.js';
+import {
+  CohortProfilesForbiddenException,
+  ProfileNotFoundException,
+} from '../users.exceptions.js';
+
+/** The fields a person may change about themselves. */
+const EDITABLE = [
+  'firstName',
+  'lastName',
+  'displayName',
+  'phone',
+  'bio',
+  'spriteKey',
+] as const;
+
+type ShownUser = User & { avatarUrl: string | null };
+
+/** The editable fields world shows to everybody in somebody's cohort. */
+const SEEN_BY_OTHERS = ['displayName', 'spriteKey'] as const;
+
+/**
+ * A person's own profile, and the card other members see of them. Apart from UsersService, which is what sign-in resolves an identity
+ * with and the session layer depends on, and from UserDirectoryService,
+ * which is the admin's list.
+ */
+@Injectable()
+export class ProfileService {
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    private readonly media: MediaService,
+    @Inject(CONFIG) private readonly config?: Pick<Env, 'MEDIA_PUBLIC_URL'>,
+  ) {}
+
+  async getOwn(userId: string, now: Date = new Date()): Promise<OwnProfileDto> {
+    return this.toOwnProfile(await this.findUser(userId), now);
+  }
+
+  /**
+   * Changes only the fields the request named. A field left out keeps its
+   * value; one sent as null is cleared.
+   */
+  async updateOwn(
+    userId: string,
+    dto: UpdateProfileDto,
+    now: Date = new Date(),
+  ): Promise<OwnProfileDto> {
+    const changes: Partial<Pick<User, (typeof EDITABLE)[number]>> = {};
+    for (const field of EDITABLE) {
+      if (dto[field] !== undefined) {
+        changes[field] = dto[field];
+      }
+    }
+    if (Object.keys(changes).length === 0) {
+      return this.getOwn(userId, now);
+    }
+
+    const row = await this.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(users)
+        .set(changes)
+        .where(eq(users.id, userId))
+        .returning();
+      if (!updated) {
+        throw new ProfileNotFoundException('No such profile', { userId });
+      }
+      // What others draw for them changed: world re-reads the account and
+      // tells their cohort. Postgres holds the notification until the commit,
+      // so world never reads the row before the change is in it.
+      if (SEEN_BY_OTHERS.some((field) => field in changes)) {
+        await tx.execute(
+          sql`select pg_notify(${PROFILE_CHANGED_CHANNEL}, ${userId})`,
+        );
+      }
+      return updated;
+    });
+    return this.getOwn(row.id, now);
+  }
+
+  /**
+   * Makes an uploaded picture theirs. The file is checked before the
+   * transaction; the picture it replaces is deleted on the next sweep.
+   */
+  async setAvatar(
+    userId: string,
+    mediaId: string,
+    now: Date = new Date(),
+  ): Promise<OwnProfileDto> {
+    await this.media.verify(mediaId, MediaKind.Avatar, userId, now);
+    await this.db.transaction(async (tx) => {
+      const ready = await this.media.claim(
+        tx,
+        mediaId,
+        MediaKind.Avatar,
+        userId,
+        now,
+      );
+      const [before] = await tx
+        .select({ avatarMediaId: users.avatarMediaId })
+        .from(users)
+        .where(eq(users.id, userId))
+        .for('update');
+      await tx
+        .update(users)
+        .set({ avatarMediaId: ready.id })
+        .where(eq(users.id, userId));
+      if (before?.avatarMediaId) {
+        await this.media.release(tx, [before.avatarMediaId], now);
+      }
+    });
+    return this.getOwn(userId, now);
+  }
+
+  /**
+   * Leaves them with initials: their upload goes, and so does Google's
+   * picture, which never comes back on a later sign-in.
+   */
+  async removeAvatar(
+    userId: string,
+    now: Date = new Date(),
+  ): Promise<OwnProfileDto> {
+    await this.db.transaction(async (tx) => {
+      const [before] = await tx
+        .select({ avatarMediaId: users.avatarMediaId })
+        .from(users)
+        .where(eq(users.id, userId))
+        .for('update');
+      if (!before) {
+        throw new ProfileNotFoundException('No such profile', { userId });
+      }
+      await tx
+        .update(users)
+        .set({ avatarMediaId: null, googlePictureUrl: null })
+        .where(eq(users.id, userId));
+      if (before.avatarMediaId) {
+        await this.media.release(tx, [before.avatarMediaId], now);
+      }
+    });
+    return this.getOwn(userId, now);
+  }
+
+  /** Records the person's choice, and when they made it. */
+  async setAnalyticsConsent(
+    userId: string,
+    consent: AnalyticsConsent,
+    now: Date = new Date(),
+  ): Promise<OwnProfileDto> {
+    const [row] = await this.db
+      .update(users)
+      .set({ analyticsConsent: consent, analyticsConsentAt: now })
+      .where(eq(users.id, userId))
+      .returning({ id: users.id });
+    if (!row) {
+      throw new ProfileNotFoundException('No such profile', { userId });
+    }
+    return this.getOwn(userId, now);
+  }
+
+  /**
+   * What `viewer` may see of another person.
+   *
+   * Themselves and admins: always. Anybody else: only somebody they share a
+   * live cohort with, and then only the cohorts they share — a member does
+   * not learn where else a classmate belongs. A guest holds one cohort, so
+   * this is also what keeps a guest to the cohort they were invited to.
+   *
+   * Everything else is a 404, whether the account is missing, suspended, or
+   * simply not theirs to see.
+   */
+  async getCard(
+    viewer: AuthenticatedUser,
+    targetId: string,
+    now: Date = new Date(),
+  ): Promise<ProfileCardDto> {
+    const notFound = () =>
+      new ProfileNotFoundException('No such profile', { userId: targetId });
+
+    const target = await this.findShown(targetId);
+    if (!target) {
+      throw notFound();
+    }
+
+    const seesEverything =
+      viewer.id === target.id || hasAdminPowers(viewer.systemRole);
+
+    const memberships = await loadLiveMemberships(
+      this.db,
+      seesEverything ? [target.id] : [target.id, viewer.id],
+      now,
+    );
+    let shown = memberships.get(target.id) ?? [];
+
+    if (!seesEverything) {
+      // A suspended account is closed to everybody but admins.
+      if (target.status === UserStatus.Suspended) {
+        throw notFound();
+      }
+      const mine = new Set(
+        (memberships.get(viewer.id) ?? []).map((m) => m.cohort.id),
+      );
+      shown = shown.filter((m) => mine.has(m.cohort.id));
+      if (shown.length === 0 && !hasAdminPowers(target.systemRole)) {
+        throw notFound();
+      }
+    }
+
+    return {
+      id: target.id,
+      email: target.email,
+      firstName: target.firstName,
+      lastName: target.lastName,
+      displayName: target.displayName,
+      bio: target.bio,
+      avatarUrl: target.avatarUrl,
+      spriteKey: spriteKeyOrNone(target.spriteKey),
+      memberships: shown.map(({ cohort, track, role }) => ({
+        cohort,
+        track,
+        role,
+      })),
+    };
+  }
+
+  /**
+   * Everybody with a live place in the cohort, for its live members and for
+   * admins. Suspended accounts are left out except for admins, as on the
+   * profile card.
+   */
+  async listCohort(
+    viewer: AuthenticatedUser,
+    cohortId: string,
+    now: Date = new Date(),
+  ): Promise<CohortProfileDto[]> {
+    const admin = hasAdminPowers(viewer.systemRole);
+    if (admin) {
+      const [cohort] = await this.db
+        .select({ id: cohorts.id })
+        .from(cohorts)
+        .where(eq(cohorts.id, cohortId))
+        .limit(1);
+      if (!cohort) {
+        throw new CohortNotFoundException(`No cohort with id ${cohortId}`);
+      }
+    }
+
+    const rows = await this.db
+      .select({
+        id: users.id,
+        displayName: users.displayName,
+        spriteKey: users.spriteKey,
+      })
+      .from(users)
+      .where(
+        and(
+          or(
+            inArray(users.systemRole, [
+              SystemRole.Admin,
+              SystemRole.SuperAdmin,
+            ]),
+            exists(
+              this.db
+                .select({ one: sql`1` })
+                .from(cohortMembers)
+                .where(
+                  and(
+                    eq(cohortMembers.userId, users.id),
+                    eq(cohortMembers.cohortId, cohortId),
+                    isLiveMembership(now),
+                  ),
+                ),
+            ),
+          ),
+          admin ? undefined : ne(users.status, UserStatus.Suspended),
+        ),
+      )
+      .orderBy(
+        sql`lower(${users.displayName}) asc nulls last`,
+        asc(users.displayName),
+        asc(users.id),
+      );
+
+    // A member is on their own list exactly when they hold a live place:
+    // SessionGuard has already turned a suspended caller away.
+    if (!admin && !rows.some((row) => row.id === viewer.id)) {
+      throw new CohortProfilesForbiddenException(
+        "Only the cohort's live members may list its people",
+        { cohortId },
+      );
+    }
+
+    return rows.map((row) => ({
+      id: row.id,
+      displayName: row.displayName,
+      spriteKey: spriteKeyOrNone(row.spriteKey),
+    }));
+  }
+
+  private async findUser(userId: string): Promise<ShownUser> {
+    const row = await this.findShown(userId);
+    if (!row) {
+      throw new ProfileNotFoundException('No such profile', { userId });
+    }
+    return row;
+  }
+
+  private async findShown(userId: string): Promise<ShownUser | undefined> {
+    const [row] = await this.db
+      .select({
+        ...getTableColumns(users),
+        avatarUrl: avatarUrl(this.config?.MEDIA_PUBLIC_URL),
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return row;
+  }
+
+  private async toOwnProfile(
+    row: ShownUser,
+    now: Date,
+  ): Promise<OwnProfileDto> {
+    const memberships = await loadLiveMemberships(this.db, [row.id], now);
+    return {
+      id: row.id,
+      email: row.email,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      displayName: row.displayName,
+      phone: row.phone,
+      bio: row.bio,
+      avatarUrl: row.avatarUrl,
+      spriteKey: spriteKeyOrNone(row.spriteKey),
+      systemRole: row.systemRole,
+      memberships: memberships.get(row.id) ?? [],
+      analyticsConsent: row.analyticsConsent,
+      createdAt: row.createdAt,
+    };
+  }
+}

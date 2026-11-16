@@ -1,0 +1,512 @@
+import type { DbExecutor } from '../../infra/database/database.constants.js';
+import type { CohortRole } from '../cohorts/schema.js';
+import type { SystemRole } from '../users/schema.js';
+import { auditLog, type AuditAction, type AuditSubjectType } from './schema.js';
+
+/** Who did it and which request — the parts every entry from one call shares. */
+export interface AuditContext {
+  actorUserId: string | null;
+  correlationId?: string;
+  /**
+   * The space the entry is about, for actions whose subject sits in or on a
+   * space. Filled here rather than in each action's details, because it is a
+   * column of its own with its own foreign key: the log can be read by space
+   * without digging it out of the JSON.
+   */
+  spaceId?: string;
+}
+
+/**
+ * The fields an edit moved, each with the value it had and the value it has
+ * now. Typed by the snapshot the action records, so an entry can name only
+ * the fields its action covers, and each `from` and `to` has that field's
+ * own type.
+ */
+export type FieldChanges<T> = {
+  [K in keyof T]?: { from: T[K]; to: T[K] };
+};
+
+/**
+ * What an entry records about a cohort: the fields an admin can set.
+ *
+ * This and every payload below is the audit log's own contract, written out
+ * here rather than picked off the cohorts, tracks or invites row types. The
+ * modules that write entries depend on this one; it does not depend back on
+ * them. So a role or a status is a `string` here: the vocabularies belong to
+ * the modules that own them, and the log records the value it was given.
+ *
+ * A caller's row still has to fit. Passing a column whose type has drifted
+ * from what is written here fails at the call site.
+ */
+export interface CohortSnapshot {
+  name: string;
+  code: string;
+  status: string;
+  /** A calendar date, `YYYY-MM-DD`. */
+  startDate: string | null;
+  endDate: string | null;
+}
+
+/** The same for a track. */
+export interface TrackSnapshot {
+  name: string;
+  code: string;
+  description: string | null;
+}
+
+/**
+ * What an admin can change on a space. The audio distances are the strings
+ * the numeric columns return, so an entry records exactly the value stored
+ * rather than a rounded copy.
+ */
+export interface SpaceSnapshot {
+  name: string;
+  kind: string | null;
+  access: string;
+  audioMode: string;
+  capacity: number | null;
+  audibleRadius: string | null;
+  subscribeRadius: string | null;
+  hysteresisFactor: string;
+}
+
+/** What an admin can change on a mentorship group. */
+export interface MentorshipGroupSnapshot {
+  name: string;
+  description: string | null;
+}
+
+/** What an admin can change on a notice: title and body only. */
+export interface NoticeSnapshot {
+  title: string;
+  body: string;
+}
+
+/** A mentorship group as a whole: the editable fields plus its people. */
+export interface MentorshipGroupRecordSnapshot extends MentorshipGroupSnapshot {
+  cohortId: string;
+  mentorMemberId: string;
+}
+
+/** A membership as it stood before a revive overwrote it. */
+export interface MembershipSnapshot {
+  role: string;
+  cohortTrackId: string | null;
+  status: string | null;
+  dismissalReason: string | null;
+  joinedAt: Date;
+  leftAt: Date | null;
+  accessExpiresAt: Date | null;
+}
+
+/**
+ * What each action is about and what it records — the one place that says
+ * so. An entry for an action must carry that action's subject type and
+ * exactly its details, so a cohort entry filed under a track, or a detail
+ * left out or misspelt, does not compile.
+ *
+ * Adding an action means adding it here, and to the table in README.md.
+ */
+interface AuditEntryShapes {
+  [AuditAction.MembershipRevived]: {
+    subject: AuditSubjectType.CohortMember;
+    details: {
+      inviteId: string;
+      invitedBy: string;
+      previous: MembershipSnapshot;
+    };
+  };
+  [AuditAction.SystemRoleChanged]: {
+    subject: AuditSubjectType.User;
+    details: {
+      /** Null for an account created with the role it now has. */
+      from: string | null;
+      to: string;
+    } & (
+      | { inviteId: string; invitedBy: string } // an accepted invite granted it
+      | { source: 'seed' } // the seed did, on nobody's behalf
+      | { source: 'admin' } // an admin did, through the API; they are the actor
+    );
+  };
+  [AuditAction.UserSuspended]: {
+    subject: AuditSubjectType.User;
+    details: {
+      /** What the admin wrote as the reason, or null for none. */
+      reason: string | null;
+      /** The actor's system_role at the time, not whatever it is now. */
+      actorRole: string;
+    };
+  };
+  [AuditAction.UserReinstated]: {
+    subject: AuditSubjectType.User;
+    details: {
+      /** The actor's system_role at the time, not whatever it is now. */
+      actorRole: string;
+      /** Who suspended the account, or null when that predates it. */
+      suspendedBy: string | null;
+      /** The role that account held when it suspended, null likewise. */
+      suspendedByRole: string | null;
+    };
+  };
+  [AuditAction.InviteCreated]: {
+    subject: AuditSubjectType.Invite;
+    details: {
+      cohortId: string | null;
+      cohortRole: CohortRole | null;
+      cohortTrackId: string | null;
+      systemRole: SystemRole;
+      expiresAt: Date;
+      guestAccessExpiresAt: Date | null;
+    };
+  };
+  [AuditAction.InviteRevoked]: {
+    subject: AuditSubjectType.Invite;
+    details: { cohortId: string | null; expiresAt: Date };
+  };
+  [AuditAction.InviteResent]: {
+    subject: AuditSubjectType.Invite;
+    details: {
+      cohortId: string | null;
+      /** The deadline the resend set, and the one it replaced. */
+      expiresAt: Date;
+      previousExpiresAt: Date;
+    };
+  };
+  [AuditAction.GuestVisitExtended]: {
+    subject: AuditSubjectType.CohortMember;
+    details: {
+      cohortId: string;
+      /** The deadline the extension set, and the one it replaced. */
+      accessExpiresAt: Date;
+      previousAccessExpiresAt: Date;
+    };
+  };
+  [AuditAction.MembershipEnded]: {
+    subject: AuditSubjectType.CohortMember;
+    details: {
+      cohortId: string;
+      role: string;
+      /** The student status the end set, or null for a removal. */
+      status: string | null;
+      /** What the admin wrote as the reason, or null for none. */
+      reason: string | null;
+    };
+  };
+  [AuditAction.MemberTrackChanged]: {
+    subject: AuditSubjectType.CohortMember;
+    details: {
+      cohortId: string;
+      trackId: string;
+      previousTrackId: string;
+    };
+  };
+  [AuditAction.InviteFlagged]: {
+    subject: AuditSubjectType.Invite;
+    details: { cohortId: string | null; invitedBy: string };
+  };
+  [AuditAction.MapSynced]: {
+    subject: AuditSubjectType.Map;
+    details: {
+      key: string;
+      /** The published version the sync read. */
+      version: string;
+      /** `created`, `restored` after being retired, or `updated`. */
+      outcome: string;
+      isEntry: boolean;
+      /** Space keys, in the order the map has them. */
+      spacesAdded: string[];
+      spacesRestored: string[];
+      spacesRetired: string[];
+      desksAdded: string[];
+      desksRestored: string[];
+      desksRetired: string[];
+    };
+  };
+  [AuditAction.MapRetired]: {
+    subject: AuditSubjectType.Map;
+    details: {
+      key: string;
+      spacesRetired: string[];
+      desksRetired: string[];
+    };
+  };
+  [AuditAction.MapPublished]: {
+    subject: AuditSubjectType.Map;
+    details: {
+      key: string;
+      /** Null on a map that had never been published before. */
+      previousPublishedAt: Date | null;
+      /** When this publish made it live. */
+      publishedAt: Date;
+    };
+  };
+  [AuditAction.FeedbackResolved]: {
+    subject: AuditSubjectType.Feedback;
+    /** Nothing beyond the subject: what was written stays on the feedback. */
+    details: Record<string, never>;
+  };
+  [AuditAction.FeedbackReopened]: {
+    subject: AuditSubjectType.Feedback;
+    details: Record<string, never>;
+  };
+  [AuditAction.SpaceMembershipGranted]: {
+    subject: AuditSubjectType.SpaceMembership;
+    details: {
+      /** Who the grant is to: exactly one of these five is set. */
+      userId: string | null;
+      cohortTrackId: string | null;
+      cohortRole: CohortRole | null;
+      systemRole: SystemRole | null;
+      mentorshipGroupId: string | null;
+      /** The span it runs for, as given — `validTo` null means no end. */
+      validFrom: Date;
+      validTo: Date | null;
+    };
+  };
+  [AuditAction.SpaceMembershipEnded]: {
+    subject: AuditSubjectType.SpaceMembership;
+    details: {
+      /** When the admin brought it to an end; the row keeps saying so. */
+      endedAt: Date;
+    };
+  };
+  [AuditAction.SpaceUpdated]: {
+    subject: AuditSubjectType.Space;
+    details: { changes: FieldChanges<SpaceSnapshot> };
+  };
+  [AuditAction.CohortCreated]: {
+    subject: AuditSubjectType.Cohort;
+    details: CohortSnapshot;
+  };
+  [AuditAction.CohortUpdated]: {
+    subject: AuditSubjectType.Cohort;
+    details: { changes: FieldChanges<CohortSnapshot> };
+  };
+  [AuditAction.CohortDeleted]: {
+    subject: AuditSubjectType.Cohort;
+    details: CohortSnapshot;
+  };
+  [AuditAction.CohortTrackAttached]: {
+    subject: AuditSubjectType.CohortTrack;
+    details: { cohortId: string; trackId: string };
+  };
+  [AuditAction.CohortTrackDetached]: {
+    subject: AuditSubjectType.CohortTrack;
+    details: {
+      cohortId: string;
+      trackId: string;
+      /**
+       * The ended space grants to the track that went with it — empty when
+       * it held none. Their granting and ending have entries of their own.
+       */
+      clearedSpaceMembershipIds: string[];
+      /** Revoked room links aimed at the track, which lost the pointer. */
+      clearedRoomLinkIds: string[];
+    };
+  };
+  [AuditAction.TrackCreated]: {
+    subject: AuditSubjectType.Track;
+    details: Pick<TrackSnapshot, 'name' | 'code'>;
+  };
+  [AuditAction.TrackUpdated]: {
+    subject: AuditSubjectType.Track;
+    details: { changes: FieldChanges<TrackSnapshot> };
+  };
+  [AuditAction.TrackDeleted]: {
+    subject: AuditSubjectType.Track;
+    details: TrackSnapshot;
+  };
+  [AuditAction.MentorshipGroupCreated]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: MentorshipGroupRecordSnapshot;
+  };
+  [AuditAction.MentorshipGroupUpdated]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: {
+      cohortId: string;
+      changes: FieldChanges<MentorshipGroupSnapshot>;
+    };
+  };
+  [AuditAction.MentorshipGroupMentorChanged]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: { cohortId: string; from: string; to: string };
+  };
+  [AuditAction.MentorshipGroupStudentAdded]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: {
+      cohortId: string;
+      cohortMemberId: string;
+      /** Set when the student joined by accepting an invite, not by admin add. */
+      inviteId?: string;
+    };
+  };
+  [AuditAction.MentorshipGroupStudentRemoved]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: { cohortId: string; cohortMemberId: string };
+  };
+  [AuditAction.DeskFreed]: {
+    subject: AuditSubjectType.DeskClaim;
+    details: { cohortId: string; deskKey: string; holderId: string };
+  };
+  [AuditAction.MentorshipGroupDeleted]: {
+    subject: AuditSubjectType.MentorshipGroup;
+    details: MentorshipGroupRecordSnapshot & {
+      /**
+       * The ended space-list entries to the group that went with it — empty
+       * when it held none. Their granting and ending have entries of their
+       * own.
+       */
+      clearedSpaceMembershipIds: string[];
+      /** Revoked room links aimed at the group, which lost the pointer. */
+      clearedRoomLinkIds: string[];
+    };
+  };
+  [AuditAction.NoticeCreated]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      cohortTrackId: string | null;
+      mentorshipGroupId: string | null;
+      title: string;
+    };
+  };
+  [AuditAction.NoticeUpdated]: {
+    subject: AuditSubjectType.Notice;
+    details: { changes: FieldChanges<NoticeSnapshot> };
+  };
+  [AuditAction.NoticePinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeUnpinned]: {
+    subject: AuditSubjectType.Notice;
+    details: { scope: string; cohortId: string | null };
+  };
+  [AuditAction.NoticeRemoved]: {
+    subject: AuditSubjectType.Notice;
+    details: {
+      scope: string;
+      cohortId: string | null;
+      title: string;
+    };
+  };
+  [AuditAction.RoomLinkCreated]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      title: string;
+    } & Partial<RoomLinkWindowDetails>;
+  };
+  [AuditAction.RoomLinkRevoked]: {
+    subject: AuditSubjectType.RoomLink;
+    details: { cohortId: string; code: string; title: string };
+  };
+  /** No longer written: runs are synced from the calendar. Kept to read old entries. */
+  [AuditAction.RoomLinkWindowChanged]: {
+    subject: AuditSubjectType.RoomLink;
+    details: {
+      cohortId: string;
+      code: string;
+      before: RoomLinkWindowDetails;
+      after: RoomLinkWindowDetails;
+    };
+  };
+  [AuditAction.RetentionSwept]: {
+    subject: null;
+    details: {
+      table: string;
+      retentionDays: number;
+      /** Rows created before this instant were deleted. */
+      cutoff: Date;
+      deleted: number;
+    };
+  };
+  [AuditAction.AttendanceCorrected]: {
+    subject: AuditSubjectType.Attendance;
+    details: {
+      cohortId: string;
+      instanceId: string;
+      studentUserId: string;
+      from: string;
+      to: string;
+      reason: string;
+    };
+  };
+  [AuditAction.CommentCreated]: {
+    subject: AuditSubjectType.Comment;
+    /** The notice only; what the member wrote stays on the comment. */
+    details: { noticeId: string };
+  };
+}
+
+/** When a room link's event runs, as ISO timestamps; both null for none. */
+interface RoomLinkWindowDetails {
+  startsAt: string | null;
+  endsAt: string | null;
+}
+
+/**
+ * One entry, as a union discriminated by `action`: naming the action fixes
+ * the subject type and the details that go with it.
+ *
+ * Built from AuditEntryShapes rather than written out member by member, and
+ * mapped over the whole enum — so an action added to AuditAction without a
+ * shape fails here, not at the first call site that happens to use it.
+ *
+ * An action whose shape has `subject: null` is about no one row, and its
+ * entry carries `subject: null`.
+ */
+export type AuditEntry = {
+  [A in AuditAction]: AuditContext & {
+    action: A;
+    subject: AuditEntryShapes[A]['subject'] extends AuditSubjectType
+      ? { type: AuditEntryShapes[A]['subject']; id: string }
+      : null;
+    details: AuditEntryShapes[A]['details'];
+  };
+}[AuditAction];
+
+/**
+ * The listed fields whose value differs between the row before an edit and
+ * after it, each with both values — what an update entry records, rather than
+ * the request body, which may name fields it left as they were.
+ */
+export function changedFields<T extends object, K extends keyof T>(
+  before: T,
+  after: T,
+  fields: readonly K[],
+): FieldChanges<Pick<T, K>> {
+  const changes: FieldChanges<Pick<T, K>> = {};
+  for (const field of fields) {
+    if (!Object.is(before[field], after[field])) {
+      changes[field] = { from: before[field], to: after[field] };
+    }
+  }
+  return changes;
+}
+
+/**
+ * Appends one entry. Takes the caller's transaction rather than the pool on
+ * purpose: the entry commits or rolls back with the change it describes, so
+ * the log can never claim something that did not happen, nor miss something
+ * that did.
+ */
+export async function writeAuditEntry(
+  executor: DbExecutor,
+  entry: AuditEntry,
+): Promise<void> {
+  await executor.insert(auditLog).values({
+    actorUserId: entry.actorUserId,
+    action: entry.action,
+    subjectType: entry.subject?.type ?? null,
+    subjectId: entry.subject?.id ?? null,
+    spaceId: entry.spaceId ?? null,
+    details: entry.details,
+    // Stored as given, never trimmed: the request's id is settled as it
+    // arrives (resolveCorrelationId) and already fits the column, so the
+    // entry carries the same id as the log lines and the response header.
+    correlationId: entry.correlationId ?? null,
+  });
+}

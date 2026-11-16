@@ -1,0 +1,317 @@
+# Audit log
+
+A record of who changed what: the admin setup (cohorts, tracks, invites) and
+the changes to people's access that follow from it. One table, `audit_log`,
+written by one function, `writeAuditEntry`.
+
+It answers "who did this, and when" after the fact. It is not an event bus,
+not analytics (PostHog does that), and not the request log (pino does that;
+an entry's `correlationId` leads to it).
+
+- [How an entry is written](#how-an-entry-is-written)
+- [Fields](#fields)
+- [Actions](#actions)
+- [Personal data](#personal-data)
+- [Retention](#retention)
+  - [Deleting an account](#deleting-an-account)
+- [Rollout](#rollout)
+- [Reading it](#reading-it)
+- [Adding an action](#adding-an-action)
+
+## How an entry is written
+
+```ts
+await this.db.transaction(async (tx) => {
+  const [row] = await tx.insert(tracks).values(/* … */).returning();
+  await writeAuditEntry(tx, {
+    actorUserId: admin.id,
+    correlationId,
+    action: AuditAction.TrackCreated,
+    subject: { type: AuditSubjectType.Track, id: row.id },
+    details: { name: row.name, code: row.code },
+  });
+});
+```
+
+Two rules, both carried by the code:
+
+- **Same transaction as the change.** `writeAuditEntry` takes the caller's
+  transaction, so the entry commits or rolls back with the change it
+  describes. A refused or failed change leaves no entry, and a committed one
+  is never missing its entry.
+- **The action decides the shape.** `AuditEntry` is a union discriminated by
+  `action`. Each action has one subject type and one set of details, declared
+  in `AuditEntryShapes` in [`audit-log.ts`](./audit-log.ts). The wrong subject
+  for an action, a detail left out, or one that is not part of the shape does
+  not compile. An update entry's `changes` are typed field by field, so a
+  `from` or `to` of the wrong type for its field does not compile either.
+
+The payload types are this module's own. They are written out in
+`audit-log.ts`, not picked off the cohorts, tracks or invites row types, so
+the modules that write entries depend on this one and it does not depend back
+on them. A role or a status is therefore a `string` here: those vocabularies
+belong to their own modules, and the log records the value it is given.
+
+Two imports remain, both tables, both in `schema.ts`, both for a foreign key:
+`users`, for `actor_user_id`, and the maps module's `spaces`, for `space_id`,
+so an entry about a space names one that exists. drizzle declares a foreign
+key on the table that holds it, so the reference has to sit here; declaring
+it anywhere else leaves the migrations and the schema disagreeing. That is
+the whole of the dependency: a table, never a module's services or types.
+`maps/schema.ts` imports nothing from audit, so there is no cycle, and
+`schema.boundary.spec.ts` fails if audit's schema imports anything else.
+
+Writing needs no Nest module and nothing to inject: `writeAuditEntry` is a
+plain function, called by the service that makes the change. `AuditModule`
+exists only for the [read route](#reading-it).
+
+Entries are append-only, and the database enforces it. A trigger on
+`audit_log` (`audit_log_append_only`, migration `0008`) rejects every row
+`UPDATE` and `DELETE`, for every role including the table's owner. The only
+thing a row can do is be inserted. The one exception is the
+[retention sweep](#retention), which lifts the trigger inside its own
+transaction.
+
+`TRUNCATE` is not covered: it is not a row operation and needs ownership of
+the table. The test suites use it to reset between tests.
+
+## Fields
+
+| Column           | Meaning                                                                                                                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`             | The entry's own id.                                                                                                                                                                       |
+| `actor_user_id`  | The account that did it. Null when no person did: the seed, a migration. A foreign key to `users`.                                                                                        |
+| `action`         | What happened: one of `AuditAction`. A `varchar`, not a Postgres enum, so a new action is a code change and not a migration.                                                              |
+| `subject_type`   | The kind of thing it happened to: one of `AuditSubjectType`. Null, with `subject_id`, for an action about no one row: `retention_swept`.                                                  |
+| `subject_id`     | That thing's id. Not a foreign key, on purpose: an entry outlives the row it is about, which is the point of recording a delete.                                                          |
+| `space_id`       | The space the entry is about, when it has one — a grant of access to a space, or a change to its settings — and a foreign key to `spaces`.                                                |
+| `details`        | What the action needs beyond its subject, as JSON. The shape is fixed per action (see [Actions](#actions)). Dates are stored as ISO 8601 strings.                                         |
+| `correlation_id` | The request's correlation id, so an entry leads to its log lines. The same value as the log lines and the `x-correlation-id` response header. Null for entries written outside a request. |
+| `created_at`     | When the entry was written, which is when the change committed.                                                                                                                           |
+
+The actor is whoever made the request, which is not always an admin: for
+`membership_revived` and `invite_flagged` it is the invitee, and for
+`system_role_changed` it is the invitee accepting an admin invite, the admin
+changing somebody's role, or nobody when the seed did it.
+
+`correlation_id` is the caller's `x-correlation-id` when they sent one of up
+to 64 characters, and a generated UUID otherwise. That is decided once, as
+the request arrives (`resolveCorrelationId` in `shared/http`), so the entry
+never holds a shortened or different id from the one in the logs. It is
+still caller-supplied text: treat it as a pointer to logs and never as proof
+of anything.
+
+Indexes cover the three ways the table is read: by time (`created_at`), by
+actor (`actor_user_id, created_at`) and by subject
+(`subject_type, subject_id, created_at`).
+
+## Actions
+
+| Action                             | Subject            | Actor                     | `details`                                                                                                                                                                                                                                                                                                                         | Written when                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------- | ------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cohort_created`                   | `cohort`           | admin                     | `name`, `code`, `status`, `startDate`, `endDate`                                                                                                                                                                                                                                                                                  | A cohort is created.                                                                                                                                                                                                                                                                                                                        |
+| `cohort_updated`                   | `cohort`           | admin                     | `changes`: each field that moved, with `from` and `to`                                                                                                                                                                                                                                                                            | A cohort edit changes at least one field. An edit that moves nothing writes no entry.                                                                                                                                                                                                                                                       |
+| `cohort_deleted`                   | `cohort`           | admin                     | The cohort as it was: `name`, `code`, `status`, `startDate`, `endDate`                                                                                                                                                                                                                                                            | A cohort is deleted. The row is gone, so this is the only trace of it.                                                                                                                                                                                                                                                                      |
+| `cohort_track_attached`            | `cohort_track`     | admin                     | `cohortId`, `trackId`                                                                                                                                                                                                                                                                                                             | A track is attached to a cohort.                                                                                                                                                                                                                                                                                                            |
+| `cohort_track_detached`            | `cohort_track`     | admin                     | `cohortId`, `trackId`, `clearedSpaceMembershipIds` — the ended space grants to the track that went with it, empty when none. Absent from entries written before space grants existed. `clearedRoomLinkIds` — revoked room links aimed at the track, which lost the pointer; absent before room link audiences                     | A track is detached from a cohort. The link row is gone, and so are any ended space grants to it, so this is the only trace of the link; each grant keeps its own entries.                                                                                                                                                                  |
+| `track_created`                    | `track`            | admin                     | `name`, `code`                                                                                                                                                                                                                                                                                                                    | A track is created.                                                                                                                                                                                                                                                                                                                         |
+| `track_updated`                    | `track`            | admin                     | `changes`: each field that moved, with `from` and `to`                                                                                                                                                                                                                                                                            | A track edit changes at least one field.                                                                                                                                                                                                                                                                                                    |
+| `track_deleted`                    | `track`            | admin                     | The track as it was: `name`, `code`, `description`                                                                                                                                                                                                                                                                                | A track is deleted.                                                                                                                                                                                                                                                                                                                         |
+| `invite_created`                   | `invite`           | admin                     | `cohortId`, `cohortRole`, `cohortTrackId`, `systemRole`, `expiresAt`, `guestAccessExpiresAt`                                                                                                                                                                                                                                      | An invite is created.                                                                                                                                                                                                                                                                                                                       |
+| `invite_revoked`                   | `invite`           | admin                     | `cohortId`, `expiresAt`                                                                                                                                                                                                                                                                                                           | An admin revokes a pending invite.                                                                                                                                                                                                                                                                                                          |
+| `invite_flagged`                   | `invite`           | invitee                   | `cohortId`, `invitedBy`                                                                                                                                                                                                                                                                                                           | The invitee flags a mistake on their invite.                                                                                                                                                                                                                                                                                                |
+| `invite_resent`                    | `invite`           | admin                     | `cohortId`, `expiresAt` (the new deadline), `previousExpiresAt`                                                                                                                                                                                                                                                                   | An admin resends an invite: a new link for a live one, or an expired one brought back.                                                                                                                                                                                                                                                      |
+| `membership_revived`               | `cohort_member`    | invitee                   | `inviteId`, `invitedBy`, `previous`: the membership as it stood (`role`, `cohortTrackId`, `status`, `dismissalReason`, `joinedAt`, `leftAt`, `accessExpiresAt`)                                                                                                                                                                   | Accepting an invite brings back a membership that had ended. A first enrolment writes no entry.                                                                                                                                                                                                                                             |
+| `guest_visit_extended`             | `cohort_member`    | admin                     | `cohortId`, `accessExpiresAt` (the new deadline), `previousAccessExpiresAt`                                                                                                                                                                                                                                                       | An admin moves a guest's visit end forward. A visit that has already ended is refused instead.                                                                                                                                                                                                                                              |
+| `membership_ended`                 | `cohort_member`    | admin                     | `cohortId`, `role`, `status` (the student status the end set, or null for a removal), `reason` (what the admin wrote, or null)                                                                                                                                                                                                    | An admin ends a membership: dismisses, withdraws, defers or graduates a student, or removes any member. No entry for a refusal: not a member of that cohort, already ended, a student-only status on staff or a guest, or a missing reason.                                                                                                 |
+| `member_track_changed`             | `cohort_member`    | admin                     | `cohortId`, `trackId` (the track the move set), `previousTrackId` (the track it replaced)                                                                                                                                                                                                                                         | An admin moves a student to another track the cohort runs. No entry for a refusal: not a member of that cohort, already ended, not a student, the cohort does not run the target track, the target track does not exist, or the student is already on it.                                                                                   |
+| `system_role_changed`              | `user`             | invitee, admin, or nobody | `from`, `to`, and one of: `inviteId` + `invitedBy` (an accepted invite granted admin), `source: "admin"` (an admin granted or revoked it through the API), `source: "seed"` (the seed made a super admin)                                                                                                                         | An account's system role changes. Nothing is written when it already had the role.                                                                                                                                                                                                                                                          |
+| `user_suspended`                   | `user`             | admin                     | `reason`: what the admin wrote, or null when they wrote nothing; `actorRole`: the actor's system role at the time                                                                                                                                                                                                                 | An admin suspends an account. No entry for a refusal: a 409 for the caller's own account or one already suspended, a 403 for a super admin's account or an actor no longer active.                                                                                                                                                          |
+| `user_reinstated`                  | `user`             | admin                     | `actorRole`: the actor's system role at the time; `suspendedBy`: who suspended the account; `suspendedByRole`: the role that account held then                                                                                                                                                                                    | An admin puts a suspended account back to active. No entry for a refusal: a 409 for an account that is not suspended, a 403 for a suspension a plain admin may not lift, or an actor no longer active.                                                                                                                                      |
+| `feedback_resolved`                | `feedback`         | admin                     | nothing — an empty object; what the member wrote stays on the feedback                                                                                                                                                                                                                                                            | An admin marks a piece of feedback dealt with. Nothing is written when it already was.                                                                                                                                                                                                                                                      |
+| `feedback_reopened`                | `feedback`         | admin                     | nothing — an empty object                                                                                                                                                                                                                                                                                                         | An admin puts a resolved piece of feedback back to open.                                                                                                                                                                                                                                                                                    |
+| `map_synced`                       | `map`              | admin                     | `key`, `version` (the published version read), `outcome` (`created`, `restored` or `updated`), `isEntry`, the keys of the spaces in `spacesAdded`, `spacesRestored`, `spacesRetired`, and of the desks in `desksAdded`, `desksRestored`, `desksRetired`. The desk fields are absent from entries written before desks were synced | A sync changes a map that stays published: the map is new or back, its entry flag moved, or its spaces or desks changed. A map the sync leaves alone writes no entry, and neither does a dry run.                                                                                                                                           |
+| `map_retired`                      | `map`              | admin                     | `key`, and the keys of the spaces and desks retired with it in `spacesRetired` and `desksRetired`. `desksRetired` is absent from entries written before desks were synced                                                                                                                                                         | A sync finds a map is no longer published and retires it with its spaces and desks.                                                                                                                                                                                                                                                         |
+| `map_published`                    | `map`              | admin                     | `key`, `previousPublishedAt` (null when it had never been published) and `publishedAt`                                                                                                                                                                                                                                            | An admin makes a synced map live for world. Republishing writes another entry; world is told the map key after the transaction commits.                                                                                                                                                                                                     |
+| `space_membership_granted`         | `space_membership` | admin                     | `userId`, `cohortTrackId`, `cohortRole` or `systemRole` — who it is to, exactly one of the four — and `validFrom`, `validTo` (null means no end)                                                                                                                                                                                  | An admin puts a person, everybody on a cohort's track, everybody holding a cohort role, or everybody holding a system role on a space's list. `space_id` names the space. No entry for a refusal: no such space, a retired one, a grant already live for that subject, a track no cohort runs, or a subject with no end date in the future. |
+| `space_membership_ended`           | `space_membership` | admin                     | `endedAt`                                                                                                                                                                                                                                                                                                                         | An admin brings a grant to an end: `space_memberships.valid_to` is set and the row stays as the record. `space_id` names the space. No entry for a refusal: no such grant, or one already ended.                                                                                                                                            |
+| `space_updated`                    | `space`            | admin                     | `changes`: each field that moved, with `from` and `to`                                                                                                                                                                                                                                                                            | An admin edits a space's settings. An edit that moves nothing writes no entry. `space_id` names the space. No entry for a refusal: no such space, an immutable field, a default space that is not normal, a capacity below 1, or a second town hall or notice board.                                                                        |
+| `mentorship_group_created`         | `mentorship_group` | admin                     | `cohortId`, `name`, `description`, `mentorMemberId`                                                                                                                                                                                                                                                                               | An admin creates a mentorship group.                                                                                                                                                                                                                                                                                                        |
+| `mentorship_group_updated`         | `mentorship_group` | admin                     | `cohortId`, `changes`: each of `name` and `description` that moved, with `from` and `to`                                                                                                                                                                                                                                          | An admin edits a group's name or description. An edit that moves nothing writes no entry.                                                                                                                                                                                                                                                   |
+| `mentorship_group_mentor_changed`  | `mentorship_group` | admin                     | `cohortId`, `from` (the old mentor membership), `to` (the new one)                                                                                                                                                                                                                                                                | An admin replaces a group's mentor.                                                                                                                                                                                                                                                                                                         |
+| `mentorship_group_student_added`   | `mentorship_group` | admin, or invitee         | `cohortId`, `cohortMemberId`, and `inviteId` when the student joined by accepting an invite                                                                                                                                                                                                                                       | An admin adds a student to a group, or an invite that names the group is accepted.                                                                                                                                                                                                                                                          |
+| `mentorship_group_student_removed` | `mentorship_group` | admin                     | `cohortId`, `cohortMemberId`                                                                                                                                                                                                                                                                                                      | An admin removes a student from a group. A membership that ends takes the link with it, recorded by `membership_ended`.                                                                                                                                                                                                                     |
+| `mentorship_group_deleted`         | `mentorship_group` | admin                     | The group as it was: `cohortId`, `name`, `description`, `mentorMemberId`; `clearedRoomLinkIds`, the revoked room links aimed at it, which lost the pointer                                                                                                                                                                        | An admin deletes a group. The row is gone, so this is the only trace of it.                                                                                                                                                                                                                                                                 |
+| `room_link_created`                | `room_link`        | admin, professor, mentor  | `cohortId`, `code`, `title`; `startsAt`, `endsAt` on entries written before runs were synced                                                                                                                                                                                                                                      | Staff make a link to a space in a cohort's campus for an event. `space_id` names the space. Opening or entering through a link writes nothing.                                                                                                                                                                                              |
+| `room_link_revoked`                | `room_link`        | admin, professor, mentor  | `cohortId`, `code`, `title`                                                                                                                                                                                                                                                                                                       | Staff revoke a link to a space in a cohort's campus. `space_id` names the space. No entry for revoking one already revoked.                                                                                                                                                                                                                 |
+| `room_link_window_changed`         | `room_link`        | admin, professor, mentor  | `cohortId`, `code`, `before`, `after`, each `{ startsAt, endsAt }`                                                                                                                                                                                                                                                                | Staff set, move or clear when a link's event runs. `space_id` names the space. A move read from the maker's calendar on entry writes nothing. No longer written since runs are synced from the organiser's calendar.                                                                                                                        |
+| `desk_freed`                       | `desk_claim`       | admin                     | `cohortId`, `deskKey`, and `holderId`, whose claim it was                                                                                                                                                                                                                                                                         | An admin ends somebody else's claim on a desk. The claim row keeps when and why it ended (`freed_by_admin`); a holder letting go of their own desk, and claims ended by a membership ending, a suspension, a demotion or a desk leaving its map, write no entry: those are recorded by the action that ended them.                          |
+| `retention_swept`                  | none               | super admin               | `table` (`notifications` or `audit_log`), `retentionDays`, `cutoff` (rows created before it were deleted), `deleted` (how many)                                                                                                                                                                                                   | The retention sweep runs on one table, even when it deletes nothing. One entry per table swept. Written in the sweep's transaction; for `audit_log`, after the trigger is back on. See [Retention](#retention).                                                                                                                             |
+| `attendance_corrected`             | `attendance`       | admin, professor, mentor  | `cohortId`, `instanceId` (the run), `studentUserId`, `from`, `to`, `reason`                                                                                                                                                                                                                                                       | Staff set a student's status at one class. `space_id` names the link's space. The correction is also kept in `attendance_overrides`.                                                                                                                                                                                                        |
+| `comment_created`                  | `comment`          | member                    | `noticeId`                                                                                                                                                                                                                                                                                                                        | A member comments on a notice. What they wrote stays on the comment; the entry records only which notice and which comment.                                                                                                                                                                                                                 |
+
+What is not recorded, so nobody goes looking for it:
+
+- Accepting or declining an invite, unless the accept revives a membership,
+  grants admin, or puts the student in a mentorship group. The invite row
+  itself holds its status and `accepted_at`.
+- A first enrolment into a cohort.
+- An invite lapsing. Nobody does that; the status flips when something reads
+  it.
+- Sign-ins, sign-outs and token refreshes.
+- A member sending feedback. The feedback row says who sent it and when, and
+  nothing a member wrote is copied here.
+- Reads of any kind.
+
+## Personal data
+
+The log is about people's access, so it refers to people. The rule is that
+it refers to them by id and holds as little else as it can.
+
+**Recorded**
+
+- User ids: the actor, and `invitedBy` and `suspendedBy` in details.
+- Ids of invites, cohorts, tracks and memberships.
+- Roles, statuses and dates.
+- Cohort and track names, codes and descriptions. These describe the
+  programme, not a person.
+
+**Never recorded**
+
+- Email addresses. An invite entry carries the invite's id; the address
+  stays on the invite.
+- Names of people.
+- Invite tokens or their hashes.
+- What an invitee wrote when flagging an invite. It stays on the invite
+  (`flag_message`).
+- What a member wrote in a comment. `comment_created` keeps the comment and
+  notice ids only; the text stays on `comments`.
+- Anything from a request body that is not listed in the action's shape.
+
+**The exceptions: free text an admin wrote**
+
+- `membership_revived` keeps `previous.dismissalReason`. It is here because
+  reviving a membership clears the reason from `cohort_members`, and without
+  the entry the fact that somebody was dismissed, and why, would be gone.
+- `membership_ended` keeps `reason`. It is on the membership too, but only
+  while the row stands: reviving clears it, and this is the copy that
+  outlives the revive.
+- `user_suspended` keeps `reason`. A suspension records the account's status
+  and nothing else, so without the entry an admin's reason would have
+  nowhere to live.
+
+All three are free text an admin wrote about a named person, and between them
+the most sensitive things in the table. `dismissalReason` belongs to one
+membership; `reason` to an account as a whole, for as long as the entry
+lasts. Treat any export or screen built on this table accordingly.
+
+An id is still personal data while the `users` row it points to exists, so
+access to this table should be as narrow as access to `users`. The one route
+that reads it, `GET /v1/audit-log`, is admin-only, the same as `GET /v1/users`.
+
+## Retention
+
+Entries are kept for `AUDIT_LOG_RETENTION_DAYS`, 365 by default and never
+fewer than 30. After that, the retention sweep deletes them. It is the one
+thing that deletes from this table. It lifts the trigger for its own
+transaction only, and turns it back on before it commits. It runs when a
+super admin calls `POST /v1/admin/retention/sweep`, which should happen on a
+schedule. How it works, and the lock it takes, are in the
+[admin module's README](../admin/README.md#how-the-audit-log-is-swept).
+
+Each sweep writes a `retention_swept` entry, so the log records what was
+removed from it and who removed it.
+
+### Deleting an account
+
+Decided: **an account that has to go is stripped, not removed, and the audit
+log is not touched.**
+
+The `users` row stays, so the entries it wrote still have an actor to point
+to. Its personal fields are wiped — the address, names, avatar, phone, bio
+and Google identity — and it is marked as deleted so it cannot sign in. What
+remains in the log is an id that no longer leads to a person.
+
+This is forced as much as chosen. `actor_user_id` is a foreign key to
+`users` with no `ON DELETE` action, so removing the row of somebody who has
+acted fails while their entries exist, and the trigger means those entries
+can be neither removed nor have their actor nulled.
+
+Not built yet: there is no route or script that does the stripping, and
+`users` has no deleted state. Until there is, do not hard-delete a `users`
+row by hand.
+
+Four things the stripping has to cover when it is built:
+
+- `membership_revived` entries about the person keep
+  `previous.dismissalReason`, free text that may identify them. It lives in
+  the log, so stripping the `users` row does not reach it.
+- `membership_ended` entries about the person keep `reason`. Same again: it
+  lives in the log, and on the membership row, neither of which the
+  stripping touches.
+- `user_suspended` entries about the person keep `reason`, the admin's own
+  words. Same again: it lives in the log, and unlike `dismissalReason` it is
+  about the account as a whole rather than one membership.
+- A user who is only the _subject_ of entries (`subject_id`, or `invitedBy`
+  inside `details`) is referenced by id with no foreign key. Those entries
+  keep the id either way.
+
+## Rollout
+
+- **Migrations.** `0006_audit_log` creates the table and its indexes.
+  `0008_audit_log_append_only` adds the trigger that refuses updates and
+  deletes. Both are additive and touch no other table. There is no feature
+  flag. The one environment variable, `AUDIT_LOG_RETENTION_DAYS`, is read
+  only by the retention sweep.
+- **Order.** Migrate before seeding. The seed writes a
+  `system_role_changed` entry when it creates or promotes a super admin, so it
+  fails without the table. The deploy command already runs `db:migrate` then
+  `db:seed`.
+- **No backfill.** History starts when the migration is applied. Cohorts,
+  tracks, invites and admins that existed before it have no entries, and an
+  empty history for a subject does not mean nothing happened to it.
+- **Old code, new table.** A release that predates this module simply does
+  not write entries. Rolling back the code does not need the migration
+  rolled back.
+
+## Reading it
+
+`GET /v1/audit-log`, admin only, lists entries newest first, paginated like
+the other admin lists. Every filter is optional and they combine with AND:
+
+| Query         | Matches                                                         |
+| ------------- | --------------------------------------------------------------- |
+| `action`      | One `AuditAction`.                                              |
+| `actorUserId` | Entries that account wrote.                                     |
+| `subjectType` | One `AuditSubjectType`.                                         |
+| `subjectId`   | Entries about that id. With `subjectType`, one thing's history. |
+| `from`        | Written at or after this instant.                               |
+| `to`          | Written before this instant. Must be after `from`.              |
+
+The range is half-open, so ranges placed end to end never count an entry
+twice: all of 7 October is `from=2026-10-07&to=2026-10-08`. A bare date is
+midnight UTC. A timestamp must carry its zone (`Z` or `+01:00`), because
+one without a zone would be read in the server's zone.
+
+Entries from one transaction share a `created_at`, so the id breaks ties
+and pages never overlap.
+
+An entry is returned as written, apart from `space_id`: the column is filled
+for entries about a space — a grant of access to it, or a change to its
+settings — but the read route does not return it yet. People appear as ids.
+Look an id up through `GET /v1/users`. The service is `AuditLogService`, and
+its filters are tested against PGlite in `audit-log.service.db.spec.ts`.
+
+## Adding an action
+
+1. Add it to `AuditAction` in [`schema.ts`](./schema.ts), with a comment on
+   what it means. Add a subject type to `AuditSubjectType` if it needs a new
+   one.
+2. Give it a shape in `AuditEntryShapes` in [`audit-log.ts`](./audit-log.ts).
+   The build fails until you do.
+3. Call `writeAuditEntry` inside the transaction that makes the change.
+4. Check the details against [Personal data](#personal-data): ids, not
+   addresses or names.
+5. Add a row to the [Actions](#actions) table.
+6. Test it against PGlite: that the entry is written with the change, and
+   that a refused change writes none.

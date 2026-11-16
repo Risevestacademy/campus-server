@@ -1,8 +1,88 @@
+import { MIN_SECRET_LENGTH } from '@campus/media';
+import { MAX_ACCESS_TOKEN_TTL_MINUTES } from '@campus/session';
 import { plainToInstance } from 'class-transformer';
 import { Type, Transform } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Min, validateSync } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsFQDN,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Matches,
+  Max,
+  Min,
+  MinLength,
+  ValidateIf,
+  validateSync,
+} from 'class-validator';
 
-const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+const LOG_LEVELS = [
+  'trace',
+  'debug',
+  'info',
+  'warn',
+  'error',
+  'fatal',
+] as const;
+
+/**
+ * The shortest retention anything may ask for, configured or passed to a
+ * one-off sweep: no sweep ever deletes a row younger than this.
+ */
+export const MIN_RETENTION_DAYS = 30;
+
+const LIVEKIT_WEBHOOK_KEYS_MESSAGE =
+  'set both LIVEKIT_WEBHOOK_API_KEY and LIVEKIT_WEBHOOK_API_SECRET, or neither';
+
+function livekitWebhookKeysGiven(o: Env): boolean {
+  return (
+    o.LIVEKIT_WEBHOOK_API_KEY !== undefined ||
+    o.LIVEKIT_WEBHOOK_API_SECRET !== undefined ||
+    recordingGiven(o)
+  );
+}
+
+const STORAGE_VARIABLES = [
+  'R2_ACCOUNT_ID',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+  'R2_PRIVATE_BUCKET',
+] as const;
+
+const UPLOAD_VARIABLES = ['R2_PUBLIC_BUCKET', 'MEDIA_PUBLIC_URL'] as const;
+
+const STORAGE_MESSAGE = `set all of ${STORAGE_VARIABLES.join(', ')}, or none of them; recording and uploads need them`;
+
+const RECORDING_MESSAGE =
+  'LIVEKIT_URL needs the R2 variables and the webhook key pair';
+
+const UPLOAD_MESSAGE = `set both ${UPLOAD_VARIABLES.join(' and ')}, with the R2 variables, or neither`;
+
+function recordingGiven(o: Env): boolean {
+  return o.LIVEKIT_URL !== undefined;
+}
+
+function uploadsGiven(o: Env): boolean {
+  return UPLOAD_VARIABLES.some((key) => o[key] !== undefined);
+}
+
+function storageGiven(o: Env): boolean {
+  return (
+    STORAGE_VARIABLES.some((key) => o[key] !== undefined) ||
+    recordingGiven(o) ||
+    uploadsGiven(o)
+  );
+}
+
+const R2_BUCKET_NAME = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+
+function blankAsUnset({ value }: { value: unknown }): unknown {
+  return value === '' ? undefined : value;
+}
 
 export function loadEnv(source: Record<string, unknown> = process.env): Env {
   const env = plainToInstance(Env, source, {});
@@ -13,7 +93,74 @@ export function loadEnv(source: Record<string, unknown> = process.env): Env {
       .join('; ');
     throw new Error(`Invalid environment variables: ${message}`);
   }
+  assertCookieDomainCovers(env);
+  assertCalendarHasSignIn(env);
   return env;
+}
+
+/**
+ * Connecting a calendar needs a full-access session, and checks the Google
+ * account against the one the member signs in with: neither exists without
+ * Google sign-in.
+ */
+function assertCalendarHasSignIn(env: Env): void {
+  if (env.FF_GOOGLE_CALENDAR_ENABLED && !env.FF_GOOGLE_AUTH_ENABLED) {
+    throw new Error(
+      'Invalid environment variables: FF_GOOGLE_CALENDAR_ENABLED needs FF_GOOGLE_AUTH_ENABLED',
+    );
+  }
+}
+
+/**
+ * A browser silently drops a cookie whose Domain does not cover the host that
+ * set it, so a mistyped AUTH_COOKIE_DOMAIN would sign nobody in and say
+ * nothing. Both hosts are checked: the callback sets the cookie, and the app
+ * is where it has to be sent from.
+ */
+function assertCookieDomainCovers(env: Env): void {
+  const domain = env.AUTH_COOKIE_DOMAIN;
+  if (!domain) {
+    return;
+  }
+  const hosts = [env.APP_PUBLIC_URL, env.GOOGLE_CALLBACK_URL]
+    .filter((url): url is string => Boolean(url))
+    .map((url) => new URL(url).hostname);
+  for (const host of hosts) {
+    if (host !== domain && !host.endsWith(`.${domain}`)) {
+      throw new Error(
+        `Invalid environment variables: AUTH_COOKIE_DOMAIN ${domain} does not cover ${host}`,
+      );
+    }
+  }
+}
+
+/**
+ * Comma-separated addresses, trimmed, lowercased (how USERS stores them) and
+ * de-duplicated. Undefined when nothing is left, so an empty variable reads
+ * as unset.
+ */
+export function parseEmailList(value: string): string[] | undefined {
+  const emails = [
+    ...new Set(
+      value
+        .split(',')
+        .map((email) => email.trim().toLowerCase())
+        .filter((email) => email.length > 0),
+    ),
+  ];
+  return emails.length > 0 ? emails : undefined;
+}
+
+/** Comma-separated values, trimmed, with the empty ones dropped. */
+export function parseList(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+export function parseCorsOrigins(value: string | undefined): string[] {
+  return parseList(value);
 }
 
 export class Env {
@@ -30,6 +177,225 @@ export class Env {
   @IsNotEmpty()
   @IsString()
   DATABASE_URL: string = 'postgresql://postgres:postgres@localhost:5432/campus';
+
+  /**
+   * The Redis world subscribes to, where each new notification is published
+   * so world can push it to the recipient's open sockets. Unset, nothing is
+   * pushed: notifications are still written, and the list still has them.
+   */
+  @IsOptional()
+  @Transform(blankAsUnset)
+  @IsString()
+  REDIS_URL?: string;
+
+  /**
+   * The admins `db:seed` creates or promotes: one address, or several
+   * separated by commas. The API itself never reads it.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? parseEmailList(value) : value,
+  )
+  @IsEmail(
+    {},
+    {
+      each: true,
+      message:
+        'DEFAULT_ADMIN_EMAIL must be one or more email addresses, separated by commas',
+    },
+  )
+  DEFAULT_ADMIN_EMAIL?: string[];
+
+  // Google sign-in ------------------------------------------------------
+  // Flag-gated the same way PostHog is, so the API still boots on an empty
+  // environment. Turn the flag on and all four values below become required:
+  // a deployment that claims to do Google sign-in and cannot is worse than
+  // one that never claimed to.
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_GOOGLE_AUTH_ENABLED: boolean = false;
+
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsNotEmpty()
+  @IsString()
+  GOOGLE_CLIENT_ID?: string;
+
+  /** Web-application client only. Android and iOS clients hold no secret. */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsNotEmpty()
+  @IsString()
+  GOOGLE_CLIENT_SECRET?: string;
+
+  /**
+   * Client ids of the native apps, comma-separated. A native app signs in
+   * with Google's own SDK and posts the id_token it is given; that token is
+   * addressed to the app's client, not the web one, so each has to be named
+   * here before POST /v1/auth/google/token will take it. Unset = only tokens
+   * addressed to GOOGLE_CLIENT_ID are accepted, which is what an Android app
+   * asking for the web client as its server client receives.
+   */
+  @IsOptional()
+  @IsString()
+  GOOGLE_MOBILE_CLIENT_IDS?: string;
+
+  /**
+   * Lets a signed-in member connect their Google Calendar, read-only. Sign-in
+   * itself never asks for it. calendar.events.readonly is a sensitive scope:
+   * until Google has verified the app, only its test users can grant it.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_GOOGLE_CALENDAR_ENABLED: boolean = false;
+
+  /**
+   * Encrypts the Google refresh tokens at rest: 32 bytes in base64. Changing
+   * it makes every stored token unreadable, so each member reconnects.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_CALENDAR_ENABLED)
+  @Matches(/^[A-Za-z0-9+/]{43}=$/, {
+    message:
+      'GOOGLE_CALENDAR_TOKEN_KEY must be 32 bytes in base64 (openssl rand -base64 32)',
+  })
+  GOOGLE_CALENDAR_TOKEN_KEY?: string;
+
+  /**
+   * Where Google returns a member who connected their calendar: this API's
+   * /v1/calendar/connect/callback, registered on the same Google client.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_CALENDAR_ENABLED)
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
+  GOOGLE_CALENDAR_CALLBACK_URL?: string;
+
+  /**
+   * This API's /v1/calendar/notifications, where Google pushes calendar
+   * changes. HTTPS with a valid certificate. Unset, calendars are only synced
+   * on the hourly backstop.
+   */
+  @IsOptional()
+  @IsUrl({ require_protocol: true, protocols: ['https'] })
+  GOOGLE_CALENDAR_WEBHOOK_URL?: string;
+
+  /**
+   * Off where the API sleeps when idle: a timer would keep it awake, so
+   * scheduled jobs run on the back of requests instead.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return true;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  SCHEDULER_TIMER_ENABLED: boolean = true;
+
+  /**
+   * Must point at this API, not at the web app, and must match a redirect URI
+   * registered on the same Google client byte for byte.
+   */
+  // `require_tld: false` so a localhost callback is legal; `require_protocol`
+  // because Google matches the redirect URI as a literal string, and a bare
+  // hostname can never match what is registered.
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
+  GOOGLE_CALLBACK_URL?: string;
+
+  /**
+   * Signs the OAuth `state` parameter. Rotating it invalidates sign-ins that
+   * are mid-flight, which is a few seconds of inconvenience, never a lockout.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsString()
+  @MinLength(32, {
+    message: 'AUTH_STATE_SECRET must be at least 32 characters',
+  })
+  AUTH_STATE_SECRET?: string;
+
+  /**
+   * Signs session tokens. Separate from AUTH_STATE_SECRET because the two
+   * protect different things for different lifetimes — rotating this one
+   * signs every session out, which is the point of being able to.
+   */
+  @ValidateIf((o: Env) => o.FF_GOOGLE_AUTH_ENABLED)
+  @IsString()
+  @MinLength(32, {
+    message: 'AUTH_SESSION_SECRET must be at least 32 characters',
+  })
+  AUTH_SESSION_SECRET?: string;
+
+  /**
+   * Lifetime of a full-access session's access token, in minutes. Capped by
+   * the shared session policy: world keeps a socket open while the sign-in
+   * behind it keeps being refreshed, and it can only tell how often that
+   * should be because no token here lives longer than the cap.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(MAX_ACCESS_TOKEN_TTL_MINUTES, {
+    message: `AUTH_SESSION_TTL_MINUTES must be at most ${MAX_ACCESS_TOKEN_TTL_MINUTES}, the shared session policy's cap`,
+  })
+  AUTH_SESSION_TTL_MINUTES: number = MAX_ACCESS_TOKEN_TTL_MINUTES;
+
+  /**
+   * Lifetime of a provisional session — long enough to finish onboarding,
+   * short because it is handed out before anyone has accepted anything.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  AUTH_PROVISIONAL_TTL_MINUTES: number = 30;
+
+  /** Lifetime of a revocable refresh token, in days. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  AUTH_REFRESH_TTL_DAYS: number = 30;
+
+  /**
+   * Parent domain for the session cookie, so `world` on a sibling subdomain
+   * receives it (`campus.example` covers `world.campus.example`). Unset keeps
+   * the cookie host-only, which is right until world has its own hostname.
+   * The refresh and state cookies stay host-only either way.
+   */
+  @IsOptional()
+  @IsFQDN(
+    {},
+    {
+      message: 'AUTH_COOKIE_DOMAIN must be a bare domain, like campus.example',
+    },
+  )
+  AUTH_COOKIE_DOMAIN?: string;
+
+  // Comma-separated list of browser origins allowed to call the API.
+
+  @IsOptional()
+  @IsString()
+  CORS_ORIGINS?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  TRUST_PROXY_HOPS: number = 1;
 
   @IsOptional()
   @IsIn(LOG_LEVELS)
@@ -66,4 +432,227 @@ export class Env {
   })
   @IsBoolean()
   FF_OTEL_METRICS_ENABLED: boolean = true;
+
+  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED || o.FF_ANALYTICS_ENABLED)
+  @IsNotEmpty()
+  @Matches(/^phc_/, { message: 'POSTHOG_PROJECT_TOKEN must start with "phc_"' })
+  POSTHOG_PROJECT_TOKEN?: string;
+
+  @ValidateIf((o: Env) => o.FF_POSTHOG_ENABLED || o.FF_ANALYTICS_ENABLED)
+  @IsUrl({ protocols: ['https'], require_protocol: true })
+  POSTHOG_HOST: string = 'https://eu.i.posthog.com';
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_POSTHOG_ENABLED: boolean = false;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_ANALYTICS_ENABLED: boolean = false;
+
+  /** Set by Railway on every deploy; the release errors and traces name. */
+  @IsOptional()
+  @IsString()
+  RAILWAY_GIT_COMMIT_SHA?: string;
+
+  // Maps (Sanity) ------------------------------------------------------
+  // Where the campus maps are published. Read only by the admin's map sync,
+  // which fills `maps` and `spaces` from what is published; no token, the
+  // dataset is public. Unset, the API still runs and the sync answers 503:
+  // nothing else here needs a map.
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined,
+  )
+  @IsString()
+  SANITY_PROJECT_ID?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && value.trim() !== ''
+      ? value.trim()
+      : 'production',
+  )
+  @Matches(/^[a-z0-9_-]+$/, {
+    message:
+      'SANITY_DATASET must contain only lowercase letters, numbers, underscores and hyphens',
+  })
+  SANITY_DATASET: string = 'production';
+
+  // Email (Resend) ------------------------------------------------------
+  // Off by default, like PostHog: local development and CI never send mail.
+  // With the flag off, invites are still created and the admin shares the
+  // link by hand, which is how it worked before email existed.
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined || value === '') return false;
+    return value === 'true' || value === true;
+  })
+  @IsBoolean()
+  FF_EMAIL_ENABLED: boolean = false;
+
+  @ValidateIf((o: Env) => o.FF_EMAIL_ENABLED)
+  @IsNotEmpty()
+  @Matches(/^re_/, { message: 'RESEND_API_KEY must start with "re_"' })
+  RESEND_API_KEY?: string;
+
+  /** The sender: a bare address or `Name <address>`. */
+  @ValidateIf((o: Env) => o.FF_EMAIL_ENABLED)
+  @Matches(
+    /^(?:[^<>]*<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)$/,
+    {
+      message: 'EMAIL_FROM must be an address, or "Name <address>"',
+    },
+  )
+  EMAIL_FROM?: string;
+
+  /**
+   * The Resend template the invite email is sent with, by id or alias.
+   * Unset, the email is the one written in invite-email.ts.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  @IsString()
+  RESEND_INVITE_TEMPLATE_ID?: string;
+
+  /**
+   * Templates of their own for an admin's invite and a guest's, which offer
+   * something a cohort member's does not. Either one unset and that invite
+   * uses the standard template; the standard one unset and both are ignored.
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  @IsString()
+  RESEND_INVITE_ADMIN_TEMPLATE_ID?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === '' ? undefined : value,
+  )
+  @IsString()
+  RESEND_INVITE_GUEST_TEMPLATE_ID?: string;
+
+  // LiveKit webhooks ------------------------------------------------------
+  // A key pair of the LiveKit project's. It checks that a webhook came from
+  // LiveKit, and, with the recording variables below, signs the requests that
+  // start and stop recordings. Both or neither: unset, the webhook route
+  // answers 503.
+
+  @ValidateIf(livekitWebhookKeysGiven)
+  @IsNotEmpty({ message: LIVEKIT_WEBHOOK_KEYS_MESSAGE })
+  @Transform(blankAsUnset)
+  LIVEKIT_WEBHOOK_API_KEY?: string;
+
+  @ValidateIf(livekitWebhookKeysGiven)
+  @IsString({ message: LIVEKIT_WEBHOOK_KEYS_MESSAGE })
+  @MinLength(MIN_SECRET_LENGTH, {
+    message: `LIVEKIT_WEBHOOK_API_SECRET must be at least ${MIN_SECRET_LENGTH} characters`,
+  })
+  @Transform(blankAsUnset)
+  LIVEKIT_WEBHOOK_API_SECRET?: string;
+
+  // Cloudflare R2 -----------------------------------------------------------
+  // One API token for both buckets. R2_PRIVATE_BUCKET holds recordings and
+  // attachments. All four, or none: unset, recording and uploads answer 503.
+
+  @ValidateIf(storageGiven)
+  @Matches(/^[0-9a-f]{32}$/, {
+    message: `R2_ACCOUNT_ID must be a Cloudflare account id; ${STORAGE_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  R2_ACCOUNT_ID?: string;
+
+  @ValidateIf(storageGiven)
+  @IsNotEmpty({ message: STORAGE_MESSAGE })
+  @Transform(blankAsUnset)
+  R2_ACCESS_KEY_ID?: string;
+
+  @ValidateIf(storageGiven)
+  @IsNotEmpty({ message: STORAGE_MESSAGE })
+  @Transform(blankAsUnset)
+  R2_SECRET_ACCESS_KEY?: string;
+
+  @ValidateIf(storageGiven)
+  @Matches(R2_BUCKET_NAME, {
+    message: `R2_PRIVATE_BUCKET must be an R2 bucket name; ${STORAGE_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  R2_PRIVATE_BUCKET?: string;
+
+  // Call recordings --------------------------------------------------------
+  // Staff start a recording through LiveKit's egress API, signed with the
+  // webhook key pair above, and LiveKit uploads the video to R2_PRIVATE_BUCKET.
+  // Unset, recording answers 503.
+
+  @ValidateIf(recordingGiven)
+  @Matches(/^wss?:\/\//, {
+    message: `LIVEKIT_URL must start with ws:// or wss://; ${RECORDING_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  LIVEKIT_URL?: string;
+
+  // Uploads ----------------------------------------------------------------
+  // Clients upload straight to R2 with presigned URLs. Profile pictures go
+  // to a public bucket served from MEDIA_PUBLIC_URL, its custom domain.
+  // Both, or neither: unset, uploads answer 503.
+
+  @ValidateIf(uploadsGiven)
+  @Matches(R2_BUCKET_NAME, {
+    message: `R2_PUBLIC_BUCKET must be an R2 bucket name; ${UPLOAD_MESSAGE}`,
+  })
+  @Transform(blankAsUnset)
+  R2_PUBLIC_BUCKET?: string;
+
+  @ValidateIf(uploadsGiven)
+  @IsUrl(
+    { protocols: ['https'], require_protocol: true, require_tld: false },
+    { message: `MEDIA_PUBLIC_URL must be an https URL; ${UPLOAD_MESSAGE}` },
+  )
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && value !== ''
+      ? value.replace(/\/+$/, '')
+      : undefined,
+  )
+  MEDIA_PUBLIC_URL?: string;
+
+  // require_tld: false keeps http://localhost:3000 valid for local dev;
+  // require_protocol: true still rejects bare words like "not-a-url".
+  @IsUrl({ require_tld: false, require_protocol: true })
+  APP_PUBLIC_URL: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  INVITE_TTL_DAYS: number = 7;
+
+  // Retention ------------------------------------------------------------
+  // How long the daily retention sweep keeps rows, in days.
+
+  /** Read notifications older than this go. Unread ones are kept at any age. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(MIN_RETENTION_DAYS)
+  NOTIFICATION_RETENTION_DAYS: number = 90;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(MIN_RETENTION_DAYS)
+  AUDIT_LOG_RETENTION_DAYS: number = 365;
 }

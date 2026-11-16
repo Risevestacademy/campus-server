@@ -1,0 +1,8 @@
+# Dependencies and build output
+node_modules/
+dist/
+pnpm-lock.yaml
+
+# Generated: rewritten by their tools, and compared byte for byte
+apps/campus-api/src/infra/database/migrations/
+apps/world/protocol.schema.json

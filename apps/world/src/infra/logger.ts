@@ -1,0 +1,86 @@
+import {
+  LOG_REDACT_PATHS,
+  reportingHooks,
+  serializeError,
+  type ErrorReporter,
+} from '@campus/error-reporting';
+import { matchesPath, pathOf } from '@campus/telemetry/paths';
+import type { FastifyInstance, FastifyServerOptions } from 'fastify';
+import { randomUUID } from 'node:crypto';
+
+import type { Env } from './env.js';
+import { failActiveSpan } from './traced.js';
+
+export const CORRELATION_ID_HEADER = 'x-correlation-id';
+
+/** A request as the request log shows it: the path, never the query string. */
+export function serializeRequest(req: {
+  id: string;
+  method: string;
+  url: string;
+  routeOptions?: { url?: string };
+}) {
+  return {
+    id: req.id,
+    method: req.method,
+    url: pathOf(req.url),
+    route: req.routeOptions?.url,
+  };
+}
+
+/**
+ * Same shape as campus-api's logging: one correlation id per request, echoed
+ * back, so a trail through the API and a trail through here can be joined.
+ */
+export function loggerOptions(
+  env: Env,
+  reporter: ErrorReporter,
+): FastifyServerOptions['logger'] {
+  return {
+    level: env.FF_LOG_LEVEL,
+    hooks: reportingHooks(reporter, failActiveSpan),
+    transport: env.FF_LOG_PRETTY
+      ? {
+          target: 'pino-pretty',
+          options: {
+            singleLine: true,
+            colorize: true,
+            translateTime: 'SYS:HH:MM:ss',
+            ignore: 'pid,hostname',
+          },
+        }
+      : undefined,
+    redact: {
+      paths: [...LOG_REDACT_PATHS],
+      censor: '[REDACTED]',
+    },
+    serializers: {
+      err: serializeError,
+      req: serializeRequest,
+      res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
+    },
+  };
+}
+
+/** Routes on these paths log nothing about their requests. */
+export function silenceRoutes(
+  app: FastifyInstance,
+  paths: readonly string[],
+): void {
+  app.addHook('onRoute', (route) => {
+    if (matchesPath(route.url, paths)) {
+      route.logLevel = 'silent';
+    }
+  });
+}
+
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** The caller's id when it is a UUID; free text could hold a name or an email. */
+export function correlationId(headers: Record<string, unknown>): string {
+  const incoming = headers[CORRELATION_ID_HEADER];
+  return typeof incoming === 'string' && UUID.test(incoming)
+    ? incoming
+    : randomUUID();
+}

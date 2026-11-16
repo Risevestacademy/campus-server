@@ -1,4 +1,9 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpStatus } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpStatus,
+} from '@nestjs/common';
 import type { ValidationError } from 'class-validator';
 import { Response } from 'express';
 
@@ -38,9 +43,15 @@ export class ValidationExceptionFilter implements ExceptionFilter {
     return fields;
   }
 
-  private mapError(prefix: string, error: ValidationError, fields: FieldErrors): void {
+  private mapError(
+    prefix: string,
+    error: ValidationError,
+    fields: FieldErrors,
+  ): void {
     const key = prefix ? `${prefix}.${error.property}` : error.property;
-    const constraint = error.constraints ? Object.values(error.constraints)[0] : undefined;
+    const constraint = error.constraints
+      ? Object.values(error.constraints)[0]
+      : undefined;
     if (constraint) {
       fields[key] = constraint;
     }

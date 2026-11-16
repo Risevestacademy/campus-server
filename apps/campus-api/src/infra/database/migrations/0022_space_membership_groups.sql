@@ -1,0 +1,5 @@
+ALTER TABLE "space_memberships" DROP CONSTRAINT "space_memberships_one_subject";--> statement-breakpoint
+ALTER TABLE "space_memberships" ADD COLUMN "mentorship_group_id" uuid;--> statement-breakpoint
+ALTER TABLE "space_memberships" ADD CONSTRAINT "space_memberships_mentorship_group_id_mentorship_groups_id_fk" FOREIGN KEY ("mentorship_group_id") REFERENCES "public"."mentorship_groups"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "space_memberships_mentorship_group_idx" ON "space_memberships" USING btree ("mentorship_group_id");--> statement-breakpoint
+ALTER TABLE "space_memberships" ADD CONSTRAINT "space_memberships_one_subject" CHECK (num_nonnulls("space_memberships"."user_id", "space_memberships"."cohort_track_id", "space_memberships"."cohort_role", "space_memberships"."system_role", "space_memberships"."mentorship_group_id") = 1);

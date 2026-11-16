@@ -1,9 +1,11 @@
 import { Global, Module } from '@nestjs/common';
-import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import { installPostgresTracing } from '@campus/telemetry/sql';
 import postgres from 'postgres';
 
-import { CONFIG, type Env } from '../config/config.module.js';
-import { DRIZZLE } from './database.constants.js';
+import { CONFIG } from '../config/config.constants.js';
+import type { Env } from '../config/env.js';
+import { DRIZZLE, type Db } from './database.constants.js';
 import * as schema from './schema/index.js';
 
 @Global()
@@ -12,8 +14,15 @@ import * as schema from './schema/index.js';
     {
       provide: DRIZZLE,
       inject: [CONFIG],
-      useFactory: (config: Env): PostgresJsDatabase<typeof schema> => {
-        const sql = postgres(config.DATABASE_URL);
+      useFactory: (config: Env): Db => {
+        // Idle connections are closed rather than held: an open one sends
+        // keepalives for as long as it lives, which is traffic enough to
+        // stop a serverless deployment ever going to sleep. The next query
+        // reconnects on its own.
+        const sql = postgres(config.DATABASE_URL, { idle_timeout: 20 });
+        if (config.FF_OTEL_ENABLED) {
+          installPostgresTracing(sql);
+        }
         return drizzle(sql, { schema });
       },
     },

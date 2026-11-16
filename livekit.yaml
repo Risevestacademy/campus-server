@@ -3,12 +3,17 @@ log_level: info
 
 rtc:
   tcp_port: 7881
-  port_range_start: 50000
-  port_range_end: 60000
+  # One UDP port for every participant (LiveKit's UDP mux), rather than a
+  # range of ten thousand: publishing a range that wide clashes with
+  # whatever else on the machine holds a port in it, and LiveKit then fails
+  # to start. Local only; production's networking is its own.
+  udp_port: 7882
   use_external_ip: true
 
 redis:
   address: redis:6379
 
+# Local only. At least 32 characters: shorter secrets can be brute-forced
+# from a single token, and @campus/media refuses them.
 keys:
-  devkey: devsecret
+  devkey: local-dev-secret-not-for-production-use

@@ -1,66 +1,113 @@
-import { randomUUID } from 'node:crypto';
-import { context, trace } from '@opentelemetry/api';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Global, Module } from '@nestjs/common';
+import {
+  LOG_REDACT_PATHS,
+  reportingHooks,
+  serializeError,
+} from '@campus/error-reporting';
+import { matchesPath, pathOf } from '@campus/telemetry/paths';
 import { LoggerModule } from 'nestjs-pino';
+import type { Options } from 'pino-http';
 
+import {
+  CORRELATION_ID_HEADER,
+  resolveCorrelationId,
+} from '../../shared/http/correlation-id.js';
 import { CONFIG, type Env } from '../config/config.module.js';
+import {
+  ERROR_REPORTER,
+  ErrorReportingModule,
+  type ErrorReporter,
+} from '../error-reporting/error-reporting.module.js';
+import { QUIET_ROUTES } from './quiet-routes.js';
 
-export const CORRELATION_ID_HEADER = 'x-correlation-id';
+export { CORRELATION_ID_HEADER };
+
+/** A request as the request log shows it: the path, never the query string. */
+export function serializeRequest(req: {
+  id?: unknown;
+  method?: string;
+  url?: string;
+  remoteAddress?: string;
+  remotePort?: number;
+}) {
+  return {
+    id: req.id,
+    method: req.method,
+    url: pathOf(req.url),
+    remoteAddress: req.remoteAddress,
+    remotePort: req.remotePort,
+  };
+}
+
+/**
+ * The route a finished request matched. The request is serialized before
+ * routing, so the route is added only once the response is done.
+ */
+export function routeOnceFinished(
+  req: object,
+  res: { writableEnded: boolean },
+): { route?: string } {
+  return res.writableEnded
+    ? { route: (req as { route?: { path?: string } }).route?.path }
+    : {};
+}
+
+export function isUnloggedRoute(url: string | undefined): boolean {
+  return matchesPath(url, QUIET_ROUTES);
+}
+
+/** The request logger's options, the `pinoHttp` nestjs-pino is given. */
+export function pinoHttpOptions(config: Env, reporter: ErrorReporter): Options {
+  return {
+    level: config.FF_LOG_LEVEL,
+    hooks: reportingHooks(reporter),
+    genReqId: (req: IncomingMessage, res: ServerResponse) => {
+      // The one place the id is decided. What is returned here is
+      // what the logs, the response header and any audit entry carry.
+      const id = resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
+      res.setHeader(CORRELATION_ID_HEADER, id);
+      return id;
+    },
+    transport: config.FF_LOG_PRETTY
+      ? {
+          target: 'pino-pretty',
+          options: {
+            singleLine: true,
+            colorize: true,
+            translateTime: 'SYS:HH:MM:ss',
+            ignore: 'pid,hostname',
+          },
+        }
+      : undefined,
+    customProps: (req: IncomingMessage, res: ServerResponse) =>
+      routeOnceFinished(req, res),
+    autoLogging: {
+      ignore: (req: IncomingMessage) => isUnloggedRoute(req.url),
+    },
+    redact: {
+      paths: [...LOG_REDACT_PATHS],
+      censor: '[REDACTED]',
+    },
+    serializers: {
+      err: serializeError,
+      req: serializeRequest,
+      res: (res: { statusCode: number }) => ({
+        statusCode: res.statusCode,
+      }),
+    },
+  };
+}
 
 @Global()
 @Module({
   imports: [
     LoggerModule.forRootAsync({
-      inject: [CONFIG],
-      useFactory: (config: Env) => ({
-        pinoHttp: {
-          level: config.FF_LOG_LEVEL,
-          genReqId: (req: IncomingMessage, res: ServerResponse) => {
-            const incoming = req.headers[CORRELATION_ID_HEADER];
-            const id = typeof incoming === 'string' && incoming.length > 0 ? incoming : randomUUID();
-            res.setHeader(CORRELATION_ID_HEADER, id);
-            return id;
-          },
-          mixin: () => {
-            const span = trace.getSpan(context.active());
-            const traceId = span?.spanContext().traceId;
-            const spanId = span?.spanContext().spanId;
-            if (!traceId || !spanId) return {};
-            return { trace_id: traceId, span_id: spanId };
-          },
-          transport: config.FF_LOG_PRETTY
-            ? {
-                target: 'pino-pretty',
-                options: {
-                  singleLine: true,
-                  colorize: true,
-                  translateTime: 'SYS:HH:MM:ss',
-                  ignore: 'pid,hostname',
-                },
-              }
-            : undefined,
-          autoLogging: {
-            ignore: (req: IncomingMessage) => req.url === '/docs' || req.url === '/reference',
-          },
-          redact: {
-            paths: ['req.headers.authorization', 'req.headers.cookie', '*.password', '*.token', '*.secret'],
-            censor: '[REDACTED]',
-          },
-          serializers: {
-            req: (req) => ({
-              id: req.id,
-              method: req.method,
-              url: req.url,
-              remoteAddress: req.remoteAddress,
-              remotePort: req.remotePort,
-            }),
-            res: (res) => ({
-              statusCode: res.statusCode,
-            }),
-          },
-        },
+      imports: [ErrorReportingModule],
+      inject: [CONFIG, ERROR_REPORTER],
+      useFactory: (config: Env, reporter: ErrorReporter) => ({
+        pinoHttp: pinoHttpOptions(config, reporter),
       }),
     }),
   ],

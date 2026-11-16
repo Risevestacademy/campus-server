@@ -1,0 +1,33 @@
+{
+  "name": "@campus/analytics",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "oxlint src/",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "posthog-node": "^5.51.7",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

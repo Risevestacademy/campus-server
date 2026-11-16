@@ -1,0 +1,669 @@
+import { randomUUID } from 'node:crypto';
+import { AbstractConnector, Redis } from 'ioredis';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
+
+import { loadEnv } from './env.js';
+import {
+  MemoryPresenceStore,
+  RedisPresenceStore,
+  DISPLACED_CHANNEL,
+  PRESENT_COHORTS_KEY,
+  cohortPresenceKey,
+  createPresenceStore,
+  presenceKey,
+  type Displacement,
+  type Presence,
+  type PresenceStore,
+} from './presence.js';
+
+const presenceOf = (
+  userId: string,
+  overrides: Partial<Presence> = {},
+): Presence => ({
+  userId,
+  connectionId: randomUUID(),
+  cohortId: 'cohort-1',
+  spaceKey: '_default',
+  since: Date.now(),
+  status: 'available',
+  ...overrides,
+});
+
+describe('MemoryPresenceStore', () => {
+  it('counts each person online once, across the campus or in one cohort', async () => {
+    const store = new MemoryPresenceStore();
+    await store.enter(presenceOf('ada'));
+    await store.enter(presenceOf('ada', { cohortId: 'cohort-2' }));
+    await store.enter(presenceOf('grace', { cohortId: 'cohort-2' }));
+
+    await expect(store.onlineUserIds()).resolves.toEqual(
+      new Set(['ada', 'grace']),
+    );
+    await expect(store.onlineUserIds('cohort-1')).resolves.toEqual(
+      new Set(['ada']),
+    );
+  });
+
+  it('lists who is online in a cohort, and nobody from another', async () => {
+    const store = new MemoryPresenceStore();
+    const ada = presenceOf('ada');
+    await store.enter(ada);
+    await store.enter(presenceOf('grace', { cohortId: 'cohort-2' }));
+
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      { ...ada, instanceId: store.instanceId },
+    ]);
+  });
+
+  it('leaves only for the connection holding the place', async () => {
+    const store = new MemoryPresenceStore();
+    const older = presenceOf('ada', { since: 1 });
+    const newer = presenceOf('ada', { since: 2 });
+    await store.enter(older);
+    await store.enter(newer);
+
+    await store.leave([older]);
+
+    await expect(store.online('cohort-1')).resolves.toHaveLength(1);
+  });
+
+  it('reports a renewal for a connection a newer one replaced', async () => {
+    const store = new MemoryPresenceStore();
+    const older = presenceOf('ada', { since: 1 });
+    await store.enter(presenceOf('ada', { since: 2 }));
+
+    await expect(store.renew([older])).resolves.toEqual([
+      { userId: 'ada', connectionId: older.connectionId },
+    ]);
+  });
+
+  it('rewrites the space on a change of space, unless a newer connection holds the place', async () => {
+    const store = new MemoryPresenceStore();
+    const older = presenceOf('ada', { since: 1 });
+    await store.enter(older);
+
+    await expect(
+      store.changeSpace({ ...older, spaceKey: 'library' }),
+    ).resolves.toBe(true);
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({ spaceKey: 'library' }),
+    ]);
+
+    await store.enter(presenceOf('ada', { since: 2 }));
+    await expect(
+      store.changeSpace({ ...older, spaceKey: 'courtyard' }),
+    ).resolves.toBe(false);
+  });
+
+  it('keeps the space each entry was last written with', async () => {
+    const store = new MemoryPresenceStore();
+    const ada = presenceOf('ada');
+    await store.enter(ada);
+
+    await store.renew([{ ...ada, spaceKey: 'library' }]);
+
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({
+        connectionId: ada.connectionId,
+        spaceKey: 'library',
+      }),
+    ]);
+  });
+
+  /** Two instances' entries can arrive in either order; the newer still wins. */
+  it('keeps the newer connection when the older one enters after it', async () => {
+    const store = new MemoryPresenceStore();
+    const newer = presenceOf('ada', { since: 2 });
+    const older = presenceOf('ada', { since: 1 });
+
+    await expect(store.enter(newer)).resolves.toBe(true);
+    await expect(store.enter(older)).resolves.toBe(false);
+
+    const [entry] = await store.online('cohort-1');
+    expect(entry?.connectionId).toBe(newer.connectionId);
+  });
+
+  it('breaks a tie of the same millisecond by connection id, either way round', async () => {
+    const low = presenceOf('ada', { since: 5, connectionId: 'aaa' });
+    const high = presenceOf('ada', { since: 5, connectionId: 'zzz' });
+
+    for (const order of [
+      [low, high],
+      [high, low],
+    ]) {
+      const store = new MemoryPresenceStore();
+      for (const entry of order) await store.enter(entry);
+      const [entry] = await store.online('cohort-1');
+      expect(entry?.connectionId).toBe('zzz');
+    }
+  });
+
+  /** One account may be in several cohorts' campuses at once. */
+  it('keeps a place in each cohort, without one displacing another', async () => {
+    const store = new MemoryPresenceStore();
+    const frontend = presenceOf('ada', { cohortId: 'cohort-1', since: 1 });
+    const backend = presenceOf('ada', { cohortId: 'cohort-2', since: 2 });
+    await store.enter(frontend);
+    await store.enter(backend);
+
+    await expect(store.renew([frontend, backend])).resolves.toEqual([]);
+    await expect(store.online('cohort-1')).resolves.toHaveLength(1);
+    await expect(store.online('cohort-2')).resolves.toHaveLength(1);
+
+    await store.leave([frontend]);
+    await expect(store.online('cohort-1')).resolves.toEqual([]);
+    await expect(store.online('cohort-2')).resolves.toHaveLength(1);
+  });
+
+  it('sets the status only for the connection holding the place', async () => {
+    const store = new MemoryPresenceStore();
+    const older = presenceOf('ada', { since: 1 });
+    const newer = presenceOf('ada', { since: 2 });
+    await store.enter(older);
+    await store.enter(newer);
+
+    await store.setStatus({ ...older, status: 'away' });
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
+
+    await store.setStatus({ ...newer, status: 'busy' });
+    await expect(store.online('cohort-1')).resolves.toEqual([
+      expect.objectContaining({ status: 'busy' }),
+    ]);
+  });
+
+  it('sets the status in one cohort only', async () => {
+    const store = new MemoryPresenceStore();
+    const frontend = presenceOf('ada', { cohortId: 'cohort-1' });
+    await store.enter(frontend);
+    await store.enter(presenceOf('ada', { cohortId: 'cohort-2' }));
+
+    await store.setStatus({ ...frontend, status: 'busy' });
+
+    await expect(store.online('cohort-2')).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
+  });
+});
+
+/**
+ * Against a real Redis, since the work is in Lua. Set WORLD_TEST_REDIS_URL to
+ * run these, ideally naming a database nothing else uses
+ * (redis://localhost:6379/15); CI does. Every test uses fresh accounts and
+ * cohorts, so they never see each other's entries.
+ */
+const url = process.env.WORLD_TEST_REDIS_URL;
+
+describe.skipIf(!url)('RedisPresenceStore', () => {
+  const clients: Redis[] = [];
+  const stores: RedisPresenceStore[] = [];
+
+  /** One world instance: its own clients, as in production. */
+  function instance(ttlSeconds = 60) {
+    const redis = new Redis(url as string);
+    const subscriber = new Redis(url as string);
+    clients.push(redis);
+    const store = new RedisPresenceStore(redis, subscriber, ttlSeconds);
+    stores.push(store);
+    const heard: Displacement[] = [];
+    store.onDisplaced((displaced) => heard.push(displaced));
+    return { store, heard, redis };
+  }
+
+  /** Subscribing is asynchronous; a message published before it is lost. */
+  const allSubscribed = () =>
+    expect
+      .poll(async () => {
+        const reply = (await clients[0]?.pubsub(
+          'NUMSUB',
+          DISPLACED_CHANNEL,
+        )) as [string, number] | undefined;
+        return reply?.[1] ?? 0;
+      })
+      .toBeGreaterThanOrEqual(stores.length);
+
+  const fresh = () => ({ user: randomUUID(), cohort: randomUUID() });
+
+  afterAll(async () => {
+    await Promise.all(stores.map((store) => store.close()));
+  });
+
+  it('records the connection, instance and cohort, and lists them', async () => {
+    const { user, cohort } = fresh();
+    const { store } = instance();
+    const ada = presenceOf(user, { cohortId: cohort, spaceKey: 'library' });
+
+    await store.enter(ada);
+
+    await expect(store.online(cohort)).resolves.toEqual([
+      { ...ada, instanceId: store.instanceId },
+    ]);
+  });
+
+  it('expires an entry nobody renews', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance(0.2);
+    await store.enter(presenceOf(user, { cohortId: cohort }));
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    await expect(store.online(cohort)).resolves.toEqual([]);
+    await expect(
+      redis.exists(presenceKey({ userId: user, cohortId: cohort })),
+    ).resolves.toBe(0);
+  });
+
+  it('keeps a renewed entry past when it would have expired', async () => {
+    const { user, cohort } = fresh();
+    const { store } = instance(0.3);
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await store.renew([ada]);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    await expect(store.online(cohort)).resolves.toHaveLength(1);
+  });
+
+  it('puts back an entry that lapsed while its connection stayed', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
+
+    await expect(store.renew([ada])).resolves.toEqual([]);
+
+    await expect(store.online(cohort)).resolves.toHaveLength(1);
+  });
+
+  it('tells the instance holding the old connection when another takes over', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    const b = instance();
+    await allSubscribed();
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+    await a.store.enter(older);
+
+    await b.store.enter(presenceOf(user, { cohortId: cohort, since: 2 }));
+
+    await expect
+      .poll(() => a.heard)
+      .toContainEqual({ userId: user, connectionId: older.connectionId });
+    const [entry] = await a.store.online(cohort);
+    expect(entry?.instanceId).toBe(b.store.instanceId);
+  });
+
+  it('tells nobody when the old connection was on the same instance', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    await allSubscribed();
+    await a.store.enter(presenceOf(user, { cohortId: cohort, since: 1 }));
+
+    await a.store.enter(presenceOf(user, { cohortId: cohort, since: 2 }));
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(a.heard).toEqual([]);
+  });
+
+  it('leaves only for the connection holding the place', async () => {
+    const { user, cohort } = fresh();
+    const { store } = instance();
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+    const newer = presenceOf(user, { cohortId: cohort, since: 2 });
+    await store.enter(older);
+    await store.enter(newer);
+
+    await store.leave([older]);
+    await expect(store.online(cohort)).resolves.toHaveLength(1);
+
+    await store.leave([newer]);
+    await expect(store.online(cohort)).resolves.toEqual([]);
+  });
+
+  it('does not let an older connection renew over a newer one', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    const b = instance();
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+    const newer = presenceOf(user, { cohortId: cohort, since: 2 });
+    await a.store.enter(older);
+    await b.store.enter(newer);
+
+    await expect(a.store.renew([older])).resolves.toEqual([
+      { userId: user, connectionId: older.connectionId },
+    ]);
+    const [entry] = await a.store.online(cohort);
+    expect(entry?.connectionId).toBe(newer.connectionId);
+  });
+
+  it('rewrites the space on a change of space and on a renewal', async () => {
+    const { user, cohort } = fresh();
+    const { store } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+
+    await expect(
+      store.changeSpace({ ...ada, spaceKey: 'library' }),
+    ).resolves.toBe(true);
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ spaceKey: 'library' }),
+    ]);
+
+    await store.renew([{ ...ada, spaceKey: 'courtyard' }]);
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ spaceKey: 'courtyard' }),
+    ]);
+  });
+
+  /**
+   * An entry written by code from before spaces were recorded has none, and
+   * is left out of the list until it is written again with one.
+   */
+  it('leaves out an entry written without a space', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+    await redis.hdel(
+      presenceKey({ userId: user, cohortId: cohort }),
+      'spaceKey',
+    );
+
+    await expect(store.online(cohort)).resolves.toEqual([]);
+
+    await store.renew([ada]);
+    await expect(store.online(cohort)).resolves.toHaveLength(1);
+  });
+
+  /**
+   * The newer connection's entry reaches Redis first, the older one's after
+   * it. Arrival order must not decide: the newer one keeps the place, and
+   * nobody is told to close it.
+   */
+  it('keeps the newer connection when the older one arrives after it, across instances', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    const b = instance();
+    await allSubscribed();
+    const newer = presenceOf(user, { cohortId: cohort, since: 2 });
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+
+    await expect(b.store.enter(newer)).resolves.toBe(true);
+    await expect(a.store.enter(older)).resolves.toBe(false);
+
+    const [entry] = await a.store.online(cohort);
+    expect(entry).toMatchObject({
+      connectionId: newer.connectionId,
+      instanceId: b.store.instanceId,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(b.heard).toEqual([]);
+  });
+
+  it('breaks a tie of the same millisecond by connection id, across instances', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    const b = instance();
+    const low = presenceOf(user, {
+      cohortId: cohort,
+      since: 5,
+      connectionId: `${user}-a`,
+    });
+    const high = presenceOf(user, {
+      cohortId: cohort,
+      since: 5,
+      connectionId: `${user}-z`,
+    });
+
+    await expect(b.store.enter(high)).resolves.toBe(true);
+    await expect(a.store.enter(low)).resolves.toBe(false);
+
+    const [entry] = await a.store.online(cohort);
+    expect(entry?.connectionId).toBe(high.connectionId);
+  });
+
+  /** When the newer one could not enter, Redis being away at the time. */
+  it('lets a newer connection renew over an older one, and tells its instance', async () => {
+    const { user, cohort } = fresh();
+    const a = instance();
+    const b = instance();
+    await allSubscribed();
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+    await a.store.enter(older);
+
+    await b.store.renew([presenceOf(user, { cohortId: cohort, since: 2 })]);
+
+    await expect
+      .poll(() => a.heard)
+      .toContainEqual({ userId: user, connectionId: older.connectionId });
+  });
+
+  it('sets the status only for the connection holding the place', async () => {
+    const { user, cohort } = fresh();
+    const { store } = instance();
+    const older = presenceOf(user, { cohortId: cohort, since: 1 });
+    const newer = presenceOf(user, { cohortId: cohort, since: 2 });
+    await store.enter(older);
+    await store.enter(newer);
+
+    await store.setStatus({ ...older, status: 'away' });
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
+
+    await store.setStatus({ ...newer, status: 'busy' });
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'busy' }),
+    ]);
+  });
+
+  it('does not bring back a lapsed entry to set its status', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
+
+    await store.setStatus({ ...ada, status: 'busy' });
+
+    await expect(
+      redis.exists(presenceKey({ userId: user, cohortId: cohort })),
+    ).resolves.toBe(0);
+  });
+
+  it('carries the status on a renewal that puts a lapsed entry back', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
+
+    await store.renew([{ ...ada, status: 'busy' }]);
+
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'busy' }),
+    ]);
+  });
+
+  /** Written by an instance deployed before statuses, during a rollout. */
+  it('reads an entry with no status as available', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    await store.enter(presenceOf(user, { cohortId: cohort, status: 'busy' }));
+    await redis.hdel(presenceKey({ userId: user, cohortId: cohort }), 'status');
+
+    await expect(store.online(cohort)).resolves.toEqual([
+      expect.objectContaining({ status: 'available' }),
+    ]);
+  });
+
+  /** One account may be in several cohorts' campuses at once. */
+  it('lists somebody in every cohort they are in, each held separately', async () => {
+    const { user, cohort } = fresh();
+    const elsewhere = randomUUID();
+    const a = instance();
+    const b = instance();
+    await allSubscribed();
+    const here = presenceOf(user, { cohortId: cohort });
+    await a.store.enter(here);
+
+    await b.store.enter(presenceOf(user, { cohortId: elsewhere }));
+
+    await expect(a.store.online(cohort)).resolves.toHaveLength(1);
+    await expect(a.store.online(elsewhere)).resolves.toHaveLength(1);
+    await expect(a.store.renew([here])).resolves.toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(a.heard).toEqual([]);
+
+    await a.store.leave([here]);
+    await expect(a.store.online(cohort)).resolves.toEqual([]);
+    await expect(a.store.online(elsewhere)).resolves.toHaveLength(1);
+    await expect(
+      a.redis.zscore(cohortPresenceKey(cohort), user),
+    ).resolves.toBeNull();
+  });
+
+  it('counts each person online once, across every cohort and instance, or in one', async () => {
+    const { user: ada, cohort } = fresh();
+    const { user: grace, cohort: elsewhere } = fresh();
+    const lapsed = fresh();
+    const a = instance();
+    const b = instance();
+    const brief = instance(0.2);
+    await a.store.enter(presenceOf(ada, { cohortId: cohort }));
+    await b.store.enter(presenceOf(ada, { cohortId: elsewhere }));
+    await b.store.enter(presenceOf(grace, { cohortId: elsewhere }));
+    await brief.store.enter(
+      presenceOf(lapsed.user, { cohortId: lapsed.cohort }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const everybody = await a.store.onlineUserIds();
+    expect(everybody).toContain(ada);
+    expect(everybody).toContain(grace);
+    expect(everybody).not.toContain(lapsed.user);
+    await expect(a.store.onlineUserIds(elsewhere)).resolves.toEqual(
+      new Set([ada, grace]),
+    );
+    await expect(a.store.onlineUserIds(randomUUID())).resolves.toEqual(
+      new Set(),
+    );
+  });
+
+  it('counts nobody whose entry is gone, whatever the index says', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    await store.enter(presenceOf(user, { cohortId: cohort }));
+
+    await redis.del(presenceKey({ userId: user, cohortId: cohort }));
+
+    await expect(store.onlineUserIds(cohort)).resolves.toEqual(new Set());
+    expect(await store.onlineUserIds()).not.toContain(user);
+  });
+
+  it('finds every cohort through the set an entry adds it to, not by scanning keys', async () => {
+    const { user, cohort } = fresh();
+    const stray = fresh();
+    const { store, redis } = instance();
+    await store.enter(presenceOf(user, { cohortId: cohort }));
+    // An index and entry no claim wrote, so its cohort is not in the set.
+    await redis.zadd(
+      cohortPresenceKey(stray.cohort),
+      Date.now() + 60_000,
+      stray.user,
+    );
+    await redis.hset(
+      presenceKey({ userId: stray.user, cohortId: stray.cohort }),
+      'connectionId',
+      randomUUID(),
+    );
+
+    await expect(redis.sismember(PRESENT_COHORTS_KEY, cohort)).resolves.toBe(1);
+    const everybody = await store.onlineUserIds();
+    expect(everybody).toContain(user);
+    expect(everybody).not.toContain(stray.user);
+    await redis.del(
+      cohortPresenceKey(stray.cohort),
+      presenceKey({ userId: stray.user, cohortId: stray.cohort }),
+    );
+  });
+
+  it('keeps a cohort in the set after everybody leaves, and counts nobody there', async () => {
+    const { user, cohort } = fresh();
+    const { store, redis } = instance();
+    const ada = presenceOf(user, { cohortId: cohort });
+    await store.enter(ada);
+
+    await store.leave([ada]);
+
+    await expect(redis.sismember(PRESENT_COHORTS_KEY, cohort)).resolves.toBe(1);
+    expect(await store.onlineUserIds()).not.toContain(user);
+  });
+});
+
+describe('createPresenceStore', () => {
+  const log = { info: () => undefined, warn: () => undefined } as never;
+
+  it('keeps presence in memory when REDIS_URL is unset', () => {
+    const env = loadEnv({
+      AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+      DEPLOYMENT_ENVIRONMENT: 'development',
+      DATABASE_URL: 'postgres://unused',
+    } as NodeJS.ProcessEnv);
+
+    expect(createPresenceStore(env, log)).toBeInstanceOf(MemoryPresenceStore);
+  });
+
+  /** As for positions: nothing may queue up behind a Redis that is not there. */
+  describe('with Redis unavailable', () => {
+    class Unreachable extends AbstractConnector {
+      constructor() {
+        super(0);
+      }
+      connect(): Promise<never> {
+        return new Promise(() => undefined);
+      }
+    }
+
+    const env = loadEnv({
+      AUTH_SESSION_SECRET: 'a-world-session-secret-of-at-least-32-chars',
+      DEPLOYMENT_ENVIRONMENT: 'development',
+      DATABASE_URL: 'postgres://unused',
+      REDIS_URL: 'redis://unreachable.invalid:6379',
+    } as NodeJS.ProcessEnv);
+
+    const afterOneTurn = (operation: Promise<unknown>) =>
+      Promise.race([
+        operation.then(
+          () => 'resolved',
+          () => 'rejected',
+        ),
+        new Promise((resolve) => setImmediate(() => resolve('pending'))),
+      ]);
+
+    let store: PresenceStore;
+    afterEach(async () => {
+      await store.close();
+    });
+
+    it.each([
+      ['enter', (s: PresenceStore) => s.enter(presenceOf('ada'))],
+      ['renew', (s: PresenceStore) => s.renew([presenceOf('ada')])],
+      ['leave', (s: PresenceStore) => s.leave([presenceOf('ada')])],
+      ['setStatus', (s: PresenceStore) => s.setStatus(presenceOf('ada'))],
+      ['online', (s: PresenceStore) => s.online('cohort-1')],
+    ])('refuses %s at once instead of queueing it', async (_name, operate) => {
+      store = createPresenceStore(
+        env,
+        log,
+        (target, options) =>
+          new Redis(target, { ...options, Connector: Unreachable }),
+      );
+
+      await expect(afterOneTurn(operate(store))).resolves.toBe('rejected');
+    });
+  });
+});

@@ -1,44 +1,94 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { Response } from 'express';
 
 import { ExceptionCode } from '../exceptions/exception-code.enum.js';
+import { resolveExceptionStatus } from '../exceptions/resolve-status.js';
 import type { ErrorResponse } from './error-response.js';
+import { requestFields, type LoggedRequest } from './request-fields.js';
+
+const GENERIC_MESSAGE = 'An unexpected error occurred';
+
+/**
+ * Structural, so the filter works with nestjs-pino or a plain console.
+ * nestjs-pino's Logger takes a lone trailing string as the context, not the
+ * message, so the context is passed too and the message survives.
+ */
+export interface ErrorLogger {
+  error(
+    payload: Record<string, unknown>,
+    message: string,
+    context: string,
+  ): void;
+}
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
+  constructor(private readonly logger?: ErrorLogger) {}
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
 
-    const status = this.resolveStatus(exception);
+    const status = resolveExceptionStatus(exception);
+
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      this.logUnhandled(exception, status, ctx.getRequest<LoggedRequest>());
+    }
+
     const body: ErrorResponse = {
       error: {
         code: this.mapStatusToCode(status),
-        message: this.resolveMessage(exception),
+        message: this.resolveMessage(exception, status),
       },
     };
 
     response.status(status).json(body);
   }
 
-  private resolveStatus(exception: unknown): number {
-    if (exception instanceof HttpException) {
-      return exception.getStatus();
+  private logUnhandled(
+    exception: unknown,
+    status: number,
+    request?: LoggedRequest,
+  ): void {
+    const payload = { err: exception, ...requestFields(request, status) };
+
+    if (this.logger) {
+      this.logger.error(
+        payload,
+        'Unhandled exception',
+        GlobalExceptionFilter.name,
+      );
+      return;
     }
-    return HttpStatus.INTERNAL_SERVER_ERROR;
+    console.error('Unhandled exception', payload);
   }
 
-  private resolveMessage(exception: unknown): string {
+  /**
+   * An HttpException carries a message somebody wrote for the caller. Any
+   * other error carries whatever the runtime happened to produce — a failed
+   * query with its SQL and bound parameters, a connection string with its
+   * password — so only the generic message is safe to return.
+   */
+  private resolveMessage(exception: unknown, status: number): string {
     if (exception instanceof HttpException) {
       if (exception.getStatus() === HttpStatus.TOO_MANY_REQUESTS) {
         return 'Too many requests, retry later.';
       }
       return exception.message;
     }
-    if (exception instanceof Error && exception.message) {
+    if (
+      status < HttpStatus.INTERNAL_SERVER_ERROR &&
+      exception instanceof Error
+    ) {
       return exception.message;
     }
-    return 'An unexpected error occurred';
+    return GENERIC_MESSAGE;
   }
 
   private mapStatusToCode(status: number): ExceptionCode {

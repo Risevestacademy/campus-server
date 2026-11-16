@@ -1,0 +1,110 @@
+import { sql } from 'drizzle-orm';
+import {
+  check,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+  varchar,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
+
+import { SystemRole, hasAdminPowers } from '@campus/session';
+
+import { media } from '../media/schema.js';
+
+// The role vocabulary and the "is this an admin" rule live in the shared
+// package: world reads the same column and has to answer the same way.
+export { SystemRole, hasAdminPowers };
+
+export enum UserStatus {
+  Active = 'active',
+  Suspended = 'suspended',
+}
+
+/** Null on the row until the person chooses, which counts as not granted. */
+export enum AnalyticsConsent {
+  Granted = 'granted',
+  Denied = 'denied',
+}
+
+export const systemRoleEnum = pgEnum('system_role', SystemRole);
+export const analyticsConsentEnum = pgEnum(
+  'analytics_consent',
+  AnalyticsConsent,
+);
+export const userStatusEnum = pgEnum('user_status', UserStatus);
+
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: varchar('email').notNull(),
+    provider: varchar('provider').notNull().default('google'),
+    providerId: varchar('provider_id'),
+    firstName: varchar('first_name'),
+    lastName: varchar('last_name'),
+    displayName: varchar('display_name'),
+    phone: varchar('phone'),
+    bio: text('bio'),
+    /**
+     * The picture Google gave at first sign-in, shown until they upload one
+     * of their own. Cleared when they remove their picture, so removing it
+     * leaves initials rather than bringing this back.
+     */
+    googlePictureUrl: varchar('google_picture_url'),
+    /** The picture they uploaded; its URL is built from its key when read. */
+    avatarMediaId: uuid('avatar_media_id').references(
+      (): AnyPgColumn => media.id,
+    ),
+    spriteKey: varchar('sprite_key'),
+    systemRole: systemRoleEnum('system_role')
+      .notNull()
+      .default(SystemRole.User),
+    status: userStatusEnum('status').notNull().default(UserStatus.Active),
+    /**
+     * Who suspended this account, and the system_role that account held
+     * when they did. On the row rather than in the audit log alone because
+     * reinstate has to read it: a suspension made by a super admin is
+     * lifted only by a super admin, and a plain admin's only by an admin of
+     * either rank. The role is the one held at the time, so a promotion
+     * later does not change who may lift what they suspended. Both null
+     * while the account is not suspended.
+     */
+    suspendedBy: uuid('suspended_by').references((): AnyPgColumn => users.id),
+    suspendedByRole: systemRoleEnum('suspended_by_role'),
+    /**
+     * Counts the times this account's sessions have been ended on purpose.
+     * Every session token is signed with the value it found here, and is
+     * refused once the two differ — so bumping this ends every session the
+     * account holds at its next request, without waiting for a token to
+     * lapse. Only ever goes up; see SessionIssuer.revokeAllSessions.
+     */
+    sessionEpoch: integer('session_epoch').notNull().default(0),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+    analyticsConsent: analyticsConsentEnum('analytics_consent'),
+    analyticsConsentAt: timestamp('analytics_consent_at', {
+      withTimezone: true,
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('users_email_unique').on(table.email),
+    check('users_email_lowercase', sql`${table.email} = lower(${table.email})`),
+    uniqueIndex('users_provider_provider_id_unique')
+      .on(table.provider, table.providerId)
+      .where(sql`${table.providerId} is not null`),
+  ],
+);
+
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;

@@ -3,33 +3,45 @@
   "private": true,
   "packageManager": "pnpm@10.26.2",
   "engines": {
-    "node": ">=20"
+    "node": "26.x"
   },
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm -r --parallel dev",
+    "dev": "pnpm --filter campus-api^... --filter world... build && pnpm --parallel --filter campus-api --filter world run \"/^(dev|start:dev)$/\"",
     "lint": "pnpm -r lint",
+    "grafana:check": "node infra/grafana/check-dashboards.mjs",
+    "grafana:deploy": "node infra/grafana/deploy-dashboards.mjs",
     "test": "pnpm -r test",
-    "dev:api": "pnpm --filter campus-api start:dev",
-    "dev:world": "pnpm --filter world dev",
-    "build:api": "pnpm --filter campus-api build",
-    "build:world": "pnpm --filter world build",
+    "dev:api": "pnpm --filter campus-api^... build && pnpm --filter campus-api start:dev",
+    "dev:world": "pnpm --filter world... build && pnpm --filter world run \"/^(dev|start:dev)$/\"",
+    "build:api": "pnpm --filter campus-api... build",
+    "build:world": "pnpm --filter world... build",
     "start:api": "pnpm --filter campus-api start",
     "start:world": "pnpm --filter world start",
     "start:api:prod": "pnpm --filter campus-api start:prod",
     "db:migrate": "pnpm --filter campus-api db:migrate",
     "db:generate": "pnpm --filter campus-api db:generate",
     "db:push": "pnpm --filter campus-api db:push",
+    "db:seed": "pnpm --filter campus-api db:seed",
     "db:studio": "pnpm --filter campus-api db:studio",
     "test:api": "pnpm --filter campus-api test",
     "test:world": "pnpm --filter world test",
     "lint:api": "pnpm --filter campus-api lint",
     "lint:world": "pnpm --filter world lint",
-    "prepare": "husky"
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
+    "start:world:prod": "pnpm --filter world start:prod"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
     "@commitlint/config-conventional": "^21.2.2",
-    "husky": "^9.1.7"
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "prettier": "^3.9.6",
+    "railway": "^3.12.0"
+  },
+  "lint-staged": {
+    "*": "prettier --write --ignore-unknown"
   }
 }

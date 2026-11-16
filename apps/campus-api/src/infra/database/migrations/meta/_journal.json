@@ -1,1 +1,293 @@
-{"version":"7","dialect":"postgresql","entries":[]}
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789570847547,
+      "tag": "0000_dazzling_iron_monger",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789769439923,
+      "tag": "0001_invites",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790587497927,
+      "tag": "0002_guest_cohort_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790698785137,
+      "tag": "0003_puzzling_talos",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790898284271,
+      "tag": "0004_lucky_titanium_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790987403238,
+      "tag": "0005_invites_revoked_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790998517690,
+      "tag": "0006_audit_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791000903853,
+      "tag": "0007_invite_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791038821930,
+      "tag": "0008_audit_log_append_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791058532459,
+      "tag": "0009_session_epoch",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791326601094,
+      "tag": "0010_super_admin_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791398746441,
+      "tag": "0011_invite_role_grantable",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791628076255,
+      "tag": "0012_user_suspended_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791814099709,
+      "tag": "0013_maps_spaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791832449296,
+      "tag": "0014_feedback",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1791989696272,
+      "tag": "0015_membership_end_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792085610763,
+      "tag": "0016_cohort_dates_in_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792494375186,
+      "tag": "0017_call_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792521978082,
+      "tag": "0018_spaces_rework",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792579335835,
+      "tag": "0019_participant_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792599731766,
+      "tag": "0020_mentorship_groups",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793044130896,
+      "tag": "0021_google_calendar_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793086871194,
+      "tag": "0022_space_membership_groups",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793358185136,
+      "tag": "0023_analytics_consent",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793638762679,
+      "tag": "0024_desks",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793702715429,
+      "tag": "0025_notices_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793702720556,
+      "tag": "0026_room_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1793780259152,
+      "tag": "0027_desk_claim_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1793827344387,
+      "tag": "0028_room_link_windows",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1793832827390,
+      "tag": "0029_notices_removed_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793850526547,
+      "tag": "0030_map_published_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1794004629939,
+      "tag": "0031_notices_mentorship_group",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794004694792,
+      "tag": "0032_notification_context",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794092680478,
+      "tag": "0033_calendar_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794352232972,
+      "tag": "0034_attendance",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1794352234120,
+      "tag": "0035_drop_room_link_windows",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1794396004153,
+      "tag": "0036_attendance_tally_failures",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1794411875659,
+      "tag": "0037_comments",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1794510092741,
+      "tag": "0038_call_recordings",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1794563144634,
+      "tag": "0039_media",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1794610373466,
+      "tag": "0040_profile_pictures",
+      "breakpoints": true
+    }
+  ]
+}

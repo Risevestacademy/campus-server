@@ -1,0 +1,114 @@
+import { Transform } from 'class-transformer';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsDateString,
+  IsEmail,
+  IsEnum,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsUUID,
+} from 'class-validator';
+
+import { CohortRole } from '../../cohorts/schema.js';
+import { SystemRole } from '../../users/schema.js';
+
+/** The system roles an invite may carry. Never super admin. */
+const INVITABLE_SYSTEM_ROLES = [SystemRole.User, SystemRole.Admin];
+
+/**
+ * Two shapes are accepted (mirrors the INVITES CHECK constraints):
+ *
+ * - Cohort invite: { email, cohortId, cohortRole } plus optional
+ *   cohortTrackId / mentorshipGroupId / systemRole / expiresAt. A guest is
+ *   one of these, and the only one that carries guestAccessExpiresAt.
+ * - Admin invite: { email, systemRole: 'admin' } with NO cohort fields.
+ *
+ * Everybody who is not an admin is invited to a cohort, so an invite naming
+ * neither is refused: it would accept into nothing.
+ *
+ * An admin+cohort combination (systemRole admin together with cohort fields)
+ * is also accepted: system_role is independent of cohort scoping, so an admin
+ * who is also a professor on a cohort is expressible.
+ *
+ * Cross-field rules (also enforced by DB CHECKs, validated here for clean 400s):
+ * - cohortId and cohortRole travel together (invites_cohort_pairing).
+ * - cohortTrackId / mentorshipGroupId require cohortId
+ *   (invites_scoped_fields_require_cohort).
+ * - cohortRole 'student' requires cohortTrackId (invites_student_requires_track).
+ */
+export class CreateInviteDto {
+  /**
+   * Invitee address. Stored lowercase.
+   * @example new.student@campus.local
+   */
+  @IsEmail()
+  @IsNotEmpty()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  email: string;
+
+  /**
+   * Required for every invite but an admin one.
+   * @example 11111111-1111-4111-8111-111111111111
+   */
+  @IsOptional()
+  @IsUUID()
+  cohortId?: string;
+
+  /** Required for every invite but an admin one. */
+  @ApiPropertyOptional({
+    enum: CohortRole,
+    enumName: 'CohortRole',
+    example: CohortRole.Student,
+  })
+  @IsOptional()
+  @IsEnum(CohortRole)
+  cohortRole?: CohortRole;
+
+  /**
+   * Required when cohortRole is student. Must belong to cohortId.
+   * @example 22222222-2222-4222-8222-222222222222
+   */
+  @IsOptional()
+  @IsUUID()
+  cohortTrackId?: string;
+
+  /**
+   * Optional pod assignment. Requires cohortId.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
+  @IsOptional()
+  @IsUUID()
+  mentorshipGroupId?: string;
+
+  /**
+   * Defaults to 'user'. Admin invites pass 'admin' with no cohort fields. An
+   * invite cannot make a super admin: only the seed does.
+   */
+  @ApiPropertyOptional({ example: SystemRole.User })
+  @IsOptional()
+  @IsIn(INVITABLE_SYSTEM_ROLES, {
+    message: `systemRole must be one of: ${INVITABLE_SYSTEM_ROLES.join(', ')}`,
+  })
+  systemRole?: SystemRole;
+
+  /**
+   * Defaults to now + INVITE_TTL_DAYS. Must be in the future.
+   * @example 2026-10-01T00:00:00.000Z
+   */
+  @IsOptional()
+  @IsDateString()
+  expiresAt?: string;
+
+  /**
+   * When the guest stops being one — required for cohortRole guest, and
+   * rejected for every other role. Not the same as expiresAt, which is how long
+   * this invite stays redeemable.
+   * @example 2026-12-01T00:00:00.000Z
+   */
+  @IsOptional()
+  @IsDateString()
+  guestAccessExpiresAt?: string;
+}

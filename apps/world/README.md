@@ -1,0 +1,303 @@
+# world
+
+The realtime service: one WebSocket per account in each cohort, carrying who
+is on the map and where they stand. Fastify 5 with `@fastify/websocket`,
+config validated with zod at boot.
+
+It trusts nothing from the client but a direction. The session comes from the
+cookie campus-api signs, the account is re-checked against Postgres, and the
+server decides every position.
+
+## What it does today
+
+- **Authenticates the upgrade:** the origin allowlist, then the session
+  token (full-access sessions only), then the account, which must exist and
+  not be suspended, then the sign-in it came from, which must still be live,
+  and last the cohort the socket names (`/socket?cohortId=…`), which the
+  account must hold a live membership in — the same rule campus-api applies
+  at sign-in, admins included: their role alone admits them anywhere.
+- **One connection per cohort:** an account may be in several cohorts'
+  campuses at once, with an avatar in each, but has one connection in each. A
+  new connection to a cohort it is already in displaces the old one, which is
+  sent `{ "type": "replaced" }` and closed with 4000 `entered_elsewhere`; the
+  avatar stays where it stood. See
+  [the protocol doc](../../docs/world-protocol.md#one-connection-per-cohort).
+  This holds across instances too: see presence, below.
+- **Presence in Redis:** who is online, in which cohort and in which space
+  (the space's key, or `_default` between drawn spaces, rewritten the moment
+  somebody crosses into another space and with every renewal), per account
+  and cohort: the live connection and the instance holding it. Each entry
+  expires `WORLD_PRESENCE_TTL_SECONDS` after its instance stops renewing it,
+  so a crashed instance's people drop out on their own. When a connection
+  takes the place of one in the same cohort on another instance, world
+  publishes that on `world:presence:displaced`, and the other instance
+  closes the old socket with `entered_elsewhere`. Without `REDIS_URL`,
+  presence is kept in memory, which only works for a single instance.
+- **Status:** each member is available, busy or away, chosen with
+  `setStatus` and shown to everybody in their cohort. Somebody idle for
+  `WORLD_AWAY_AFTER_SECONDS` shows as away until they do something again. It
+  is kept on the presence entry, so it goes when the connection does; nothing
+  is written to Postgres. See [the protocol doc](../../docs/world-protocol.md#status).
+- **Keeps sockets honest:**
+  - a heartbeat drops sockets that stopped answering
+  - follows the sign-in behind each socket rather than its fifteen-minute
+    access token: signing out closes it within a heartbeat, and so does a
+    sign-in that stops being refreshed
+  - re-checks the account and the cohort membership behind each socket, so a
+    suspension — or the end of a guest's visit — reaches an open socket
+    within one heartbeat
+- **Movement on a tile grid:**
+  - the map is the published entry map, loaded from Sanity through
+    `campus-world-map`; the database only says which map key an admin
+    published. Its collision shapes become blocked tiles, and the `snapshot`
+    tells clients which map and version that is. A publish notification
+    reloads it without a restart, after building and validating the new map
+    off to the side; connected players on new walls are nudged, crossed into
+    their new spaces, and sent `positionCorrected`
+  - every tile is known to be in one space: the drawn space covering its
+    middle (the smaller, where two overlap, then the key that sorts first),
+    or the map's default space, `_default`, for the corridors and grounds.
+    Worked out once at load (`movement/spaces.ts`)
+  - every step into another space asks `mayEnter` from
+    `@campus/space-access`: a normal space admits anybody in the campus, a
+    designated one only the people its list names, admins anything. A no is
+    a `refused` move. The spaces and their lists are read from campus-api's
+    tables at boot, again whenever campus-api notifies `spaces_changed`, and
+    every heartbeat; each person's role and track at connect and every
+    heartbeat. Somebody already inside stays until they step out
+  - the server enforces walking speed
+  - one avatar per account in each cohort, walked by whichever socket holds
+    its place there
+  - each cohort is its own campus: nobody sees, or is told about, anybody in
+    another cohort, though they share the process and the map
+  - other players' moves are sent once per tick
+  - a reconnect within a grace period resumes where the player stood
+  - between visits, players start where they last stood in that cohort, kept
+    in Redis per account and cohort (`REDIS_URL`; unset keeps nothing)
+- **Limits:**
+  - per-socket message size and rate
+  - a cap on what may wait unsent to a client that stops reading
+- **A call per space:** on arrival and on every step into another space,
+  a `call` message with a LiveKit token for that cohort's room in the space
+  (`LIVEKIT_*`; unset, no calls). World takes people out of a call they
+  left and revokes its token; a removal LiveKit does not confirm is tried
+  again at every heartbeat. In a proximity space, `nearby` names who is within the subscribe
+  radius (5 tiles to hear and 6 to subscribe where the space sets none),
+  each tick it changes. See [the protocol doc](../../docs/world-protocol.md#calls).
+- **The admin broadcast:** everybody also gets a token for their cohort's
+  broadcast room, to listen beside their space's call; admins' tokens may
+  publish the microphone there, and last a minute, enough to join. Somebody
+  who stops being an admin is taken out at the next heartbeat, their tokens
+  revoked, and handed one to listen. See
+  [the protocol doc](../../docs/world-protocol.md#broadcast).
+- **Chat:** `say` reaches whoever can hear the speaker, by the space's
+  hearing, and is never stored. See
+  [the protocol doc](../../docs/world-protocol.md#chat).
+- **The pre-join connection check:** a short-lived LiveKit token for testing
+  devices and network before a call. See [below](#the-connection-check).
+- **Who is online, for admins:** a count for the admin dashboard, across the
+  campus or in one cohort. See [below](#the-online-count).
+- **Staff muting and removing:** an admin, or a professor or mentor in a
+  designated space that lists them, may switch off somebody's microphone
+  once, or move them out of the space and keep them out for 90 seconds
+  (they may ask to enter). See
+  [the protocol doc](../../docs/world-protocol.md#staff-muting-and-removing).
+- **Locks and asking to enter:** anybody inside a normal whole-room space
+  may lock it; somebody refused at a locked or designated space may ask
+  from beside it, and somebody inside answers. Both are held in this
+  process, per cohort. See
+  [the protocol doc](../../docs/world-protocol.md#locks).
+
+Not yet: more than one served map, portals, or live positions shared across
+instances (a player who moves to another instance starts from their last
+saved position). A re-sync and a publish are expected back to back: world
+reads the current version from Sanity, so a restart between the two serves
+the re-synced geometry even though `published_at` still names the old version.
+
+## Running it
+
+From the repo root:
+
+```bash
+pnpm dev:world      # builds @campus/session, @campus/media and world, then recompiles and restarts on change
+pnpm build:world    # builds @campus/session, @campus/media and world
+pnpm start:world    # runs the last build
+```
+
+Or scoped here with `pnpm --filter world <script>`. Plain `build`, `dev` and
+`start:dev` assume `@campus/session` and `@campus/media` are already built;
+the root scripts build them for you.
+
+Config is read from the environment; `.env.example` lists every variable with
+its default and what it does. Two have no default and are required:
+`AUTH_SESSION_SECRET` (the same value as campus-api's) and `DATABASE_URL` (the
+same database campus-api writes; world only reads it).
+
+The local `start` and `start:dev` scripts load `apps/world/.env`. Copy
+`.env.example` to `.env` and set local values before starting World.
+`start:prod` does not load this file; production configuration must be supplied
+by the deployment environment.
+
+`GET /health` answers while the process is up. It does not touch the
+database.
+
+## Layout
+
+```
+src/
+  app.ts                Fastify app: error handling, /health, /schema.json, /docs, /docs-json, the gateway
+  index.ts              boot and graceful shutdown; starts telemetry before the app loads
+  quiet-routes.ts       routes neither logged nor traced, with no imports, for index.ts
+  admin/                GET /admin/online, the online count for admins
+  http/
+    routes.ts           what world's HTTP routes share: CORS and preflight, signing in, error bodies
+    routes.testing.ts   the route specs' shared env, accounts and session; left out of the build
+  infra/                env, logger, the database reads (accounts, memberships, spaces),
+                        Redis (positions, presence), the published map
+    metrics.ts          the socket metrics: counters, gauges and running totals
+    traced.ts           spans for the work that waits: traced(), annotate(), failing a span
+    fastify-otel.ts     @fastify/otel's options, keeping query values off its span
+    exit.ts             flushing PostHog and telemetry on the way out
+  media/                POST /media/connection-check and its per-account budget
+  movement/             the grid and who stands where — no sockets here
+  status/               available, busy or away, and going away while idle — no sockets here
+  spaces/               locks, requests to enter, and staff removals — no sockets here
+  socket/
+    gateway.ts          the /socket route: upgrade, heartbeat, tick, messages; for now also
+                        the doors (spaces read, mayEnter on a step), calls and nearby lists
+    authenticate.ts     who may open a socket
+    protocol.ts         every message, both directions, as zod schemas
+    protocol.schema.ts  those schemas as JSON Schema, for the frontend
+    frame-budget.ts     inbound rate limit
+    outbound.ts         outbound backpressure
+protocol.schema.json    generated — do not edit
+```
+
+## The protocol
+
+Messages are defined once, in `src/socket/protocol.ts`. From them:
+
+- **`protocol.schema.json`** is generated for the frontend to build types
+  from. After changing `protocol.ts`, run `pnpm --filter world protocol:schema`
+  and commit the result; a test fails CI if you forget.
+- **`GET /schema.json`** serves that same document from the running
+  instance, open to anybody, so the frontend can generate its types from the
+  environment it builds against.
+- **`GET /docs-json`** serves the protocol as an AsyncAPI 2.6 document,
+  built by `src/socket/protocol.asyncapi.ts` from the same schemas. It adds
+  the socket's address, the session cookie, and which side sends each
+  message — read from the `ClientMessage` and `ServerMessage` unions, so a
+  new message lands on the right side without being listed anywhere else.
+- **`GET /docs`** shows that document as a page, as campus-api's `/docs`
+  shows its own. The page loads AsyncAPI's viewer from a CDN
+  (`src/socket/protocol.docs.ts` pins the version) and reads `/docs-json`
+  from the same instance.
+- **[docs/world-protocol.md](../../docs/world-protocol.md)** explains to
+  client authors what the schema can't: message order, correcting a predicted
+  step, limits and close codes. Update it when what a client should _do_
+  changes.
+
+## The connection check
+
+`POST /media/connection-check` gives a signed-in member a token for
+LiveKit's pre-join device and network check (`ConnectionCheck` in
+`livekit-client`, or LiveKit's hosted connection test). No request body;
+one marked `Content-Type: application/json` may still be empty.
+
+- **Who:** the same sign-in as the socket, without the cohort: a
+  `full_access` session whose account still exists, is not suspended, and
+  whose sign-in has not ended. A browser sends the `campus_session` cookie
+  with `credentials: 'include'` from an origin in `CORS_ORIGINS`; anything
+  else sends `Authorization: Bearer <token>`. This route answers CORS itself,
+  preflight included, for those origins only.
+- **What comes back** (`200`, `Cache-Control: no-store`):
+
+  ```json
+  {
+    "url": "wss://campus-dev.livekit.cloud",
+    "room": "connection-check-0b9e…",
+    "token": "eyJ…",
+    "expiresAt": "2026-10-09T10:45:18.000Z"
+  }
+  ```
+
+  Pass `url` and `token` to the check. The room is made up for this call, so
+  nobody else can be in it, and LiveKit removes it when the check disconnects.
+  The token lasts two minutes, enough to run the check once. It may publish
+  audio and video, which the check needs, but not data. Ask for a new one for
+  each run.
+
+- **Errors**, in campus-api's `{ "error": { "code", "message", "details"? } }`
+  shape:
+
+  | Status | `code`                 | When                                                                                                                               |
+  | ------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal: `no_token`, `token_not_usable`, `wrong_scope`, `account_suspended`, … |
+  | 403    | `FORBIDDEN`            | The page's origin is not in `CORS_ORIGINS`, or a cookie came with no origin at all                                                 |
+  | 429    | `RATE_LIMITED`         | More than `WORLD_CONNECTION_CHECKS_PER_MINUTE` (default 5) for this account this minute. `Retry-After` gives the seconds to wait   |
+  | 503    | `MEDIA_NOT_CONFIGURED` | This deployment has no media server. Not worth retrying: skip the check and say calls are unavailable here                         |
+
+  The limit is counted per account, in each instance's memory. It is
+  checked after the token, before the account lookups, so refused callers
+  spend nobody's budget. A member learns that media is not configured only
+  after passing sign-in.
+
+Media is configured by `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`: all three, or none. world refuses to boot with only
+some of them set, or with values `@campus/media` would refuse: a URL that is
+not `ws://` or `wss://`, or a secret under 32 characters. Locally, the values
+in `.env.example` point at the LiveKit container in `docker-compose.local.yml`.
+
+## The online count
+
+`GET /admin/online` says how many people are online now, for the admin
+dashboard. campus-api has the dashboard's other figures; it never asks world
+for this one.
+
+- **Who:** an admin, signed in the same way as for the connection check
+  (the `campus_session` cookie from an origin in `CORS_ORIGINS`, or
+  `Authorization: Bearer <token>`). CORS is answered here, preflight included.
+- **What:** `?cohortId=<uuid>` counts one cohort; without it, the whole
+  campus, where somebody in two cohorts' campuses counts once. Read from
+  presence, so it covers every world instance. The campus-wide count finds
+  cohorts through `world:presence:cohorts`, a set each presence write adds
+  its cohort to, so it never scans Redis's keys.
+- **Beside campus-api's figures** (`GET /v1/dashboard`): world does not know
+  which cohorts exist, so a cohort that does not counts `0` here where
+  campus-api answers 404. And campus-api counts suspended accounts as
+  members, while world never lets them in, so they are never online.
+- **What comes back** (`200`, `Cache-Control: no-store`): `{ "online": 12 }`.
+- **Errors**, in the same shape as the connection check's:
+
+  | Status | `code`                 | When                                                                                                                          |
+  | ------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+  | 400    | `INVALID_ARGUMENT`     | `cohortId` is not a UUID                                                                                                      |
+  | 401    | `UNAUTHORIZED`         | No usable session. `details.reason` is the socket's refusal, as for the connection check                                      |
+  | 403    | `FORBIDDEN`            | Signed in but not an admin, the page's origin is not in `CORS_ORIGINS`, or a cookie came with no origin at all                |
+  | 429    | `RATE_LIMITED`         | More than `WORLD_ONLINE_COUNTS_PER_MINUTE` (default 30) for this account this minute. `Retry-After` gives the seconds to wait |
+  | 503    | `PRESENCE_UNAVAILABLE` | Redis cannot be read. Try again shortly                                                                                       |
+
+## Tests
+
+```bash
+pnpm --filter world test
+```
+
+The socket tests start a real server on a random port and connect real
+WebSocket clients. The account lookup is replaced by an in-memory stand-in,
+so no database is needed. Each test must close its sockets: a check after
+every test fails if any are left open.
+
+Presence is Lua run inside Redis, so its tests, and the one that runs two
+instances side by side, need a real Redis. They are skipped unless
+`WORLD_TEST_REDIS_URL` is set; CI sets it. Locally, point it at a database
+nothing else uses:
+
+```bash
+WORLD_TEST_REDIS_URL=redis://localhost:6379/15 pnpm --filter world test
+```
+
+## Deploying
+
+See [docs/deployment.md](../../docs/deployment.md#world): the build command,
+the healthcheck path, and the environment variables to set.

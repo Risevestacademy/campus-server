@@ -2,45 +2,82 @@ import { ArgumentsHost, Catch, ExceptionFilter } from '@nestjs/common';
 import { Response } from 'express';
 
 import { DomainException } from '../exceptions/domain.exception.js';
-import { ExceptionCode } from '../exceptions/exception-code.enum.js';
+import {
+  ExceptionCode,
+  mapExceptionCodeToStatus,
+} from '../exceptions/exception-code.enum.js';
 import type { ErrorResponse } from './error-response.js';
+import type { ErrorLogger } from './global-exception.filter.js';
+import { requestFields, type LoggedRequest } from './request-fields.js';
+
+const GENERIC_MESSAGE = 'An unexpected error occurred';
 
 @Catch(DomainException)
 export class DomainExceptionFilter implements ExceptionFilter {
+  constructor(private readonly logger?: ErrorLogger) {}
+
   catch(exception: DomainException, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
 
     const status = this.mapCodeToStatus(exception.code);
+    // A 5xx here is a bug in this service, not something the caller did. Its
+    // message and details are written for whoever reads the logs, and can
+    // carry addresses, ids or query fragments — so nothing but the generic
+    // message goes out. This is the same rule GlobalExceptionFilter applies
+    // to non-domain exceptions; without it here, a DomainException carrying
+    // INTERNAL_ERROR would bypass the one guarantee that rule exists to make.
+    //
+    // SERVICE_UNAVAILABLE is the one 5xx that is not a bug: something this
+    // service depends on is not there, and it was raised on purpose to say
+    // so. Its message is written for the caller, who needs it to know
+    // whether to wait or to call somebody, so it goes out as written.
+    const unavailable = exception.code === ExceptionCode.ServiceUnavailable;
+    const serverFault = status >= 500 && !unavailable;
     const body: ErrorResponse = {
       error: {
         code: exception.code,
-        message: exception.message,
-        ...(exception.details ? { details: exception.details } : {}),
+        message: serverFault ? GENERIC_MESSAGE : exception.message,
+        ...(!serverFault && exception.details
+          ? { details: exception.details }
+          : {}),
       },
     };
+
+    // Swallowing the detail without recording it would trade a leak for an
+    // invisible failure, so the diagnostic is logged instead of returned.
+    // An unavailable dependency is logged too: it answers the caller, but
+    // somebody still has to go and look at it.
+    if (serverFault || unavailable) {
+      this.log(exception, status, ctx.getRequest<LoggedRequest>(), unavailable);
+    }
 
     response.status(status).json(body);
   }
 
-  protected mapCodeToStatus(code: ExceptionCode): number {
-    switch (code) {
-      case ExceptionCode.InvalidArgument:
-        return 400;
-      case ExceptionCode.Unauthorized:
-        return 401;
-      case ExceptionCode.Forbidden:
-        return 403;
-      case ExceptionCode.NotFound:
-        return 404;
-      case ExceptionCode.Conflict:
-      case ExceptionCode.SpaceAtCapacity:
-        return 409;
-      case ExceptionCode.RateLimited:
-        return 429;
-      case ExceptionCode.InternalError:
-      default:
-        return 500;
+  private log(
+    exception: DomainException,
+    status: number,
+    request: LoggedRequest | undefined,
+    unavailable: boolean,
+  ): void {
+    const message = unavailable
+      ? 'Dependency unavailable'
+      : 'Unhandled exception';
+    const payload = {
+      err: exception,
+      ...requestFields(request, status),
+      ...(unavailable ? { severity: 'warning' } : {}),
+    };
+
+    if (this.logger) {
+      this.logger.error(payload, message, DomainExceptionFilter.name);
+      return;
     }
+    console.error(message, payload);
+  }
+
+  protected mapCodeToStatus(code: ExceptionCode): number {
+    return mapExceptionCodeToStatus(code);
   }
 }
