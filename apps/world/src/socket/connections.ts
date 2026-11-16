@@ -26,6 +26,9 @@ export type ConnectionMode = 'avatar' | 'watcher';
  */
 export type EnterMode = 'take' | 'ifFree';
 
+/** Which app opened the socket, as it said itself. Decides nothing. */
+export type ClientApp = 'web' | 'mobile';
+
 export interface Connection {
   id: string;
   userId: string;
@@ -33,6 +36,9 @@ export interface Connection {
   cohortId: string;
   mode: ConnectionMode;
   enter: EnterMode;
+  client: ClientApp;
+  /** `users.analytics_consent` granted, as the account was last read. */
+  analyticsConsent: boolean;
   /** As the account was when this socket opened, updated as it changes. */
   appearance: Appearance;
   /**

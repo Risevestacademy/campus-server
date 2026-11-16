@@ -38,6 +38,8 @@ export interface WorldContext {
     except?: Connection,
   ): void;
   closeFor(socket: WebSocket, reason: CloseReason): void;
+  /** The reason closeFor gave this socket, if it was the one that closed it. */
+  closedFor(socket: WebSocket): CloseReason | undefined;
 }
 
 /**
@@ -85,10 +87,20 @@ export function createContext(
     }
   }
 
+  const closeReasons = new WeakMap<WebSocket, CloseReason>();
+
   function closeFor(socket: WebSocket, reason: CloseReason): void {
     metrics.closedByServer(reason);
+    if (!closeReasons.has(socket)) closeReasons.set(socket, reason);
     sendClose(socket, reason);
   }
 
-  return { ...base, send, sendFrame, broadcast, closeFor };
+  return {
+    ...base,
+    send,
+    sendFrame,
+    broadcast,
+    closeFor,
+    closedFor: (socket) => closeReasons.get(socket),
+  };
 }

@@ -62,6 +62,9 @@ frame, both ways, is one JSON object with a `type`.
   account only when nobody does; otherwise you watch. See
   [Watching](#watching). Leaving it off, or `enter=take`, takes the avatar as
   every client always has.
+- **Say which app you are.** The mobile app adds `client=mobile`; leaving it
+  off means `web`. It is only counted in product analytics and changes nothing
+  about the socket.
 
 > **World on its own hostname.** Browsers cannot put an `Authorization`
 > header on a WebSocket, so the cookie is the only way in, and by default it
