@@ -67,14 +67,15 @@ is drastic for the audit log, so a one-off period is never applied to both.
 
 ### Schedule
 
-**Nothing runs the sweep on a timer.** Call the route on a recurring schedule,
-daily or weekly, from an external scheduler: a cron job, a Railway cron
-service, or a GitHub Actions schedule, signed in as a super admin. Missing a
-run does no harm: the next one deletes whatever has since come due.
+The sweep runs once a day on campus-api's scheduler, as the job
+`retention-sweep`, over both tables with the configured periods. Its audit
+entries have no actor. Only one replica runs it per day. An API that sleeps
+runs it on the first request after it is due, so nothing outside has to call
+it. Missing a day does no harm: the next run deletes whatever has since come
+due.
 
-The API sleeps when idle, so a timer inside it would either keep it awake or
-not fire. A built-in scheduler may come later. For now an external call is
-enough.
+The route is still there for a super admin who wants a sweep now, or a
+one-off period for one table.
 
 ### How the audit log is swept
 

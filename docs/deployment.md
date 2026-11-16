@@ -41,7 +41,8 @@ stops being read on 2026-12-01; do not add either.
 
 All app services use **Root Directory `/`** (repo root), not their
 subfolder — required so Railway's builder (Railpack) sees the shared pnpm
-workspace lockfile.
+workspace lockfile. Railpack takes the Node version from `engines.node` in
+the root `package.json` (`26.x`), the same major CI runs.
 
 Every build command ends in `--filter <app>... build`. The trailing `...`
 builds the workspace packages the app depends on (`@campus/session`) first;
@@ -80,7 +81,7 @@ change to either reaches both apps:
   the database pool closes idle connections and why nothing here should
   poll; a signed-in browser refreshing its token also wakes it.
   `SCHEDULER_TIMER_ENABLED=false` there: scheduled jobs (calendar sync,
-  grant revocations) then run on the back of requests, at most once a
+  grant revocations, the retention sweep) then run on the back of requests, at most once a
   minute, instead of on a timer that would keep it awake.
 - Healthcheck path: `/v1/health`
 - Env vars: `DATABASE_URL` (Postgres plugin reference), `NODE_ENV=production`,
@@ -100,7 +101,7 @@ change to either reaches both apps:
   `INVITE_TTL_DAYS` (invite lifetime in days; optional, defaults to 7),
   `NOTIFICATION_RETENTION_DAYS` and `AUDIT_LOG_RETENTION_DAYS` (what the
   retention sweep keeps; optional, default 90 and 365, at least 30; the sweep
-  only runs when called — see `apps/campus-api/src/modules/admin/README.md`),
+  runs daily on the scheduler — see `apps/campus-api/src/modules/admin/README.md`),
   `FF_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM` (the invite
   email, e.g. `Campus by Rise <invites@campusbyrise.com>`),
   `RESEND_INVITE_TEMPLATE_ID`, `RESEND_INVITE_ADMIN_TEMPLATE_ID` and
@@ -471,14 +472,10 @@ at another server with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
 
 ## Open items
 
-- `world` has no public domain — add one once something actually calls it.
 - Production is not described in `.railway/railway.ts`. It has no Redis, no
   variables on campus-api or world, and older build settings; bring it in
   line before the file is taught about it. Without Redis there, notifications
   are listed but never pushed to open sockets.
-- Node version isn't pinned on Railway. Railpack takes it from `engines.node`
-  in the root `package.json`, which says `>=20`, so it builds on Node 20
-  while CI runs 24. Pin it (for example `"node": "24.x"`) to match.
 - World on Railway's own domain cannot get the cookie: `up.railway.app` is a
   public suffix, so no `Domain` can span two services there. It works once
   both sit under the custom domain with `AUTH_COOKIE_DOMAIN` set.
