@@ -49,7 +49,7 @@ export interface PersonProperties {
 
 export interface CohortProperties {
   status: string;
-  start_date: string;
+  start_date: string | null;
 }
 
 export interface Analytics {

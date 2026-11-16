@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { eq, sql } from 'drizzle-orm';
 
 import {
@@ -57,7 +58,7 @@ describe.skipIf(!REAL_POSTGRES_URL)(
         config,
         pg.db as never,
         new UsersService(pg.db as never),
-        new CohortMembersService(pg.db as never),
+        new CohortMembersService(pg.db as never, createTestAnalytics()),
       );
     });
 

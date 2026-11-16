@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -10,6 +11,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 
 import { AppModule } from './../src/app.module.js';
+import { ANALYTICS } from './../src/infra/analytics/analytics.module.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import {
@@ -48,6 +50,8 @@ const unlimited = {
   }),
 };
 const db = drizzle(new PGlite(), { schema });
+/** What would have gone to PostHog. */
+const analytics = createTestAnalytics();
 
 describe('mentorship group admin routes (e2e)', () => {
   let app: INestApplication<App>;
@@ -101,6 +105,8 @@ describe('mentorship group admin routes (e2e)', () => {
       .useValue(disabledEmailSender)
       .overrideProvider(ThrottlerStorage)
       .useValue(unlimited)
+      .overrideProvider(ANALYTICS)
+      .useValue(analytics)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -128,6 +134,7 @@ describe('mentorship group admin routes (e2e)', () => {
     await db.execute(
       sql`truncate space_memberships, spaces, maps, mentorship_group_students, mentorship_groups, invites, audit_log, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
     );
+    analytics.events.length = 0;
     const [admin] = await db
       .insert(users)
       .values({ email: 'admin@campus.local', systemRole: SystemRole.Admin })
@@ -273,6 +280,17 @@ describe('mentorship group admin routes (e2e)', () => {
         mentor: { cohortMemberId: w.mentor1.id },
         students: [],
       });
+      expect(
+        analytics.events.filter((e) => e.event.startsWith('mentorship_group.')),
+      ).toEqual([
+        expect.objectContaining({
+          event: 'mentorship_group.created',
+          properties: expect.objectContaining({
+            size: 0,
+            cohort_id: w.cohort.id,
+          }),
+        }),
+      ]);
 
       const added1 = (
         await as(adminCookie)

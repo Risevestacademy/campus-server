@@ -58,8 +58,15 @@ export class FeedbackController {
     @CurrentUser() author: AuthenticatedUser,
     @Body() dto: CreateFeedbackDto,
     @Headers('user-agent') userAgent: string | undefined,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<FeedbackReceiptDto> {
-    const receipt = await this.feedback.create(author, dto, userAgent);
+    const receipt = await this.feedback.create(
+      author,
+      dto,
+      userAgent,
+      undefined,
+      correlationId,
+    );
     // After the write, and not waited for. The report is saved and in the
     // list whatever becomes of the email, and a member held up by a slow
     // mail provider sends it again. notify() never rejects.

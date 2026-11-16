@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, eq, inArray, ne, sql } from 'drizzle-orm';
 
+import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
 import { CONFIG } from '../../infra/config/config.constants.js';
 import type { Env } from '../../infra/config/env.js';
 import {
@@ -71,6 +75,7 @@ type GroupRow = typeof mentorshipGroups.$inferSelect;
 export class MentorshipGroupsService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
     @Inject(CONFIG) private readonly config?: Pick<Env, 'MEDIA_PUBLIC_URL'>,
   ) {}
 
@@ -108,7 +113,16 @@ export class MentorshipGroupsService {
         return row;
       });
 
-      return (await this.loadGroups(this.db, [row]))[0];
+      const [group] = await this.loadGroups(this.db, [row]);
+      if (audit.actorUserId) {
+        this.analytics.track(
+          'mentorship_group.created',
+          audit.actorUserId,
+          { size: group.students.length },
+          { cohortId, correlationId: audit.correlationId },
+        );
+      }
+      return group;
     } catch (err) {
       throw this.translateWriteError(err, {
         cohortId,

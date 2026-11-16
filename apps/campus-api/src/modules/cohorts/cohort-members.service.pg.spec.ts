@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { eq } from 'drizzle-orm';
 
 import {
@@ -41,8 +42,11 @@ describe.skipIf(!REAL_POSTGRES_URL)(
 
     beforeAll(() => {
       pg = connectRealPostgres();
-      members = new CohortMembersService(pg.db as never);
-      cohortsService = new CohortsService(pg.db as never);
+      members = new CohortMembersService(pg.db as never, createTestAnalytics());
+      cohortsService = new CohortsService(
+        pg.db as never,
+        createTestAnalytics(),
+      );
     });
 
     afterAll(async () => {

@@ -8,6 +8,10 @@ import {
 import type { Request, Response } from 'express';
 import { PinoLogger } from 'nestjs-pino';
 
+import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import {
   resolveExceptionStatus,
@@ -52,6 +56,7 @@ export class SignInRedirectFilter implements ExceptionFilter {
   constructor(
     @Inject(CONFIG) private readonly config: Env,
     private readonly logger: PinoLogger,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
   ) {
     this.logger.setContext(SignInRedirectFilter.name);
   }
@@ -64,7 +69,14 @@ export class SignInRedirectFilter implements ExceptionFilter {
 
     const ctx = host.switchToHttp();
     const res = ctx.getResponse<Response>();
+    const req = ctx.getRequest<Request & { id?: unknown }>();
     const code = signInErrorCode(exception);
+
+    this.analytics.trackAnonymous(
+      'auth.sign_in_failed',
+      { reason: code, client: 'web' },
+      { correlationId: typeof req.id === 'string' ? req.id : undefined },
+    );
 
     // Every server_error is logged: the user is told something went wrong on
     // our side, so there has to be a record of what.
@@ -72,7 +84,7 @@ export class SignInRedirectFilter implements ExceptionFilter {
       logRedirectedFailure(
         this.logger,
         exception,
-        ctx.getRequest<Request & { id?: string }>(),
+        req as Request & { id?: string },
         'Unexpected sign-in failure',
       );
     }
