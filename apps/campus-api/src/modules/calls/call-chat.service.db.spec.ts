@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { spaceRoomName, type CallEvent } from '@campus/media';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
@@ -51,6 +52,7 @@ const calls = new CallsService(
   {} as never,
   { setContext: () => undefined, warn: () => undefined } as never,
   chat,
+  createTestAnalytics(),
 );
 
 let member: AuthenticatedUser;

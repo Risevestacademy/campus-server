@@ -117,6 +117,21 @@ person it was done to. A space is named by its `spaces.id` and kind, never its
 name, and the corridors produce no space events. Chat is only ever counted,
 never sent.
 
+## What calls send
+
+campus-api sends these from LiveKit's webhooks, once each change is recorded.
+A retried webhook that changes nothing sends nothing.
+
+| Event                | When                                                                                     | Whose                                                     |
+| -------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `call.left`          | Somebody's time in a call ends: they left, the room finished, or a newer run replaced it | Theirs with consent, else a stand-in per stay in the call |
+| `call.ended`         | A call ends, with how long it ran, how many came and the most at once                    | Nobody                                                    |
+| `recording.started`  | LiveKit takes on a recording                                                             | The staff member who started it, no consent asked         |
+| `recording.finished` | A recording completes or fails, including a start LiveKit refused                        | Nobody                                                    |
+
+Calls start with audio and video off, and only video is recorded, so `call.left`
+says whether video went on and nothing about the microphone.
+
 ## How to verify it works
 
 1. Trigger a 500 → it shows up in PostHog Error Tracking with its route and

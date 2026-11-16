@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import {
   RecordingRefusedError,
   spaceRoomName,
@@ -30,6 +31,7 @@ import type { RecordingMedia } from './recording-media.js';
 import { RecordingsService, START_SETTLE_MS } from './recordings.service.js';
 import { RecordingStatus, recordings, sessions } from './schema.js';
 
+const analytics = createTestAnalytics();
 const MIGRATIONS = fileURLToPath(
   new URL('../../infra/database/migrations', import.meta.url),
 );
@@ -123,7 +125,12 @@ beforeEach(async () => {
       return this.known.get(fileKey) ?? null;
     },
   };
-  service = new RecordingsService(db as never, media, logger as never);
+  service = new RecordingsService(
+    db as never,
+    media,
+    logger as never,
+    analytics,
+  );
 
   const [map] = await db
     .insert(maps)
@@ -423,6 +430,7 @@ describe('starting a recording', () => {
       db as never,
       null,
       logger as never,
+      analytics,
     );
 
     await expect(
@@ -558,5 +566,77 @@ describe('what LiveKit says of a recording', () => {
       service.record(event({ state: 'active' }), later(1)),
     ).resolves.toBeUndefined();
     expect(await rows()).toEqual([]);
+  });
+});
+
+describe('analytics', () => {
+  const complete = (): RecordingEvent => ({
+    kind: 'recording_updated',
+    egressId: 'EG_1',
+    room: spaceRoomName({ cohortId, spaceId: classroom }),
+    roomId: null,
+    fileKey: null,
+    state: 'complete',
+    startedAt: later(1),
+    endedAt: later(61),
+    durationMs: 3_600_000,
+    sizeBytes: 1,
+    error: null,
+  });
+
+  beforeEach(async () => {
+    analytics.events.length = 0;
+    analytics.dropped.length = 0;
+    await openCall(classroom);
+  });
+
+  afterEach(() => {
+    expect(analytics.dropped).toEqual([]);
+  });
+
+  it('counts a start under the staff member who started it', async () => {
+    await service.start(professor, cohortId, classroom, NOW);
+
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        event: 'recording.started',
+        distinctId: professor,
+        properties: expect.objectContaining({
+          space_kind: expect.any(String),
+        }),
+      }),
+    ]);
+  });
+
+  it('counts a recording finishing once, under nobody, in its cohort', async () => {
+    await service.start(professor, cohortId, classroom, NOW);
+    analytics.events.length = 0;
+
+    await service.record(complete(), later(62));
+    await service.record(complete(), later(63));
+
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        event: 'recording.finished',
+        properties: expect.objectContaining({
+          outcome: 'complete',
+          duration_s: 3600,
+          cohort_id: cohortId,
+          $process_person_profile: false,
+        }),
+      }),
+    ]);
+  });
+
+  it('counts a start LiveKit refused as failed, and no start', async () => {
+    media.refuse = true;
+
+    await expect(
+      service.start(professor, cohortId, classroom, NOW),
+    ).rejects.toThrow(RecordingUnavailableException);
+
+    expect(
+      analytics.events.map((e) => [e.event, e.properties.outcome]),
+    ).toEqual([['recording.finished', 'failed']]);
   });
 });

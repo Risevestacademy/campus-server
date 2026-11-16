@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { spaceRoomName } from '@campus/media';
 import { eq } from 'drizzle-orm';
 
@@ -50,6 +51,7 @@ describe.skipIf(!REAL_POSTGRES_URL)(
         {} as never,
         { setContext: () => undefined, warn: () => undefined } as never,
         chat,
+        createTestAnalytics(),
       );
     });
 

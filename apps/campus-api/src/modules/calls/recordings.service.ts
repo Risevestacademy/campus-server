@@ -7,6 +7,7 @@ import {
   type RecordingEvent,
   type StartedRecording,
 } from '@campus/media';
+import type { EventProperties } from '@campus/analytics';
 import { COHORT_ROLES, SPACE_ACCESS, mayEnter } from '@campus/space-access';
 import { Inject, Injectable } from '@nestjs/common';
 import {
@@ -27,8 +28,13 @@ import {
   type Db,
   type DbExecutor,
 } from '../../infra/database/database.constants.js';
+import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
 import { timestamptz } from '../../infra/database/timestamptz.js';
 import { isUniqueViolation } from '../../infra/database/unique-violation.js';
+import { spaces } from '../maps/schema.js';
 import { hasAdminPowers } from '../users/schema.js';
 import {
   RecordingConflictException,
@@ -78,6 +84,7 @@ export class RecordingsService {
     @Inject(DRIZZLE) private readonly db: Db,
     @Inject(RECORDING_MEDIA) private readonly media: RecordingMedia | null,
     private readonly logger: PinoLogger,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
   ) {
     this.logger.setContext(RecordingsService.name);
   }
@@ -144,7 +151,7 @@ export class RecordingsService {
           { err, recordingId: id, cohortId, spaceId },
           'LiveKit would not start a recording',
         );
-        await this.db
+        const failed = await this.db
           .update(recordings)
           .set({
             status: RecordingStatus.Failed,
@@ -156,7 +163,9 @@ export class RecordingsService {
               eq(recordings.id, id),
               eq(recordings.status, RecordingStatus.Starting),
             ),
-          );
+          )
+          .returning({ id: recordings.id });
+        await this.trackFinished(failed.map((row) => row.id));
         throw new RecordingUnavailableException(
           'The recording could not be started',
           { cohortId, spaceId },
@@ -170,6 +179,7 @@ export class RecordingsService {
       );
       const found = await this.find(media, row);
       if (found) {
+        await this.trackStarted(userId, spaceId);
         await this.record(found, now);
         return this.byId(id);
       }
@@ -185,6 +195,7 @@ export class RecordingsService {
       .set({ providerEgressId: started.egressId })
       .where(eq(recordings.id, id));
     if (started.roomId) await this.follow(this.db, id, started.roomId);
+    await this.trackStarted(userId, spaceId);
     return this.byId(id);
   }
 
@@ -233,7 +244,7 @@ export class RecordingsService {
   /** Applies what LiveKit says of a recording. A finished one stays finished. */
   async record(event: RecordingEvent, at: Date): Promise<void> {
     if (!parseSpaceRoomName(event.room)) return;
-    await this.db.transaction(async (tx) => {
+    const finished = await this.db.transaction(async (tx) => {
       const [row] = await tx
         .select()
         .from(recordings)
@@ -283,7 +294,62 @@ export class RecordingsService {
           error: event.error,
         })
         .where(eq(recordings.id, row.id));
+      return ended ? row.id : null;
     });
+    if (finished) await this.trackFinished([finished]);
+  }
+
+  /** A recording LiveKit took on, under the staff member who started it. */
+  private async trackStarted(userId: string, spaceId: string): Promise<void> {
+    try {
+      const [space] = await this.db
+        .select({ kind: spaces.kind })
+        .from(spaces)
+        .where(eq(spaces.id, spaceId));
+      if (!space) return;
+      this.analytics.track('recording.started', userId, {
+        space_kind: (space.kind ??
+          'unset') as EventProperties<'recording.started'>['space_kind'],
+      });
+    } catch (err) {
+      this.logger.warn({ err }, 'could not count a recording start');
+    }
+  }
+
+  /** Recordings that have just finished, either way, under nobody. */
+  private async trackFinished(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+      const rows = await this.db
+        .select({
+          status: recordings.status,
+          durationMs: recordings.durationMs,
+          startedAt: recordings.startedAt,
+          endedAt: recordings.endedAt,
+          cohortId: sessions.cohortId,
+        })
+        .from(recordings)
+        .innerJoin(sessions, eq(sessions.id, recordings.sessionId))
+        .where(inArray(recordings.id, [...ids]));
+      for (const row of rows) {
+        const ms =
+          row.durationMs ??
+          (row.startedAt && row.endedAt
+            ? row.endedAt.getTime() - row.startedAt.getTime()
+            : 0);
+        this.analytics.trackAnonymous(
+          'recording.finished',
+          {
+            outcome:
+              row.status === RecordingStatus.Complete ? 'complete' : 'failed',
+            duration_s: Math.max(0, Math.floor(ms / 1000)),
+          },
+          { cohortId: row.cohortId },
+        );
+      }
+    } catch (err) {
+      this.logger.warn({ err }, 'could not count a finished recording');
+    }
   }
 
   /**
@@ -338,7 +404,7 @@ export class RecordingsService {
         await this.record(found, now);
         continue;
       }
-      await this.db
+      const failed = await this.db
         .update(recordings)
         .set({
           status: RecordingStatus.Failed,
@@ -350,7 +416,9 @@ export class RecordingsService {
             eq(recordings.id, recording.id),
             inArray(recordings.status, LIVE),
           ),
-        );
+        )
+        .returning({ id: recordings.id });
+      await this.trackFinished(failed.map((row) => row.id));
     }
   }
 

@@ -47,6 +47,7 @@ describe('the event catalogue', () => {
       'space.lock_changed',
       'entry.request_ended',
       'walk.ended',
+      'call.left',
     ]);
   });
 });

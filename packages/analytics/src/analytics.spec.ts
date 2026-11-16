@@ -299,6 +299,23 @@ describe('trackAnonymous', () => {
     const [first, second] = analytics.events;
     expect(first.distinctId).not.toBe(second.distinctId);
   });
+
+  it('carries a cohort as a property alone, with no group and no person', () => {
+    const analytics = createTestAnalytics();
+
+    analytics.trackAnonymous(
+      'recording.finished',
+      { outcome: 'complete', duration_s: 90 },
+      { cohortId: COHORT },
+    );
+
+    const [event] = analytics.events;
+    expect(event.properties).toMatchObject({
+      cohort_id: COHORT,
+      $process_person_profile: false,
+    });
+    expect(event.groups).toBeUndefined();
+  });
 });
 
 describe('createAnalytics', () => {
