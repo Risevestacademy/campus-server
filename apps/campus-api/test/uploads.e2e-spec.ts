@@ -213,6 +213,11 @@ describe('uploads (e2e)', () => {
           contentTypes: expect.arrayContaining(['application/pdf', 'text/csv']),
           maxBytes: 25 * 1024 * 1024,
         },
+        {
+          kind: 'call_chat_attachment',
+          contentTypes: expect.arrayContaining(['application/pdf', 'text/csv']),
+          maxBytes: 25 * 1024 * 1024,
+        },
       ],
       maxAttachments: 10,
     });

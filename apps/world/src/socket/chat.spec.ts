@@ -223,6 +223,7 @@ describe('saying something', () => {
       userId: ada.userId,
       spaceKey: DEFAULT_SPACE_KEY,
       text: 'hello',
+      attachment: null,
       at: expect.any(String),
     });
     await expect(waitFor(ada, (m) => m.type === 'said')).resolves.toEqual(said);
@@ -292,6 +293,43 @@ describe('saying something', () => {
       ]);
     say(ada, 'x'.repeat(500));
     await waitFor(ada, (m) => m.type === 'said');
+    await leave(ada);
+  });
+
+  it('passes a file on as it was given, with or without words', async () => {
+    const ada = await arrive();
+    const grace = await arrive();
+    const attachment = {
+      mediaId: randomUUID(),
+      fileName: 'plan.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 48213,
+    };
+
+    ada.ws.send(JSON.stringify({ type: 'say', attachment }));
+
+    await expect(
+      waitFor(grace, (m) => m.type === 'said'),
+    ).resolves.toMatchObject({ userId: ada.userId, text: '', attachment });
+    await leave(ada, grace);
+  });
+
+  it('refuses a file that is not described properly', async () => {
+    const ada = await arrive();
+
+    for (const attachment of [
+      { mediaId: 'nope', fileName: 'a.pdf', contentType: 'x', sizeBytes: 1 },
+      { mediaId: randomUUID(), fileName: null, contentType: '', sizeBytes: 1 },
+      { mediaId: randomUUID(), fileName: null, contentType: 'x', sizeBytes: 0 },
+    ]) {
+      ada.ws.send(JSON.stringify({ type: 'say', text: 'hi', attachment }));
+    }
+
+    await expect
+      .poll(() => ada.messages.filter((m) => m.type === 'error').length)
+      .toBe(3);
+    await quiet();
+    expect(heard(ada)).toEqual([]);
     await leave(ada);
   });
 

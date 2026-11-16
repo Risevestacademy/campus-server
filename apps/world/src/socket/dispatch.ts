@@ -70,7 +70,7 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
         return;
       }
       case 'say':
-        chat.say(connection, message.text);
+        chat.say(connection, message);
         return;
       default:
         send(connection.socket, {
@@ -177,7 +177,7 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
           return;
         case 'say':
           presence.noteActivity(connection);
-          chat.say(connection, result.message.text);
+          chat.say(connection, result.message);
           return;
         case 'mute':
           presence.noteActivity(connection);

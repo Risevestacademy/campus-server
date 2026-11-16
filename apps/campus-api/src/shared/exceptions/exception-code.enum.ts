@@ -26,6 +26,8 @@ export enum ExceptionCode {
   UploadTypeNotAllowed = 'UPLOAD_TYPE_NOT_ALLOWED',
   /** The uploaded file is missing, or is not what its upload was signed for. */
   UploadMismatch = 'UPLOAD_MISMATCH',
+  /** The file was there, and the caller may see where it was, but it is gone. */
+  MediaGone = 'MEDIA_GONE',
   /**
    * The API is up and the request was sound, but something it depends on is
    * not there to answer: not configured on this deployment, or not reachable
@@ -66,6 +68,8 @@ export function mapExceptionCodeToStatus(code: ExceptionCode): number {
       return 415;
     case ExceptionCode.UploadMismatch:
       return 422;
+    case ExceptionCode.MediaGone:
+      return 410;
     case ExceptionCode.RateLimited:
       return 429;
     case ExceptionCode.ServiceUnavailable:

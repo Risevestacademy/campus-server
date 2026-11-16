@@ -2,6 +2,7 @@ import { applyDecorators } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiCreatedResponse,
+  ApiGoneResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -84,7 +85,8 @@ export function ApiReadMedia(): MethodDecorator {
         'For refreshing an attachment link that has expired or answered 403. ' +
         'The link lasts 15 minutes. Images open in the browser; anything ' +
         'else downloads. Only for someone who can see what the file is ' +
-        'attached to: a notice they can see, or feedback an admin may read.',
+        'attached to: a notice they can see, feedback an admin may read, or ' +
+        'a call in a space they may enter.',
     }),
     ApiOkResponse({ type: SignedReadDto }),
     ApiBadRequestResponse({
@@ -96,6 +98,11 @@ export function ApiReadMedia(): MethodDecorator {
       type: ApiErrorResponseDto,
       description:
         'No such file, or not one you may read: the same answer either way.',
+    }),
+    ApiGoneResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'A file you could read, since let go by its owner, such as one sent in a call that has ended (`MEDIA_GONE`). Show it as no longer available.',
     }),
     ApiServiceUnavailableResponse({
       type: ApiErrorResponseDto,

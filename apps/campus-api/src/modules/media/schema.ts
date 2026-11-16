@@ -17,6 +17,7 @@ export enum MediaKind {
   Avatar = 'avatar',
   NoticeAttachment = 'notice_attachment',
   FeedbackAttachment = 'feedback_attachment',
+  CallChatAttachment = 'call_chat_attachment',
 }
 
 export enum MediaBucket {

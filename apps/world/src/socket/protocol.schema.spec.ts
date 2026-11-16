@@ -102,6 +102,7 @@ describe('protocol.schema.json', () => {
         'Player',
         'Avatar',
         'SpaceName',
+        'ChatAttachment',
         'Call',
         'BroadcastCall',
         'Direction',

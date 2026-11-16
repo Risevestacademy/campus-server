@@ -2,7 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { SessionScope, signSessionToken } from '@campus/session';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
@@ -13,12 +13,21 @@ import { AppModule } from './../src/app.module.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
+import { sessions } from './../src/modules/calls/schema.js';
 import {
   CohortRole,
   cohortMembers,
   cohorts,
 } from './../src/modules/cohorts/schema.js';
+import {
+  AudioMode,
+  SpaceAccess,
+  SpaceKind,
+  maps,
+  spaces,
+} from './../src/modules/maps/schema.js';
 import { MEDIA_STORAGE } from './../src/modules/media/media-storage.js';
+import { MediaStatus, media } from './../src/modules/media/schema.js';
 import {
   memoryMediaStorage,
   PDF,
@@ -37,12 +46,18 @@ const MIGRATIONS = fileURLToPath(
 const SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
 const db = drizzle(new PGlite(), { schema });
 const { objects, storage } = memoryMediaStorage();
+const tooMany = Array.from(
+  { length: 11 },
+  (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+);
+const badAttachmentIds = [tooMany, [tooMany[0], tooMany[0]], ['nope'], null];
 
 describe('attachments (e2e)', () => {
   let app: INestApplication<App>;
   let adminCookie: string;
   let memberCookie: string;
   let outsiderCookie: string;
+  let cohortId: string;
 
   const cookieFor = async (user: typeof users.$inferSelect) => {
     const { token } = await signSessionToken(
@@ -111,7 +126,7 @@ describe('attachments (e2e)', () => {
 
   beforeEach(async () => {
     await db.execute(
-      sql`truncate notice_attachments, feedback_attachments, media, notifications, audit_log, notices, feedback, cohort_members, cohorts, users cascade`,
+      sql`truncate call_chat_attachments, notice_attachments, feedback_attachments, media, sessions, spaces, maps, notifications, audit_log, notices, feedback, cohort_members, cohorts, users cascade`,
     );
     objects.clear();
     const [admin, member, outsider] = await db
@@ -126,6 +141,7 @@ describe('attachments (e2e)', () => {
       .insert(cohorts)
       .values({ name: 'Cohort 1', code: 'C1' })
       .returning();
+    cohortId = cohort.id;
     await db.insert(cohortMembers).values({
       userId: member.id,
       cohortId: cohort.id,
@@ -200,11 +216,7 @@ describe('attachments (e2e)', () => {
     });
 
     it('refuses more than ten files, repeats, and ids that are not ids', async () => {
-      const ids = Array.from(
-        { length: 11 },
-        (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
-      );
-      for (const attachmentIds of [ids, [ids[0], ids[0]], ['nope']]) {
+      for (const attachmentIds of badAttachmentIds) {
         await request(app.getHttpServer())
           .post('/v1/notices')
           .set('Cookie', adminCookie)
@@ -238,6 +250,103 @@ describe('attachments (e2e)', () => {
       ]);
       await readUrl(file, adminCookie).expect(200);
       await readUrl(file, memberCookie).expect(404);
+    });
+
+    it('refuses more than ten files, repeats, and ids that are not ids', async () => {
+      for (const attachmentIds of badAttachmentIds) {
+        await request(app.getHttpServer())
+          .post('/v1/feedback')
+          .set('Cookie', memberCookie)
+          .send({
+            type: 'bug',
+            title: 'The door will not open',
+            details: 'See the attached.',
+            attachmentIds,
+          })
+          .expect(400);
+      }
+      await request(app.getHttpServer())
+        .post('/v1/feedback')
+        .set('Cookie', memberCookie)
+        .send({
+          type: 'bug',
+          title: 'The door will not open',
+          details: 'See the attached.',
+          attachmentIds: [],
+        })
+        .expect(201);
+    });
+  });
+
+  describe('in a call', () => {
+    let spaceId: string;
+    const attach = (mediaId: string, cookie = memberCookie) =>
+      request(app.getHttpServer())
+        .post(`/v1/cohorts/${cohortId}/spaces/${spaceId}/call/attachments`)
+        .set('Cookie', cookie)
+        .send({ mediaId });
+
+    beforeEach(async () => {
+      const [map] = await db
+        .insert(maps)
+        .values({ key: 'campus', name: 'Campus' })
+        .returning();
+      const [space] = await db
+        .insert(spaces)
+        .values({
+          mapId: map.id,
+          key: 'library',
+          name: 'Library',
+          kind: SpaceKind.MeetingRoom,
+          audioMode: AudioMode.Boundary,
+          access: SpaceAccess.Normal,
+        })
+        .returning();
+      spaceId = space.id;
+    });
+
+    it('sends a file that others in the space open, until it is gone', async () => {
+      await db
+        .insert(sessions)
+        .values({ cohortId, spaceId, providerRoomId: 'RM_1' });
+      const file = await uploaded(memberCookie, 'call_chat_attachment');
+
+      const sent = await attach(file).expect(201);
+
+      expect(sent.body).toMatchObject({
+        id: file,
+        fileName: 'Term plan.pdf',
+        url: expect.stringContaining('?read'),
+      });
+      await readUrl(file, adminCookie).expect(200);
+      await readUrl(file, outsiderCookie).expect(404);
+
+      await db
+        .update(media)
+        .set({
+          status: MediaStatus.Removed,
+          removedAt: new Date(),
+          purgeAfter: new Date(),
+        })
+        .where(eq(media.id, file));
+      const gone = await readUrl(file, adminCookie).expect(410);
+      expect(gone.body.error.code).toBe('MEDIA_GONE');
+      await readUrl(file, outsiderCookie).expect(404);
+    });
+
+    it('answers 409 with no call going on, and 403 to somebody not in the cohort', async () => {
+      const file = await uploaded(memberCookie, 'call_chat_attachment');
+      const conflict = await attach(file).expect(409);
+      expect(conflict.body.error.code).toBe('CONFLICT');
+
+      await db
+        .insert(sessions)
+        .values({ cohortId, spaceId, providerRoomId: 'RM_1' });
+      await attach(
+        await uploaded(outsiderCookie, 'call_chat_attachment'),
+        outsiderCookie,
+      ).expect(403);
+      await attach('nope').expect(400);
     });
   });
 

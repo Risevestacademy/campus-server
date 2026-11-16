@@ -9,6 +9,8 @@ import {
 import { cohorts } from '../cohorts/schema.js';
 import { AudioMode, SpaceAccess, maps, spaces } from '../maps/schema.js';
 import { users } from '../users/schema.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
+import { CallChatService } from './call-chat.service.js';
 import { CallsService } from './calls.service.js';
 import { sessionParticipants, sessions } from './schema.js';
 
@@ -27,7 +29,12 @@ describe.skipIf(!REAL_POSTGRES_URL)('CallsService, webhooks at once', () => {
 
   beforeAll(() => {
     pg = connectRealPostgres();
-    service = new CallsService(pg.db as never, {} as never, logger as never);
+    service = new CallsService(
+      pg.db as never,
+      {} as never,
+      logger as never,
+      new CallChatService(pg.db as never, mediaWithoutStorage(pg.db)),
+    );
   });
 
   afterAll(async () => {

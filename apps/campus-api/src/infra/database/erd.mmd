@@ -1,7 +1,7 @@
 %% =====================================================================
 %% Campus by Rise — full ERD
 %% GENERATED — do not hand-edit.
-%% 34 tables, 25 enums.
+%% 35 tables, 25 enums.
 %% -
 %% Mermaid ER cannot express nullability, defaults, column lengths,
 %% partial indexes or CHECK constraints. Those are listed at the
@@ -438,9 +438,14 @@ erDiagram
         smallint position
     }
 
+    CALL_CHAT_ATTACHMENTS {
+        uuid media_id PK,FK
+        uuid session_id FK
+    }
+
     MEDIA {
         uuid id PK
-        media_kind_enum kind "avatar | notice_attachment | feedback_attachment"
+        media_kind_enum kind "avatar | notice_attachment | feedback_attachment | call_chat_attachment"
         media_bucket_enum bucket "public | private"
         varchar upload_key UK "incoming/<id>, private"
         varchar key UK "where it is served from"
@@ -532,6 +537,8 @@ erDiagram
     MEDIA ||--o| NOTICE_ATTACHMENTS : "attached_as"
     FEEDBACK ||--o{ FEEDBACK_ATTACHMENTS : "carries"
     MEDIA ||--o| FEEDBACK_ATTACHMENTS : "attached_as"
+    SESSIONS ||--o{ CALL_CHAT_ATTACHMENTS : "carries"
+    MEDIA ||--o| CALL_CHAT_ATTACHMENTS : "attached_as"
     SPACES ||--o{ AUDIT_LOG : "subject_of"
 
 %% =====================================================================

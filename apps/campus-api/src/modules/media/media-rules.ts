@@ -70,6 +70,7 @@ export const MEDIA_RULES: Record<MediaKind, MediaRule> = {
   },
   [MediaKind.NoticeAttachment]: attachment('notices'),
   [MediaKind.FeedbackAttachment]: attachment('feedback'),
+  [MediaKind.CallChatAttachment]: attachment('call-chat'),
 };
 
 const EXTENSIONS: Record<string, string> = {

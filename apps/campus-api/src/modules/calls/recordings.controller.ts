@@ -13,7 +13,8 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiStartRecording, ApiStopRecording } from './docs/recordings.docs.js';
-import { RecordingDto, RecordingSpaceParamDto } from './dto/recording.dto.js';
+import { CallSpaceParamDto } from './dto/call-space.dto.js';
+import { RecordingDto } from './dto/recording.dto.js';
 import { RecordingsService } from './recordings.service.js';
 
 @ApiTags('recordings')
@@ -26,7 +27,7 @@ export class RecordingsController {
   @Post()
   @ApiStartRecording()
   async start(
-    @Param() params: RecordingSpaceParamDto,
+    @Param() params: CallSpaceParamDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<RecordingDto> {
     return RecordingDto.from(
@@ -43,7 +44,7 @@ export class RecordingsController {
   @HttpCode(HttpStatus.OK)
   @ApiStopRecording()
   async stop(
-    @Param() params: RecordingSpaceParamDto,
+    @Param() params: CallSpaceParamDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<RecordingDto> {
     return RecordingDto.from(

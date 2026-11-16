@@ -491,6 +491,12 @@ Text goes where voice goes: a line reaches whoever can hear you.
 
 - **Send** `{ "type": "say", "text": "…" }`. It is trimmed, and must be 1 to
   500 characters; anything else is a `BAD_MESSAGE` error.
+- **A file** goes with a line as `attachment`: `{ "mediaId", "fileName",
+"contentType", "sizeBytes" }`, as campus-api answered
+  `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/call/attachments`. The text
+  may then be empty. World passes it on without checking it; whoever gets it
+  opens it with campus-api's `GET /v1/media/{mediaId}/url`, which lets in
+  whoever may enter the space and answers 410 once the call has ended.
 - **Who gets it:** in a whole-room space, everybody in that space; in a
   proximity space (the corridors included), the people within its
   subscribe radius when you send it. That is the radius exactly, without
@@ -499,7 +505,8 @@ Text goes where voice goes: a line reaches whoever can hear you.
   match. Never anybody in another space or cohort. Chat works whether or not calls are
   set up.
 - **What arrives**, to them and to you: `{ "type": "said", "id": "…",
-"userId": "…", "spaceKey": "…", "text": "…", "at": "…" }`. Show your own
+"userId": "…", "spaceKey": "…", "text": "…", "attachment": null, "at": "…" }`,
+  with the file when one was sent. Show your own
   line when its `said` comes back. `spaceKey` lets a client keep a
   meeting's chat apart from the corridor's.
 - **Nothing is kept.** A line reaches whoever is in earshot at that moment;
