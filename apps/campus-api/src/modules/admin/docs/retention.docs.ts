@@ -22,8 +22,8 @@ export function ApiSweepRetention(): MethodDecorator {
         'Send `table` to sweep one table only, and `retentionDays` with it ' +
         'for a one-off period. No period may be under 30 days.\n\n' +
         'Each table is swept in a transaction of its own, which also writes ' +
-        'a `retention_swept` audit entry. Nothing runs this on a timer: call ' +
-        'it daily or weekly from an external scheduler.',
+        'a `retention_swept` audit entry. The same sweep already runs once ' +
+        'a day on its own; call this for one now.',
     }),
     ApiOkResponse({ type: SweepRetentionResponseDto }),
     ApiBadRequestResponse({
