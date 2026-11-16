@@ -46,6 +46,11 @@ const MIGRATIONS = fileURLToPath(
 const SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
 const db = drizzle(new PGlite(), { schema });
 const { objects, storage } = memoryMediaStorage();
+const tooMany = Array.from(
+  { length: 11 },
+  (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+);
+const badAttachmentIds = [tooMany, [tooMany[0], tooMany[0]], ['nope'], null];
 
 describe('attachments (e2e)', () => {
   let app: INestApplication<App>;
@@ -211,11 +216,7 @@ describe('attachments (e2e)', () => {
     });
 
     it('refuses more than ten files, repeats, and ids that are not ids', async () => {
-      const ids = Array.from(
-        { length: 11 },
-        (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
-      );
-      for (const attachmentIds of [ids, [ids[0], ids[0]], ['nope'], null]) {
+      for (const attachmentIds of badAttachmentIds) {
         await request(app.getHttpServer())
           .post('/v1/notices')
           .set('Cookie', adminCookie)
@@ -249,6 +250,31 @@ describe('attachments (e2e)', () => {
       ]);
       await readUrl(file, adminCookie).expect(200);
       await readUrl(file, memberCookie).expect(404);
+    });
+
+    it('refuses more than ten files, repeats, and ids that are not ids', async () => {
+      for (const attachmentIds of badAttachmentIds) {
+        await request(app.getHttpServer())
+          .post('/v1/feedback')
+          .set('Cookie', memberCookie)
+          .send({
+            type: 'bug',
+            title: 'The door will not open',
+            details: 'See the attached.',
+            attachmentIds,
+          })
+          .expect(400);
+      }
+      await request(app.getHttpServer())
+        .post('/v1/feedback')
+        .set('Cookie', memberCookie)
+        .send({
+          type: 'bug',
+          title: 'The door will not open',
+          details: 'See the attached.',
+          attachmentIds: [],
+        })
+        .expect(201);
     });
   });
 
