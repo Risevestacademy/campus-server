@@ -641,8 +641,7 @@ export class Env {
   INVITE_TTL_DAYS: number = 7;
 
   // Retention ------------------------------------------------------------
-  // How long the retention sweep keeps rows, in days. Nothing deletes on a
-  // timer: the sweep runs when POST /v1/admin/retention/sweep is called.
+  // How long the daily retention sweep keeps rows, in days.
 
   /** Read notifications older than this go. Unread ones are kept at any age. */
   @IsOptional()

@@ -5,6 +5,7 @@ import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 
+import type { ScheduledJob } from '../../infra/scheduler/scheduler.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import {
   AUDIT_LOG_APPEND_ONLY_TRIGGER,
@@ -28,9 +29,11 @@ const config = {
   AUDIT_LOG_RETENTION_DAYS: 365,
 };
 const logger = { setContext: vi.fn(), info: vi.fn() };
+const scheduler = { register: vi.fn() };
 const service = new RetentionService(
   db as never,
   config as never,
+  scheduler as never,
   logger as never,
 );
 
@@ -111,6 +114,24 @@ beforeEach(async () => {
 });
 
 describe('RetentionService', () => {
+  it('sweeps both tables daily on the scheduler, with no actor', async () => {
+    await notification(100, true);
+    await auditEntry(400);
+    service.onModuleInit();
+    const job = scheduler.register.mock.calls.at(-1)?.[0] as ScheduledJob;
+    expect(job).toMatchObject({ name: 'retention-sweep', everyMs: DAY_MS });
+
+    await job.run(new Date());
+
+    expect(await notificationIds()).toEqual([]);
+    expect(await entriesOf(AuditAction.TrackCreated)).toEqual([]);
+    const sweeps = await entriesOf(AuditAction.RetentionSwept);
+    expect(sweeps).toHaveLength(2);
+    for (const entry of sweeps) {
+      expect(entry.actorUserId).toBeNull();
+    }
+  });
+
   it('deletes only read notifications and audit entries past their period', async () => {
     await notification(100, true);
     await notification(400, true);

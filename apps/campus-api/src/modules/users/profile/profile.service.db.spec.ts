@@ -503,6 +503,33 @@ describe('profile card', () => {
     expect(card.id).toBe(ada.id);
   });
 
+  it('shows any member an admin, with only the cohorts they share', async () => {
+    const admin = await person('admin@campus.local', {
+      systemRole: SystemRole.Admin,
+    });
+    const root = await person('root@campus.local', {
+      systemRole: SystemRole.SuperAdmin,
+    });
+    await join(admin.id, c2, CohortRole.Mentor);
+
+    const adminCard = await service.getCard(viewerOf(ada), admin.id);
+    const rootCard = await service.getCard(viewerOf(grace), root.id);
+
+    expect(adminCard).toMatchObject({ id: admin.id, memberships: [] });
+    expect(rootCard).toMatchObject({ id: root.id, memberships: [] });
+  });
+
+  it('404s a suspended admin to a member', async () => {
+    const admin = await person('admin@campus.local', {
+      systemRole: SystemRole.Admin,
+      status: UserStatus.Suspended,
+    });
+
+    await expect(
+      service.getCard(viewerOf(ada), admin.id),
+    ).rejects.toBeInstanceOf(ProfileNotFoundException);
+  });
+
   it('shows a person their own card, with no cohort needed', async () => {
     const card = await service.getCard(viewerOf(grace), grace.id);
 
@@ -591,8 +618,39 @@ describe("a cohort's people", () => {
     const seen = async (viewer: typeof users.$inferSelect) =>
       (await service.listCohort(viewerOf(viewer), c1)).map((entry) => entry.id);
 
-    await expect(seen(ada)).resolves.toEqual([ada.id]);
-    await expect(seen(admin)).resolves.toEqual([ada.id, banned.id]);
+    await expect(seen(ada)).resolves.toEqual([ada.id, admin.id]);
+    await expect(seen(admin)).resolves.toEqual([ada.id, banned.id, admin.id]);
+  });
+
+  it('lists every admin in every cohort, once each, and a suspended one to admins only', async () => {
+    const ada = await person('ada@campus.local', { displayName: 'Ada' });
+    const admin = await person('admin@campus.local', {
+      displayName: 'Admin',
+      systemRole: SystemRole.Admin,
+    });
+    const root = await person('root@campus.local', {
+      displayName: 'Root',
+      systemRole: SystemRole.SuperAdmin,
+    });
+    const benched = await person('benched@campus.local', {
+      displayName: 'Benched',
+      systemRole: SystemRole.Admin,
+      status: UserStatus.Suspended,
+    });
+    await join(ada.id, c1, CohortRole.Student);
+    await join(admin.id, c1, CohortRole.Professor);
+    await join(admin.id, c2, CohortRole.Professor);
+
+    const seen = async (viewer: typeof users.$inferSelect) =>
+      (await service.listCohort(viewerOf(viewer), c1)).map((entry) => entry.id);
+
+    await expect(seen(ada)).resolves.toEqual([ada.id, admin.id, root.id]);
+    await expect(seen(root)).resolves.toEqual([
+      ada.id,
+      admin.id,
+      benched.id,
+      root.id,
+    ]);
   });
 
   it('refuses somebody with no live place in the cohort', async () => {
@@ -616,7 +674,9 @@ describe("a cohort's people", () => {
       systemRole: SystemRole.Admin,
     });
 
-    await expect(service.listCohort(viewerOf(admin), c2)).resolves.toEqual([]);
+    await expect(
+      service.listCohort(viewerOf(admin), c2),
+    ).resolves.toMatchObject([{ id: admin.id }]);
     await expect(
       service.listCohort(
         viewerOf(admin),

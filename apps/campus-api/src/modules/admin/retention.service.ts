@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { and, isNotNull, lt, sql } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
@@ -9,6 +9,7 @@ import {
   type Db,
   type Tx,
 } from '../../infra/database/database.constants.js';
+import { Scheduler } from '../../infra/scheduler/scheduler.js';
 import { InvalidArgumentException } from '../../shared/exceptions/index.js';
 import { writeAuditEntry } from '../audit/audit-log.js';
 import {
@@ -19,6 +20,7 @@ import {
 import { notifications } from '../notifications/schema.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SWEEP_JOB_MS = DAY_MS;
 
 /**
  * Long enough to wait for audit writes already in flight; short enough that
@@ -52,16 +54,27 @@ export interface RetentionSweepOptions {
 /**
  * Deletes rows that have outlived their retention period, one table at a
  * time, each in a transaction of its own that also writes the sweep's audit
- * entry. Nothing calls it on a timer: see this module's README.
+ * entry. Runs daily on the scheduler, and on demand for super admins.
  */
 @Injectable()
-export class RetentionService {
+export class RetentionService implements OnModuleInit {
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
     @Inject(CONFIG) private readonly config: Env,
+    private readonly scheduler: Scheduler,
     private readonly logger: PinoLogger,
   ) {
     this.logger.setContext(RetentionService.name);
+  }
+
+  onModuleInit(): void {
+    this.scheduler.register({
+      name: 'retention-sweep',
+      everyMs: SWEEP_JOB_MS,
+      run: async (now) => {
+        await this.sweep({ actorUserId: null, now });
+      },
+    });
   }
 
   /**

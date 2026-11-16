@@ -135,12 +135,13 @@ export function ApiGetProfileCard(): MethodDecorator {
         'What one member sees of another: names, photo, bio, address and ' +
         'the cohorts the two share. The phone number is never on a card.\n\n' +
         'A member can open the card of anybody they share a live cohort ' +
-        'with, and sees only the shared cohorts. An admin can open any ' +
-        'card and sees every live cohort, as does a person opening their ' +
-        'own.\n\n' +
+        'with, and sees only the shared cohorts. Any member can open an ' +
+        'admin’s card, also seeing only the shared cohorts, which may be ' +
+        'none. An admin can open any card and sees every live cohort, as ' +
+        'does a person opening their own.\n\n' +
         'Anything else answers 404 — no such account, a suspended one, or ' +
-        'one the caller shares no cohort with — so a card cannot be used to ' +
-        'find out who has an account.',
+        'a non-admin the caller shares no cohort with — so a card cannot be ' +
+        'used to find out who has an account.',
     }),
     ApiOkResponse({ type: ProfileCardDto }),
     ApiBadRequestResponse({
@@ -160,7 +161,8 @@ export function ApiListCohortProfiles(): MethodDecorator {
     ApiOperation({
       summary: "List a cohort's people",
       description:
-        'Everybody with a live place in the cohort, with their display name ' +
+        'Everybody with a live place in the cohort, plus every admin, who ' +
+        'counts as in every cohort, with their display name ' +
         'and sprite, for the sidebar: the whole cohort in one response, ' +
         'sorted by display name with unnamed people last. Who of them is ' +
         'online, and where, comes from the world socket.\n\n' +
