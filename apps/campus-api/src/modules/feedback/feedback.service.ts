@@ -1,6 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import {
   and,
+  asc,
   count,
   desc,
   eq,
@@ -14,7 +15,11 @@ import {
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
-import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
+import {
+  DRIZZLE,
+  type Db,
+  type DbExecutor,
+} from '../../infra/database/database.constants.js';
 import { isCheckViolation } from '../../infra/database/check-violation.js';
 import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
@@ -23,6 +28,8 @@ import { writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { cohortMembers } from '../cohorts/schema.js';
+import { MediaService } from '../media/media.service.js';
+import { MediaKind, media } from '../media/schema.js';
 import {
   SystemRole,
   UserStatus,
@@ -46,6 +53,7 @@ import {
   FeedbackStatus,
   FeedbackType,
   feedback,
+  feedbackAttachments,
 } from './schema.js';
 
 /**
@@ -86,8 +94,29 @@ const listColumns = {
 };
 
 @Injectable()
-export class FeedbackService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+export class FeedbackService implements OnModuleInit {
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    private readonly media: MediaService,
+  ) {}
+
+  onModuleInit(): void {
+    this.media.registerReader(
+      MediaKind.FeedbackAttachment,
+      async (viewer, mediaId) => {
+        if (!hasAdminPowers(viewer.systemRole)) return false;
+        const [row] = await this.db
+          .select({ id: feedback.id })
+          .from(feedbackAttachments)
+          .innerJoin(feedback, eq(feedback.id, feedbackAttachments.feedbackId))
+          .where(
+            and(eq(feedbackAttachments.mediaId, mediaId), visibleTo(viewer)),
+          )
+          .limit(1);
+        return row !== undefined;
+      },
+    );
+  }
 
   /**
    * Saves what a member sent. Who sent it comes from their session; the
@@ -111,6 +140,18 @@ export class FeedbackService {
     if (dto.reportedUserId && dto.type !== FeedbackType.Report) {
       throw invalid('reportedUserId', 'reportedUserId is only for a report');
     }
+    const attachmentIds = dto.attachmentIds ?? [];
+    if (attachmentIds.length > 0) {
+      // The cheap refusals first, so they cost no storage work. Asked again
+      // under the lock below, where they are decided.
+      await this.assertMaySend(this.db, author, dto.cohortId, now);
+      await this.media.verifyAll(
+        attachmentIds,
+        MediaKind.FeedbackAttachment,
+        author.id,
+        now,
+      );
+    }
 
     try {
       return await this.db.transaction(async (tx) => {
@@ -123,41 +164,7 @@ export class FeedbackService {
           sql`select pg_advisory_xact_lock(hashtextextended(${`feedback:${author.id}`}, 0))`,
         );
 
-        const [{ sent }] = await tx
-          .select({ sent: count() })
-          .from(feedback)
-          .where(
-            and(
-              eq(feedback.submittedBy, author.id),
-              gte(feedback.createdAt, new Date(now.getTime() - HOUR_MS)),
-            ),
-          );
-        if (sent >= FEEDBACK_MAX_PER_HOUR) {
-          throw new FeedbackRateLimitedException(
-            'You have sent a lot of feedback in the last hour. Try again later.',
-          );
-        }
-
-        // Not asked of an admin. Admins enter any cohort's campus without
-        // being in it, as they pass campus-api's sign-in gate and world's
-        // cohort check, so any cohort may be where they were. The foreign
-        // key still refuses one that does not exist.
-        if (dto.cohortId && !hasAdminPowers(author.systemRole)) {
-          const [membership] = await tx
-            .select({ id: cohortMembers.id })
-            .from(cohortMembers)
-            .where(
-              and(
-                eq(cohortMembers.userId, author.id),
-                eq(cohortMembers.cohortId, dto.cohortId),
-                isLiveMembership(now),
-              ),
-            )
-            .limit(1);
-          if (!membership) {
-            throw invalid('cohortId', 'cohortId is not a cohort you are in');
-          }
-        }
+        await this.assertMaySend(tx, author, dto.cohortId, now);
 
         const [row] = await tx
           .insert(feedback)
@@ -183,6 +190,22 @@ export class FeedbackService {
             title: feedback.title,
             createdAt: feedback.createdAt,
           });
+        if (attachmentIds.length > 0) {
+          await this.media.claimAll(
+            tx,
+            attachmentIds,
+            MediaKind.FeedbackAttachment,
+            author.id,
+            now,
+          );
+          await tx.insert(feedbackAttachments).values(
+            attachmentIds.map((mediaId, position) => ({
+              feedbackId: row.id,
+              mediaId,
+              position,
+            })),
+          );
+        }
         return row;
       });
     } catch (err) {
@@ -200,6 +223,51 @@ export class FeedbackService {
         }
       }
       throw err;
+    }
+  }
+
+  /**
+   * Under the hourly limit, and naming a cohort the sender is in. An admin
+   * may name any cohort: admins enter any cohort's campus without being in
+   * it, as they pass campus-api's sign-in gate and world's cohort check. The
+   * foreign key still refuses one that does not exist.
+   */
+  private async assertMaySend(
+    db: DbExecutor,
+    author: AuthenticatedUser,
+    cohortId: string | undefined,
+    now: Date,
+  ): Promise<void> {
+    const [{ sent }] = await db
+      .select({ sent: count() })
+      .from(feedback)
+      .where(
+        and(
+          eq(feedback.submittedBy, author.id),
+          gte(feedback.createdAt, new Date(now.getTime() - HOUR_MS)),
+        ),
+      );
+    if (sent >= FEEDBACK_MAX_PER_HOUR) {
+      throw new FeedbackRateLimitedException(
+        'You have sent a lot of feedback in the last hour. Try again later.',
+      );
+    }
+
+    if (cohortId && !hasAdminPowers(author.systemRole)) {
+      const [membership] = await db
+        .select({ id: cohortMembers.id })
+        .from(cohortMembers)
+        .where(
+          and(
+            eq(cohortMembers.userId, author.id),
+            eq(cohortMembers.cohortId, cohortId),
+            isLiveMembership(now),
+          ),
+        )
+        .limit(1);
+      if (!membership) {
+        throw invalid('cohortId', 'cohortId is not a cohort you are in');
+      }
     }
   }
 
@@ -249,7 +317,11 @@ export class FeedbackService {
    * One piece of feedback, whole, for an admin. A report that names the
    * admin asking is answered as if it were not there.
    */
-  async get(viewer: AuthenticatedUser, id: string): Promise<FeedbackDto> {
+  async get(
+    viewer: AuthenticatedUser,
+    id: string,
+    now: Date = new Date(),
+  ): Promise<FeedbackDto> {
     const [row] = await this.db
       .select({
         ...listColumns,
@@ -270,7 +342,20 @@ export class FeedbackService {
         feedbackId: id,
       });
     }
-    return row;
+    const files = await this.db
+      .select({ file: media })
+      .from(feedbackAttachments)
+      .innerJoin(media, eq(media.id, feedbackAttachments.mediaId))
+      .where(eq(feedbackAttachments.feedbackId, id))
+      .orderBy(asc(feedbackAttachments.position));
+    const attachments =
+      files.length > 0
+        ? await this.media.attachments(
+            files.map(({ file }) => file),
+            now,
+          )
+        : [];
+    return { ...row, attachments };
   }
 
   /**

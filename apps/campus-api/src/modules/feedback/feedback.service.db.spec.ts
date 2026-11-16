@@ -8,6 +8,7 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import { SystemRole, UserStatus, users } from '../users/schema.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
 import type { CreateFeedbackDto } from './dto/feedback.dto.js';
 import {
   FeedbackInvalidArgumentException,
@@ -29,7 +30,7 @@ const MIGRATIONS = fileURLToPath(
 const db = drizzle(new PGlite(), {
   schema: { users, cohorts, cohortMembers, feedback, auditLog },
 });
-const service = new FeedbackService(db as never);
+const service = new FeedbackService(db as never, mediaWithoutStorage(db));
 
 const NOBODY = '00000000-0000-4000-8000-000000000000';
 
@@ -151,6 +152,7 @@ describe('sending', () => {
       resolvedBy: null,
       resolvedAt: null,
       createdAt: new Date('2026-10-12T09:30:00Z'),
+      attachments: [],
     });
   });
 

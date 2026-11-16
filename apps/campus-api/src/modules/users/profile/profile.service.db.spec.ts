@@ -66,6 +66,7 @@ const storage: MediaStorage = {
     objects.delete(`${bucket}:${key}`);
   },
   publicUrl: (key) => `https://media.test/${key}`,
+  signRead: async (key) => `https://r2.test/${key}?read`,
 };
 const mediaService = new MediaService(
   db as never,

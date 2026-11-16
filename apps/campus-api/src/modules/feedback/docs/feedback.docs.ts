@@ -5,8 +5,10 @@ import {
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiServiceUnavailableResponse,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
+  ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 
 import { ApiAdminOnly } from '../../../shared/dto/admin-route.docs.js';
@@ -46,6 +48,9 @@ export function ApiSendFeedback(): MethodDecorator {
         'sent. Admins are emailed that a report has arrived, without what ' +
         'it says; an admin the report names is left out, and cannot read ' +
         'or resolve it.\n\n' +
+        '`attachmentIds` carries up to ten screenshots or files: ' +
+        '`feedback_attachment` uploads of the sender’s, from ' +
+        '`POST /v1/uploads`. Only admins can open them.\n\n' +
         'The answer confirms it arrived. A member cannot read back what ' +
         'they have sent.',
     }),
@@ -57,11 +62,28 @@ export function ApiSendFeedback(): MethodDecorator {
         'three; `reportedUserId` is on something that is not a report or ' +
         'names no account; `cohortId` names no cohort, or, from anybody but ' +
         'an admin, a cohort the sender is not in; or ' +
-        '`context` is not one object.',
+        '`context` is not one object; or `attachmentIds` has more than ' +
+        'ten, a repeat, or something that is not an id.',
     }),
     ApiUnauthorizedResponse({
       type: ApiErrorResponseDto,
       description: 'No usable full-access session.',
+    }),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'An attachment that is not a waiting `feedback_attachment` upload of yours.',
+    }),
+    ApiUnprocessableEntityResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'An attachment is not the file it was signed for, or nothing was ' +
+        'uploaded (`UPLOAD_MISMATCH`).',
+    }),
+    ApiServiceUnavailableResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'Attachments were sent, and uploads are not configured here.',
     }),
     ApiTooManyRequestsResponse({
       type: ApiErrorResponseDto,

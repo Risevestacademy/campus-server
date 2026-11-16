@@ -4,6 +4,7 @@ import {
   check,
   foreignKey,
   index,
+  smallint,
   pgTable,
   text,
   timestamp,
@@ -13,6 +14,7 @@ import {
 
 import { cohortTracks, cohorts } from '../cohorts/schema.js';
 import { mentorshipGroups } from '../mentorship-groups/schema.js';
+import { media } from '../media/schema.js';
 import { users } from '../users/schema.js';
 
 /**
@@ -117,3 +119,20 @@ export type NoticeTarget = Pick<
   Notice,
   'scope' | 'cohortId' | 'cohortTrackId' | 'mentorshipGroupId'
 >;
+
+/** A file shown with a notice, in the order its author gave. */
+export const noticeAttachments = pgTable(
+  'notice_attachments',
+  {
+    mediaId: uuid('media_id')
+      .primaryKey()
+      .references(() => media.id),
+    noticeId: uuid('notice_id')
+      .notNull()
+      .references(() => notices.id, { onDelete: 'cascade' }),
+    position: smallint('position').notNull(),
+  },
+  (table) => [index('notice_attachments_notice_idx').on(table.noticeId)],
+);
+
+export type NoticeAttachment = typeof noticeAttachments.$inferSelect;

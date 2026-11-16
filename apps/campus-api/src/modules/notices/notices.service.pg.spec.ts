@@ -19,6 +19,7 @@ import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
 import type { NotificationPush } from '../notifications/notification-push.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
 import { NoticeConflictException } from './notices.exceptions.js';
 import { NoticesService } from './notices.service.js';
 import { NoticeScope, notices } from './schema.js';
@@ -106,6 +107,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('NoticesService, two pins at once', () => {
       pg.db as never,
       new NotificationsService(pg.db as never),
       noPush,
+      mediaWithoutStorage(pg.db),
     );
   });
 
@@ -174,7 +176,12 @@ describe.skipIf(!REAL_POSTGRES_URL)(
         onnotice: () => undefined,
       });
       const db = drizzle(single, { schema }) as never;
-      service = new NoticesService(db, new NotificationsService(db), noPush);
+      service = new NoticesService(
+        db,
+        new NotificationsService(db),
+        noPush,
+        mediaWithoutStorage(db),
+      );
     });
 
     afterAll(async () => {

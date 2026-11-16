@@ -203,7 +203,18 @@ describe('uploads (e2e)', () => {
           contentTypes: ['image/jpeg', 'image/png', 'image/webp'],
           maxBytes: 2 * 1024 * 1024,
         },
+        {
+          kind: 'notice_attachment',
+          contentTypes: expect.arrayContaining(['application/pdf', 'text/csv']),
+          maxBytes: 25 * 1024 * 1024,
+        },
+        {
+          kind: 'feedback_attachment',
+          contentTypes: expect.arrayContaining(['application/pdf', 'text/csv']),
+          maxBytes: 25 * 1024 * 1024,
+        },
       ],
+      maxAttachments: 10,
     });
   });
 });

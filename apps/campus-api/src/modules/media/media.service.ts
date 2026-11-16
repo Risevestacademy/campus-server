@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
-import { and, asc, count, eq, gt, inArray, lte } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, lte, sql } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import {
@@ -11,8 +11,10 @@ import {
   type Tx,
 } from '../../infra/database/database.constants.js';
 import { Scheduler } from '../../infra/scheduler/scheduler.js';
+import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import {
   MediaNotConfiguredException,
+  MediaNotFoundException,
   TooManyPendingUploadsException,
   UploadMismatchException,
   UploadNotFoundException,
@@ -23,11 +25,14 @@ import {
   MAX_PENDING_PER_USER,
   MEDIA_RULES,
   PENDING_TTL_MS,
+  SIGNED_READ_TTL_SECONDS,
   SNIFF_BYTES,
   UPLOAD_URL_TTL_SECONDS,
   VERIFY_WINDOW_MS,
+  cleanFileName,
   contentMatches,
   extensionOf,
+  opensInline,
   uploadKeyOf,
 } from './media-rules.js';
 import { MEDIA_STORAGE, type MediaStorage } from './media-storage.js';
@@ -46,6 +51,7 @@ export interface UploadRequest {
   kind: MediaKind;
   contentType: string;
   sizeBytes: number;
+  fileName?: string;
 }
 
 export interface CreatedUpload {
@@ -55,8 +61,32 @@ export interface CreatedUpload {
   expiresAt: Date;
 }
 
+export interface SignedRead {
+  url: string;
+  expiresAt: Date;
+}
+
+/** A private file as its owner's payload shows it, with a link to read it. */
+export interface Attachment {
+  id: string;
+  fileName: string | null;
+  contentType: string;
+  sizeBytes: number;
+  url: string;
+  urlExpiresAt: Date;
+}
+
+/** Whether this person may read this file, as the owner it belongs to decides. */
+export type MediaReader = (
+  viewer: AuthenticatedUser,
+  mediaId: string,
+  now: Date,
+) => Promise<boolean>;
+
 @Injectable()
 export class MediaService implements OnModuleInit {
+  private readonly readers = new Map<MediaKind, MediaReader>();
+
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
     @Inject(MEDIA_STORAGE) private readonly storage: MediaStorage | null,
@@ -125,6 +155,9 @@ export class MediaService implements OnModuleInit {
       uploadedBy: userId,
       contentType: request.contentType,
       sizeBytes: request.sizeBytes,
+      fileName: rule.named
+        ? cleanFileName(request.fileName, request.contentType)
+        : null,
       createdAt: now,
     });
     return {
@@ -239,6 +272,37 @@ export class MediaService implements OnModuleInit {
     return ready;
   }
 
+  /** `verify` for each of a list of uploads, once each. */
+  async verifyAll(
+    mediaIds: readonly string[],
+    kind: MediaKind,
+    userId: string,
+    now: Date,
+  ): Promise<void> {
+    await Promise.all(
+      [...new Set(mediaIds)].map((id) => this.verify(id, kind, userId, now)),
+    );
+  }
+
+  /**
+   * `claim` for each of a list of uploads, returned in the order given. Rows
+   * are locked in id order, so two requests sharing uploads cannot deadlock.
+   */
+  async claimAll(
+    tx: Tx,
+    mediaIds: readonly string[],
+    kind: MediaKind,
+    userId: string,
+    now: Date,
+  ): Promise<Media[]> {
+    const ids = [...new Set(mediaIds)];
+    const claimed = new Map<string, Media>();
+    for (const id of [...ids].sort()) {
+      claimed.set(id, await this.claim(tx, id, kind, userId, now));
+    }
+    return ids.map((id) => claimed.get(id)!);
+  }
+
   private async pendingUpload(
     executor: DbExecutor,
     mediaId: string,
@@ -273,26 +337,81 @@ export class MediaService implements OnModuleInit {
     now: Date,
   ): Promise<void> {
     if (mediaIds.length === 0) return;
-    for (const [kind, rule] of Object.entries(MEDIA_RULES)) {
-      await executor
-        .update(media)
-        .set({
-          status: MediaStatus.Removed,
-          removedAt: now,
-          purgeAfter: new Date(now.getTime() + rule.graceMs),
-        })
-        .where(
-          and(
-            inArray(media.id, mediaIds),
-            eq(media.kind, kind as MediaKind),
-            eq(media.status, MediaStatus.Ready),
-          ),
-        );
-    }
+    const purgeAfter = sql.join(
+      Object.entries(MEDIA_RULES).map(
+        ([kind, rule]) =>
+          sql`when ${kind} then ${new Date(now.getTime() + rule.graceMs).toISOString()}::timestamptz`,
+      ),
+      sql` `,
+    );
+    await executor
+      .update(media)
+      .set({
+        status: MediaStatus.Removed,
+        removedAt: now,
+        purgeAfter: sql`case ${media.kind} ${purgeAfter} end`,
+      })
+      .where(
+        and(inArray(media.id, mediaIds), eq(media.status, MediaStatus.Ready)),
+      );
   }
 
   publicUrl(key: string): string {
     return this.requireStorage().publicUrl(key);
+  }
+
+  /** Called by each owner of a private kind, once, as its module starts. */
+  registerReader(kind: MediaKind, reader: MediaReader): void {
+    this.readers.set(kind, reader);
+  }
+
+  /**
+   * A fresh link to a private file, for someone its owner lets read it.
+   * Anything else is the same 404, so a file's existence does not leak.
+   */
+  async readUrl(
+    viewer: AuthenticatedUser,
+    mediaId: string,
+    now: Date,
+  ): Promise<SignedRead> {
+    const [row] = await this.db
+      .select()
+      .from(media)
+      .where(and(eq(media.id, mediaId), eq(media.status, MediaStatus.Ready)));
+    const reader = row && this.readers.get(row.kind);
+    if (!row || !reader || !(await reader(viewer, mediaId, now))) {
+      throw new MediaNotFoundException(`File ${mediaId} not found`);
+    }
+    return this.signRead(row, now);
+  }
+
+  /** Each ready private file, with a link to read it; an owner's payload embeds these. */
+  async attachments(rows: readonly Media[], now: Date): Promise<Attachment[]> {
+    return Promise.all(
+      rows.map(async (row) => {
+        const read = await this.signRead(row, now);
+        return {
+          id: row.id,
+          fileName: row.fileName,
+          contentType: row.contentType,
+          sizeBytes: row.sizeBytes,
+          url: read.url,
+          urlExpiresAt: read.expiresAt,
+        };
+      }),
+    );
+  }
+
+  private async signRead(row: Media, now: Date): Promise<SignedRead> {
+    const url = await this.requireStorage().signRead(
+      row.key!,
+      { inline: opensInline(row.contentType), fileName: row.fileName },
+      SIGNED_READ_TTL_SECONDS,
+    );
+    return {
+      url,
+      expiresAt: new Date(now.getTime() + SIGNED_READ_TTL_SECONDS * 1000),
+    };
   }
 
   /** Deletes the files of abandoned uploads and of released media whose grace is over. */

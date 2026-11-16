@@ -150,6 +150,7 @@ beforeEach(async () => {
       objects.delete(at2(bucket, key));
     },
     publicUrl: (key) => `https://media.test/${key}`,
+    signRead: async (key) => `https://r2.test/${key}?read`,
   };
   service = new MediaService(
     db as never,
@@ -192,6 +193,30 @@ describe('createUpload', () => {
       service.createUpload(alice, avatar(2 * 1024 * 1024 + 1), NOW),
     ).rejects.toThrow(UploadTooLargeException);
     expect(signed).toEqual([]);
+  });
+
+  it('keeps an attachment’s cleaned name, and never a profile picture’s', async () => {
+    const file = await service.createUpload(
+      alice,
+      {
+        kind: MediaKind.NoticeAttachment,
+        contentType: 'application/pdf',
+        sizeBytes: 100,
+        fileName: '../Term plan.pdf',
+      },
+      NOW,
+    );
+    const picture = await service.createUpload(
+      alice,
+      { ...avatar(), fileName: 'me.webp' },
+      NOW,
+    );
+
+    expect(await rowOf(file.mediaId)).toMatchObject({
+      bucket: PRIVATE,
+      fileName: 'Term plan.pdf',
+    });
+    expect((await rowOf(picture.mediaId)).fileName).toBeNull();
   });
 
   it('records nothing when signing fails', async () => {
@@ -405,6 +430,31 @@ describe('verify and claim', () => {
       UploadNotFoundException,
     );
     expect(await rowOf(mediaId)).toMatchObject({ key: null });
+  });
+});
+
+describe('claimAll', () => {
+  it('locks in id order and returns the uploads in the order given', async () => {
+    const ids = [];
+    for (let i = 0; i < 3; i += 1) {
+      const { mediaId } = await uploaded();
+      await verify(mediaId);
+      ids.push(mediaId);
+    }
+    const given = [...ids].sort().reverse();
+    const locked: string[] = [];
+    const claim = service.claim.bind(service);
+    service.claim = (tx, id, ...rest) => {
+      locked.push(id);
+      return claim(tx, id, ...rest);
+    };
+
+    const rows = await db.transaction((tx) =>
+      service.claimAll(tx as never, given, MediaKind.Avatar, alice, at(2000)),
+    );
+
+    expect(locked).toEqual([...ids].sort());
+    expect(rows.map((row) => row.id)).toEqual(given);
   });
 });
 
