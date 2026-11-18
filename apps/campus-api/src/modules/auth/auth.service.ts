@@ -27,7 +27,7 @@ import {
  * is someone holding an invite they have not accepted yet, who still has
  * onboarding to finish before they belong anywhere.
  */
-export type SignInOutcome =
+export type SignInOutcome = (
   | {
       kind: 'full_access';
       user: User;
@@ -35,7 +35,8 @@ export type SignInOutcome =
       /** A pending invite addressed to them, to answer without losing access. */
       pendingInvite: Invite | null;
     }
-  | { kind: 'provisional'; user: User; invite: Invite };
+  | { kind: 'provisional'; user: User; invite: Invite }
+) & { firstSignIn: boolean };
 
 @Injectable()
 export class AuthService {
@@ -85,6 +86,7 @@ export class AuthService {
       throw new AccountSuspendedError();
     }
 
+    const firstSignIn = !existing?.lastLoginAt;
     const grant = existing ? await this.resolveAccess(existing) : null;
     const invite = await this.invites.findUsableForEmail(email);
     if (existing && grant) {
@@ -105,7 +107,13 @@ export class AuthService {
         },
         'google sign-in',
       );
-      return { kind: 'full_access', user, grant, pendingInvite: invite };
+      return {
+        kind: 'full_access',
+        user,
+        grant,
+        pendingInvite: invite,
+        firstSignIn,
+      };
     }
 
     if (!invite) {
@@ -127,7 +135,7 @@ export class AuthService {
       'google sign-in',
     );
 
-    return { kind: 'provisional', user, invite };
+    return { kind: 'provisional', user, invite, firstSignIn };
   }
 
   /** A row found by address still needs the subject written onto it. */

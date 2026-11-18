@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, count, desc, eq } from 'drizzle-orm';
 
+import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import { isForeignKeyViolation } from '../../infra/database/foreign-key-violation.js';
 import { isUniqueViolation } from '../../infra/database/unique-violation.js';
@@ -48,12 +52,15 @@ const COHORT_AUDITED_FIELDS = [
  */
 @Injectable()
 export class CohortsService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
+  ) {}
 
   async create(dto: CreateCohortDto, audit: AuditContext): Promise<Cohort> {
     try {
       // One transaction, so a cohort is never created without its entry.
-      return await this.db.transaction(async (tx) => {
+      const cohort = await this.db.transaction(async (tx) => {
         const [row] = await tx
           .insert(cohorts)
           .values({
@@ -78,6 +85,16 @@ export class CohortsService {
         });
         return row;
       });
+      this.describeCohort(cohort);
+      if (audit.actorUserId) {
+        this.analytics.track(
+          'cohort.created',
+          audit.actorUserId,
+          { status: cohort.status },
+          { cohortId: cohort.id, correlationId: audit.correlationId },
+        );
+      }
+      return cohort;
     } catch (err) {
       if (isUniqueViolation(err, 'cohorts_code_unique')) {
         throw new CohortConflictException(
@@ -291,7 +308,7 @@ export class CohortsService {
     audit: AuditContext,
   ): Promise<Cohort> {
     try {
-      return await this.db.transaction(async (tx) => {
+      const cohort = await this.db.transaction(async (tx) => {
         // Locked, so the range check below and the write it guards see the
         // same row. Unlocked, two edits each moving one date could both pass
         // against the old pair and together store an end before the start.
@@ -354,6 +371,8 @@ export class CohortsService {
         }
         return row;
       });
+      this.describeCohort(cohort);
+      return cohort;
     } catch (err) {
       if (isUniqueViolation(err, 'cohorts_code_unique')) {
         throw new CohortConflictException(
@@ -363,6 +382,14 @@ export class CohortsService {
       }
       throw err;
     }
+  }
+
+  /** Keeps the cohort's PostHog group in step with the row. */
+  private describeCohort(cohort: Cohort): void {
+    this.analytics.identifyCohort(cohort.id, {
+      status: cohort.status,
+      start_date: cohort.startDate,
+    });
   }
 
   async remove(id: string, audit: AuditContext): Promise<void> {

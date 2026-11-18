@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { and, eq, isNull } from 'drizzle-orm';
 
 import {
@@ -283,7 +284,10 @@ describe.skipIf(!REAL_POSTGRES_URL)('DesksService on real Postgres', () => {
     );
     const gate = deferred();
     const locked = deferred();
-    const ending = new CohortMembersService(pg.db as never).endMembership(
+    const ending = new CohortMembersService(
+      pg.db as never,
+      createTestAnalytics(),
+    ).endMembership(
       cohortId,
       first.id,
       MembershipEndAction.Remove,

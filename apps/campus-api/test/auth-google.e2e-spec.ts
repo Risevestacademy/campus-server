@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -9,6 +10,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 
 import { AppModule } from './../src/app.module.js';
+import { ANALYTICS } from './../src/infra/analytics/analytics.module.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
@@ -56,6 +58,9 @@ const google = {
 
 const SESSION_SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
 
+/** What would have gone to PostHog. */
+const analytics = createTestAnalytics();
+
 /** Pulls the session token back out of the Set-Cookie the callback wrote. */
 function sessionFrom(response: { headers: Record<string, unknown> }): string {
   const cookies = (response.headers['set-cookie'] ?? []) as string[];
@@ -77,6 +82,8 @@ describe('Google sign-in (e2e)', () => {
       .useValue(db)
       .overrideProvider(GoogleOAuthService)
       .useValue(google)
+      .overrideProvider(ANALYTICS)
+      .useValue(analytics)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -106,6 +113,7 @@ describe('Google sign-in (e2e)', () => {
   beforeEach(async () => {
     await db.execute(sql`truncate users cascade`);
     google.exchangeCode.mockReset().mockResolvedValue(IDENTITY);
+    analytics.events.length = 0;
   });
 
   /** Walks the real first leg so the callback gets a state we actually issued. */
@@ -149,6 +157,16 @@ describe('Google sign-in (e2e)', () => {
     const cookies = (response.headers['set-cookie'] ?? []) as string[];
     expect(cookies.some((c) => c.startsWith(`${SESSION_COOKIE}=`))).toBe(false);
     expect(await db.select().from(users)).toHaveLength(0);
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        event: 'auth.sign_in_failed',
+        properties: expect.objectContaining({
+          reason: 'invite_required',
+          client: 'web',
+          $process_person_profile: false,
+        }),
+      }),
+    ]);
   });
 
   it('signs in an invited stranger provisionally and creates their account', async () => {
@@ -186,6 +204,16 @@ describe('Google sign-in (e2e)', () => {
       email: IDENTITY.email,
     });
     expect(await db.select().from(users)).toHaveLength(2);
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        event: 'auth.signed_in',
+        distinctId: claims.userId,
+        properties: expect.objectContaining({
+          client: 'web',
+          first_sign_in: true,
+        }),
+      }),
+    ]);
   });
 
   /**

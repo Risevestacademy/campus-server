@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -28,7 +29,11 @@ const mediaService = new MediaService(
   { register: () => undefined } as never,
   { setContext: () => undefined, error: () => undefined } as never,
 );
-const service = new FeedbackService(db as never, mediaService);
+const service = new FeedbackService(
+  db as never,
+  mediaService,
+  createTestAnalytics(),
+);
 service.onModuleInit();
 
 let member: AuthenticatedUser;

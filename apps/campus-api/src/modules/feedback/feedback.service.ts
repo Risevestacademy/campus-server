@@ -16,6 +16,10 @@ import {
 import { alias } from 'drizzle-orm/pg-core';
 
 import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
+import {
   DRIZZLE,
   type Db,
   type DbExecutor,
@@ -98,6 +102,7 @@ export class FeedbackService implements OnModuleInit {
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
     private readonly media: MediaService,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
   ) {}
 
   onModuleInit(): void {
@@ -136,6 +141,7 @@ export class FeedbackService implements OnModuleInit {
     dto: CreateFeedbackDto,
     userAgent: string | undefined,
     now: Date = new Date(),
+    correlationId?: string,
   ): Promise<FeedbackReceiptDto> {
     if (dto.reportedUserId && dto.type !== FeedbackType.Report) {
       throw invalid('reportedUserId', 'reportedUserId is only for a report');
@@ -154,7 +160,7 @@ export class FeedbackService implements OnModuleInit {
     }
 
     try {
-      return await this.db.transaction(async (tx) => {
+      const receipt = await this.db.transaction(async (tx) => {
         // One send at a time per account. The count below and the insert
         // after it are two statements, and without this a burst of requests
         // would each count before any of them had saved, and all go through.
@@ -208,6 +214,13 @@ export class FeedbackService implements OnModuleInit {
         }
         return row;
       });
+      this.analytics.track(
+        'feedback.submitted',
+        author.id,
+        { category: receipt.type },
+        { cohortId: dto.cohortId, correlationId },
+      );
+      return receipt;
     } catch (err) {
       // What the database will not take because of what was sent is the
       // caller's to correct, not ours to apologise for.

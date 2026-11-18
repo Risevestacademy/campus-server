@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -49,7 +50,8 @@ const config = {
   INVITE_TTL_DAYS: 7,
 } as never;
 
-const invitesService = new InvitesService(db as never, config);
+const analytics = createTestAnalytics();
+const invitesService = new InvitesService(db as never, config, analytics);
 const mailer = { send: vi.fn() };
 const service = new InviteImportService(
   db as never,
@@ -105,6 +107,48 @@ beforeEach(async () => {
 });
 
 describe('InviteImportService', () => {
+  it('counts each invited row once the file is in, and no failed row', async () => {
+    analytics.events.length = 0;
+    await upload(
+      'email,role,track\nada@campus.local,student,se\ngrace@campus.local,professor,\nbad,student,se\n',
+    );
+
+    expect(
+      analytics.events.map((e) => [e.event, e.distinctId, e.properties]),
+    ).toEqual([
+      [
+        'invite.sent',
+        inviter.id,
+        expect.objectContaining({
+          role: 'student',
+          via: 'import',
+          cohort_id: cohortId,
+        }),
+      ],
+      [
+        'invite.sent',
+        inviter.id,
+        expect.objectContaining({ role: 'professor', via: 'import' }),
+      ],
+    ]);
+  });
+
+  it('counts nothing when the file is undone by a fault', async () => {
+    analytics.events.length = 0;
+    vi.spyOn(invitesService, 'create')
+      .mockImplementationOnce(
+        InvitesService.prototype.create.bind(invitesService),
+      )
+      .mockRejectedValueOnce(new Error('connection reset'));
+
+    await expect(
+      upload(
+        'email,role,track\nada@campus.local,student,se\ngrace@campus.local,student,se\n',
+      ),
+    ).rejects.toThrow('connection reset');
+    expect(analytics.events).toEqual([]);
+  });
+
   it('invites every row, each as an ordinary invite to the cohort', async () => {
     const result = await upload(
       'email,role,track\nada@campus.local,student,se\ngrace@campus.local,professor,\n',

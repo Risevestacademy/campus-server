@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { eq } from 'drizzle-orm';
 
 import {
@@ -177,7 +178,10 @@ describe.skipIf(!REAL_POSTGRES_URL)(
     beforeAll(async () => {
       pg = connectRealPostgres();
       service = new SpaceMembershipsService(pg.db as never);
-      cohortsService = new CohortsService(pg.db as never);
+      cohortsService = new CohortsService(
+        pg.db as never,
+        createTestAnalytics(),
+      );
 
       const tag = unique();
       const [map] = await pg.db

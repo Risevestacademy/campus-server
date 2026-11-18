@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { eq } from 'drizzle-orm';
 
 import {
@@ -30,7 +31,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('CohortsService, two edits at once', () => {
 
   beforeAll(() => {
     pg = connectRealPostgres();
-    service = new CohortsService(pg.db as never);
+    service = new CohortsService(pg.db as never, createTestAnalytics());
   });
 
   afterAll(async () => {

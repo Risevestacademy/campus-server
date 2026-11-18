@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -9,6 +10,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 
 import { AppModule } from './../src/app.module.js';
+import { ANALYTICS } from './../src/infra/analytics/analytics.module.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { GoogleSignInFailedError } from './../src/modules/auth/auth.exceptions.js';
@@ -51,6 +53,9 @@ const IDENTITY = {
 /** Stands in for Google: the app's id_token is taken as already checked. */
 const google = { verifyIdToken: vi.fn() };
 
+/** What would have gone to PostHog. */
+const analytics = createTestAnalytics();
+
 /**
  * A native app has no cookie jar, so every route that hands a browser its
  * session in Set-Cookie has to hand a native app the same session in the
@@ -73,6 +78,8 @@ describe('sessions for a client without cookies (e2e)', () => {
       .useValue(db)
       .overrideProvider(GoogleOAuthService)
       .useValue(google)
+      .overrideProvider(ANALYTICS)
+      .useValue(analytics)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -104,6 +111,8 @@ describe('sessions for a client without cookies (e2e)', () => {
       sql`truncate refresh_tokens, invites, cohort_members, cohorts, users cascade`,
     );
     google.verifyIdToken.mockReset().mockResolvedValue(IDENTITY);
+    analytics.events.length = 0;
+    analytics.people.length = 0;
 
     const [admin] = await db
       .insert(users)
@@ -455,6 +464,79 @@ describe('sessions for a client without cookies (e2e)', () => {
 
       expect(response.body.status).toBe(InviteStatus.Accepted);
       expect(response.body.session).toBeUndefined();
+    });
+  });
+
+  describe('analytics', () => {
+    afterEach(() => {
+      expect(analytics.dropped).toEqual([]);
+    });
+
+    it('counts a sign-in from the app, and whether it was the first', async () => {
+      const memberId = await seedMember();
+
+      await signIn().expect(200);
+      await signIn().expect(200);
+
+      expect(
+        analytics.events.map((e) => [e.event, e.distinctId, e.properties]),
+      ).toEqual([
+        [
+          'auth.signed_in',
+          memberId,
+          expect.objectContaining({ client: 'mobile', first_sign_in: true }),
+        ],
+        [
+          'auth.signed_in',
+          memberId,
+          expect.objectContaining({ client: 'mobile', first_sign_in: false }),
+        ],
+      ]);
+      expect(analytics.people[0]).toEqual({
+        distinctId: memberId,
+        properties: {
+          system_role: SystemRole.User,
+          first_seen_at: expect.any(String),
+        },
+      });
+    });
+
+    it('counts a refused sign-in under nobody, with its reason', async () => {
+      await signIn().expect(403);
+
+      expect(analytics.events).toEqual([
+        expect.objectContaining({
+          event: 'auth.sign_in_failed',
+          properties: expect.objectContaining({
+            reason: 'invite_required',
+            client: 'mobile',
+            $process_person_profile: false,
+          }),
+        }),
+      ]);
+      expect(analytics.people).toEqual([]);
+    });
+
+    it('counts a sign-out once, and not a second one with the same token', async () => {
+      const memberId = await seedMember();
+      const { refreshToken } = (await signIn().expect(200)).body;
+      analytics.events.length = 0;
+
+      const logout = () =>
+        request(app.getHttpServer())
+          .post('/v1/auth/logout')
+          .send({ refreshToken })
+          .expect(204);
+      await logout();
+      await logout();
+
+      expect(analytics.events).toEqual([
+        expect.objectContaining({
+          event: 'auth.signed_out',
+          distinctId: memberId,
+          properties: expect.objectContaining({ client: 'mobile' }),
+        }),
+      ]);
     });
   });
 });

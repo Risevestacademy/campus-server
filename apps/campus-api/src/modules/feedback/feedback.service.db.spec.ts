@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -30,7 +31,12 @@ const MIGRATIONS = fileURLToPath(
 const db = drizzle(new PGlite(), {
   schema: { users, cohorts, cohortMembers, feedback, auditLog },
 });
-const service = new FeedbackService(db as never, mediaWithoutStorage(db));
+const analytics = createTestAnalytics();
+const service = new FeedbackService(
+  db as never,
+  mediaWithoutStorage(db),
+  analytics,
+);
 
 const NOBODY = '00000000-0000-4000-8000-000000000000';
 
@@ -115,6 +121,39 @@ beforeEach(async () => {
 });
 
 describe('sending', () => {
+  it('counts what was sent by its category, in the cohort named', async () => {
+    analytics.events.length = 0;
+    await service.create(
+      ada,
+      bug({ type: FeedbackType.Report, cohortId }),
+      undefined,
+      new Date(),
+      '6f1c2b8e-3d4a-4e5f-8a9b-0c1d2e3f4a5b',
+    );
+
+    expect(analytics.dropped).toEqual([]);
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        distinctId: ada.id,
+        event: 'feedback.submitted',
+        properties: expect.objectContaining({
+          category: 'report',
+          cohort_id: cohortId,
+          correlation_id: '6f1c2b8e-3d4a-4e5f-8a9b-0c1d2e3f4a5b',
+        }),
+      }),
+    ]);
+  });
+
+  it('counts nothing that was refused', async () => {
+    analytics.events.length = 0;
+    await expect(
+      service.create(grace, bug({ cohortId }), undefined),
+    ).rejects.toThrow();
+
+    expect(analytics.events).toEqual([]);
+  });
+
   it('saves what was sent, from whoever the session says sent it', async () => {
     const receipt = await service.create(
       ada,

@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -38,7 +39,7 @@ beforeAll(async () => {
     config,
     db as never,
     new UsersService(db as never),
-    new CohortMembersService(db as never),
+    new CohortMembersService(db as never, createTestAnalytics()),
   );
 });
 
@@ -193,7 +194,7 @@ describe('SessionIssuer refresh persistence', () => {
       config,
       db as never,
       revokingUsers as never,
-      new CohortMembersService(db as never),
+      new CohortMembersService(db as never, createTestAnalytics()),
     );
 
     await expect(
@@ -373,7 +374,7 @@ describe('SessionIssuer.revokeAllSessions', () => {
           return account;
         },
       } as never,
-      new CohortMembersService(db as never),
+      new CohortMembersService(db as never, createTestAnalytics()),
     );
   };
 
