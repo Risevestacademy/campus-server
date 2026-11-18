@@ -415,6 +415,16 @@ describe('analytics', () => {
     ]);
   });
 
+  it('counts an older join that arrives after a newer one once, ending at the newer join', async () => {
+    await record(joined(`${userId}:second`), 3);
+    await record(joined(), 1);
+    await record(left(), 2);
+
+    expect(named('call.left').map((e) => e.properties.duration_s)).toEqual([
+      120,
+    ]);
+  });
+
   it('counts the run a newer one replaced as ended', async () => {
     await record(joined(), 0);
     await record(started('RM_2'), 20);

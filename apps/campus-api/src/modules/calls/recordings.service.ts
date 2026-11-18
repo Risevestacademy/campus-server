@@ -179,7 +179,6 @@ export class RecordingsService {
       );
       const found = await this.find(media, row);
       if (found) {
-        await this.trackStarted(userId, spaceId);
         await this.record(found, now);
         return this.byId(id);
       }
@@ -190,12 +189,13 @@ export class RecordingsService {
     }
 
     // The webhook may have filled it in already, from the file key.
-    await this.db
+    const took = await this.db
       .update(recordings)
       .set({ providerEgressId: started.egressId })
-      .where(eq(recordings.id, id));
+      .where(and(eq(recordings.id, id), isNull(recordings.providerEgressId)))
+      .returning({ id: recordings.id });
     if (started.roomId) await this.follow(this.db, id, started.roomId);
-    await this.trackStarted(userId, spaceId);
+    if (took.length > 0) await this.trackStarted(id);
     return this.byId(id);
   }
 
@@ -244,7 +244,7 @@ export class RecordingsService {
   /** Applies what LiveKit says of a recording. A finished one stays finished. */
   async record(event: RecordingEvent, at: Date): Promise<void> {
     if (!parseSpaceRoomName(event.room)) return;
-    const finished = await this.db.transaction(async (tx) => {
+    const outcome = await this.db.transaction(async (tx) => {
       const [row] = await tx
         .select()
         .from(recordings)
@@ -263,6 +263,7 @@ export class RecordingsService {
         return;
       }
       if (event.roomId) await this.follow(tx, row.id, event.roomId);
+      const took = !row.providerEgressId && !OVER.includes(row.status);
       if (OVER.includes(row.status) || !event.state) {
         if (!row.providerEgressId) {
           await tx
@@ -270,7 +271,7 @@ export class RecordingsService {
             .set({ providerEgressId: event.egressId })
             .where(eq(recordings.id, row.id));
         }
-        return;
+        return { id: row.id, took, ended: false };
       }
 
       const startedAt = row.startedAt ?? event.startedAt ?? at;
@@ -294,21 +295,28 @@ export class RecordingsService {
           error: event.error,
         })
         .where(eq(recordings.id, row.id));
-      return ended ? row.id : null;
+      return { id: row.id, took, ended };
     });
-    if (finished) await this.trackFinished([finished]);
+    if (!outcome) return;
+    if (outcome.took) await this.trackStarted(outcome.id);
+    if (outcome.ended) await this.trackFinished([outcome.id]);
   }
 
-  /** A recording LiveKit took on, under the staff member who started it. */
-  private async trackStarted(userId: string, spaceId: string): Promise<void> {
+  /**
+   * A recording LiveKit took on, under the staff member who started it.
+   * Sent by whichever path first saves LiveKit's id for it.
+   */
+  private async trackStarted(id: string): Promise<void> {
     try {
-      const [space] = await this.db
-        .select({ kind: spaces.kind })
-        .from(spaces)
-        .where(eq(spaces.id, spaceId));
-      if (!space) return;
-      this.analytics.track('recording.started', userId, {
-        space_kind: (space.kind ??
+      const [row] = await this.db
+        .select({ startedBy: recordings.startedBy, kind: spaces.kind })
+        .from(recordings)
+        .innerJoin(sessions, eq(sessions.id, recordings.sessionId))
+        .innerJoin(spaces, eq(spaces.id, sessions.spaceId))
+        .where(eq(recordings.id, id));
+      if (!row) return;
+      this.analytics.track('recording.started', row.startedBy, {
+        space_kind: (row.kind ??
           'unset') as EventProperties<'recording.started'>['space_kind'],
       });
     } catch (err) {

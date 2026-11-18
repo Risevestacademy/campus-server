@@ -323,13 +323,18 @@ export class CallsService {
           .orderBy(asc(sessionParticipants.joinedAt))
           .limit(1);
         if (newer) {
-          await tx.insert(sessionParticipants).values({
-            sessionId: run.id,
-            userId,
-            providerIdentity: event.identity,
-            joinedAt,
-            leftAt: newer.joinedAt,
-          });
+          closed.participants.push(
+            ...(await tx
+              .insert(sessionParticipants)
+              .values({
+                sessionId: run.id,
+                userId,
+                providerIdentity: event.identity,
+                joinedAt,
+                leftAt: newer.joinedAt,
+              })
+              .returning(closedParticipant)),
+          );
           return;
         }
         // Back in under a new identity before LiveKit said the old one left.

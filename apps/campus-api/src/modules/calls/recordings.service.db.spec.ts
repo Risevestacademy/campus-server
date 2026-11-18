@@ -628,6 +628,48 @@ describe('analytics', () => {
     ]);
   });
 
+  it('counts a start whose answer was lost once its webhook arrives, and its end', async () => {
+    media.dropStart = true;
+    await expect(
+      service.start(professor, cohortId, classroom, NOW),
+    ).rejects.toThrow(RecordingUnavailableException);
+    const [row] = await rows();
+    expect(analytics.events).toEqual([]);
+
+    const late = { ...complete(), egressId: 'EG_9', fileKey: row.fileKey };
+    await service.record({ ...late, state: 'active', endedAt: null }, later(1));
+    await service.record(late, later(62));
+
+    expect(analytics.events.map((e) => [e.event, e.distinctId])).toEqual([
+      ['recording.started', professor],
+      ['recording.finished', expect.any(String)],
+    ]);
+  });
+
+  it('counts a start once, though its webhook beats LiveKit’s answer', async () => {
+    const start = media.start.bind(media);
+    media.start = async (room, fileKey) => {
+      const answer = await start(room, fileKey);
+      await service.record(
+        { ...complete(), fileKey, state: 'active', endedAt: null },
+        later(1),
+      );
+      return answer;
+    };
+
+    await service.start(professor, cohortId, classroom, NOW);
+
+    expect(analytics.events.map((e) => e.event)).toEqual(['recording.started']);
+  });
+
+  it('counts a start whose answer was lost once LiveKit is found to have it', async () => {
+    media.loseAnswer = true;
+
+    await service.start(professor, cohortId, classroom, NOW);
+
+    expect(analytics.events.map((e) => e.event)).toEqual(['recording.started']);
+  });
+
   it('counts a start LiveKit refused as failed, and no start', async () => {
     media.refuse = true;
 
