@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { spaceRoomName, type CallEvent } from '@campus/media';
 import { and, eq, isNull } from 'drizzle-orm';
 
@@ -34,6 +35,7 @@ describe.skipIf(!REAL_POSTGRES_URL)('CallsService, webhooks at once', () => {
       {} as never,
       logger as never,
       new CallChatService(pg.db as never, mediaWithoutStorage(pg.db)),
+      createTestAnalytics(),
     );
   });
 

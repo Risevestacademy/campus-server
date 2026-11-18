@@ -66,6 +66,10 @@ entry (`provider_identity`). Somebody who walks out and straight back in can
 have a new identity join before LiveKit says the old one left; the old row
 is closed then, so a person has one open row per call.
 
+Once an event's changes commit, whoever left a call is counted as
+`call.left`, and a run that closed as `call.ended`; see
+[docs/posthog.md](../../../../../docs/posthog.md#what-calls-send).
+
 ## Video recordings
 
 Staff record a space's call as one video of the whole room. LiveKit records

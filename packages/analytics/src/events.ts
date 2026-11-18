@@ -168,6 +168,26 @@ export const EVENTS = {
     },
     true,
   ),
+  'call.left': event(
+    {
+      ...space,
+      audio_mode: z.enum(['proximity', 'boundary']),
+      duration_s: count,
+      video_on: z.boolean(),
+    },
+    true,
+  ),
+  'call.ended': event({
+    ...space,
+    duration_s: count,
+    participants: count,
+    peak_participants: count,
+  }),
+  'recording.started': event({ space_kind: spaceKind }),
+  'recording.finished': event({
+    outcome: z.enum(['complete', 'failed']),
+    duration_s: count,
+  }),
   'staff.acted': event({
     action: z.enum(['muted', 'removed']),
     space_kind: spaceKind,
