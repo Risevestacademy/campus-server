@@ -147,6 +147,8 @@ export interface Account extends Appearance {
   admin: boolean;
   /** `users.system_role` as text, which a space's list may name. */
   systemRole: string;
+  /** Whether they granted product analytics; unset counts as not. */
+  analyticsConsent: boolean;
 }
 
 /**
@@ -156,7 +158,7 @@ export interface Account extends Appearance {
  * perfectly good session.
  */
 export const ACCOUNT_QUERY =
-  'select id, status, system_role, session_epoch, display_name, sprite_key from users where id = $1 limit 1';
+  'select id, status, system_role, session_epoch, display_name, sprite_key, analytics_consent from users where id = $1 limit 1';
 
 /**
  * A login is live while its refresh family holds a token that is neither
@@ -424,6 +426,7 @@ export function createAccountLookup(env: Env): AccountLookup {
           session_epoch: number;
           display_name: string | null;
           sprite_key: string | null;
+          analytics_consent: string | null;
         }[]
       >(ACCOUNT_QUERY, [userId]);
       const row = rows[0];
@@ -436,6 +439,7 @@ export function createAccountLookup(env: Env): AccountLookup {
             systemRole: row.system_role,
             displayName: row.display_name,
             spriteKey: spriteKeyOrNone(row.sprite_key),
+            analyticsConsent: row.analytics_consent === 'granted',
           }
         : null;
     },

@@ -2,6 +2,7 @@ import {
   createErrorReporter,
   type ErrorReporter,
 } from '@campus/error-reporting';
+import { createAnalytics, type Analytics } from '@campus/analytics';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 
@@ -38,6 +39,7 @@ export interface World {
   presence: PresenceStore;
   notifications: NotificationFeed;
   reporter: ErrorReporter;
+  analytics: Analytics;
 }
 
 /** What a world is built from; every part defaults to the real thing. */
@@ -61,6 +63,8 @@ export interface BuildWorldOptions {
   loadMap?: (mapKey?: string) => Promise<WorldMap>;
   /** Where errors are reported. Built from `env` when left out. */
   reporter?: ErrorReporter;
+  /** Where product events go. Built from `env` when left out. */
+  analytics?: Analytics;
 }
 
 export async function buildWorld({
@@ -79,12 +83,24 @@ export async function buildWorld({
     environment: env.DEPLOYMENT_ENVIRONMENT,
     release: env.RAILWAY_GIT_COMMIT_SHA,
   }),
+  analytics,
 }: BuildWorldOptions = {}): Promise<World> {
   const app = Fastify({
     logger: loggerOptions(env, reporter),
     genReqId: (req) => correlationId(req.headers as Record<string, unknown>),
     bodyLimit: env.WORLD_MAX_MESSAGE_BYTES,
   });
+  const events =
+    analytics ??
+    createAnalytics({
+      enabled: env.FF_ANALYTICS_ENABLED,
+      token: env.POSTHOG_PROJECT_TOKEN,
+      host: env.POSTHOG_HOST,
+      environment: env.DEPLOYMENT_ENVIRONMENT,
+      release: env.RAILWAY_GIT_COMMIT_SHA,
+      onDropped: (event, reason) =>
+        app.log.warn({ event, reason }, 'analytics event dropped'),
+    });
 
   silenceRoutes(app, QUIET_ROUTES);
 
@@ -158,6 +174,7 @@ export async function buildWorld({
     worldMap,
     (mapKey) => loader(mapKey),
     feed,
+    events,
   );
   feed.onNotification((created) => gateway.notify(created));
   // Not awaited: a database that will not take the listen must not stop the
@@ -253,5 +270,6 @@ export async function buildWorld({
     presence: present,
     notifications: feed,
     reporter,
+    analytics: events,
   };
 }

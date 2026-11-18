@@ -15,14 +15,16 @@ import {
   type Refusal,
   type UpgradeDecision,
 } from './authenticate.js';
-import type { Connection, EnterMode } from './connections.js';
+import type { ClientApp, Connection, EnterMode } from './connections.js';
 import { sendClose, type WorldContext } from './context.js';
 import {
+  CLIENT_QUERY_PARAM,
   COHORT_QUERY_PARAM,
   ENTER_QUERY_PARAM,
   RESUME_QUERY_PARAM,
   SOCKET_PATH,
 } from './endpoint.js';
+import { presenceEndOf, type WorldAnalytics } from './features/analytics.js';
 import { avatarOf, type AppearanceFeature } from './features/appearance.js';
 import type { BroadcastRoom } from './features/broadcast-room.js';
 import type { Calls } from './features/calls.js';
@@ -44,6 +46,7 @@ type OpenContext = Pick<
   | 'send'
   | 'broadcast'
   | 'closeFor'
+  | 'closedFor'
 >;
 
 type Outcome = 'opened' | 'refused' | 'failed' | 'abandoned';
@@ -72,6 +75,7 @@ export interface OpenDeps {
   demote(connection: Connection): void;
   /** Starts reading what the socket sends. */
   listen(connection: Connection): void;
+  analytics: Pick<WorldAnalytics, 'started' | 'entered' | 'ended'>;
 }
 
 /** The socket route: every upgrade is decided, and an accepted one joins the campus. */
@@ -86,6 +90,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     send,
     broadcast,
     closeFor,
+    closedFor,
   } = ctx;
   const {
     accounts,
@@ -104,6 +109,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
     drop,
     demote,
     listen,
+    analytics,
   } = deps;
 
   // The handler returns its promise so @fastify/websocket can catch a
@@ -167,6 +173,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       closed = true;
       if (registered) {
         drop(registered);
+        analytics.ended(registered, presenceEndOf(closedFor(ws), code));
         app.log.info(
           { connectionId: registered.id, userId: registered.userId },
           'socket closed',
@@ -311,6 +318,8 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
       cohortId: decision.cohortId,
       mode: watching ? 'watcher' : 'avatar',
       enter: entry.enter,
+      client: entry.client,
+      analyticsConsent: decision.account.analyticsConsent,
       appearance: {
         displayName: decision.account.displayName,
         spriteKey: decision.account.spriteKey,
@@ -343,6 +352,7 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
         'socket opened, watching',
       );
       record(attempt, 'opened');
+      analytics.started(connection, entry.resume !== undefined);
       ws.on('pong', () => {
         connection.alive = true;
       });
@@ -429,6 +439,8 @@ export function registerSocketRoute(ctx: OpenContext, deps: OpenDeps): void {
 
     presence.enter(connection);
     presence.timeStatus(connection);
+    analytics.started(connection, !arriving);
+    analytics.entered(connection, 'joined');
     app.log.info(
       {
         connectionId: connection.id,
@@ -540,6 +552,7 @@ function seatOf(decision: Extract<UpgradeDecision, { ok: true }>): Seat {
 interface Entry {
   enter: EnterMode;
   resume: string | undefined;
+  client: ClientApp;
 }
 
 /** Anything but ifFree takes the avatar, as every client did before watching. */
@@ -553,6 +566,7 @@ function entryFrom(query: unknown): Entry {
     enter: params[ENTER_QUERY_PARAM] === 'ifFree' ? 'ifFree' : 'take',
     resume:
       typeof resume === 'string' && resume.length > 0 ? resume : undefined,
+    client: params[CLIENT_QUERY_PARAM] === 'mobile' ? 'mobile' : 'web',
   };
 }
 

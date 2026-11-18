@@ -43,6 +43,8 @@ const schema = z
 
     /** Error tracking, as in campus-api. Off unless switched on. */
     FF_POSTHOG_ENABLED: flag.default(false),
+    /** Product events, as in campus-api, with the same token and host. */
+    FF_ANALYTICS_ENABLED: flag.default(false),
     POSTHOG_PROJECT_TOKEN: optionalText,
     POSTHOG_HOST: z
       .url({ protocol: /^https$/ })
@@ -236,14 +238,14 @@ const schema = z
     }
 
     if (
-      env.FF_POSTHOG_ENABLED &&
+      (env.FF_POSTHOG_ENABLED || env.FF_ANALYTICS_ENABLED) &&
       !env.POSTHOG_PROJECT_TOKEN?.startsWith('phc_')
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['POSTHOG_PROJECT_TOKEN'],
         message:
-          'must be set, and start with "phc_", while FF_POSTHOG_ENABLED is on',
+          'must be set, and start with "phc_", while FF_POSTHOG_ENABLED or FF_ANALYTICS_ENABLED is on',
       });
     }
 

@@ -171,7 +171,7 @@ describe('track', () => {
       analytics.track(
         'presence.started',
         ADA,
-        { client: 'web', reconnect: false },
+        { client: 'web', reconnect: false, mode: 'avatar' },
         null as never,
       ),
     ).not.toThrow();
@@ -228,7 +228,11 @@ describe('track', () => {
 });
 
 describe('consent', () => {
-  const properties = { client: 'web', reconnect: false } as const;
+  const properties = {
+    client: 'web',
+    reconnect: false,
+    mode: 'avatar',
+  } as const;
 
   it('names the person once they have granted it', () => {
     const analytics = createTestAnalytics();
@@ -337,7 +341,7 @@ describe('createAnalytics', () => {
     analytics.track(
       'presence.started',
       ADA,
-      { client: 'web', reconnect: false },
+      { client: 'web', reconnect: false, mode: 'avatar' },
       { sessionId: GRACE, cohortId: COHORT },
     );
     analytics.trackAnonymous('auth.sign_in_failed', {
@@ -351,6 +355,7 @@ describe('createAnalytics', () => {
       properties: {
         client: 'web',
         reconnect: false,
+        mode: 'avatar',
         app_version: 'abc123',
         environment: 'staging',
         cohort_id: COHORT,

@@ -1,7 +1,7 @@
 # PostHog
 
-campus-api and world send errors to PostHog Error Tracking. campus-api can
-send product events too, through [`packages/analytics`](../packages/analytics).
+campus-api and world send errors to PostHog Error Tracking. Both can send
+product events too, through [`packages/analytics`](../packages/analytics).
 
 ## What is reported
 
@@ -52,8 +52,8 @@ Both services read the same three variables, validated at boot:
 Use one PostHog project per environment, the same one for both services.
 
 `FF_ANALYTICS_ENABLED`, off by default, sends product events. It uses the same
-token and host, and is separate so errors can run without events. campus-api
-alone reads it for now.
+token and host, and is separate so errors can run without events. Each service
+reads its own.
 
 ## Consent
 
@@ -93,6 +93,29 @@ change sends nothing.
 An admin invite has no cohort role, so it is not counted. Signing in also sets
 the person's `system_role` and `first_seen_at`; creating or editing a cohort
 sets its group's `status` and `start_date`.
+
+## What world sends
+
+Every event here needs consent. Without it, the event goes under the socket's
+own id, with no person, so one visit's events link up without pointing at
+anyone. world reads consent with the account, at connect and every heartbeat.
+
+| Event                 | When                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `presence.started`    | A socket is admitted: which app (the `client` parameter), whether it resumed, avatar or watcher                        |
+| `presence.ended`      | It closes, with how long it lasted and why                                                                             |
+| `status.chosen`       | Somebody chooses a status. Going away while idle is not counted                                                        |
+| `space.visited`       | Somebody leaves a drawn space they stayed in for 10 s or more, with how they came and how many lines of chat they said |
+| `space.refused`       | A step or a walk is turned away at a space, at most once a minute per person and space                                 |
+| `space.lock_changed`  | Somebody locks or unlocks the space they are in                                                                        |
+| `entry.request_ended` | A request to enter ends, under the person who asked, with how long they waited                                         |
+| `walk.ended`          | A walk to somebody, a space or a tile ends                                                                             |
+
+`staff.acted` (a mute or a removal) is the exception. It is the staff member's
+job, so it goes under their id with no consent asked, and never names the
+person it was done to. A space is named by its `spaces.id` and kind, never its
+name, and the corridors produce no space events. Chat is only ever counted,
+never sent.
 
 ## How to verify it works
 

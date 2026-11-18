@@ -16,5 +16,8 @@ export const ENTER_QUERY_PARAM = 'enter';
 /** The `connectionId` of this client's last socket, to resume its avatar. */
 export const RESUME_QUERY_PARAM = 'resume';
 
+/** web, the default, or mobile: which app opened the socket, for analytics alone. */
+export const CLIENT_QUERY_PARAM = 'client';
+
 /** The cookie campus-api sets at sign-in, which the browser sends on the upgrade. */
 export const SESSION_COOKIE = 'campus_session';

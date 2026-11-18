@@ -102,6 +102,12 @@ server decides every position.
   once, or move them out of the space and keep them out for 90 seconds
   (they may ask to enter). See
   [the protocol doc](../../docs/world-protocol.md#staff-muting-and-removing).
+- **Product events:** presence, spaces, locks, requests to enter, walks
+  and staff actions go to PostHog through `@campus/analytics`, behind
+  `FF_ANALYTICS_ENABLED`. All of them are in one place,
+  `socket/features/analytics.ts`, and everything but a staff action is under
+  a stand-in id unless the person granted consent. See
+  [docs/posthog.md](../../docs/posthog.md#what-world-sends).
 - **Locks and asking to enter:** anybody inside a normal whole-room space
   may lock it; somebody refused at a locked or designated space may ask
   from beside it, and somebody inside answers. Both are held in this

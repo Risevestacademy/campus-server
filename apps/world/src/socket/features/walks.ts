@@ -15,6 +15,7 @@ import { besideSpace } from '../../spaces/requests.js';
 import type { Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { ServerErrorCode, type WalkEndReason } from '../protocol.js';
+import type { ArrivedBy, WorldAnalytics } from './analytics.js';
 import type { EntryRequestsFeature } from './entry-requests.js';
 
 type WalksContext = Pick<
@@ -64,6 +65,13 @@ export interface WalkDeps {
   isFull(connection: Connection, spaceKey: string): boolean;
   noteMoved(connection: Connection): void;
   arrivedAt(connection: Connection, tile: Tile): void;
+  analytics: Pick<WorldAnalytics, 'walkEnded'>;
+  /** A walk stopped at a space closed to them, or full. */
+  noteRefusal(
+    connection: Connection,
+    spaceKey: string,
+    outcome: 'refused' | 'full',
+  ): void;
 }
 
 export type Walks = ReturnType<typeof createWalks>;
@@ -78,6 +86,8 @@ export function createWalks(
     isFull,
     noteMoved,
     arrivedAt,
+    analytics,
+    noteRefusal,
   }: WalkDeps,
 ) {
   const { app, env, map, connections, players, send, isStopping } = ctx;
@@ -238,6 +248,21 @@ export function createWalks(
         spaceKey !== null &&
         requests.mayAsk(connection, spaceKey, new Date()),
     });
+    analytics.walkEnded(connection, walk.target.kind, reason, walk.taken);
+    if ((reason === 'refused' || reason === 'full') && spaceKey !== null) {
+      noteRefusal(connection, spaceKey, reason);
+    }
+  }
+
+  /** How a step on a walk got them there, as the visit is counted. */
+  function arrivalOf(connection: Connection): ArrivedBy | undefined {
+    const walk = walks.get(connection);
+    if (!walk) return undefined;
+    return walk.target.kind === 'person'
+      ? 'go_to'
+      : walk.target.kind === 'space'
+        ? 'go_to_space'
+        : 'go_to_tile';
   }
 
   /**
@@ -518,6 +543,7 @@ export function createWalks(
 
   return {
     admitsStep,
+    arrivalOf,
     goTo,
     goToSpace,
     goToTile,

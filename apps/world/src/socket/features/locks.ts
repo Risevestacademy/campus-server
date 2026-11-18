@@ -2,6 +2,7 @@ import { SpaceLocks, lockableKeys } from '../../spaces/locks.js';
 import type { Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { ServerErrorCode, encode } from '../protocol.js';
+import type { WorldAnalytics } from './analytics.js';
 import type { Doors } from './doors.js';
 
 type LocksContext = Pick<
@@ -15,6 +16,7 @@ export function createLocks(
   ctx: LocksContext,
   doors: Pick<Doors, 'all'>,
   reviewRequests: (cohortId: string, spaceKey: string) => void,
+  analytics: Pick<WorldAnalytics, 'lockChanged'>,
 ) {
   const { connections, send, sendFrame, broadcast, isStopping } = ctx;
   const locks = new SpaceLocks();
@@ -53,10 +55,20 @@ export function createLocks(
       });
       return;
     }
+    let changed = false;
     if (!locked) {
-      unlock(cohortId, spaceKey, userId);
+      changed = unlock(cohortId, spaceKey, userId);
     } else if (locks.lock(cohortId, spaceKey)) {
       broadcast(cohortId, { type: 'lockChanged', spaceKey, locked, userId });
+      changed = true;
+    }
+    if (changed) {
+      analytics.lockChanged(
+        connection,
+        spaceKey,
+        locked,
+        connections.occupancy(cohortId, spaceKey),
+      );
     }
   }
 
@@ -65,16 +77,16 @@ export function createLocks(
     cohortId: string,
     spaceKey: string,
     userId: string | null,
-  ): void {
-    if (locks.unlock(cohortId, spaceKey)) {
-      broadcast(cohortId, {
-        type: 'lockChanged',
-        spaceKey,
-        locked: false,
-        userId,
-      });
-      reviewRequests(cohortId, spaceKey);
-    }
+  ): boolean {
+    if (!locks.unlock(cohortId, spaceKey)) return false;
+    broadcast(cohortId, {
+      type: 'lockChanged',
+      spaceKey,
+      locked: false,
+      userId,
+    });
+    reviewRequests(cohortId, spaceKey);
+    return true;
   }
 
   /** A lock ends when the last person in that cohort's copy of the space leaves. */

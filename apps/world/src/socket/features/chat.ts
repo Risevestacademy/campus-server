@@ -22,6 +22,8 @@ export type Chat = ReturnType<typeof createChat>;
 export function createChat(
   ctx: ChatContext,
   spaceOf: (spaceKey: string) => WorldSpace | undefined,
+  /** A line went out from this seat's avatar. */
+  onSaid: (connection: Connection) => void = () => undefined,
 ) {
   const { connections, players, send, sendFrame } = ctx;
   /** One per seat, so a watcher and the avatar it speaks for share it. */
@@ -106,6 +108,7 @@ export function createChat(
     )) {
       deliver(listener.connection);
     }
+    onSaid(connection);
   }
 
   /** Once nobody is left on the seat to speak from it. */

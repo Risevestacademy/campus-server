@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import {
   signSessionToken,
   SessionScope,
@@ -29,7 +30,7 @@ import {
 
 export const SECRET = 'a-world-session-secret-of-at-least-32-chars';
 export const ORIGIN = 'https://campus.example.com';
-export const COHORT = 'cohort-1';
+export const COHORT = 'c0a4e1b2-3d5f-4a6b-8c7d-9e0f1a2b3c4d';
 
 /** A seat in the tests' own cohort unless another is named. */
 export type SeatIn = Pick<Seat, 'userId'> & Partial<Seat>;
@@ -64,6 +65,8 @@ export const accounts = {
   admins: new Set<string>(),
   /** Profiles with a name or sprite set. Everybody else has neither. */
   looks: new Map<string, { displayName: string; spriteKey: string }>(),
+  /** Who granted analytics consent. Nobody else has. */
+  consenting: new Set<string>(),
   find: async (userId: string) =>
     accounts.gone.has(userId)
       ? null
@@ -75,6 +78,7 @@ export const accounts = {
           sessionEpoch: accounts.epochs.get(userId) ?? 0,
           displayName: accounts.looks.get(userId)?.displayName ?? null,
           spriteKey: accounts.looks.get(userId)?.spriteKey ?? null,
+          analyticsConsent: accounts.consenting.has(userId),
         },
   liveSessions: async (ids: readonly string[]): Promise<Set<string>> =>
     new Set(ids.filter((id) => !accounts.endedSessions.has(id))),
@@ -117,7 +121,14 @@ export const accounts = {
     );
   },
   /** The spaces on the map as campus-api has them. See openLibrary. */
-  spaces: new Map<string, SpaceFacts & { capacity?: number | null }>(),
+  spaces: new Map<
+    string,
+    SpaceFacts & {
+      id?: string;
+      audioMode?: string;
+      capacity?: number | null;
+    }
+  >(),
   failSpaces: false,
   spacesOn: async () => {
     if (accounts.failSpaces) throw new Error('postgres is down');
@@ -400,6 +411,12 @@ export function restoreMap(): void {
   world.gateway.players.setGrid(map.grid);
 }
 
+/** The library's `spaces.id`. */
+export const LIBRARY_ID = '5a1c0d2e-7b3f-4c8a-9e6d-1f2a3b4c5d6e';
+
+/** What would have gone to PostHog, from the world every spec shares. */
+export const analytics = createTestAnalytics();
+
 /**
  * The library as a normal meeting room, which anybody walks into: how every
  * test finds it unless it says otherwise. No capacity means no limit.
@@ -407,6 +424,8 @@ export function restoreMap(): void {
 export function openLibrary(capacity: number | null = null): void {
   accounts.spaces.clear();
   accounts.spaces.set('library', {
+    id: LIBRARY_ID,
+    audioMode: 'boundary',
     name: 'Library',
     kind: 'meeting_room',
     access: SPACE_ACCESS.Normal,
@@ -420,6 +439,8 @@ export function openLibrary(capacity: number | null = null): void {
 /** The library designated, with these entries on its list. */
 export function designateLibrary(...grants: SpaceGrantFacts[]): void {
   accounts.spaces.set('library', {
+    id: LIBRARY_ID,
+    audioMode: 'boundary',
     name: 'Library',
     kind: 'classroom',
     access: SPACE_ACCESS.Designated,
@@ -604,6 +625,9 @@ export function useWorld(): void {
     accounts.visitEnds.clear();
     accounts.admins.clear();
     accounts.looks.clear();
+    accounts.consenting.clear();
+    analytics.events.length = 0;
+    analytics.dropped.length = 0;
     accounts.roles.clear();
     accounts.groups.clear();
     accounts.failSpaces = false;
@@ -652,6 +676,7 @@ export function useWorld(): void {
       positions: store,
       presence,
       notifications,
+      analytics,
       map,
       loadMap: async (mapKey?: string) => {
         mapSource.loads += 1;

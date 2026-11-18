@@ -68,6 +68,7 @@ export default defineRailway((ctx) => {
       builder: 'RAILPACK',
       watchPatterns: [
         '/apps/world/**',
+        '/packages/analytics/**',
         '/packages/error-reporting/**',
         '/packages/media/**',
         '/packages/session/**',
@@ -93,6 +94,7 @@ export default defineRailway((ctx) => {
       FF_LOG_PRETTY: preserve(),
       FF_OTEL_ENABLED: preserve(),
       FF_OTEL_METRICS_ENABLED: preserve(),
+      FF_ANALYTICS_ENABLED: preserve(),
       FF_POSTHOG_ENABLED: preserve(),
       LIVEKIT_API_KEY: preserve(),
       LIVEKIT_API_SECRET: preserve(),
