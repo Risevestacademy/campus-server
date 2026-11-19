@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import {} from '@campus/space-access';
 import { describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';

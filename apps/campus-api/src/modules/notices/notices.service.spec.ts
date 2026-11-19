@@ -1,4 +1,4 @@
-import type { NotificationCreated } from '@campus/session';
+import type { NotificationCreated } from '@campus/contracts';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';

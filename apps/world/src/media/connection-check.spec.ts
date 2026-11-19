@@ -1,4 +1,4 @@
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 

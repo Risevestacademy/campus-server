@@ -44,7 +44,7 @@ import {
   SessionGuard,
   type SessionTransport,
 } from '../auth/session.guard.js';
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 import { ApiCreateInvite } from './docs/create-invite.docs.js';
 import { ApiDecideInvite } from './docs/decide-invite.docs.js';
 import { ApiImportInvites } from './docs/import-invites.docs.js';

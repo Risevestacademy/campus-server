@@ -8,7 +8,7 @@ its own (the caller passes the moment, so a test can stand at any).
 same answer: **world** asks it on every step into a space, and **campus-api**
 whenever a route needs to know the same thing. Two copies of a rule that
 decides who gets in would drift, and the drift would open a door rather than
-fail a build — which is why `@campus/session` holds the session token once,
+fail a build — which is why `@campus/contracts` holds the session token once,
 and why this holds the door once.
 
 ## Two kinds of space
@@ -27,7 +27,7 @@ First match stands:
    setting on the row says.
 3. **Admins enter anything** that is set up and standing, past a lock and
    whatever a list says. `admin` and `super_admin` alike, through
-   `hasAdminPowers` from `@campus/session`, so "who counts as an admin" has
+   `hasAdminPowers` from `@campus/contracts`, so "who counts as an admin" has
    one answer across the workspace.
 4. **Everybody else must be in this campus**: a live membership in the cohort
    the check names. Ended, expired, absent — or held in some other cohort,

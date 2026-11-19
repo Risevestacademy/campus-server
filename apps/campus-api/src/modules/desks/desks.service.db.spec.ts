@@ -1,5 +1,5 @@
 import { createTestAnalytics } from '@campus/analytics/testing';
-import { DESKS_CHANGED_CHANNEL } from '@campus/session';
+import { DESKS_CHANGED_CHANNEL } from '@campus/contracts';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';

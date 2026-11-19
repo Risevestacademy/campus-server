@@ -18,7 +18,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { SessionScope, type SessionClaims } from '@campus/session';
+import { SessionScope, type SessionClaims } from '@campus/contracts';
 import type { Request, Response } from 'express';
 
 import {

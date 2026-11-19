@@ -3,7 +3,7 @@ import {
   signSessionToken,
   SessionScope,
   type NotificationCreated,
-} from '@campus/session';
+} from '@campus/contracts';
 import {
   SPACE_ACCESS,
   type CohortMembershipFacts,

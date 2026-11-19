@@ -17,7 +17,7 @@ import {
   SessionScope,
   verifySessionToken,
   type SessionClaims,
-} from '@campus/session';
+} from '@campus/contracts';
 
 /** How the session reached us, which is also how a new one has to go back. */
 export type SessionTransport = 'cookie' | 'bearer';

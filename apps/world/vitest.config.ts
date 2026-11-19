@@ -25,8 +25,8 @@ export default defineConfig({
       '@campus/media': fileURLToPath(
         new URL('../../packages/media/src/index.ts', import.meta.url),
       ),
-      '@campus/session': fileURLToPath(
-        new URL('../../packages/session/src/index.ts', import.meta.url),
+      '@campus/contracts': fileURLToPath(
+        new URL('../../packages/contracts/src/index.ts', import.meta.url),
       ),
       '@campus/space-access': fileURLToPath(
         new URL('../../packages/space-access/src/index.ts', import.meta.url),

@@ -3,7 +3,7 @@ import {
   mintRoomToken,
   participantIdentity,
 } from '@campus/media';
-import { hasAdminPowers } from '@campus/session';
+import { hasAdminPowers } from '@campus/contracts';
 
 import type { mediaCredentials } from '../../infra/env.js';
 import type { Connection } from '../connections.js';

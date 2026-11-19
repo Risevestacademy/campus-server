@@ -19,7 +19,7 @@ import {
   SessionScope,
   signSessionToken,
   verifySessionToken,
-} from '@campus/session';
+} from '@campus/contracts';
 import {
   CohortRole,
   cohortMembers,

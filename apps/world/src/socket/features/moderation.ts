@@ -1,5 +1,5 @@
 import { microphoneMuter, type MuteResult } from '@campus/media';
-import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
+import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/contracts';
 import { COHORT_ROLES, SPACE_ACCESS, mayEnter } from '@campus/space-access';
 
 import type { mediaCredentials } from '../../infra/env.js';
