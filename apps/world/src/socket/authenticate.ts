@@ -3,7 +3,7 @@ import {
   SessionScope,
   verifySessionToken,
   type SessionClaims,
-} from '@campus/session';
+} from '@campus/contracts';
 
 import type { Account, AccountLookup } from '../infra/accounts.js';
 import { allowedOrigins, type Env } from '../infra/env.js';

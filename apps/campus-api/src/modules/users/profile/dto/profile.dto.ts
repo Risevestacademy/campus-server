@@ -16,7 +16,7 @@ import {
   UserMembershipDto,
   UserMembershipTrackDto,
 } from '../../dto/user-list-item.dto.js';
-import { SPRITE_KEYS, type SpriteKey } from '@campus/session';
+import { SPRITE_KEYS, type SpriteKey } from '@campus/contracts';
 
 /**
  * Trimmed, with an empty string read as "clear it". NUL goes too: Postgres

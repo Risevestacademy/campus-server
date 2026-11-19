@@ -17,7 +17,7 @@ import { GoogleSignInFailedError } from './../src/modules/auth/auth.exceptions.j
 import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
 import { refreshTokens } from './../src/modules/auth/schema.js';
 import { REFRESH_COOKIE } from './../src/modules/auth/session-cookie.js';
-import { SessionScope, verifySessionToken } from '@campus/session';
+import { SessionScope, verifySessionToken } from '@campus/contracts';
 import {
   CohortRole,
   cohortMembers,

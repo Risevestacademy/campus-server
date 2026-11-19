@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import type { CohortMembershipFacts } from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';

@@ -12,7 +12,7 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
-import { SystemRole, hasAdminPowers } from '@campus/session';
+import { SystemRole, hasAdminPowers } from '@campus/contracts';
 
 import { media } from '../media/schema.js';
 

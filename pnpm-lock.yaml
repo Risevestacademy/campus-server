@@ -59,15 +59,15 @@ importers:
       '@campus/analytics':
         specifier: workspace:*
         version: link:../../packages/analytics
+      '@campus/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@campus/error-reporting':
         specifier: workspace:*
         version: link:../../packages/error-reporting
       '@campus/media':
         specifier: workspace:*
         version: link:../../packages/media
-      '@campus/session':
-        specifier: workspace:*
-        version: link:../../packages/session
       '@campus/space-access':
         specifier: workspace:*
         version: link:../../packages/space-access
@@ -195,15 +195,15 @@ importers:
       '@campus/analytics':
         specifier: workspace:*
         version: link:../../packages/analytics
+      '@campus/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@campus/error-reporting':
         specifier: workspace:*
         version: link:../../packages/error-reporting
       '@campus/media':
         specifier: workspace:*
         version: link:../../packages/media
-      '@campus/session':
-        specifier: workspace:*
-        version: link:../../packages/session
       '@campus/space-access':
         specifier: workspace:*
         version: link:../../packages/space-access
@@ -297,6 +297,25 @@ importers:
         specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.1))
 
+  packages/contracts:
+    dependencies:
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.81.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.1))
+
   packages/error-reporting:
     dependencies:
       '@opentelemetry/api':
@@ -341,30 +360,11 @@ importers:
         specifier: 'catalog:'
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.1))
 
-  packages/session:
-    dependencies:
-      jose:
-        specifier: ^6.2.12
-        version: 6.2.12
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 26.6.6
-      oxlint:
-        specifier: 'catalog:'
-        version: 1.81.0
-      typescript:
-        specifier: 'catalog:'
-        version: 6.0.3
-      vitest:
-        specifier: 'catalog:'
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.1))
-
   packages/space-access:
     dependencies:
-      '@campus/session':
+      '@campus/contracts':
         specifier: workspace:*
-        version: link:../session
+        version: link:../contracts
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

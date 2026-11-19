@@ -19,7 +19,7 @@ import {
   type SendResult,
 } from './../src/infra/email/email-sender.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import {
   CohortRole,
   cohortTracks,

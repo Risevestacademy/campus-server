@@ -14,7 +14,7 @@ import { ANALYTICS } from './../src/infra/analytics/analytics.module.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { GoogleOAuthService } from './../src/modules/auth/google-oauth.service.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
-import { SessionScope, verifySessionToken } from '@campus/session';
+import { SessionScope, verifySessionToken } from '@campus/contracts';
 import {
   CohortRole,
   cohortMembers,
