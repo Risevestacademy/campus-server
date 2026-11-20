@@ -700,3 +700,150 @@ describe('who is told about a report', () => {
     await expect(service.reportRecipients(grace.id)).resolves.toHaveLength(2);
   });
 });
+
+/**
+ * AT-35: the list narrowed to the account a report names. The filter is one
+ * more term in the list's AND, so the hiding rule still applies to it.
+ */
+describe('filtering by the account a report names', () => {
+  type ListFilter = Parameters<FeedbackService['list']>[1];
+
+  const pageOf = (filters: Omit<ListFilter, 'page' | 'perPage'> = {}) =>
+    service.list(admin, { page: 1, perPage: 20, ...filters });
+  const titlesOf = async (filters: Omit<ListFilter, 'page' | 'perPage'> = {}) =>
+    (await pageOf(filters)).items.map((item) => item.title);
+
+  beforeEach(async () => {
+    const send = (
+      author: AuthenticatedUser,
+      title: string,
+      createdAt: string,
+      overrides: Partial<CreateFeedbackDto> = {},
+    ) =>
+      service.create(
+        author,
+        bug({ title, ...overrides }),
+        undefined,
+        new Date(createdAt),
+      );
+
+    await send(ada, 'grace by ada', '2026-10-12T09:00:00Z', {
+      type: FeedbackType.Report,
+      reportedUserId: grace.id,
+    });
+    const byAdmin = await send(
+      admin,
+      'grace by admin',
+      '2026-10-13T09:00:00Z',
+      {
+        type: FeedbackType.Report,
+        reportedUserId: grace.id,
+      },
+    );
+    await service.setStatus(admin, byAdmin.id, FeedbackStatus.Resolved);
+    await send(ada, 'admin by ada', '2026-10-14T09:00:00Z', {
+      type: FeedbackType.Report,
+      reportedUserId: admin.id,
+    });
+    await send(ada, 'no account', '2026-10-11T09:00:00Z', {
+      type: FeedbackType.Report,
+    });
+    await send(ada, 'bug about grace', '2026-10-10T09:00:00Z', {
+      type: FeedbackType.Bug,
+      about: 'Grace Hopper',
+    });
+    await send(ada, 'idea about grace', '2026-10-09T09:00:00Z', {
+      type: FeedbackType.Idea,
+      about: 'Grace Hopper',
+    });
+  });
+
+  it('returns only reports naming that account, newest first, and counts only them', async () => {
+    const page = await pageOf({ reportedUserId: grace.id });
+
+    expect(page.items.map((item) => item.title)).toEqual([
+      'grace by admin',
+      'grace by ada',
+    ]);
+    expect(page.items.map((item) => item.reportedUser?.id)).toEqual([
+      grace.id,
+      grace.id,
+    ]);
+    expect(page.meta).toEqual({
+      page: 1,
+      perPage: 20,
+      total: 2,
+      totalPages: 1,
+    });
+  });
+
+  it('pages the filtered list and reports the filtered total', async () => {
+    const first = await service.list(admin, {
+      page: 1,
+      perPage: 1,
+      reportedUserId: grace.id,
+    });
+    const second = await service.list(admin, {
+      page: 2,
+      perPage: 1,
+      reportedUserId: grace.id,
+    });
+
+    expect(first.items.map((item) => item.title)).toEqual(['grace by admin']);
+    expect(second.items.map((item) => item.title)).toEqual(['grace by ada']);
+    expect(first.meta).toMatchObject({ total: 2, totalPages: 2 });
+    expect(second.meta).toMatchObject({ total: 2, totalPages: 2 });
+  });
+
+  it('combines with type, status and sender', async () => {
+    await expect(
+      titlesOf({ reportedUserId: grace.id, type: FeedbackType.Report }),
+    ).resolves.toEqual(['grace by admin', 'grace by ada']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, status: FeedbackStatus.Resolved }),
+    ).resolves.toEqual(['grace by admin']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, submittedBy: ada.id }),
+    ).resolves.toEqual(['grace by ada']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, submittedBy: admin.id }),
+    ).resolves.toEqual(['grace by admin']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, type: FeedbackType.Bug }),
+    ).resolves.toEqual([]);
+  });
+
+  it('gives an admin nothing when they filter on their own id', async () => {
+    const page = await pageOf({ reportedUserId: admin.id });
+
+    expect(page.items).toEqual([]);
+    expect(page.meta.total).toBe(0);
+  });
+
+  it('shows that person to another admin', async () => {
+    const page = await service.list(superAdmin, {
+      page: 1,
+      perPage: 20,
+      reportedUserId: admin.id,
+    });
+
+    expect(page.items.map((item) => item.title)).toEqual(['admin by ada']);
+    expect(page.meta.total).toBe(1);
+  });
+
+  it('is an empty page for an id that names nobody', async () => {
+    const page = await pageOf({ reportedUserId: NOBODY });
+
+    expect(page.items).toEqual([]);
+    expect(page.meta.total).toBe(0);
+  });
+
+  it('never matches a report with no account, a bug, an idea, or the free-text about line', async () => {
+    const titles = await titlesOf({ reportedUserId: grace.id });
+
+    expect(titles).toEqual(['grace by admin', 'grace by ada']);
+    expect(titles).not.toContain('no account');
+    expect(titles).not.toContain('bug about grace');
+    expect(titles).not.toContain('idea about grace');
+  });
+});

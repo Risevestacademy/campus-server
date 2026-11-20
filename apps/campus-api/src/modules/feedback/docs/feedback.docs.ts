@@ -116,12 +116,15 @@ export function ApiListFeedback(): MethodDecorator {
       summary: 'List feedback (admin only)',
       description:
         'Everything members have sent, newest first, paginated. Filters ' +
-        'are optional and combine with AND: `type`, `status`, and ' +
-        '`submittedBy` for everything one account has sent.\n\n' +
+        'are optional and combine with AND: `type`, `status`, ' +
+        '`submittedBy` for everything one account has sent, and ' +
+        '`reportedUserId` for reports naming one account. The filters only ' +
+        'narrow: `reportedUserId` is combined with the hiding rule below, ' +
+        'so an admin filtering their own id gets nothing.\n\n' +
         'Each row has who sent it and, for a report that names an ' +
         'account, who it names. The `details` are on the single read.\n\n' +
         'A report that names the admin asking is left out, and not ' +
-        'counted.',
+        'counted, with every filter.',
     }),
     ApiPaginatedResponse(FeedbackListItemDto),
     ApiBadRequestResponse({
