@@ -48,7 +48,7 @@ at least five minutes ago, so late word from LiveKit of who left has arrived.
 | --------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `GET /v1/cohorts/{cohortId}/attendance/classes`           | Tallied runs, newest first, paged, with counts; `from` and `to` filter by start |
 | `GET /v1/attendance/classes/{instanceId}`                 | One run with every expected student                                             |
-| `GET /v1/cohorts/{cohortId}/attendance/students`          | Per student: classes, present, partial, absent, percentage                      |
+| `GET /v1/cohorts/{cohortId}/attendance/students`          | Per student: classes, present, partial, absent, percentage; `trackId` filters   |
 | `GET /v1/cohorts/{cohortId}/attendance/students/{userId}` | One student's summary and each class                                            |
 | `PUT /v1/attendance/{attendanceId}`                       | Correct a status: `{ status, reason }`                                          |
 

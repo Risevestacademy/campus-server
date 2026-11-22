@@ -25,7 +25,12 @@ import { writeAuditEntry, type AuditContext } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortNotFoundException } from '../cohorts/cohorts.exceptions.js';
-import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
+import {
+  CohortRole,
+  cohortMembers,
+  cohortTracks,
+  cohorts,
+} from '../cohorts/schema.js';
 import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import {
   RoomLinkAudience,
@@ -43,6 +48,7 @@ import type {
   AttendanceRowDto,
   CorrectAttendanceDto,
   ListAttendanceClassesQueryDto,
+  ListStudentAttendanceQueryDto,
   StudentAttendanceDto,
   StudentAttendanceSummaryDto,
 } from './dto/attendance.dto.js';
@@ -154,10 +160,11 @@ export class AttendanceService {
   async listStudents(
     user: AuthenticatedUser,
     cohortId: string,
+    query: ListStudentAttendanceQueryDto = {},
     now = new Date(),
   ): Promise<StudentAttendanceSummaryDto[]> {
     const scope = await this.staffScope(user, cohortId, now);
-    const rows = await this.db
+    let students = this.db
       .select({
         userId: attendance.userId,
         firstName: users.firstName,
@@ -176,6 +183,27 @@ export class AttendanceService {
       )
       .innerJoin(roomLinks, eq(roomLinks.id, roomLinkInstances.roomLinkId))
       .innerJoin(users, eq(users.id, attendance.userId))
+      .$dynamic();
+    if (query.trackId) {
+      // The student's track is on their membership, which outlives its end:
+      // one row per person per cohort, so a student who left still has it.
+      students = students
+        .innerJoin(
+          cohortMembers,
+          and(
+            eq(cohortMembers.cohortId, cohortId),
+            eq(cohortMembers.userId, attendance.userId),
+          ),
+        )
+        .innerJoin(
+          cohortTracks,
+          and(
+            eq(cohortTracks.id, cohortMembers.cohortTrackId),
+            eq(cohortTracks.trackId, query.trackId),
+          ),
+        );
+    }
+    const rows = await students
       .where(and(eq(roomLinks.cohortId, cohortId), visible(scope)))
       .groupBy(
         attendance.userId,

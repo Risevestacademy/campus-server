@@ -87,6 +87,8 @@ export function ApiListStudentAttendance(): MethodDecorator {
       description:
         'Per student, across the classes the caller may read: how many, how ' +
         'many present, partial and absent, and the percentage of time. ' +
+        '`trackId` narrows it to the students on one catalogue track, by ' +
+        'their membership’s track now, as the roster filters. ' +
         WHO,
     }),
     ApiOkResponse({ type: [StudentAttendanceSummaryDto] }),
