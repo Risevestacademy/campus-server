@@ -92,8 +92,13 @@ export function createWalks(
 ) {
   const { app, env, map, connections, players, send, isStopping } = ctx;
   const walks = new Map<Connection, Walk>();
-  const walkLimit =
-    env.WORLD_WALK_MAX_STEPS ?? map.grid.width * map.grid.height;
+
+  /**
+   * Most steps one walk takes: the map's width × height, more than any
+   * shortest path, so only a chase after somebody who keeps walking away
+   * reaches it. Read from the map as it is now, so a reload moves it.
+   */
+  const walkLimit = () => map.grid.width * map.grid.height;
 
   /**
    * Why a space is closed to this person, or null when they may step in.
@@ -452,7 +457,7 @@ export function createWalks(
       walk.path = plan.path;
       walk.aimedAt = them ? { x: them.x, y: them.y } : null;
     }
-    if (walk.taken >= walkLimit) {
+    if (walk.taken >= walkLimit()) {
       endWalk(connection, 'no_way');
       return;
     }
@@ -533,6 +538,8 @@ export function createWalks(
    * where the person now stands.
    */
   function replanAll(): void {
+    // A space's floor is worked out from the walls and bounds it had.
+    floors.clear();
     for (const walk of walks.values()) {
       walk.path = [];
       walk.failed = 0;
