@@ -12,7 +12,7 @@ import { CohortRole, cohortMembers } from '../cohorts/schema.js';
 import { endDeskClaims } from '../desks/end-claims.js';
 import { DeskReleaseReason, deskClaims } from '../desks/schema.js';
 import type { UserSystemRoleDto } from './dto/system-role.dto.js';
-import { hasAdminPowers, SystemRole, users } from './schema.js';
+import { hasAdminPowers, SystemRole, UserStatus, users } from './schema.js';
 import {
   SystemRoleLockedException,
   UserNotFoundException,
@@ -85,6 +85,7 @@ export class UserRolesService {
           id: users.id,
           email: users.email,
           systemRole: users.systemRole,
+          status: users.status,
         })
         .from(users)
         .where(inArray(users.id, [actor.id, targetId]))
@@ -101,6 +102,11 @@ export class UserRolesService {
           userId: targetId,
         });
       }
+      if (target.status === UserStatus.Deleted) {
+        throw new SystemRoleLockedException('This account is deleted', {
+          userId: targetId,
+        });
+      }
       if (target.systemRole === SystemRole.SuperAdmin) {
         throw new SystemRoleLockedException(
           "A super admin's role cannot be changed",
@@ -108,7 +114,11 @@ export class UserRolesService {
         );
       }
       if (target.systemRole === role) {
-        return target;
+        return {
+          id: target.id,
+          email: target.email,
+          systemRole: target.systemRole,
+        };
       }
 
       const [row] = await tx

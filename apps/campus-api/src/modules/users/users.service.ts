@@ -26,8 +26,9 @@ export function isAdmin(user: User): boolean {
   return hasAdminPowers(user.systemRole);
 }
 
+/** Suspended or deleted: either way it may not sign in or be served. */
 export function isSuspended(user: User): boolean {
-  return user.status === UserStatus.Suspended;
+  return user.status !== UserStatus.Active;
 }
 
 export function hasGoogleIdentity(user: User): boolean {

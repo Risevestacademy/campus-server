@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -19,6 +20,7 @@ import type { PaginatedResponseDto } from '../../shared/dto/index.js';
 import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import {
+  ApiDeleteUser,
   ApiListUsers,
   ApiReinstateUser,
   ApiSetSystemRole,
@@ -32,6 +34,7 @@ import {
 } from './dto/system-role.dto.js';
 import type { UserListItemDto } from './dto/user-list-item.dto.js';
 import { SuspendUserDto, UserStatusDto } from './dto/user-status.dto.js';
+import { AccountDeletionService } from './account-deletion.service.js';
 import { UserRolesService } from './user-roles.service.js';
 import { UserDirectoryService } from './user-directory.service.js';
 import { UserStatusService } from './user-status.service.js';
@@ -47,6 +50,7 @@ export class UsersController {
     private readonly directory: UserDirectoryService,
     private readonly roles: UserRolesService,
     private readonly status: UserStatusService,
+    private readonly deletion: AccountDeletionService,
   ) {}
 
   @Get()
@@ -95,5 +99,16 @@ export class UsersController {
     @CorrelationId() correlationId: string | undefined,
   ): Promise<UserStatusDto> {
     return this.status.reinstate(admin, params.id, correlationId);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiDeleteUser()
+  delete(
+    @Param() params: UserIdParamDto,
+    @CurrentUser() admin: AuthenticatedUser,
+    @CorrelationId() correlationId: string | undefined,
+  ): Promise<void> {
+    return this.deletion.delete(admin, params.id, correlationId);
   }
 }

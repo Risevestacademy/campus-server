@@ -7,7 +7,6 @@ import {
   exists,
   getTableColumns,
   inArray,
-  ne,
   or,
   sql,
 } from 'drizzle-orm';
@@ -233,7 +232,7 @@ export class ProfileService {
 
     if (!seesEverything) {
       // A suspended account is closed to everybody but admins.
-      if (target.status === UserStatus.Suspended) {
+      if (target.status !== UserStatus.Active) {
         throw notFound();
       }
       const mine = new Set(
@@ -311,7 +310,7 @@ export class ProfileService {
                 ),
             ),
           ),
-          admin ? undefined : ne(users.status, UserStatus.Suspended),
+          admin ? undefined : eq(users.status, UserStatus.Active),
         ),
       )
       .orderBy(

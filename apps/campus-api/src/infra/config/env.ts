@@ -458,6 +458,27 @@ export class Env {
   @IsBoolean()
   FF_ANALYTICS_ENABLED: boolean = false;
 
+  /**
+   * A personal API key with `person:write`, and the project it acts on. Used
+   * only to drop a deleted account's person profile; unset, those deletions
+   * wait until it is set.
+   */
+  @IsOptional()
+  @Transform(blankAsUnset)
+  @Matches(/^phx_/, {
+    message: 'POSTHOG_PERSONAL_API_KEY must start with "phx_"',
+  })
+  POSTHOG_PERSONAL_API_KEY?: string;
+
+  @ValidateIf((o: Env) => o.POSTHOG_PERSONAL_API_KEY !== undefined)
+  @Matches(/^\d+$/, { message: 'POSTHOG_PROJECT_ID must be a number' })
+  POSTHOG_PROJECT_ID?: string;
+
+  /** PostHog's app host, which the API is on; not the ingestion host. */
+  @IsOptional()
+  @IsUrl({ protocols: ['https'], require_protocol: true })
+  POSTHOG_API_HOST: string = 'https://eu.posthog.com';
+
   /** Set by Railway on every deploy; the release errors and traces name. */
   @IsOptional()
   @IsString()

@@ -237,18 +237,19 @@ This is forced as much as chosen. `actor_user_id` is a foreign key to
 acted fails while their entries exist, and the trigger means those entries
 can be neither removed nor have their actor nulled.
 
-Not built yet: there is no route or script that does the stripping, and
-`users` has no deleted state. Until there is, do not hard-delete a `users`
-row by hand.
+`DELETE /users/:id` does the stripping (`AccountDeletionService`). It marks
+the row `deleted`, overwrites the address with a placeholder so the real one
+is free again, and writes an `account_deleted` entry. Do not hard-delete a
+`users` row by hand.
 
-Four things the stripping has to cover when it is built:
+What the stripping covers, and what it leaves:
 
 - `membership_revived` entries about the person keep
   `previous.dismissalReason`, free text that may identify them. It lives in
   the log, so stripping the `users` row does not reach it.
-- `membership_ended` entries about the person keep `reason`. Same again: it
-  lives in the log, and on the membership row, neither of which the
-  stripping touches.
+- `membership_ended` entries about the person keep `reason`. It lives in the
+  log, which the stripping cannot touch. The copy on the membership row
+  (`dismissal_reason`) is wiped.
 - `user_suspended` entries about the person keep `reason`, the admin's own
   words. Same again: it lives in the log, and unlike `dismissalReason` it is
   about the account as a whole rather than one membership.

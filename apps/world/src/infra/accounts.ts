@@ -433,7 +433,7 @@ export function createAccountLookup(env: Env): AccountLookup {
       return row
         ? {
             id: row.id,
-            suspended: row.status === 'suspended',
+            suspended: row.status !== 'active',
             sessionEpoch: row.session_epoch,
             admin: hasAdminPowers(row.system_role),
             systemRole: row.system_role,

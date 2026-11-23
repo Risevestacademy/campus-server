@@ -25,7 +25,11 @@ const user = {
   sessionEpoch: 0,
 } as User;
 const users = {
-  findById: vi.fn(async () => ({ ...user, systemRole: 'user' })),
+  findById: vi.fn(async () => ({
+    ...user,
+    systemRole: 'user',
+    status: 'active',
+  })),
 };
 const members = {
   resolveActiveAccess: vi.fn(async () => ({ endsAt: null })),

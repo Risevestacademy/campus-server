@@ -163,6 +163,11 @@ export class UserStatusService {
       // The state of the target first: it answers the request even when the
       // caller is also of the wrong rank, so "not suspended" never comes
       // back as "a super admin is required".
+      if (target.status === UserStatus.Deleted) {
+        throw new AccountStatusLockedException('This account is deleted', {
+          userId: targetId,
+        });
+      }
       if (target.status === status) {
         throw new AccountStatusLockedException(
           status === UserStatus.Suspended

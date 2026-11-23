@@ -23,7 +23,15 @@ export { SystemRole, hasAdminPowers };
 export enum UserStatus {
   Active = 'active',
   Suspended = 'suspended',
+  Deleted = 'deleted',
 }
+
+/** What a deleted account is shown as, wherever its name would have been. */
+export const DELETED_DISPLAY_NAME = 'Deleted user';
+
+/** The address a deleted account is left with, which frees its real one. */
+export const deletedEmailOf = (userId: string) =>
+  `deleted+${userId}@deleted.invalid`;
 
 /** Null on the row until the person chooses, which counts as not granted. */
 export enum AnalyticsConsent {
@@ -89,6 +97,9 @@ export const users = pgTable(
     analyticsConsentAt: timestamp('analytics_consent_at', {
       withTimezone: true,
     }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /** When PostHog let go of this deleted account's person profile. */
+    analyticsErasedAt: timestamp('analytics_erased_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -100,6 +111,10 @@ export const users = pgTable(
   (table) => [
     uniqueIndex('users_email_unique').on(table.email),
     check('users_email_lowercase', sql`${table.email} = lower(${table.email})`),
+    check(
+      'users_deleted_at_with_status',
+      sql`(${table.status}::text = 'deleted') = (${table.deletedAt} is not null)`,
+    ),
     uniqueIndex('users_provider_provider_id_unique')
       .on(table.provider, table.providerId)
       .where(sql`${table.providerId} is not null`),

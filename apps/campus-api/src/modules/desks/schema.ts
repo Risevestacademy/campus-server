@@ -23,6 +23,7 @@ export enum DeskReleaseReason {
   /** The desk is no longer on the published map. */
   DeskRetired = 'desk_retired',
   AccountSuspended = 'account_suspended',
+  AccountDeleted = 'account_deleted',
   /** An admin with no live place in the cohort became a plain user. */
   AdminRoleRemoved = 'admin_role_removed',
 }

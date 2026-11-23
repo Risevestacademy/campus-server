@@ -477,7 +477,7 @@ export class AttendanceService {
       .select({ systemRole: users.systemRole, status: users.status })
       .from(users)
       .where(eq(users.id, user.id));
-    if (!account || account.status === UserStatus.Suspended) {
+    if (!account || account.status !== UserStatus.Active) {
       throw new AttendanceForbiddenException(
         'This account may not read attendance',
         { cohortId },
