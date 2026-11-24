@@ -1,5 +1,5 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
-import { DESKS_CHANGED_CHANNEL } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
+import { DESKS_CHANGED_CHANNEL } from '@campus/contracts';
 import { SPACES_CHANGED_CHANNEL } from '@campus/space-access';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';

@@ -1,7 +1,7 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 
 import type { AuthenticatedRequest } from '../../shared/auth/authenticated-user.js';
-import type { SessionClaims } from '@campus/session';
+import type { SessionClaims } from '@campus/contracts';
 import type { ProvisionalRequest, SessionTransport } from './session.guard.js';
 
 /**

@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { tileIndex } from '../movement/grid.js';

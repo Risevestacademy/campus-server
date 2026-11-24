@@ -2,7 +2,7 @@ import {
   SessionScope,
   signSessionToken,
   type SessionScope as Scope,
-} from '@campus/session';
+} from '@campus/contracts';
 
 import type { Account } from '../infra/accounts.js';
 import { loadEnv } from '../infra/env.js';

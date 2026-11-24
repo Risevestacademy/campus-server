@@ -1,5 +1,5 @@
 import type { Analytics } from '@campus/analytics';
-import { DEFAULT_SPACE_KEY, type NotificationCreated } from '@campus/session';
+import { DEFAULT_SPACE_KEY, type NotificationCreated } from '@campus/contracts';
 import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 import type { FastifyInstance } from 'fastify';
 

@@ -125,13 +125,13 @@ the re-synced geometry even though `published_at` still names the old version.
 From the repo root:
 
 ```bash
-pnpm dev:world      # builds @campus/session, @campus/media and world, then recompiles and restarts on change
-pnpm build:world    # builds @campus/session, @campus/media and world
+pnpm dev:world      # builds @campus/contracts, @campus/media and world, then recompiles and restarts on change
+pnpm build:world    # builds @campus/contracts, @campus/media and world
 pnpm start:world    # runs the last build
 ```
 
 Or scoped here with `pnpm --filter world <script>`. Plain `build`, `dev` and
-`start:dev` assume `@campus/session` and `@campus/media` are already built;
+`start:dev` assume `@campus/contracts` and `@campus/media` are already built;
 the root scripts build them for you.
 
 Config is read from the environment; `.env.example` lists every variable with

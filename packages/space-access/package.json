@@ -17,7 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@campus/session": "workspace:*"
+    "@campus/contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",
