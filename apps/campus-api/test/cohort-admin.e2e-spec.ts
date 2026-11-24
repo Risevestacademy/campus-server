@@ -28,7 +28,7 @@ import {
   REFRESH_COOKIE,
   SESSION_COOKIE,
 } from './../src/modules/auth/session-cookie.js';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { CohortRole, StudentStatus } from './../src/modules/cohorts/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';

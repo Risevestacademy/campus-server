@@ -1,4 +1,4 @@
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 import {} from '@campus/space-access';
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';

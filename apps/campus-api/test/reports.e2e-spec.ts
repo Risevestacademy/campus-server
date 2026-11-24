@@ -12,7 +12,7 @@ import { AppModule } from './../src/app.module.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { AuditAction, auditLog } from './../src/modules/audit/schema.js';
 import {
   CohortRole,

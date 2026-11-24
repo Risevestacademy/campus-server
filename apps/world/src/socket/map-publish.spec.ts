@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY, SessionScope } from '@campus/session';
+import { DEFAULT_SPACE_KEY, SessionScope } from '@campus/contracts';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { WorldMap } from '../movement/world-map.js';

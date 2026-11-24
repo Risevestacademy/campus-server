@@ -1,4 +1,4 @@
-import type { SessionClaims } from '@campus/session';
+import type { SessionClaims } from '@campus/contracts';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { Account, AccountLookup } from '../infra/accounts.js';

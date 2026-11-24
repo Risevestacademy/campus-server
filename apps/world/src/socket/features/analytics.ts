@@ -1,5 +1,5 @@
 import type { Analytics, EventName, EventProperties } from '@campus/analytics';
-import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
+import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/contracts';
 
 import type { Connection } from '../connections.js';
 import type {

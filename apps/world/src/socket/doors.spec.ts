@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY, SessionScope } from '@campus/session';
+import { DEFAULT_SPACE_KEY, SessionScope } from '@campus/contracts';
 import { SPACE_ACCESS, type SpaceFacts } from '@campus/space-access';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';

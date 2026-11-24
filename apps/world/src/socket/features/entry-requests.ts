@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 
 import type { AccountLookup } from '../../infra/accounts.js';

@@ -1,4 +1,4 @@
-import { SessionScope, verifySessionToken } from '@campus/session';
+import { SessionScope, verifySessionToken } from '@campus/contracts';
 
 import type { AccessGrant } from '../cohorts/cohort-members.service.js';
 import type { User } from '../users/schema.js';

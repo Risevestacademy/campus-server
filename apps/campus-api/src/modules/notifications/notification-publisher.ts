@@ -1,7 +1,7 @@
 import {
   NOTIFICATION_CREATED_CHANNEL,
   type NotificationCreated,
-} from '@campus/session';
+} from '@campus/contracts';
 import { Logger, type OnModuleDestroy } from '@nestjs/common';
 import { Redis } from 'ioredis';
 
