@@ -238,6 +238,9 @@ interface AuditEntryShapes {
       previousPublishedAt: Date | null;
       /** When this publish made it live. */
       publishedAt: Date;
+      /** The synced version before this publish and after it. */
+      previousPublishedVersion: string | null;
+      publishedVersion: string | null;
     };
   };
   [AuditAction.FeedbackResolved]: {

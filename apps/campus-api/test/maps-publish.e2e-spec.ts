@@ -36,7 +36,7 @@ const SECRET = 'an-e2e-session-secret-of-at-least-32-chars';
 const MISSING = '00000000-0000-4000-8000-000000000000';
 const db = drizzle(new PGlite(), { schema });
 
-describe('POST /v1/maps/:id/publish (e2e)', () => {
+describe('maps admin routes (e2e)', () => {
   let app: INestApplication<App>;
   let admin: typeof users.$inferSelect;
   let adminCookie: string;
@@ -137,7 +137,13 @@ describe('POST /v1/maps/:id/publish (e2e)', () => {
     [campusId] = (
       await db
         .insert(maps)
-        .values({ key: 'campus', name: 'Campus', isEntry: true })
+        .values({
+          key: 'campus',
+          name: 'Campus',
+          isEntry: true,
+          syncedVersion: 'campus-v1',
+          syncedAt: new Date('2026-11-01T10:00:00Z'),
+        })
         .returning({ id: maps.id })
     ).map((map) => map.id);
     [annexId] = (
@@ -168,6 +174,57 @@ describe('POST /v1/maps/:id/publish (e2e)', () => {
     stopListening = undefined;
   });
 
+  describe('GET /v1/maps', () => {
+    const list = (cookie = adminCookie) =>
+      request(app.getHttpServer()).get('/v1/maps').set('Cookie', cookie);
+
+    it('refuses without a session and to a non-admin', async () => {
+      await request(app.getHttpServer()).get('/v1/maps').expect(401);
+      const res = await list(memberCookie).expect(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it('lists every map, the entry map first, with what was synced and published', async () => {
+      const res = await list().expect(200);
+
+      expect(res.body).toEqual([
+        {
+          id: campusId,
+          key: 'campus',
+          name: 'Campus',
+          isEntry: true,
+          retiredAt: null,
+          syncedVersion: 'campus-v1',
+          syncedAt: '2026-11-01T10:00:00.000Z',
+          publishedAt: null,
+          publishedVersion: null,
+        },
+        expect.objectContaining({ id: annexId, key: 'annex', isEntry: false }),
+        expect.objectContaining({
+          id: retiredId,
+          key: 'old',
+          retiredAt: '2026-01-01T00:00:00.000Z',
+        }),
+      ]);
+    });
+
+    it('shows a publish as the synced version going live', async () => {
+      await publish(campusId).expect(200);
+      await db
+        .update(maps)
+        .set({ syncedVersion: 'campus-v2' })
+        .where(eq(maps.id, campusId));
+
+      const res = await list().expect(200);
+
+      expect(res.body[0]).toMatchObject({
+        syncedVersion: 'campus-v2',
+        publishedVersion: 'campus-v1',
+        publishedAt: expect.any(String),
+      });
+    });
+  });
+
   describe('access', () => {
     it('refuses without a session', async () => {
       await request(app.getHttpServer())
@@ -192,6 +249,7 @@ describe('POST /v1/maps/:id/publish (e2e)', () => {
       id: campusId,
       key: 'campus',
       publishedAt: expect.any(String),
+      publishedVersion: 'campus-v1',
     });
     const [row] = await db
       .select({ publishedAt: maps.publishedAt })

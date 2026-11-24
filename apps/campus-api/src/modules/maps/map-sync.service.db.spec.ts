@@ -413,7 +413,7 @@ describe('syncing again', () => {
     await expect(entries()).resolves.toHaveLength(1);
   });
 
-  /** A new version of the same map, with the same spaces, changes no row. */
+  /** A new version of the same map, with the same spaces, changes no space. */
   it('reports the version it read, and that nothing changed, for a new version with the same spaces', async () => {
     await sync(first);
 
@@ -422,6 +422,47 @@ describe('syncing again', () => {
     expect(result).toMatchObject({
       changed: false,
       maps: [{ version: 'campus-v2', outcome: MapSyncOutcome.Unchanged }],
+    });
+  });
+
+  it('records the version it read on the map, and when it first read it', async () => {
+    const at = (iso: string) => new Date(iso);
+    const versionOf = async () =>
+      (
+        await db
+          .select({
+            syncedVersion: maps.syncedVersion,
+            syncedAt: maps.syncedAt,
+            publishedVersion: maps.publishedVersion,
+          })
+          .from(maps)
+          .where(eq(maps.key, 'campus'))
+      )[0];
+
+    published = first;
+    await service.sync(admin, {}, at('2026-11-01T10:00:00Z'));
+    await expect(versionOf()).resolves.toEqual({
+      syncedVersion: 'campus-v1',
+      syncedAt: at('2026-11-01T10:00:00Z'),
+      publishedVersion: null,
+    });
+
+    await service.sync(admin, {}, at('2026-11-01T11:00:00Z'));
+    await expect(versionOf()).resolves.toMatchObject({
+      syncedAt: at('2026-11-01T10:00:00Z'),
+    });
+
+    published = [{ ...first[0], version: 'campus-v2' }];
+    await service.sync(admin, { dryRun: true }, at('2026-11-01T12:00:00Z'));
+    await expect(versionOf()).resolves.toMatchObject({
+      syncedVersion: 'campus-v1',
+    });
+
+    await service.sync(admin, {}, at('2026-11-01T13:00:00Z'));
+    await expect(versionOf()).resolves.toEqual({
+      syncedVersion: 'campus-v2',
+      syncedAt: at('2026-11-01T13:00:00Z'),
+      publishedVersion: null,
     });
   });
 
