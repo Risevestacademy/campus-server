@@ -1,4 +1,4 @@
-import { SessionScope, type NotificationCreated } from '@campus/session';
+import { SessionScope, type NotificationCreated } from '@campus/contracts';
 import { describe, expect, it } from 'vitest';
 
 import {

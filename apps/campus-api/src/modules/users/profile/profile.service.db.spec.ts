@@ -1,4 +1,4 @@
-import { PROFILE_CHANGED_CHANNEL } from '@campus/session';
+import { PROFILE_CHANGED_CHANNEL } from '@campus/contracts';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';

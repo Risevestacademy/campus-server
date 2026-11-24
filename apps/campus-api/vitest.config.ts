@@ -32,8 +32,8 @@ export default defineConfig({
       '@campus/error-reporting': fileURLToPath(
         new URL('../../packages/error-reporting/src/index.ts', import.meta.url),
       ),
-      '@campus/session': fileURLToPath(
-        new URL('../../packages/session/src/index.ts', import.meta.url),
+      '@campus/contracts': fileURLToPath(
+        new URL('../../packages/contracts/src/index.ts', import.meta.url),
       ),
       '@campus/media/testing': fileURLToPath(
         new URL('../../packages/media/src/testing.ts', import.meta.url),

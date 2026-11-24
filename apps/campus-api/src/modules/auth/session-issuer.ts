@@ -18,7 +18,7 @@ import {
   isRefreshTokenLive,
   SessionScope,
   signSessionToken,
-} from '@campus/session';
+} from '@campus/contracts';
 
 /** The transaction handle drizzle hands a `db.transaction` callback. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];

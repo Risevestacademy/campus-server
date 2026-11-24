@@ -1,4 +1,4 @@
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type WebSocket from 'ws';

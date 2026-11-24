@@ -1,4 +1,4 @@
-import type { NotificationCreated } from '@campus/session';
+import type { NotificationCreated } from '@campus/contracts';
 import { Inject, Injectable } from '@nestjs/common';
 import { PinoLogger } from 'nestjs-pino';
 
