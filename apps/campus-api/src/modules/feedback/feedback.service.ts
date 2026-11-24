@@ -299,6 +299,9 @@ export class FeedbackService implements OnModuleInit {
       query.submittedBy
         ? eq(feedback.submittedBy, query.submittedBy)
         : undefined,
+      query.reportedUserId
+        ? eq(feedback.reportedUserId, query.reportedUserId)
+        : undefined,
     );
 
     const [rows, [{ total }]] = await Promise.all([
