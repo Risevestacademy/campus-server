@@ -445,6 +445,20 @@ interface AuditEntryShapes {
     /** The notice only; what the member wrote stays on the comment. */
     details: { noticeId: string };
   };
+  [AuditAction.ReportExported]: {
+    subject: AuditSubjectType.Cohort;
+    details: {
+      /** `membership` or `attendance`. */
+      report: string;
+      state: string;
+      trackId: string | null;
+      role: string | null;
+      /** The range of class starts, as ISO timestamps; attendance only. */
+      from: string | null;
+      to: string | null;
+      rows: number;
+    };
+  };
 }
 
 /** When a room link's event runs, as ISO timestamps; both null for none. */
