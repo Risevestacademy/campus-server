@@ -6,6 +6,7 @@ import { SessionModule } from '../auth/session.module.js';
 import { MapPublishService } from './map-publish.service.js';
 import { MapSyncService } from './map-sync.service.js';
 import { MapsController } from './maps.controller.js';
+import { MapsService } from './maps.service.js';
 import { MAPS_FETCH, PublishedMapsReader } from './published-maps.js';
 import { SpaceMembershipsController } from './space-memberships.controller.js';
 import { SpaceMembershipsService } from './space-memberships.service.js';
@@ -19,6 +20,7 @@ import { MAPS_NOTIFY, tellWorldMap } from './tell-world.js';
   providers: [
     MapPublishService,
     MapSyncService,
+    MapsService,
     SpaceMembershipsService,
     SpacesService,
     PublishedMapsReader,

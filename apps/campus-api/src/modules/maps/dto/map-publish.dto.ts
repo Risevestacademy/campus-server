@@ -19,4 +19,12 @@ export class MapPublishedResponseDto {
   /** When this publish made it live. */
   @ApiProperty({ type: String, format: 'date-time' })
   publishedAt: Date;
+
+  /**
+   * The synced version this publish recorded. Null when no sync has recorded
+   * one yet.
+   * @example 3f9c2a
+   */
+  @ApiProperty({ type: String, nullable: true })
+  publishedVersion: string | null;
 }

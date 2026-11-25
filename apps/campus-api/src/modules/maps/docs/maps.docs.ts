@@ -10,10 +10,33 @@ import {
 
 import { ApiAdminOnly } from '../../../shared/dto/admin-route.docs.js';
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
+import { MapResponseDto } from '../dto/map.dto.js';
 import { MapPublishedResponseDto } from '../dto/map-publish.dto.js';
 import { MapSyncResultDto } from '../dto/map-sync.dto.js';
 
 const NO_MAP = 'No map with that id.';
+
+export function ApiListMaps(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'List the maps (admin only)',
+      description:
+        'Every map the database knows of, retired ones included, with the ' +
+        'entry map first and the rest by key. Not paginated: a campus has a ' +
+        'handful of maps.\n\n' +
+        '`syncedVersion` is the Sanity version the last sync read, and ' +
+        '`publishedVersion` the synced version when an admin last published. ' +
+        'When they differ, the latest sync is not live yet. Compare ' +
+        '`syncedVersion` with the manifest in Sanity to tell whether there is ' +
+        'something newer to sync.\n\n' +
+        'World loads the current map from Sanity when told, not ' +
+        '`publishedVersion`: if Sanity changed between the sync and the ' +
+        'publish, world serves the newer one.',
+    }),
+    ApiOkResponse({ type: MapResponseDto, isArray: true }),
+    ApiAdminOnly(),
+  );
+}
 
 export function ApiPublishMap(): MethodDecorator {
   return applyDecorators(
@@ -30,6 +53,9 @@ export function ApiPublishMap(): MethodDecorator {
         'a space edit uses. That is fire-and-forget: this route does not wait ' +
         'for world, and a failed notification is logged rather than failing ' +
         'the publish.\n\n' +
+        '`publishedVersion` records the synced version at this moment. ' +
+        'World loads whatever Sanity holds now, so sync and publish back to ' +
+        'back.\n\n' +
         'Only the map people enter on can be published: world serves one map, ' +
         'and a different one would leave clients without a spawn. A retired ' +
         'map is refused for the same reason a retired space is.',

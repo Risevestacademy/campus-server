@@ -61,7 +61,7 @@ export class MapPublishService {
 
       const [row] = await tx
         .update(maps)
-        .set({ publishedAt: now })
+        .set({ publishedAt: now, publishedVersion: map.syncedVersion })
         .where(eq(maps.id, id))
         .returning();
 
@@ -73,6 +73,8 @@ export class MapPublishService {
           key: map.key,
           previousPublishedAt: map.publishedAt,
           publishedAt: row.publishedAt ?? now,
+          previousPublishedVersion: map.publishedVersion,
+          publishedVersion: row.publishedVersion,
         },
       });
 
@@ -80,6 +82,7 @@ export class MapPublishService {
         id: row.id,
         key: row.key,
         publishedAt: row.publishedAt ?? now,
+        publishedVersion: row.publishedVersion,
       };
     });
 

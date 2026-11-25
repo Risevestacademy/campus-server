@@ -75,7 +75,12 @@ beforeEach(async () => {
   [campusId] = (
     await db
       .insert(maps)
-      .values({ key: 'campus', name: 'Campus', isEntry: true })
+      .values({
+        key: 'campus',
+        name: 'Campus',
+        isEntry: true,
+        syncedVersion: 'campus-v1',
+      })
       .returning({ id: maps.id })
   ).map((map) => map.id);
   [annexId] = (
@@ -97,15 +102,21 @@ beforeEach(async () => {
 });
 
 describe('publishing a map', () => {
-  it('sets when it went live, records who did it, and tells world its key', async () => {
+  it('sets when it went live and the synced version, records who did it, and tells world its key', async () => {
     const now = new Date('2026-10-01T10:00:00Z');
 
     await expect(
       service.publish(campusId, { actorUserId: admin.id }, now),
-    ).resolves.toEqual({ id: campusId, key: 'campus', publishedAt: now });
+    ).resolves.toEqual({
+      id: campusId,
+      key: 'campus',
+      publishedAt: now,
+      publishedVersion: 'campus-v1',
+    });
 
     await expect(mapRow(campusId)).resolves.toMatchObject({
       publishedAt: now,
+      publishedVersion: 'campus-v1',
     });
     expect(await entries()).toEqual([
       {
@@ -117,6 +128,8 @@ describe('publishing a map', () => {
           key: 'campus',
           previousPublishedAt: null,
           publishedAt: now.toISOString(),
+          previousPublishedVersion: null,
+          publishedVersion: 'campus-v1',
         },
       },
     ]);
@@ -124,15 +137,20 @@ describe('publishing a map', () => {
     expect(notify).toHaveBeenCalledWith(db, 'campus');
   });
 
-  it('moves the timestamp, writes a second entry, and tells world again', async () => {
+  it('moves the timestamp and version, writes a second entry, and tells world again', async () => {
     const first = new Date('2026-10-01T10:00:00Z');
     const second = new Date('2026-10-01T10:05:00Z');
 
     await service.publish(campusId, { actorUserId: admin.id }, first);
+    await db
+      .update(maps)
+      .set({ syncedVersion: 'campus-v2' })
+      .where(eq(maps.id, campusId));
     await service.publish(campusId, { actorUserId: admin.id }, second);
 
     await expect(mapRow(campusId)).resolves.toMatchObject({
       publishedAt: second,
+      publishedVersion: 'campus-v2',
     });
     const written = await entries();
     expect(written).toHaveLength(2);
@@ -140,6 +158,8 @@ describe('publishing a map', () => {
       key: 'campus',
       previousPublishedAt: first.toISOString(),
       publishedAt: second.toISOString(),
+      previousPublishedVersion: 'campus-v1',
+      publishedVersion: 'campus-v2',
     });
     expect(notify).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenLastCalledWith(db, 'campus');
