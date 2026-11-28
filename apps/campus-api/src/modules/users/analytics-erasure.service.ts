@@ -57,34 +57,80 @@ export class AnalyticsErasureService implements OnModuleInit {
     if (waiting.length === 0) return;
     const ids = waiting.map((row) => row.id);
 
-    const host = this.config.POSTHOG_API_HOST.replace(/\/+$/, '');
-    const response = await this.fetcher(
-      `${host}/api/projects/${projectId}/persons/bulk_delete/`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${key}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          distinct_ids: ids,
-          delete_events: false,
-          delete_recordings: true,
-        }),
-      },
-    );
-    if (!response.ok) {
-      this.logger.warn(
-        { status: response.status, waiting: ids.length },
-        'PostHog refused the person deletions; trying again next run',
-      );
-      return;
+    const url = `${this.config.POSTHOG_API_HOST.replace(/\/+$/, '')}/api/projects/${projectId}/persons/bulk_delete/`;
+    let erased: string[] = [];
+    const batch = await this.bulkDelete(url, key, ids);
+    if (batch === 'clean') {
+      erased = ids;
+    } else if (batch === 'partly') {
+      // PostHog names a failure by its own person id, not the distinct id we
+      // sent, so only one id per call says whose deletion failed.
+      for (const id of ids) {
+        if ((await this.bulkDelete(url, key, [id])) === 'clean') {
+          erased.push(id);
+        }
+      }
     }
 
-    await this.db
-      .update(users)
-      .set({ analyticsErasedAt: now })
-      .where(inArray(users.id, ids));
-    this.logger.info({ erased: ids.length }, 'PostHog person profiles deleted');
+    if (erased.length > 0) {
+      await this.db
+        .update(users)
+        .set({ analyticsErasedAt: now })
+        .where(inArray(users.id, erased));
+    }
+    if (erased.length < ids.length) {
+      this.logger.warn(
+        { waiting: ids.length, erased: erased.length },
+        'PostHog did not delete every person profile; trying again next run',
+      );
+    } else {
+      this.logger.info(
+        { erased: erased.length },
+        'PostHog person profiles deleted',
+      );
+    }
+  }
+
+  /**
+   * `clean` only when PostHog accepted the call and listed no
+   * `deletion_errors`; `partly` when it listed some; `refused` otherwise.
+   */
+  private async bulkDelete(
+    url: string,
+    key: string,
+    distinctIds: string[],
+  ): Promise<'clean' | 'partly' | 'refused'> {
+    const response = await this.fetcher(url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${key}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        distinct_ids: distinctIds,
+        delete_events: false,
+        delete_recordings: true,
+      }),
+    });
+    if (!response.ok) {
+      this.logger.warn(
+        { status: response.status, ids: distinctIds.length },
+        'PostHog refused the person deletions',
+      );
+      return 'refused';
+    }
+    const body: unknown = await response.json().catch(() => null);
+    const errors =
+      body && typeof body === 'object' && 'deletion_errors' in body
+        ? body.deletion_errors
+        : undefined;
+    if (!Array.isArray(errors)) {
+      this.logger.warn(
+        { status: response.status },
+        'PostHog answered the person deletions without deletion_errors',
+      );
+      return 'refused';
+    }
+    return errors.length === 0 ? 'clean' : 'partly';
   }
 }

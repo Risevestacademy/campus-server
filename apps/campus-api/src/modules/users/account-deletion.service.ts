@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { PinoLogger } from 'nestjs-pino';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
@@ -30,18 +30,15 @@ import { noticeAttachments } from '../notices/schema.js';
 import { notifications } from '../notifications/schema.js';
 import { roomLinkPasses } from '../room-links/schema.js';
 import { renderAccountDeletedEmail } from './account-deleted-email.js';
+import { lockAdminAndTarget } from './lock-admin-target.js';
 import {
   DELETED_DISPLAY_NAME,
   deletedEmailOf,
-  hasAdminPowers,
   SystemRole,
   UserStatus,
   users,
 } from './schema.js';
-import {
-  AccountStatusLockedException,
-  UserNotFoundException,
-} from './users.exceptions.js';
+import { AccountStatusLockedException } from './users.exceptions.js';
 
 /**
  * Deletes an account on the person's request. The row stays, because the
@@ -77,32 +74,11 @@ export class AccountDeletionService {
     }
 
     const former = await this.db.transaction(async (tx) => {
-      const locked = await tx
-        .select({
-          id: users.id,
-          email: users.email,
-          firstName: users.firstName,
-          systemRole: users.systemRole,
-          status: users.status,
-        })
-        .from(users)
-        .where(inArray(users.id, [actor.id, targetId]))
-        .orderBy(asc(users.id))
-        .for('update');
-      const caller = locked.find((row) => row.id === actor.id);
-      const target = locked.find((row) => row.id === targetId);
-
-      if (!caller || !hasAdminPowers(caller.systemRole)) {
-        throw new AccessDeniedException('Admin role required');
-      }
-      if (caller.status !== UserStatus.Active) {
-        throw new AccessDeniedException('Your account is not active');
-      }
-      if (!target) {
-        throw new UserNotFoundException(`User ${targetId} not found`, {
-          userId: targetId,
-        });
-      }
+      const { caller, target } = await lockAdminAndTarget(
+        tx,
+        actor.id,
+        targetId,
+      );
       if (target.status === UserStatus.Deleted) {
         throw new AccountStatusLockedException(
           'This account is already deleted',
@@ -179,6 +155,14 @@ export class AccountDeletionService {
             eq(invites.status, InviteStatus.Pending),
           ),
         );
+      await tx
+        .update(invites)
+        .set({
+          email: deletedEmailOf(targetId),
+          flaggedAt: null,
+          flagMessage: null,
+        })
+        .where(eq(invites.email, target.email));
       await tx
         .delete(spaceMemberships)
         .where(eq(spaceMemberships.userId, targetId));

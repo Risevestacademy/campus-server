@@ -27,7 +27,7 @@ export function isAdmin(user: User): boolean {
 }
 
 /** Suspended or deleted: either way it may not sign in or be served. */
-export function isSuspended(user: User): boolean {
+export function isInactive(user: User): boolean {
   return user.status !== UserStatus.Active;
 }
 

@@ -8,7 +8,7 @@ import {
 import { InvitesService } from '../invites/invites.service.js';
 import type { Invite } from '../invites/schema.js';
 import type { User } from '../users/schema.js';
-import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
+import { isAdmin, isInactive, UsersService } from '../users/users.service.js';
 import {
   AccountSuspendedError,
   GoogleSignInFailedError,
@@ -78,7 +78,7 @@ export class AuthService {
     // must not leave their Google subject bound to somebody's account.
     const existing = await this.users.findForGoogleIdentity(normalized);
 
-    if (existing && isSuspended(existing)) {
+    if (existing && isInactive(existing)) {
       this.logger.warn(
         { userId: existing.id },
         'suspended account attempted to sign in',

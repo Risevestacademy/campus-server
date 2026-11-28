@@ -12,7 +12,7 @@ import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { refreshTokens } from './schema.js';
 import type { Invite } from '../invites/schema.js';
 import { users as usersTable, type User } from '../users/schema.js';
-import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
+import { isAdmin, isInactive, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import {
   isRefreshTokenLive,
@@ -354,7 +354,7 @@ export class SessionIssuer {
       await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Refresh token is not usable');
     }
-    if (isSuspended(user)) {
+    if (isInactive(user)) {
       await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Account is suspended');
     }

@@ -36,6 +36,22 @@ const deleted = async (email: string) => {
     .returning();
   return row;
 };
+const accepted = (errors: unknown[] = []) =>
+  new Response(
+    JSON.stringify({
+      persons_found: 1,
+      persons_deleted: errors.length === 0 ? 1 : 0,
+      persons_queued_for_deletion: 0,
+      events_queued_for_deletion: false,
+      recordings_queued_for_deletion: true,
+      deletion_errors: errors,
+    }),
+    { status: 202 },
+  );
+const sentIds = (fetcher: ReturnType<typeof vi.fn>) =>
+  fetcher.mock.calls.map(
+    ([, init]) => JSON.parse((init as RequestInit).body as string).distinct_ids,
+  );
 const erasedAt = async (id: string) => {
   const [row] = await db.select().from(users).where(eq(users.id, id));
   return row.analyticsErasedAt;
@@ -53,7 +69,7 @@ describe('AnalyticsErasureService.erase', () => {
   it('drops deleted accounts’ PostHog profiles, keeps their events, and marks them', async () => {
     const gone = await deleted('gone@campus.local');
     await db.insert(users).values({ email: 'here@campus.local' });
-    const fetcher = vi.fn(async () => new Response('{}', { status: 200 }));
+    const fetcher = vi.fn(async () => accepted());
     const now = new Date('2026-11-19T10:00:00Z');
 
     await serviceWith(configured, fetcher as never).erase(now);
@@ -73,6 +89,40 @@ describe('AnalyticsErasureService.erase', () => {
       delete_recordings: true,
     });
     expect(await erasedAt(gone.id)).toEqual(now);
+  });
+
+  it('retries one by one when PostHog lists failures, and marks only those deleted', async () => {
+    const ok = await deleted('ok@campus.local');
+    const stuck = await deleted('stuck@campus.local');
+    const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+      const ids = JSON.parse(init.body as string).distinct_ids as string[];
+      return accepted(
+        ids.includes(stuck.id)
+          ? [{ person_uuid: 'p-1', step: 'delete_person' }]
+          : [],
+      );
+    });
+    const now = new Date('2026-11-28T10:00:00Z');
+
+    await serviceWith(configured, fetcher as never).erase(now);
+
+    const calls = sentIds(fetcher);
+    expect(calls).toHaveLength(3);
+    expect(new Set(calls[0])).toEqual(new Set([ok.id, stuck.id]));
+    expect(calls.slice(1)).toEqual(
+      expect.arrayContaining([[ok.id], [stuck.id]]),
+    );
+    expect(await erasedAt(ok.id)).toEqual(now);
+    expect(await erasedAt(stuck.id)).toBeNull();
+  });
+
+  it('leaves them waiting when the answer has no deletion_errors', async () => {
+    const gone = await deleted('gone@campus.local');
+    const fetcher = vi.fn(async () => new Response('{}', { status: 202 }));
+
+    await serviceWith(configured, fetcher as never).erase(new Date());
+
+    expect(await erasedAt(gone.id)).toBeNull();
   });
 
   it('leaves them waiting when PostHog refuses', async () => {
