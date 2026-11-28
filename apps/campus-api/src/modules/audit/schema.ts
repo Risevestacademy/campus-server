@@ -195,6 +195,11 @@ export enum AuditAction {
    * the member wrote stays on the comment and never comes here.
    */
   CommentCreated = 'comment_created',
+  /**
+   * An admin downloaded a cohort report as CSV. `details` has which report,
+   * the filters it was run with and how many rows it held; never the rows.
+   */
+  ReportExported = 'report_exported',
 }
 
 export enum AuditSubjectType {

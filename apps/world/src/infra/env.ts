@@ -3,7 +3,7 @@ import {
   assertMediaCredentials,
   type MediaCredentials,
 } from '@campus/media';
-import { MIN_SESSION_REFRESH_WINDOW_SECONDS } from '@campus/session';
+import { MIN_SESSION_REFRESH_WINDOW_SECONDS } from '@campus/contracts';
 import { z } from 'zod';
 
 /**

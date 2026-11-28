@@ -2,7 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ThrottlerStorage } from '@nestjs/throttler';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { asc, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';

@@ -1,4 +1,4 @@
-import { DESKS_CHANGED_CHANNEL } from '@campus/session';
+import { DESKS_CHANGED_CHANNEL } from '@campus/contracts';
 import { and, isNull, sql, type SQL } from 'drizzle-orm';
 
 import type { DbExecutor } from '../../infra/database/database.constants.js';

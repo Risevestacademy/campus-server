@@ -249,6 +249,9 @@ interface AuditEntryShapes {
       previousPublishedAt: Date | null;
       /** When this publish made it live. */
       publishedAt: Date;
+      /** The synced version before this publish and after it. */
+      previousPublishedVersion: string | null;
+      publishedVersion: string | null;
     };
   };
   [AuditAction.FeedbackResolved]: {
@@ -452,6 +455,20 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.Comment;
     /** The notice only; what the member wrote stays on the comment. */
     details: { noticeId: string };
+  };
+  [AuditAction.ReportExported]: {
+    subject: AuditSubjectType.Cohort;
+    details: {
+      /** `membership` or `attendance`. */
+      report: string;
+      state: string;
+      trackId: string | null;
+      role: string | null;
+      /** The range of class starts, as ISO timestamps; attendance only. */
+      from: string | null;
+      to: string | null;
+      rows: number;
+    };
   };
 }
 

@@ -200,6 +200,23 @@ export class ListFeedbackQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID()
   submittedBy?: string;
+
+  /**
+   * Only reports naming this account. The filter only narrows: it is combined
+   * with the rule that hides a report naming the admin asking, so an admin
+   * filtering their own id gets nothing. A report with no named account, and
+   * bugs and ideas, never match.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Only reports naming this account. The filter only narrows; an admin ' +
+      'filtering their own id gets nothing.',
+  })
+  @IsOptional()
+  @IsUUID()
+  reportedUserId?: string;
 }
 
 /** Somebody named on a piece of feedback, as an admin needs to see them. */

@@ -1,4 +1,4 @@
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { FastifyOtelInstrumentation } from '@fastify/otel';
 import { context, metrics, SpanStatusCode, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';

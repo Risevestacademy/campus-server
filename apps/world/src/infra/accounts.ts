@@ -3,7 +3,7 @@ import {
   PROFILE_CHANGED_CHANNEL,
   hasAdminPowers,
   spriteKeyOrNone,
-} from '@campus/session';
+} from '@campus/contracts';
 import {
   SPACES_CHANGED_CHANNEL,
   type CohortMembershipFacts,
@@ -167,7 +167,7 @@ export const ACCOUNT_QUERY =
  * "minted recently" is campus-api vouching for the session again. Signing out
  * revokes the family outright.
  *
- * `revoked_at is null and expires_at > $3` is @campus/session's
+ * `revoked_at is null and expires_at > $3` is @campus/contracts's
  * `isRefreshTokenLive`, written in SQL; the two must agree, or world holds a
  * socket on a token campus-api will no longer refresh. `created_at >= $2` is
  * world's own rule on top.

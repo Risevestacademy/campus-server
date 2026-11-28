@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 
 import { walkable } from '../movement/grid.js';
 import { spaceAt } from '../movement/spaces.js';

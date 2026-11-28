@@ -34,7 +34,7 @@ import {
   GlobalExceptionFilter,
   ValidationExceptionFilter,
 } from './../src/shared/filters/index.js';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 
 const MIGRATIONS = fileURLToPath(
   new URL('../src/infra/database/migrations', import.meta.url),

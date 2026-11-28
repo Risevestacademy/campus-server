@@ -1,5 +1,5 @@
 import { MIN_SECRET_LENGTH } from '@campus/media';
-import { MAX_ACCESS_TOKEN_TTL_MINUTES } from '@campus/session';
+import { MAX_ACCESS_TOKEN_TTL_MINUTES } from '@campus/contracts';
 import { plainToInstance } from 'class-transformer';
 import { Type, Transform } from 'class-transformer';
 import {

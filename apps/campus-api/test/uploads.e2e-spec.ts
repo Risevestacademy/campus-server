@@ -3,7 +3,7 @@ import { r2Connection } from '@campus/media';
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';

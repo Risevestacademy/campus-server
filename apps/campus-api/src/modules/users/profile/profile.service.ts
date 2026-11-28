@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/session';
+import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/contracts';
 import {
   and,
   asc,

@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import { contains, type MapLayout } from 'campus-world-map';
 
 import { tileIndex, walkable, type Grid, type Tile } from './grid.js';

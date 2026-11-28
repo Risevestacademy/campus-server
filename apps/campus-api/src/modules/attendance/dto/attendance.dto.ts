@@ -41,6 +41,17 @@ export class AttendanceIdParamDto {
   attendanceId: string;
 }
 
+export class ListStudentAttendanceQueryDto {
+  /**
+   * Students on this catalogue track, by their membership's track now, as
+   * on the roster. A track the cohort does not run matches nobody.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
+  @IsOptional()
+  @IsUUID()
+  trackId?: string;
+}
+
 export class ListAttendanceClassesQueryDto extends PaginationQueryDto {
   /**
    * Classes starting at or after this instant.

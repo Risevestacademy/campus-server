@@ -1,5 +1,5 @@
 {
-  "id": "de98cfbe-5037-44ab-a8f0-fab10ad89af4",
+  "id": "4fc9243b-be56-471a-ae35-cf1899676684",
   "prevId": "b23a8489-acb9-4eed-918b-5cc58a685063",
   "version": "7",
   "dialect": "postgresql",
@@ -2766,9 +2766,27 @@
           "primaryKey": false,
           "notNull": false
         },
+        "synced_version": {
+          "name": "synced_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "synced_at": {
+          "name": "synced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "published_at": {
           "name": "published_at",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "published_version": {
+          "name": "published_version",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -4834,18 +4852,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "deleted_at": {
-          "name": "deleted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "analytics_erased_at": {
-          "name": "analytics_erased_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -4935,10 +4941,6 @@
         "users_email_lowercase": {
           "name": "users_email_lowercase",
           "value": "\"users\".\"email\" = lower(\"users\".\"email\")"
-        },
-        "users_deleted_at_with_status": {
-          "name": "users_deleted_at_with_status",
-          "value": "(\"users\".\"status\"::text = 'deleted') = (\"users\".\"deleted_at\" is not null)"
         }
       },
       "isRLSEnabled": false
@@ -5043,7 +5045,6 @@
         "enrolment_ended",
         "desk_retired",
         "account_suspended",
-        "account_deleted",
         "admin_role_removed"
       ]
     },
@@ -5157,8 +5158,7 @@
       "schema": "public",
       "values": [
         "active",
-        "suspended",
-        "deleted"
+        "suspended"
       ]
     }
   },

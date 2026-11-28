@@ -45,9 +45,9 @@ workspace lockfile. Railpack takes the Node version from `engines.node` in
 the root `package.json` (`26.x`), the same major CI runs.
 
 Every build command ends in `--filter <app>... build`. The trailing `...`
-builds the workspace packages the app depends on (`@campus/session`) first;
+builds the workspace packages the app depends on (`@campus/contracts`) first;
 they ship compiled output, so without it the build fails with
-`Cannot find module '@campus/session'`.
+`Cannot find module '@campus/contracts'`.
 
 Each service should set these **watch paths**, so a commit redeploys only
 what it can affect. Both include the shared package and the root workspace files, since a
@@ -55,7 +55,7 @@ change to either reaches both apps:
 
 ```
 /apps/<app>/**
-/packages/session/**
+/packages/contracts/**
 /package.json
 /pnpm-lock.yaml
 /pnpm-workspace.yaml
@@ -65,7 +65,7 @@ change to either reaches both apps:
 
 - Build: `pnpm install --frozen-lockfile && pnpm --filter campus-api... build`
   — the trailing `...` builds the workspace packages campus-api depends on
-  (`@campus/session`), which ship compiled output. Without it the API starts
+  (`@campus/contracts`), which ship compiled output. Without it the API starts
   and then cannot resolve them.
 - Start: `node --max-old-space-size=128 --max-semi-space-size=2 apps/campus-api/dist/main.js`
   — `node` directly, because started through pnpm the wrapper stays alive as
@@ -129,7 +129,7 @@ change to either reaches both apps:
   (15), refresh tokens `AUTH_REFRESH_TTL_DAYS` (30), provisional sessions
   `AUTH_PROVISIONAL_TTL_MINUTES` (30). See [auth-flow.md](./auth-flow.md) for
   refresh and sign-out. The access-token lifetime is capped at 15 minutes by
-  the shared session policy in `@campus/session`: campus-api refuses to boot
+  the shared session policy in `@campus/contracts`: campus-api refuses to boot
   above it, and world refuses a refresh window shorter than it plus two
   minutes, since world relies on sign-ins being refreshed that often.
 - `GOOGLE_MOBILE_CLIENT_IDS` (optional): the Google client ids of the native

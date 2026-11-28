@@ -1,5 +1,5 @@
-import { DEFAULT_SPACE_KEY, signSessionToken } from '@campus/session';
-import { SessionScope } from '@campus/session';
+import { DEFAULT_SPACE_KEY, signSessionToken } from '@campus/contracts';
+import { SessionScope } from '@campus/contracts';
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';

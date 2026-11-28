@@ -31,7 +31,7 @@
     "@campus/analytics": "workspace:*",
     "@campus/error-reporting": "workspace:*",
     "@campus/media": "workspace:*",
-    "@campus/session": "workspace:*",
+    "@campus/contracts": "workspace:*",
     "@campus/space-access": "workspace:*",
     "@campus/telemetry": "workspace:*",
     "@nestjs/common": "^12.0.1",

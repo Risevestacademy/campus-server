@@ -32,6 +32,7 @@ import {
   AttendanceStudentParamDto,
   CorrectAttendanceDto,
   ListAttendanceClassesQueryDto,
+  ListStudentAttendanceQueryDto,
   StudentAttendanceDto,
   StudentAttendanceSummaryDto,
 } from './dto/attendance.dto.js';
@@ -57,9 +58,10 @@ export class CohortAttendanceController {
   @ApiListStudentAttendance()
   listStudents(
     @Param() params: AttendanceCohortParamDto,
+    @Query() query: ListStudentAttendanceQueryDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<StudentAttendanceSummaryDto[]> {
-    return this.attendance.listStudents(user, params.cohortId);
+    return this.attendance.listStudents(user, params.cohortId, query);
   }
 
   @Get('students/:userId')
