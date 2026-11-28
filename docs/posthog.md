@@ -55,6 +55,19 @@ Use one PostHog project per environment, the same one for both services.
 token and host, and is separate so errors can run without events. Each service
 reads its own.
 
+campus-api also reads three variables for deleting accounts:
+
+- `POSTHOG_PERSONAL_API_KEY`: a personal API key (`phx_…`) with the
+  `person:write` scope.
+- `POSTHOG_PROJECT_ID`: the numeric project id, required with the key.
+- `POSTHOG_API_HOST`: `https://eu.posthog.com` by default. This is the API
+  host, not the ingestion host.
+
+With the key and the project id set, a job every 10 minutes deletes the
+person profiles and recordings of deleted accounts, and keeps their events.
+It counts an account as erased only when PostHog reports no `deletion_errors`
+for it. Unset, the accounts wait and are erased on the first run after.
+
 ## Consent
 
 `users.analytics_consent` holds what a person chose: `granted`, `denied`, or

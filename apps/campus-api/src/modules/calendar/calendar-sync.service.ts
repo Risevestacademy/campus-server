@@ -7,7 +7,6 @@ import {
   inArray,
   isNotNull,
   isNull,
-  ne,
   notExists,
   notInArray,
   or,
@@ -333,7 +332,7 @@ export class CalendarSyncService {
       .where(
         and(
           eq(users.id, roomLinkInstances.organizerId),
-          ne(users.status, UserStatus.Suspended),
+          eq(users.status, UserStatus.Active),
           or(
             inArray(users.systemRole, ADMIN_ROLES),
             exists(
@@ -421,7 +420,7 @@ export class CalendarSyncService {
       .select({ systemRole: users.systemRole, status: users.status })
       .from(users)
       .where(eq(users.id, userId));
-    if (!account || account.status === UserStatus.Suspended) {
+    if (!account || account.status !== UserStatus.Active) {
       return null;
     }
     if (hasAdminPowers(account.systemRole)) {

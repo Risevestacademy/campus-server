@@ -39,6 +39,11 @@ export enum AuditAction {
    */
   UserReinstated = 'user_reinstated',
   /**
+   * An admin deleted an account on the person's request. The row stays with
+   * its personal fields stripped, so `details` names no one.
+   */
+  AccountDeleted = 'account_deleted',
+  /**
    * An admin offered somebody a place. `details` has what was offered — the
    * cohort, the roles — and never the address, which stays on the invite.
    */

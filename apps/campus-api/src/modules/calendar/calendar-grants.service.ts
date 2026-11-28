@@ -8,6 +8,7 @@ import {
   isNotNull,
   isNull,
   lte,
+  ne,
   notExists,
   notInArray,
   or,
@@ -179,7 +180,7 @@ export class CalendarGrantsService {
       .from(users)
       .where(
         or(
-          eq(users.status, UserStatus.Suspended),
+          ne(users.status, UserStatus.Active),
           and(notInArray(users.systemRole, ADMIN_ROLES), notExists(live)),
         ),
       );

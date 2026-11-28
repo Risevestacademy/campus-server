@@ -137,6 +137,17 @@ interface AuditEntryShapes {
       actorRole: string;
     };
   };
+  [AuditAction.AccountDeleted]: {
+    subject: AuditSubjectType.User;
+    details: {
+      /** The actor's system_role at the time, not whatever it is now. */
+      actorRole: string;
+      /** The role the account held before it was deleted. */
+      systemRole: string;
+      /** The cohort memberships the deletion ended. */
+      endedMembershipIds: string[];
+    };
+  };
   [AuditAction.UserReinstated]: {
     subject: AuditSubjectType.User;
     details: {

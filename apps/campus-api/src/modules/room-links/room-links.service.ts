@@ -294,7 +294,7 @@ export class RoomLinksService {
       .select({ systemRole: users.systemRole, status: users.status })
       .from(users)
       .where(eq(users.id, user.id));
-    if (!account || account.status === UserStatus.Suspended) {
+    if (!account || account.status !== UserStatus.Active) {
       return [];
     }
     const member = hasAdminPowers(account.systemRole)
@@ -469,7 +469,7 @@ async function standing(
     .select({ systemRole: users.systemRole, status: users.status })
     .from(users)
     .where(eq(users.id, user.id));
-  if (!account || account.status === UserStatus.Suspended) {
+  if (!account || account.status !== UserStatus.Active) {
     throw new RoomLinkForbiddenException(
       'This account may not use room links',
       { cohortId },

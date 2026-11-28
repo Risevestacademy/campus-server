@@ -7,7 +7,7 @@ import {
 
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedRequest } from '../../shared/auth/authenticated-user.js';
-import { isSuspended, UsersService } from '../users/users.service.js';
+import { isInactive, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { readSessionCookie } from './session-cookie.js';
@@ -99,7 +99,7 @@ abstract class SessionGuardBase implements CanActivate {
     if (!user) {
       throw new SessionUnauthorizedError('Session is not usable');
     }
-    if (isSuspended(user)) {
+    if (isInactive(user)) {
       throw new SessionUnauthorizedError('Account is suspended');
     }
     // The epoch the token was signed with against the one on the row. They
