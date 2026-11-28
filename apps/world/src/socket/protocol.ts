@@ -250,7 +250,8 @@ export const WalkEndReason = z
       'elsewhere: they are online, but connected to another world server, ' +
       'which a walk cannot reach. gone and elsewhere end only walks to ' +
       'somebody. no_way: no path reaches where you were going: walls, a ' +
-      'space with no room beside them, or a walk past the step limit. ' +
+      'space with no room beside them, or a walk past the step limit, the ' +
+      "map's width × height in steps. " +
       'moved_by_staff: staff removed you from a space mid-walk.',
   });
 
