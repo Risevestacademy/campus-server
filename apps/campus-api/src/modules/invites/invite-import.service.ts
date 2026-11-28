@@ -109,6 +109,9 @@ export class InviteImportService {
       }
       return created;
     });
+    for (const { receipt } of created) {
+      this.invites.trackSent(receipt, inviter, 'import', correlationId);
+    }
 
     // Emails only once every write is committed, and a few at a time: sent
     // one by one, a full file would hold the request open for minutes.

@@ -3,7 +3,7 @@ import { r2Connection } from '@campus/media';
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -203,7 +203,23 @@ describe('uploads (e2e)', () => {
           contentTypes: ['image/jpeg', 'image/png', 'image/webp'],
           maxBytes: 2 * 1024 * 1024,
         },
+        {
+          kind: 'notice_attachment',
+          contentTypes: expect.arrayContaining(['application/pdf', 'text/csv']),
+          maxBytes: 25 * 1024 * 1024,
+        },
+        {
+          kind: 'feedback_attachment',
+          contentTypes: expect.arrayContaining(['application/pdf', 'text/csv']),
+          maxBytes: 25 * 1024 * 1024,
+        },
+        {
+          kind: 'call_chat_attachment',
+          contentTypes: expect.arrayContaining(['application/pdf', 'text/csv']),
+          maxBytes: 25 * 1024 * 1024,
+        },
       ],
+      maxAttachments: 10,
     });
   });
 });

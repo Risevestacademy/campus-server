@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { createHash } from 'node:crypto';
 
 import { PGlite } from '@electric-sql/pglite';
@@ -74,8 +75,9 @@ const config = {
   INVITE_TTL_DAYS: 7,
 } as never;
 
-const service = new InvitesService(db as never, config);
-const members = new CohortMembersService(db as never);
+const analytics = createTestAnalytics();
+const service = new InvitesService(db as never, config, analytics);
+const members = new CohortMembersService(db as never, analytics);
 const inviter: AuthenticatedUser = {
   id: '',
   email: 'admin@campus.local',
@@ -3034,5 +3036,137 @@ describe('InvitesService admin revoke and list', () => {
         own.id,
       );
     });
+  });
+});
+
+describe('analytics', () => {
+  const DAY = 86_400_000;
+  let invitee: AuthenticatedUser;
+
+  const studentInvite = (email = invitee.email) => ({
+    email,
+    cohortId: fixtures.cohortId,
+    cohortRole: CohortRole.Student,
+    cohortTrackId: fixtures.cohortTrackId,
+  });
+
+  beforeEach(async () => {
+    analytics.events.length = 0;
+    analytics.dropped.length = 0;
+    const [row] = await db
+      .insert(users)
+      .values({ email: 'invitee@campus.local' })
+      .returning();
+    invitee = { id: row.id, email: row.email, systemRole: row.systemRole };
+  });
+
+  afterEach(() => {
+    expect(analytics.dropped).toEqual([]);
+  });
+
+  it('counts an invite sent, by the admin who sent it, in its cohort', async () => {
+    await service.create(studentInvite(), inviter);
+
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        distinctId: inviter.id,
+        event: 'invite.sent',
+        properties: expect.objectContaining({
+          role: 'student',
+          via: 'single',
+          cohort_id: fixtures.cohortId,
+        }),
+        groups: { cohort: fixtures.cohortId },
+      }),
+    ]);
+  });
+
+  it('counts nothing for a refused invite', async () => {
+    await service.create(studentInvite(), inviter);
+    analytics.events.length = 0;
+
+    await expect(service.create(studentInvite(), inviter)).rejects.toThrow(
+      InviteConflictException,
+    );
+    expect(analytics.events).toEqual([]);
+  });
+
+  it('leaves an invite made in a caller’s transaction for the caller to count', async () => {
+    await db.transaction((tx) =>
+      service.create(studentInvite(), inviter, undefined, tx as never),
+    );
+
+    expect(analytics.events).toEqual([]);
+  });
+
+  it('does not count an admin invite, which has no cohort role', async () => {
+    await service.create(
+      { email: 'new-admin@campus.local', systemRole: SystemRole.Admin },
+      inviter,
+    );
+
+    expect(analytics.events).toEqual([]);
+  });
+
+  it('counts a resend and a revoke', async () => {
+    const { id } = await service.create(studentInvite(), inviter);
+    await service.resend(id, inviter);
+    await service.revoke(id, inviter);
+
+    expect(analytics.events.map((e) => [e.event, e.properties.role])).toEqual([
+      ['invite.sent', 'student'],
+      ['invite.resent', 'student'],
+      ['invite.revoked', 'student'],
+    ]);
+  });
+
+  it('counts an accept under the person who accepted, with whole days since it was sent', async () => {
+    const { id, createdAt } = await service.create(studentInvite(), inviter);
+    analytics.events.length = 0;
+
+    await service.decide(
+      id,
+      InviteDecision.Accept,
+      invitee,
+      new Date(new Date(createdAt).getTime() + 3.5 * DAY),
+    );
+
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        distinctId: invitee.id,
+        event: 'invite.accepted',
+        properties: expect.objectContaining({
+          role: 'student',
+          days_since_sent: 3,
+        }),
+        groups: { cohort: fixtures.cohortId },
+      }),
+    ]);
+  });
+
+  it('counts a decline under the person who declined', async () => {
+    const { id } = await service.create(studentInvite(), inviter);
+    analytics.events.length = 0;
+
+    await service.decide(id, InviteDecision.Decline, invitee);
+
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        distinctId: invitee.id,
+        event: 'invite.declined',
+        properties: expect.objectContaining({ role: 'student' }),
+      }),
+    ]);
+  });
+
+  it('counts nothing for a decision that was refused', async () => {
+    const { id } = await service.create(studentInvite(), inviter);
+    await service.decide(id, InviteDecision.Decline, invitee);
+    analytics.events.length = 0;
+
+    await expect(
+      service.decide(id, InviteDecision.Accept, invitee),
+    ).rejects.toThrow(InviteAlreadyDeclinedException);
+    expect(analytics.events).toEqual([]);
   });
 });

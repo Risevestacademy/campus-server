@@ -53,7 +53,7 @@ always normal, because it is the way to everywhere else.
 A map row can exist with no default space, and nothing here will object.
 Giving every map its default is the job of the [sync](#the-sync), which
 writes it with the map's row, under the key `_default` (`DEFAULT_SPACE_KEY`
-from `@campus/session`, the same value world answers for a tile in no drawn
+from `@campus/contracts`, the same value world answers for a tile in no drawn
 space) and the name
 "Corridors and grounds". A space drawn with that key is refused.
 
@@ -170,10 +170,11 @@ nothing writes none.
 this says what world should serve. They are separate on purpose.
 
 An admin publishes the row for the map people enter on. The row is locked,
-checked and given this moment as `published_at` in one transaction, with a
-`map_published` audit entry naming the admin, the map and the timestamp before
-and after. Publishing an already-published map moves the timestamp and writes
-another entry; a sync never writes or clears `published_at`.
+checked and given this moment as `published_at` and its `synced_version` as
+`published_version` in one transaction, with a `map_published` audit entry
+naming the admin, the map, and the timestamp and version before and after.
+Publishing an already-published map moves both and writes another entry; a
+sync never writes or clears either.
 
 Only the entry map can be published. World serves one map, and a different one
 would leave clients with no spawn: publishing another is a `409 CONFLICT`
@@ -184,13 +185,31 @@ After the commit, campus-api sends the map's key on the same `pg_notify`
 channel a space edit uses. It does not wait for world. A notification that
 fails is logged, not returned and not rolled back: the publish stands.
 
-**What this does not do.** The database stores no map geometry and no published
-version. World reads the current map from Sanity by key. So a re-sync after a
-CMS edit leaves `published_at` at the old timestamp while Sanity already holds
-the new version: a world restart between the re-sync and the publish serves
-the new geometry even though it was not published yet. Sync and publish are
-expected back to back. Fixing that needs a published version or snapshot,
-which is deliberately not part of this schema.
+## Versions
+
+Each sync writes the Sanity version it read to `synced_version`, and moves
+`synced_at` when that version is new. A new version on its own is not a change
+in the sync's answer (`changed` stays false when no space or desk moved), but
+the row still records it. `GET /v1/maps` returns both versions for every map,
+so the admin page can tell:
+
+- **Synced, not published**: `synced_version` differs from `published_version`.
+- **Sanity is ahead**: the manifest's version differs from `synced_version`.
+
+A map synced before these columns existed has both null until the next sync.
+
+**What this does not do.** The database stores no map geometry, and world does
+not load `published_version`: it reads the current map from Sanity by key. So
+`published_version` is what was synced when the admin published, and world
+serves something newer if Sanity changed in between, or if world restarts
+after a re-sync that was not published. Sync and publish are expected back to
+back. Making world load the published version is not part of this change.
+
+## Listing
+
+`GET /v1/maps`, admins only: every map, retired ones included, the entry map
+first and the rest by key, with the versions above. Not paginated.
+`GET /v1/spaces?mapId=` narrows the spaces list to one map.
 
 ## Granting access
 

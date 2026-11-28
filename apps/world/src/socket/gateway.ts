@@ -1,4 +1,5 @@
-import { DEFAULT_SPACE_KEY, type NotificationCreated } from '@campus/session';
+import type { Analytics } from '@campus/analytics';
+import { DEFAULT_SPACE_KEY, type NotificationCreated } from '@campus/contracts';
 import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 import type { FastifyInstance } from 'fastify';
 
@@ -16,6 +17,11 @@ import type { Seat } from '../seat.js';
 import {} from './authenticate.js';
 import { Connections, personOf, type Connection } from './connections.js';
 import { createContext } from './context.js';
+import {
+  createWorldAnalytics,
+  type ArrivedBy,
+  type RequestReason,
+} from './features/analytics.js';
 import { createAppearance } from './features/appearance.js';
 import { createBroadcastRoom } from './features/broadcast-room.js';
 import { createCalls } from './features/calls.js';
@@ -90,6 +96,7 @@ export function registerGateway(
   /** The same startup loading path, for a publish that happens later. */
   loadMap: (mapKey: string) => Promise<WorldMap>,
   notifications: Pick<NotificationFeed, 'publish'>,
+  analytics: Analytics,
 ): Gateway {
   const connections = new Connections();
   const metrics = worldMetrics(connections);
@@ -113,8 +120,12 @@ export function registerGateway(
   const appearance = createAppearance(ctx, accounts);
 
   const doors = createDoors(ctx, accounts, afterSpacesRead);
-  const locks = createLocks(ctx, doors, (cohortId, spaceKey) =>
-    requests.review(cohortId, spaceKey),
+  const events = createWorldAnalytics(analytics, doors);
+  const locks = createLocks(
+    ctx,
+    doors,
+    (cohortId, spaceKey) => requests.review(cohortId, spaceKey),
+    events,
   );
 
   function afterSpacesRead(): void {
@@ -176,6 +187,37 @@ export function registerGateway(
     return others >= capacity;
   }
 
+  /** Why a space is closed to this person, short of being full. */
+  function whyRefused(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): RequestReason {
+    if (moderation.isRemoved(connection, spaceKey, now.getTime())) {
+      return 'removed';
+    }
+    if (doors.get(spaceKey)?.access === SPACE_ACCESS.Designated) {
+      return 'designated';
+    }
+    if (locks.isLocked(connection.cohortId, spaceKey)) return 'locked';
+    return 'closed';
+  }
+
+  /** A step or a walk turned away at a space's edge. */
+  function noteRefusal(
+    connection: Connection,
+    spaceKey: string,
+    outcome: 'refused' | 'full',
+  ): void {
+    const now = new Date();
+    events.refused(
+      connection,
+      spaceKey,
+      outcome === 'full' ? 'full' : whyRefused(connection, spaceKey, now),
+      outcome !== 'full' && requests.mayAsk(connection, spaceKey, now),
+    );
+  }
+
   const requests = createEntryRequests(ctx, {
     doors,
     locks,
@@ -184,10 +226,12 @@ export function registerGateway(
     mayStepInto,
     accounts,
     notifications,
+    analytics: events,
+    whyRefused,
   });
 
   const media = mediaCredentials(env);
-  const chat = createChat(ctx, doors.get);
+  const chat = createChat(ctx, doors.get, events.said);
   const calls = createCalls(ctx, doors, media);
   const broadcastRoom = createBroadcastRoom(ctx, media, calls.removeFromRoom);
   const moderation = createModeration(ctx, {
@@ -196,9 +240,10 @@ export function registerGateway(
     media,
     mayStepInto,
     isFull,
+    analytics: events,
     movedOut(target, player) {
       noteMoved(target);
-      arrivedAt(target, player);
+      arrivedAt(target, player, 'moved');
       walks.end(target, 'moved_by_staff');
     },
   });
@@ -210,6 +255,8 @@ export function registerGateway(
     isFull,
     noteMoved,
     arrivedAt,
+    analytics: events,
+    noteRefusal,
   });
 
   /** Turned or moved: the next tick sends it, and the next save keeps it. */
@@ -224,9 +271,16 @@ export function registerGateway(
     positionWrites.moved(seat);
   }
 
-  /** On a new tile: maybe in another space, maybe away from a door. */
-  function arrivedAt(connection: Connection, tile: Tile): void {
-    recordSpaceCrossing(connection, tile);
+  /**
+   * On a new tile: maybe in another space, maybe away from a door. `how` is
+   * for a move nobody chose; a step or a walk is told apart here.
+   */
+  function arrivedAt(
+    connection: Connection,
+    tile: Tile,
+    how?: ArrivedBy,
+  ): void {
+    recordSpaceCrossing(connection, tile, how);
     requests.leaveTheDoor(connection, tile);
   }
 
@@ -239,12 +293,17 @@ export function registerGateway(
    * records the new one in presence now, not at the next renewal. Skipped
    * once shutdown has begun, as the write would undo shutdown's removal.
    */
-  function recordSpaceCrossing(connection: Connection, tile: Tile): void {
+  function recordSpaceCrossing(
+    connection: Connection,
+    tile: Tile,
+    how?: ArrivedBy,
+  ): void {
     const spaceKey = spaceAt(map.spaces, tile);
     if (spaceKey === connection.spaceKey) return;
     const left = connection.spaceKey;
     connection.spaceKey = spaceKey;
     if (stopping) return;
+    events.entered(connection, how ?? walks.arrivalOf(connection) ?? 'step');
     broadcast(connection.cohortId, {
       type: 'spaceChanged',
       userId: connection.userId,
@@ -362,7 +421,7 @@ export function registerGateway(
 
       const spaceKey = spaceAt(map.spaces, at);
       if (spaceKey !== connection.spaceKey) {
-        arrivedAt(connection, at);
+        arrivedAt(connection, at, 'moved');
       }
     }
   }
@@ -521,6 +580,7 @@ export function registerGateway(
    * the swap, as for any socket replaced.
    */
   function demote(connection: Connection): void {
+    events.leftSpace(connection);
     walks.cancel(connection);
     presenceSync.forgetStatusTimer(connection);
     calls.leave(connection);
@@ -587,6 +647,8 @@ export function registerGateway(
   heartbeat.unref();
 
   const listen = createDispatch(ctx, {
+    analytics: events,
+    noteRefusal,
     presence: presenceSync,
     locks,
     requests,
@@ -614,6 +676,7 @@ export function registerGateway(
     drop,
     demote,
     listen,
+    analytics: events,
   });
 
   return {
@@ -658,6 +721,7 @@ export function registerGateway(
       // a redeploy should put nobody back at the spawn. Before the sockets
       // close, so the positions written are the ones they stood at.
       stopping = true;
+      events.endAll('shutdown');
       await positionWrites.stop();
       await presenceSync.leaveAll();
       for (const connection of connections.everyone()) {

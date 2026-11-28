@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { createHash } from 'node:crypto';
 
 import { auditLog } from '../audit/schema.js';
@@ -146,7 +147,11 @@ function serviceWith(state: Partial<FakeState> = {}) {
     auditEntries: [],
     ...state,
   };
-  const service = new InvitesService(makeDb(full) as never, config);
+  const service = new InvitesService(
+    makeDb(full) as never,
+    config,
+    createTestAnalytics(),
+  );
   return { service, state: full };
 }
 

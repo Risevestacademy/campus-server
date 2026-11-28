@@ -1,17 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsUUID } from 'class-validator';
 
 import { RecordingStatus, type CallRecording } from '../schema.js';
-
-export class RecordingSpaceParamDto {
-  /** @example 11111111-1111-4111-8111-111111111111 */
-  @IsUUID()
-  cohortId: string;
-
-  /** @example 33333333-3333-4333-8333-333333333333 */
-  @IsUUID()
-  spaceId: string;
-}
 
 export class RecordingDto {
   /** @example 55555555-5555-4555-8555-555555555555 */

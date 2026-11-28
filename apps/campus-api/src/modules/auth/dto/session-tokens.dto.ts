@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 
 import type { IssuedSession } from '../session-issuer.js';
 

@@ -1,10 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { and, count, desc, eq, isNull, sql } from 'drizzle-orm';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import {
   DRIZZLE,
   type Db,
   type DbExecutor,
+  type Tx,
 } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import type { PaginatedResponseDto } from '../../shared/dto/paginated-response.dto.js';
@@ -16,6 +17,8 @@ import {
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { isLiveMembership } from '../cohorts/cohort-members.service.js';
 import { CohortRole, cohortMembers, cohortTracks } from '../cohorts/schema.js';
+import { type Attachment, MediaService } from '../media/media.service.js';
+import { MediaKind, media } from '../media/schema.js';
 import { mentorshipGroups } from '../mentorship-groups/schema.js';
 import { NotificationPush } from '../notifications/notification-push.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
@@ -33,10 +36,13 @@ import {
 } from './notices.exceptions.js';
 import {
   NoticeScope,
+  noticeAttachments,
   notices,
   type Notice,
   type NoticeTarget,
 } from './schema.js';
+
+export type NoticeWithAttachments = Notice & { attachments: Attachment[] };
 
 const MAX_PINNED_PER_SCOPE = 3;
 const NOTICE_AUDITED_FIELDS = ['title', 'body'] as const;
@@ -56,12 +62,33 @@ const noticeColumns = {
 };
 
 @Injectable()
-export class NoticesService {
+export class NoticesService implements OnModuleInit {
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
     private readonly notifications: NotificationsService,
     private readonly push: NotificationPush,
+    private readonly media: MediaService,
   ) {}
+
+  onModuleInit(): void {
+    this.media.registerReader(
+      MediaKind.NoticeAttachment,
+      async (viewer, mediaId, now) => {
+        const [row] = await this.db
+          .select({ id: notices.id })
+          .from(noticeAttachments)
+          .innerJoin(notices, eq(notices.id, noticeAttachments.noticeId))
+          .where(
+            and(
+              eq(noticeAttachments.mediaId, mediaId),
+              noticesVisibleTo(this.db, viewer, now),
+            ),
+          )
+          .limit(1);
+        return row !== undefined;
+      },
+    );
+  }
 
   /**
    * The notice wall: one page of the notices the caller can see.
@@ -101,10 +128,16 @@ export class NoticesService {
       this.db.select({ total: count() }).from(notices).where(filter),
     ]);
 
+    const attachments = await this.attachmentsOf(
+      this.db,
+      rows.map((row) => row.id),
+      now,
+    );
     return {
       items: rows.map((row) => ({
         ...row,
         scope: row.scope as NoticeScope,
+        attachments: attachments.get(row.id) ?? [],
       })),
       meta: {
         page: query.page,
@@ -119,7 +152,8 @@ export class NoticesService {
     dto: CreateNoticeDto,
     actor: AuthenticatedUser,
     audit: AuditContext,
-  ): Promise<Notice> {
+    now: Date = new Date(),
+  ): Promise<NoticeWithAttachments> {
     this.validateScopeReferences(dto);
     // Validation has refused any reference the scope does not take.
     const target: NoticeTarget = {
@@ -129,6 +163,15 @@ export class NoticesService {
       mentorshipGroupId: dto.mentorshipGroupId ?? null,
     };
     await this.assertCanManageNotices(this.db, actor, target);
+    const attachmentIds = dto.attachmentIds ?? [];
+    if (attachmentIds.length > 0) {
+      await this.media.verifyAll(
+        attachmentIds,
+        MediaKind.NoticeAttachment,
+        actor.id,
+        now,
+      );
+    }
 
     const { row, created } = await this.db.transaction(async (tx) => {
       if (target.cohortTrackId) {
@@ -155,6 +198,7 @@ export class NoticesService {
           body: dto.body,
         })
         .returning();
+      await this.attach(tx, row.id, attachmentIds, actor.id, now);
 
       await writeAuditEntry(tx, {
         ...audit,
@@ -173,7 +217,7 @@ export class NoticesService {
       return { row, created };
     });
     void this.push.send(created);
-    return row;
+    return this.withAttachments(row, now);
   }
 
   async update(
@@ -181,8 +225,24 @@ export class NoticesService {
     dto: UpdateNoticeDto,
     actor: AuthenticatedUser,
     audit: AuditContext,
-  ): Promise<Notice> {
-    return this.db.transaction(async (tx) => {
+    now: Date = new Date(),
+  ): Promise<NoticeWithAttachments> {
+    const wanted = dto.attachmentIds;
+    if (wanted) {
+      // Before the storage work, so somebody who may not edit it causes none.
+      await this.manageable(this.db, id, actor);
+      const { added } = diff(await this.attachedIds(this.db, id), wanted);
+      if (added.length > 0) {
+        await this.media.verifyAll(
+          added,
+          MediaKind.NoticeAttachment,
+          actor.id,
+          now,
+        );
+      }
+    }
+
+    const row = await this.db.transaction(async (tx) => {
       const [existing] = await tx
         .select()
         .from(notices)
@@ -197,7 +257,15 @@ export class NoticesService {
 
       await this.assertCanManageNotices(tx, actor, existing);
 
-      if (dto.title === undefined && dto.body === undefined) {
+      const files = wanted
+        ? diff(await this.attachedIds(tx, id), wanted)
+        : undefined;
+
+      if (
+        dto.title === undefined &&
+        dto.body === undefined &&
+        !files?.changed
+      ) {
         return existing;
       }
 
@@ -206,21 +274,33 @@ export class NoticesService {
         .set({
           ...(dto.title !== undefined ? { title: dto.title } : {}),
           ...(dto.body !== undefined ? { body: dto.body } : {}),
+          updatedAt: now,
         })
         .where(eq(notices.id, id))
         .returning();
 
       const changes = changedFields(existing, row, NOTICE_AUDITED_FIELDS);
-      if (Object.keys(changes).length > 0) {
+      let attachments: { added: string[]; removed: string[] } | undefined;
+      if (wanted && files?.changed) {
+        const { added, removed } = files;
+        await this.media.release(tx, removed, now);
+        await tx
+          .delete(noticeAttachments)
+          .where(eq(noticeAttachments.noticeId, id));
+        await this.attach(tx, id, wanted, actor.id, now, added);
+        attachments = { added, removed };
+      }
+      if (Object.keys(changes).length > 0 || attachments) {
         await writeAuditEntry(tx, {
           ...audit,
           action: AuditAction.NoticeUpdated,
           subject: { type: AuditSubjectType.Notice, id },
-          details: { changes },
+          details: attachments ? { changes, attachments } : { changes },
         });
       }
       return row;
     });
+    return this.withAttachments(row, now);
   }
 
   async pin(
@@ -228,8 +308,8 @@ export class NoticesService {
     pinned: boolean,
     actor: AuthenticatedUser,
     audit: AuditContext,
-  ): Promise<Notice> {
-    return this.db.transaction(async (tx) => {
+  ): Promise<NoticeWithAttachments> {
+    const row = await this.db.transaction(async (tx) => {
       const [existing] = await tx
         .select()
         .from(notices)
@@ -277,6 +357,7 @@ export class NoticesService {
 
       return row;
     });
+    return this.withAttachments(row, new Date());
   }
 
   async remove(
@@ -299,10 +380,12 @@ export class NoticesService {
 
       await this.assertCanManageNotices(tx, actor, existing);
 
+      const now = new Date();
       await tx
         .update(notices)
-        .set({ removedAt: new Date(), pinned: false })
+        .set({ removedAt: now, pinned: false })
         .where(eq(notices.id, id));
+      await this.media.release(tx, await this.attachedIds(tx, id), now);
 
       await writeAuditEntry(tx, {
         ...audit,
@@ -315,6 +398,97 @@ export class NoticesService {
         },
       });
     });
+  }
+
+  /** A live notice this actor may manage, read without a lock. */
+  private async manageable(
+    db: DbExecutor,
+    id: string,
+    actor: AuthenticatedUser,
+  ): Promise<Notice> {
+    const [existing] = await db
+      .select()
+      .from(notices)
+      .where(and(eq(notices.id, id), isNull(notices.removedAt)));
+    if (!existing) {
+      throw new NoticeNotFoundException(`Notice ${id} not found`, {
+        noticeId: id,
+      });
+    }
+    await this.assertCanManageNotices(db, actor, existing);
+    return existing;
+  }
+
+  private async attachedIds(db: DbExecutor, noticeId: string) {
+    const rows = await db
+      .select({ mediaId: noticeAttachments.mediaId })
+      .from(noticeAttachments)
+      .where(eq(noticeAttachments.noticeId, noticeId))
+      .orderBy(asc(noticeAttachments.position));
+    return rows.map((row) => row.mediaId);
+  }
+
+  /**
+   * Links `mediaIds` to the notice in that order, claiming those in `claim`
+   * (all of them by default): uploads of the actor's that were verified.
+   */
+  private async attach(
+    tx: Tx,
+    noticeId: string,
+    mediaIds: readonly string[],
+    actorId: string,
+    now: Date,
+    claim: readonly string[] = mediaIds,
+  ): Promise<void> {
+    if (mediaIds.length === 0) return;
+    if (claim.length > 0) {
+      await this.media.claimAll(
+        tx,
+        claim,
+        MediaKind.NoticeAttachment,
+        actorId,
+        now,
+      );
+    }
+    await tx
+      .insert(noticeAttachments)
+      .values(
+        mediaIds.map((mediaId, position) => ({ noticeId, mediaId, position })),
+      );
+  }
+
+  private async withAttachments(
+    row: Notice,
+    now: Date,
+  ): Promise<NoticeWithAttachments> {
+    const attachments = await this.attachmentsOf(this.db, [row.id], now);
+    return { ...row, attachments: attachments.get(row.id) ?? [] };
+  }
+
+  private async attachmentsOf(
+    db: DbExecutor,
+    noticeIds: readonly string[],
+    now: Date,
+  ): Promise<Map<string, Attachment[]>> {
+    const byNotice = new Map<string, Attachment[]>();
+    if (noticeIds.length === 0) return byNotice;
+    const rows = await db
+      .select({ noticeId: noticeAttachments.noticeId, file: media })
+      .from(noticeAttachments)
+      .innerJoin(media, eq(media.id, noticeAttachments.mediaId))
+      .where(inArray(noticeAttachments.noticeId, [...noticeIds]))
+      .orderBy(asc(noticeAttachments.position));
+    if (rows.length === 0) return byNotice;
+    const signed = await this.media.attachments(
+      rows.map((row) => row.file),
+      now,
+    );
+    rows.forEach((row, i) => {
+      const list = byNotice.get(row.noticeId) ?? [];
+      list.push(signed[i]);
+      byNotice.set(row.noticeId, list);
+    });
+    return byNotice;
   }
 
   private validateScopeReferences(dto: CreateNoticeDto): void {
@@ -496,4 +670,15 @@ export class NoticesService {
 
     return total;
   }
+}
+
+/** What changes when a notice's files go from `current` to `wanted`. */
+function diff(current: readonly string[], wanted: readonly string[]) {
+  return {
+    added: wanted.filter((mediaId) => !current.includes(mediaId)),
+    removed: current.filter((mediaId) => !wanted.includes(mediaId)),
+    changed:
+      wanted.length !== current.length ||
+      wanted.some((mediaId, i) => mediaId !== current[i]),
+  };
 }

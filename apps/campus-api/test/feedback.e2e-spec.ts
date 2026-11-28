@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -20,7 +20,11 @@ import { AuditAction, auditLog } from './../src/modules/audit/schema.js';
 import { CohortRole } from './../src/modules/cohorts/schema.js';
 import { SESSION_COOKIE } from './../src/modules/auth/session-cookie.js';
 import { FEEDBACK_MAX_PER_HOUR } from './../src/modules/feedback/feedback.service.js';
-import { feedback } from './../src/modules/feedback/schema.js';
+import {
+  FeedbackStatus,
+  FeedbackType,
+  feedback,
+} from './../src/modules/feedback/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
 import {
@@ -482,6 +486,7 @@ describe('feedback (e2e)', () => {
         resolvedBy: null,
         resolvedAt: null,
         createdAt: '2026-10-10T09:00:00.000Z',
+        attachments: [],
       });
     });
 
@@ -540,6 +545,165 @@ describe('feedback (e2e)', () => {
       const res = await setStatus(bugId, 'closed').expect(400);
 
       expect(res.body.error.details.fields).toHaveProperty('status');
+    });
+  });
+
+  /**
+   * AT-35: the list narrowed to the account a report names. The route still
+   * hides a report naming the asking admin, so the filter only narrows.
+   */
+  describe('filtering by the account a report names', () => {
+    let root: typeof users.$inferSelect;
+    let rootCookie: string;
+
+    beforeEach(async () => {
+      [root] = await db
+        .insert(users)
+        .values({
+          email: 'root@campus.local',
+          systemRole: SystemRole.SuperAdmin,
+        })
+        .returning();
+      rootCookie = await cookieFor(root);
+
+      const at = (day: number) =>
+        new Date(`2026-10-${String(day).padStart(2, '0')}T09:00:00Z`);
+      const row = (values: typeof feedback.$inferInsert) =>
+        db.insert(feedback).values(values);
+
+      await row({
+        type: FeedbackType.Report,
+        title: 'about other by member',
+        details: 'What happened.',
+        submittedBy: member.id,
+        reportedUserId: other.id,
+        createdAt: at(12),
+      });
+      await row({
+        type: FeedbackType.Report,
+        title: 'about other by admin',
+        details: 'What happened.',
+        submittedBy: admin.id,
+        reportedUserId: other.id,
+        status: FeedbackStatus.Resolved,
+        resolvedBy: admin.id,
+        resolvedAt: at(13),
+        createdAt: at(13),
+      });
+      await row({
+        type: FeedbackType.Report,
+        title: 'about admin',
+        details: 'What happened.',
+        submittedBy: member.id,
+        reportedUserId: admin.id,
+        createdAt: at(14),
+      });
+      await row({
+        type: FeedbackType.Report,
+        title: 'about nobody',
+        details: 'What happened.',
+        submittedBy: member.id,
+        createdAt: at(11),
+      });
+      await row({
+        type: FeedbackType.Bug,
+        title: 'bug about other',
+        details: 'What happened.',
+        about: 'Other Person',
+        submittedBy: member.id,
+        createdAt: at(10),
+      });
+      await row({
+        type: FeedbackType.Idea,
+        title: 'idea about other',
+        details: 'What happened.',
+        about: 'Other Person',
+        submittedBy: member.id,
+        createdAt: at(9),
+      });
+    });
+
+    it('filters the list to reports naming one account, newest first, with a filtered total', async () => {
+      const res = await list(`?reportedUserId=${other.id}`).expect(200);
+
+      expect(
+        res.body.items.map((item: { title: string }) => item.title),
+      ).toEqual(['about other by admin', 'about other by member']);
+      expect(
+        res.body.items.every(
+          (item: { reportedUser: { id: string } }) =>
+            item.reportedUser.id === other.id,
+        ),
+      ).toBe(true);
+      expect(res.body.meta).toEqual({
+        page: 1,
+        perPage: 20,
+        total: 2,
+        totalPages: 1,
+      });
+    });
+
+    it('combines the account with type, status and who sent it', async () => {
+      const resolved = await list(
+        `?reportedUserId=${other.id}&status=resolved`,
+      ).expect(200);
+      expect(
+        resolved.body.items.map((item: { title: string }) => item.title),
+      ).toEqual(['about other by admin']);
+
+      const byMember = await list(
+        `?reportedUserId=${other.id}&submittedBy=${member.id}`,
+      ).expect(200);
+      expect(
+        byMember.body.items.map((item: { title: string }) => item.title),
+      ).toEqual(['about other by member']);
+
+      const bugs = await list(`?reportedUserId=${other.id}&type=bug`).expect(
+        200,
+      );
+      expect(bugs.body.items).toEqual([]);
+    });
+
+    it('gives an admin nothing when they filter on their own id', async () => {
+      const own = await list(`?reportedUserId=${admin.id}`).expect(200);
+
+      expect(own.body.items).toEqual([]);
+      expect(own.body.meta.total).toBe(0);
+
+      const seen = await list(`?reportedUserId=${admin.id}`, rootCookie).expect(
+        200,
+      );
+      expect(
+        seen.body.items.map((item: { title: string }) => item.title),
+      ).toEqual(['about admin']);
+      expect(seen.body.meta.total).toBe(1);
+    });
+
+    it('is an empty page for an id that names nobody', async () => {
+      const res = await list(`?reportedUserId=${NOBODY}`).expect(200);
+
+      expect(res.body.items).toEqual([]);
+      expect(res.body.meta.total).toBe(0);
+    });
+
+    it('refuses a malformed id, a member, and no session', async () => {
+      await list('?reportedUserId=ada').expect(400);
+      await list(`?reportedUserId=${other.id}`, memberCookie).expect(403);
+      await request(app.getHttpServer())
+        .get(`/v1/feedback?reportedUserId=${other.id}`)
+        .expect(401);
+    });
+
+    it('never matches a report with no account, a bug, an idea, or the free-text about line', async () => {
+      const res = await list(`?reportedUserId=${other.id}`).expect(200);
+      const titles = res.body.items.map(
+        (item: { title: string }) => item.title,
+      );
+
+      expect(titles).toHaveLength(2);
+      expect(titles).not.toContain('about nobody');
+      expect(titles).not.toContain('bug about other');
+      expect(titles).not.toContain('idea about other');
     });
   });
 });

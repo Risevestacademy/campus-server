@@ -109,6 +109,7 @@ export function createSweeps(
           // caught here, a heartbeat late at worst.
           appearance.show(connection, account);
           connection.systemRole = account.systemRole;
+          connection.analyticsConsent = account.analyticsConsent;
           // Made or unmade an admin: a new token, to speak or only listen.
           // Or the last one could not be minted: try again.
           if (

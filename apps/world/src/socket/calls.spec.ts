@@ -1,6 +1,6 @@
 import { parseSpaceRoomName, userIdOfIdentity } from '@campus/media';
-import { DEFAULT_SPACE_KEY, signSessionToken } from '@campus/session';
-import { SessionScope } from '@campus/session';
+import { DEFAULT_SPACE_KEY, signSessionToken } from '@campus/contracts';
+import { SessionScope } from '@campus/contracts';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { randomUUID } from 'node:crypto';

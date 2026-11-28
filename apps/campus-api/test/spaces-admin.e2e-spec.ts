@@ -2,7 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { ThrottlerStorage } from '@nestjs/throttler';
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -257,6 +257,43 @@ describe('space admin routes (e2e)', () => {
         unsetId,
       ]);
       expect(res.body.meta.total).toBe(1);
+    });
+
+    it('narrows the list to the spaces of one map', async () => {
+      const [annex] = await db
+        .insert(maps)
+        .values({ key: 'annex', name: 'Annex' })
+        .returning();
+      const [lab] = await db
+        .insert(spaces)
+        .values({
+          mapId: annex.id,
+          key: 'lab',
+          name: 'Lab',
+          kind: SpaceKind.Open,
+          audioMode: AudioMode.Proximity,
+          access: SpaceAccess.Normal,
+        })
+        .returning();
+
+      const ids = async (query: string) =>
+        (
+          await as(adminCookie).get(`/v1/spaces?${query}`).expect(200)
+        ).body.items.map((row: { id: string }) => row.id);
+
+      await expect(ids(`mapId=${annex.id}`)).resolves.toEqual([lab.id]);
+      await expect(ids(`mapId=${mapId}`)).resolves.toEqual([spaceId, unsetId]);
+      await expect(ids(`mapId=${mapId}&needsKind=true`)).resolves.toEqual([
+        unsetId,
+      ]);
+      await expect(ids(`mapId=${MISSING}`)).resolves.toEqual([]);
+    });
+
+    it('refuses a malformed map id', async () => {
+      const res = await as(adminCookie)
+        .get('/v1/spaces?mapId=not-a-uuid')
+        .expect(400);
+      expect(res.body.error.details.fields).toHaveProperty('mapId');
     });
 
     it('reads one space, retired or not', async () => {

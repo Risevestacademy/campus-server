@@ -49,7 +49,7 @@ export interface PersonProperties {
 
 export interface CohortProperties {
   status: string;
-  start_date: string;
+  start_date: string | null;
 }
 
 export interface Analytics {
@@ -60,11 +60,14 @@ export interface Analytics {
     properties: EventProperties<E>,
     options?: TrackOptions,
   ): void;
-  /** For an event with no known person, such as a failed sign-in. */
+  /**
+   * For an event with no known person, such as a failed sign-in, or about a
+   * room rather than anybody in it. A cohort is sent as `cohort_id` alone.
+   */
   trackAnonymous<E extends EventName>(
     event: E,
     properties: EventProperties<E>,
-    options?: Pick<TrackOptions, 'correlationId'>,
+    options?: Pick<TrackOptions, 'correlationId' | 'cohortId'>,
   ): void;
   identifyPerson(distinctId: string, properties: PersonProperties): void;
   identifyCohort(cohortId: string, properties: CohortProperties): void;

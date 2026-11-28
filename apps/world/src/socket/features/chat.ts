@@ -8,7 +8,9 @@ import { seatKey, type Seat } from '../../seat.js';
 import type { Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { SayBudget, inEarshot, type Hearing } from '../earshot.js';
-import { ServerErrorCode, encode } from '../protocol.js';
+import { ServerErrorCode, encode, type ClientMessage } from '../protocol.js';
+
+type SayMessage = Extract<ClientMessage, { type: 'say' }>;
 
 type ChatContext = Pick<
   WorldContext,
@@ -20,6 +22,8 @@ export type Chat = ReturnType<typeof createChat>;
 export function createChat(
   ctx: ChatContext,
   spaceOf: (spaceKey: string) => WorldSpace | undefined,
+  /** A line went out from this seat's avatar. */
+  onSaid: (connection: Connection) => void = () => undefined,
 ) {
   const { connections, players, send, sendFrame } = ctx;
   /** One per seat, so a watcher and the avatar it speaks for share it. */
@@ -38,9 +42,13 @@ export function createChat(
   /**
    * Relays a line of chat to whoever can hear the speaker, and back to the
    * speaker. A space with no row yet is heard by distance, at the default
-   * radius. Never stored, and never logged: what people say is theirs.
+   * radius. Never stored, and never logged: what people say is theirs. A
+   * file goes with it as given; opening it is campus-api's to allow.
    */
-  function say(from: Connection, text: string): void {
+  function say(
+    from: Connection,
+    { text, attachment }: Pick<SayMessage, 'text' | 'attachment'>,
+  ): void {
     const connection = connections.holderOf(from);
     const speaker = connection && players.get(connection);
     if (!connection || !speaker) {
@@ -83,6 +91,7 @@ export function createChat(
       userId: connection.userId,
       spaceKey: connection.spaceKey,
       text,
+      attachment: attachment ?? null,
       at: new Date().toISOString(),
     });
     const deliver = (to: Connection): void => {
@@ -99,6 +108,7 @@ export function createChat(
     )) {
       deliver(listener.connection);
     }
+    onSaid(connection);
   }
 
   /** Once nobody is left on the seat to speak from it. */

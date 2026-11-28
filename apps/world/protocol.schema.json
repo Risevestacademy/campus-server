@@ -245,7 +245,7 @@
         "no_way",
         "moved_by_staff"
       ],
-      "description": "arrived: walking to somebody, you are one tile from them, in their space, never on their tile; to a space, you are on the free tile nearest its middle, or its middle when none is free; to a tile, you are on it. stopped: you sent `stopWalking` or a `move`. refused: a space you may not enter is in the way, or is where you were going, and you stopped beside the first one; `mayAsk` says whether asking to enter it would be taken. full: a space you may enter is in the way, or is where you were going, but already holds as many people as its capacity allows, and you stopped beside the first one; `mayAsk` is false. Refused wins when a space is both closed to you and full. gone: they left, or were not here. elsewhere: they are online, but connected to another world server, which a walk cannot reach. gone and elsewhere end only walks to somebody. no_way: no path reaches where you were going: walls, a space with no room beside them, or a walk past the step limit. moved_by_staff: staff removed you from a space mid-walk."
+      "description": "arrived: walking to somebody, you are one tile from them, in their space, never on their tile; to a space, you are on the free tile nearest its middle, or its middle when none is free; to a tile, you are on it. stopped: you sent `stopWalking` or a `move`. refused: a space you may not enter is in the way, or is where you were going, and you stopped beside the first one; `mayAsk` says whether asking to enter it would be taken. full: a space you may enter is in the way, or is where you were going, but already holds as many people as its capacity allows, and you stopped beside the first one; `mayAsk` is false. Refused wins when a space is both closed to you and full. gone: they left, or were not here. elsewhere: they are online, but connected to another world server, which a walk cannot reach. gone and elsewhere end only walks to somebody. no_way: no path reaches where you were going: walls, a space with no room beside them, or a walk past the step limit, the map's width × height in steps. moved_by_staff: staff removed you from a space mid-walk."
     },
     "EntryRequestOutcome": {
       "type": "string",
@@ -259,6 +259,46 @@
         "cancelled"
       ],
       "description": "admitted: a yes. Their next step into the space is let through; walking away from beside it first lets the yes lapse. declined: a no. withdrawn: the asker withdrew it, or disconnected. walked_away: the asker left the tiles beside the space. nobody_inside: nobody inside can answer any more. not_needed: they may walk in without asking now, as the space was unlocked or its list names them. cancelled: the space no longer takes requests."
+    },
+    "ChatAttachment": {
+      "type": "object",
+      "properties": {
+        "mediaId": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Open it with `GET /v1/media/{mediaId}/url` on campus-api."
+        },
+        "fileName": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contentType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "mediaId",
+        "fileName",
+        "contentType",
+        "sizeBytes"
+      ],
+      "additionalProperties": false,
+      "description": "A file sent in a call’s chat, from `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/call/attachments`."
     },
     "PingMessage": {
       "type": "object",
@@ -428,9 +468,16 @@
           "const": "say"
         },
         "text": {
+          "default": "",
           "type": "string",
-          "minLength": 1,
           "maxLength": 500
+        },
+        "attachment": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ChatAttachment"
+            }
+          ]
         }
       },
       "required": [
@@ -438,7 +485,7 @@
         "text"
       ],
       "additionalProperties": false,
-      "description": "A line of chat to whoever can hear you: everybody in a whole-room space, or the people within its subscribe radius in a proximity space, measured when you send it, without the hysteresis `nearby` keeps, so the two need not match at the edge. Up to 500 characters, trimmed. Answered by the `said` you and they get; five lines at once, then one a second, after which a NOT_ALLOWED error. Never stored. Counts as activity."
+      "description": "A line of chat to whoever can hear you: everybody in a whole-room space, or the people within its subscribe radius in a proximity space, measured when you send it, without the hysteresis `nearby` keeps, so the two need not match at the edge. Up to 500 characters, trimmed; may be empty when it carries an `attachment`. Answered by the `said` you and they get; five lines at once, then one a second, after which a NOT_ALLOWED error. Never stored. Counts as activity."
     },
     "MuteMessage": {
       "type": "object",
@@ -1253,7 +1300,19 @@
           "description": "The space they said it in, so a meeting’s chat can be kept apart."
         },
         "text": {
-          "type": "string"
+          "type": "string",
+          "description": "Empty when the line is only a file."
+        },
+        "attachment": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ChatAttachment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The file sent with it, as the speaker gave it; null for none."
         },
         "at": {
           "type": "string",
@@ -1266,6 +1325,7 @@
         "userId",
         "spaceKey",
         "text",
+        "attachment",
         "at"
       ],
       "additionalProperties": false,

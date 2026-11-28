@@ -1,4 +1,4 @@
-import type { NotificationCreated } from '@campus/session';
+import type { NotificationCreated } from '@campus/contracts';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -24,6 +24,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { notifications } from '../notifications/schema.js';
 import { tracks } from '../tracks/schema.js';
 import { SystemRole, users } from '../users/schema.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
 import { NoticeScope, notices } from './schema.js';
 import { NoticesService } from './notices.service.js';
 import {
@@ -51,6 +52,7 @@ const service = new NoticesService(
   pglite as unknown as Db,
   new NotificationsService(pglite as unknown as Db),
   push,
+  mediaWithoutStorage(pglite),
 );
 
 let adminUser: AuthenticatedUser;

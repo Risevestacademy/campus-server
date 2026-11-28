@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -10,6 +11,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 
 import { AppModule } from './../src/app.module.js';
+import { ANALYTICS } from './../src/infra/analytics/analytics.module.js';
 import * as schema from './../src/infra/database/schema/index.js';
 import { DRIZZLE } from './../src/infra/database/database.constants.js';
 import {
@@ -26,7 +28,7 @@ import {
   REFRESH_COOKIE,
   SESSION_COOKIE,
 } from './../src/modules/auth/session-cookie.js';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { CohortRole, StudentStatus } from './../src/modules/cohorts/schema.js';
 import { SystemRole, users } from './../src/modules/users/schema.js';
 import { ValidationException } from './../src/shared/exceptions/index.js';
@@ -57,6 +59,8 @@ const unlimited = {
   }),
 };
 const db = drizzle(new PGlite(), { schema });
+/** What would have gone to PostHog. */
+const analytics = createTestAnalytics();
 
 /**
  * The setup an invite depends on: a track, a cohort, and the link between
@@ -114,6 +118,8 @@ describe('cohort and track admin routes (e2e)', () => {
       .useValue(disabledEmailSender)
       .overrideProvider(ThrottlerStorage)
       .useValue(unlimited)
+      .overrideProvider(ANALYTICS)
+      .useValue(analytics)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -144,6 +150,8 @@ describe('cohort and track admin routes (e2e)', () => {
     await db.execute(
       sql`truncate invites, cohort_members, cohort_tracks, cohorts, tracks, users cascade`,
     );
+    analytics.events.length = 0;
+    analytics.cohorts.length = 0;
     const [admin] = await db
       .insert(users)
       .values({ email: 'admin@campus.local', systemRole: SystemRole.Admin })
@@ -449,6 +457,22 @@ describe('cohort and track admin routes (e2e)', () => {
         endDate: '2027-06-30',
         status: 'upcoming',
       });
+      expect(analytics.events).toEqual([
+        expect.objectContaining({
+          event: 'cohort.created',
+          properties: expect.objectContaining({
+            status: 'upcoming',
+            cohort_id: res.body.id,
+          }),
+          groups: { cohort: res.body.id },
+        }),
+      ]);
+      expect(analytics.cohorts).toEqual([
+        {
+          cohortId: res.body.id,
+          properties: { status: 'upcoming', start_date: '2026-09-01' },
+        },
+      ]);
     });
 
     // The documented validation shape: clients map details.fields to inputs.

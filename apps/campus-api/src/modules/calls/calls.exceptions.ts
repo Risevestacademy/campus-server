@@ -32,3 +32,16 @@ export class RecordingNotFoundException extends DomainException {
 export class RecordingConflictException extends DomainException {
   readonly code = ExceptionCode.Conflict;
 }
+
+export class CallChatNotFoundException extends DomainException {
+  readonly code = ExceptionCode.NotFound;
+}
+
+export class CallChatForbiddenException extends DomainException {
+  readonly code = ExceptionCode.Forbidden;
+}
+
+/** No call is going on in the space to send a file in. */
+export class NoOpenCallException extends DomainException {
+  readonly code = ExceptionCode.Conflict;
+}

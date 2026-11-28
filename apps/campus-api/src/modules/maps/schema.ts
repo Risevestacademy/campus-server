@@ -7,6 +7,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  text,
   timestamp,
   uniqueIndex,
   uuid,
@@ -89,15 +90,22 @@ export const maps = pgTable(
      */
     retiredAt: timestamp('retired_at', { withTimezone: true }),
     /**
-     * When an admin made this version live for world. Null until then, and
-     * never written by the sync: a synced map is known to the database but
-     * world keeps serving the old one until an admin publishes.
+     * The Sanity version the last sync read, and when the sync first saw it.
+     * Null on a row no sync has written since these columns were added.
+     */
+    syncedVersion: text('synced_version'),
+    syncedAt: timestamp('synced_at', { withTimezone: true }),
+    /**
+     * When an admin last published this map for world, and the synced
+     * version at that moment. Null until then, and never written by the sync,
+     * so a map synced since its last publish has the two versions differ.
      *
-     * A re-sync does not clear it, so a map published before the sync keeps
-     * its old timestamp. The published version itself is not stored here;
-     * world reads the current map from Sanity (see the maps README).
+     * World reads the current map from Sanity, not this version (see the maps
+     * README): if Sanity moved on between the sync and the publish, world
+     * serves a version newer than `publishedVersion`.
      */
     publishedAt: timestamp('published_at', { withTimezone: true }),
+    publishedVersion: text('published_version'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

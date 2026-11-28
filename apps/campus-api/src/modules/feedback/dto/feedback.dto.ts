@@ -15,6 +15,8 @@ import {
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../shared/dto/pagination-query.dto.js';
+import { AttachmentDto } from '../../media/dto/upload.dto.js';
+import { AttachmentIds } from '../../media/dto/attachment-ids.decorator.js';
 import {
   FEEDBACK_ABOUT_MAX_LENGTH,
   FEEDBACK_DETAILS_MAX_LENGTH,
@@ -155,6 +157,13 @@ export class CreateFeedbackDto {
   @ValidateNested()
   @Type(() => FeedbackContextDto)
   context?: FeedbackContextDto;
+
+  /**
+   * Screenshots or files, in this order: `feedback_attachment` uploads of
+   * yours. Only admins can open them.
+   */
+  @AttachmentIds()
+  attachmentIds?: string[];
 }
 
 /** What the member gets back: that it arrived, and nothing to act on. */
@@ -191,6 +200,23 @@ export class ListFeedbackQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID()
   submittedBy?: string;
+
+  /**
+   * Only reports naming this account. The filter only narrows: it is combined
+   * with the rule that hides a report naming the admin asking, so an admin
+   * filtering their own id gets nothing. A report with no named account, and
+   * bugs and ideas, never match.
+   * @example 33333333-3333-4333-8333-333333333333
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Only reports naming this account. The filter only narrows; an admin ' +
+      'filtering their own id gets nothing.',
+  })
+  @IsOptional()
+  @IsUUID()
+  reportedUserId?: string;
 }
 
 /** Somebody named on a piece of feedback, as an admin needs to see them. */
@@ -257,6 +283,9 @@ export class FeedbackDto extends FeedbackListItemDto {
 
   /** @example 2026-10-13T11:00:00.000Z */
   resolvedAt: Date | null;
+
+  @ApiProperty({ type: [AttachmentDto] })
+  attachments: AttachmentDto[];
 }
 
 export class UpdateFeedbackStatusDto {

@@ -1,7 +1,7 @@
 import {
   NOTIFICATION_CREATED_CHANNEL,
   type NotificationCreated,
-} from '@campus/session';
+} from '@campus/contracts';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';

@@ -15,6 +15,10 @@ import {
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
+import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import {
   DRIZZLE,
@@ -93,6 +97,11 @@ import { InviteStatus, invites, type Invite } from './schema.js';
 export type DecisionOutcome =
   | { kind: 'accepted'; response: InviteDecisionResponseDto; account: User }
   | { kind: 'declined'; response: InviteDecisionResponseDto };
+
+/** A decision and the invite it settled, which the decision's event reads. */
+type Decided = { outcome: DecisionOutcome; invite: Invite };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The exception for an invite that already carries an answer, chosen by which
@@ -197,6 +206,7 @@ export class InvitesService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Db,
     @Inject(CONFIG) private readonly config: Env,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
   ) {}
 
   /**
@@ -207,14 +217,16 @@ export class InvitesService {
    * `db` lets a caller making several invites hold them in one transaction
    * of its own: the checks then read what its earlier invites wrote, and
    * this invite's write becomes a savepoint inside it, so a refusal undoes
-   * this invite alone.
+   * this invite alone, and the caller counts it once its transaction commits
+   * (see trackSent).
    */
   async create(
     dto: CreateInviteDto,
     inviter: AuthenticatedUser,
     correlationId?: string,
-    db: DbExecutor = this.db,
+    outer?: DbExecutor,
   ): Promise<Omit<InviteResponseDto, 'emailStatus'>> {
+    const db = outer ?? this.db;
     const email = dto.email.trim().toLowerCase();
     const systemRole = dto.systemRole ?? SystemRole.User;
 
@@ -285,6 +297,9 @@ export class InvitesService {
           return row;
         });
 
+        if (!outer) {
+          this.trackSent(row, inviter, 'single', correlationId);
+        }
         const inviteLink = buildInviteLink(this.config.APP_PUBLIC_URL, token);
         return {
           id: row.id,
@@ -710,12 +725,60 @@ export class InvitesService {
     now: Date = new Date(),
     correlationId?: string,
   ): Promise<DecisionOutcome> {
-    return decision === InviteDecision.Accept
-      ? this.accept(inviteId, user, now, {
-          actorUserId: user.id,
-          correlationId,
-        })
-      : this.decline(inviteId, user, now);
+    const { outcome, invite } =
+      decision === InviteDecision.Accept
+        ? await this.accept(inviteId, user, now, {
+            actorUserId: user.id,
+            correlationId,
+          })
+        : await this.decline(inviteId, user, now);
+
+    if (invite.cohortRole) {
+      const options = { cohortId: invite.cohortId ?? undefined, correlationId };
+      if (outcome.kind === 'accepted') {
+        this.analytics.track(
+          'invite.accepted',
+          user.id,
+          {
+            role: invite.cohortRole,
+            days_since_sent: Math.max(
+              0,
+              Math.floor((now.getTime() - invite.createdAt.getTime()) / DAY_MS),
+            ),
+          },
+          options,
+        );
+      } else {
+        this.analytics.track(
+          'invite.declined',
+          user.id,
+          { role: invite.cohortRole },
+          options,
+        );
+      }
+    }
+    return outcome;
+  }
+
+  /**
+   * Counts an invite once it is committed. Only a cohort invite has a role to
+   * count it by; an admin invite is a platform role and is not counted.
+   */
+  trackSent(
+    invite: Pick<Invite, 'cohortId' | 'cohortRole'>,
+    inviter: AuthenticatedUser,
+    via: 'single' | 'import',
+    correlationId?: string,
+  ): void {
+    if (!invite.cohortRole) {
+      return;
+    }
+    this.analytics.track(
+      'invite.sent',
+      inviter.id,
+      { role: invite.cohortRole, via },
+      { cohortId: invite.cohortId ?? undefined, correlationId },
+    );
   }
 
   private async accept(
@@ -723,7 +786,7 @@ export class InvitesService {
     user: AuthenticatedUser,
     now: Date,
     audit: AuditContext,
-  ): Promise<DecisionOutcome> {
+  ): Promise<Decided> {
     return this.db.transaction(async (tx) => {
       const claimed = await this.claimInvite(
         tx,
@@ -749,15 +812,18 @@ export class InvitesService {
           audit,
         );
         return {
-          kind: 'accepted',
-          response: {
-            inviteId: claimed.invite.id,
-            status: InviteStatus.Accepted,
-            decidedAt: claimed.invite.acceptedAt ?? now,
-            membership,
-            systemRole: account.systemRole,
+          invite: claimed.invite,
+          outcome: {
+            kind: 'accepted',
+            response: {
+              inviteId: claimed.invite.id,
+              status: InviteStatus.Accepted,
+              decidedAt: claimed.invite.acceptedAt ?? now,
+              membership,
+              systemRole: account.systemRole,
+            },
+            account,
           },
-          account,
         };
       }
 
@@ -769,7 +835,7 @@ export class InvitesService {
     inviteId: string,
     user: AuthenticatedUser,
     now: Date,
-  ): Promise<DecisionOutcome> {
+  ): Promise<Decided> {
     return this.db.transaction(async (tx) => {
       const claimed = await this.claimInvite(
         tx,
@@ -782,13 +848,16 @@ export class InvitesService {
       if (claimed.fresh) {
         checkEmailMatch(claimed.invite, user);
         return {
-          kind: 'declined',
-          response: {
-            inviteId: claimed.invite.id,
-            status: InviteStatus.Declined,
-            decidedAt: claimed.invite.updatedAt,
-            membership: null,
-            systemRole: null,
+          invite: claimed.invite,
+          outcome: {
+            kind: 'declined',
+            response: {
+              inviteId: claimed.invite.id,
+              status: InviteStatus.Declined,
+              decidedAt: claimed.invite.updatedAt,
+              membership: null,
+              systemRole: null,
+            },
           },
         };
       }
@@ -1421,6 +1490,14 @@ export class InvitesService {
     });
 
     if (revoked) {
+      if (revoked.cohortRole) {
+        this.analytics.track(
+          'invite.revoked',
+          actor.id,
+          { role: revoked.cohortRole },
+          { cohortId: revoked.cohortId ?? undefined, correlationId },
+        );
+      }
       return toAdminInviteItem(revoked, now);
     }
 
@@ -1550,6 +1627,14 @@ export class InvitesService {
           throw terminalInviteException(await this.findInvite(inviteId), {
             inviteId,
           });
+        }
+        if (updated.cohortRole) {
+          this.analytics.track(
+            'invite.resent',
+            actor.id,
+            { role: updated.cohortRole },
+            { cohortId: updated.cohortId ?? undefined, correlationId },
+          );
         }
 
         return {

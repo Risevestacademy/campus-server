@@ -1,4 +1,4 @@
-import { PROFILE_CHANGED_CHANNEL } from '@campus/session';
+import { PROFILE_CHANGED_CHANNEL } from '@campus/contracts';
 import { PGlite } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -66,6 +66,7 @@ const storage: MediaStorage = {
     objects.delete(`${bucket}:${key}`);
   },
   publicUrl: (key) => `https://media.test/${key}`,
+  signRead: async (key) => `https://r2.test/${key}?read`,
 };
 const mediaService = new MediaService(
   db as never,

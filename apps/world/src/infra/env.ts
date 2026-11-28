@@ -3,7 +3,7 @@ import {
   assertMediaCredentials,
   type MediaCredentials,
 } from '@campus/media';
-import { MIN_SESSION_REFRESH_WINDOW_SECONDS } from '@campus/session';
+import { MIN_SESSION_REFRESH_WINDOW_SECONDS } from '@campus/contracts';
 import { z } from 'zod';
 
 /**
@@ -43,6 +43,8 @@ const schema = z
 
     /** Error tracking, as in campus-api. Off unless switched on. */
     FF_POSTHOG_ENABLED: flag.default(false),
+    /** Product events, as in campus-api, with the same token and host. */
+    FF_ANALYTICS_ENABLED: flag.default(false),
     POSTHOG_PROJECT_TOKEN: optionalText,
     POSTHOG_HOST: z
       .url({ protocol: /^https$/ })
@@ -110,13 +112,6 @@ const schema = z
      * outrun the server and be refused.
      */
     WORLD_STEP_MS: z.coerce.number().int().min(1).default(100),
-
-    /**
-     * Most steps one `goTo` walk takes before it gives up with `no_way`. Only
-     * a chase after somebody who keeps walking away reaches it. Unset: the
-     * map's width × height, longer than any shortest path.
-     */
-    WORLD_WALK_MAX_STEPS: z.coerce.number().int().min(1).optional(),
 
     /**
      * How often everybody is told who moved. Shorter looks smoother and costs
@@ -236,14 +231,14 @@ const schema = z
     }
 
     if (
-      env.FF_POSTHOG_ENABLED &&
+      (env.FF_POSTHOG_ENABLED || env.FF_ANALYTICS_ENABLED) &&
       !env.POSTHOG_PROJECT_TOKEN?.startsWith('phc_')
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['POSTHOG_PROJECT_TOKEN'],
         message:
-          'must be set, and start with "phc_", while FF_POSTHOG_ENABLED is on',
+          'must be set, and start with "phc_", while FF_POSTHOG_ENABLED or FF_ANALYTICS_ENABLED is on',
       });
     }
 

@@ -3,11 +3,12 @@
 The record of calls held in spaces, written from LiveKit's webhooks
 (`POST /v1/calls/webhook`). world hands people the calls; this records them.
 
-| Table                  | A row is                                                                                                |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sessions`             | One call in a cohort's space: which cohort and space, the provider's room id, when it opened and closed |
-| `session_participants` | One person's time in a call: when they joined, when they left, and whether they turned their video on   |
-| `recordings`           | One video recording of a call: who started and stopped it, where its file is, and how it went           |
+| Table                   | A row is                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------- |
+| `sessions`              | One call in a cohort's space: which cohort and space, the provider's room id, when it opened and closed |
+| `session_participants`  | One person's time in a call: when they joined, when they left, and whether they turned their video on   |
+| `recordings`            | One video recording of a call: who started and stopped it, where its file is, and how it went           |
+| `call_chat_attachments` | One file sent in a call's chat, and the call it was sent in                                             |
 
 A session is open while `closed_at` is null, and a participant is still in
 the call while `left_at` is null. There is no status column beside them.
@@ -45,13 +46,13 @@ ignored. A session is one run of that room, keyed by LiveKit's id for the
 run (`provider_room_id`, unique): a room that empties and fills again is a
 new session.
 
-| Event                | What it writes                                                       |
-| -------------------- | -------------------------------------------------------------------- |
-| `room_started`       | Opens the cohort's session in the space, if none is open             |
-| `participant_joined` | A participant row, opening the session first if its start was missed |
-| `participant_left`   | `left_at` on the row with that identity                              |
-| `track_published`    | `video_enabled` when the track is a camera                           |
-| `room_finished`      | `closed_at` on the session, and `left_at` on everybody still in it   |
+| Event                | What it writes                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| `room_started`       | Opens the cohort's session in the space, if none is open                                    |
+| `participant_joined` | A participant row, opening the session first if its start was missed                        |
+| `participant_left`   | `left_at` on the row with that identity                                                     |
+| `track_published`    | `video_enabled` when the track is a camera                                                  |
+| `room_finished`      | `closed_at` on the session, `left_at` on everybody still in it, and its chat files released |
 
 LiveKit retries what it could not deliver and does not promise order, so
 each event checks what is recorded first. A second join, leave or room event
@@ -64,6 +65,10 @@ identity is their user id, a colon and a suffix world makes fresh for each
 entry (`provider_identity`). Somebody who walks out and straight back in can
 have a new identity join before LiveKit says the old one left; the old row
 is closed then, so a person has one open row per call.
+
+Once an event's changes commit, whoever left a call is counted as
+`call.left`, and a run that closed as `call.ended`; see
+[docs/posthog.md](../../../../../docs/posthog.md#what-calls-send).
 
 ## Video recordings
 
@@ -118,3 +123,25 @@ LiveKit's reason). A finished row stays finished, whatever arrives late.
 A recording stops by itself when the call ends.
 
 Recordings are never deleted.
+
+## Files in a call's chat
+
+Chat goes through world and is never stored, but a file sent in it is tied
+here to the call, so that it opens only while the call goes on.
+
+1. Upload it: `POST /v1/uploads` with kind `call_chat_attachment`, then PUT
+   the file.
+2. `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/call/attachments` with
+   `{mediaId}`. For anyone who may enter the space (`mayEnter`), while a
+   call is going on in it: 403 otherwise, and 409 with no call. The file
+   is verified, then claimed and tied to the open session in one
+   transaction that holds the session, so it cannot slip in after the call
+   has closed. The answer is the file with a 15-minute link.
+3. Send the line through world's `say` with that `attachment`. World
+   passes it on unchecked; whoever gets it opens it with
+   `GET /v1/media/{id}/url`, which lets in whoever may enter the space.
+
+When the session closes, by `room_finished` or because a newer run of the
+room replaced it, its files are released in the same transaction:
+`GET /v1/media/{id}/url` then answers 410 `MEDIA_GONE`, and the sweeper
+deletes them a week later.

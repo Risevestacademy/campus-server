@@ -1,5 +1,5 @@
 import { microphoneMuter, type MuteResult } from '@campus/media';
-import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/session';
+import { DEFAULT_SPACE_KEY, hasAdminPowers } from '@campus/contracts';
 import { COHORT_ROLES, SPACE_ACCESS, mayEnter } from '@campus/space-access';
 
 import type { mediaCredentials } from '../../infra/env.js';
@@ -9,6 +9,7 @@ import { takesRequests } from '../../spaces/requests.js';
 import { personOf, type Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { ServerErrorCode, encode } from '../protocol.js';
+import type { WorldAnalytics } from './analytics.js';
 import type { Doors } from './doors.js';
 import type { EntryRequestsFeature } from './entry-requests.js';
 
@@ -29,6 +30,7 @@ export interface ModerationDeps {
   media: ReturnType<typeof mediaCredentials>;
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
   isFull(connection: Connection, spaceKey: string): boolean;
+  analytics: Pick<WorldAnalytics, 'staffActed'>;
   /** Put outside by staff: what a step onto that tile would do, and the end of any walk. */
   movedOut(target: Connection, player: Player): void;
 }
@@ -37,7 +39,15 @@ export type Moderation = ReturnType<typeof createModeration>;
 
 export function createModeration(
   ctx: ModerationContext,
-  { doors, requests, media, mayStepInto, isFull, movedOut }: ModerationDeps,
+  {
+    doors,
+    requests,
+    media,
+    mayStepInto,
+    isFull,
+    analytics,
+    movedOut,
+  }: ModerationDeps,
 ) {
   const { app, map, connections, players, send, sendFrame } = ctx;
   const muteMicrophone = media ? microphoneMuter(media) : undefined;
@@ -199,6 +209,7 @@ export function createModeration(
     target: Connection,
     spaceKey: string,
   ): void {
+    analytics.staffActed(actor, action, spaceKey);
     app.log.info(
       {
         action,

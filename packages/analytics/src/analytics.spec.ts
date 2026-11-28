@@ -171,7 +171,7 @@ describe('track', () => {
       analytics.track(
         'presence.started',
         ADA,
-        { client: 'web', reconnect: false },
+        { client: 'web', reconnect: false, mode: 'avatar' },
         null as never,
       ),
     ).not.toThrow();
@@ -228,7 +228,11 @@ describe('track', () => {
 });
 
 describe('consent', () => {
-  const properties = { client: 'web', reconnect: false } as const;
+  const properties = {
+    client: 'web',
+    reconnect: false,
+    mode: 'avatar',
+  } as const;
 
   it('names the person once they have granted it', () => {
     const analytics = createTestAnalytics();
@@ -295,6 +299,23 @@ describe('trackAnonymous', () => {
     const [first, second] = analytics.events;
     expect(first.distinctId).not.toBe(second.distinctId);
   });
+
+  it('carries a cohort as a property alone, with no group and no person', () => {
+    const analytics = createTestAnalytics();
+
+    analytics.trackAnonymous(
+      'recording.finished',
+      { outcome: 'complete', duration_s: 90 },
+      { cohortId: COHORT },
+    );
+
+    const [event] = analytics.events;
+    expect(event.properties).toMatchObject({
+      cohort_id: COHORT,
+      $process_person_profile: false,
+    });
+    expect(event.groups).toBeUndefined();
+  });
 });
 
 describe('createAnalytics', () => {
@@ -337,7 +358,7 @@ describe('createAnalytics', () => {
     analytics.track(
       'presence.started',
       ADA,
-      { client: 'web', reconnect: false },
+      { client: 'web', reconnect: false, mode: 'avatar' },
       { sessionId: GRACE, cohortId: COHORT },
     );
     analytics.trackAnonymous('auth.sign_in_failed', {
@@ -351,6 +372,7 @@ describe('createAnalytics', () => {
       properties: {
         client: 'web',
         reconnect: false,
+        mode: 'avatar',
         app_version: 'abc123',
         environment: 'staging',
         cohort_id: COHORT,

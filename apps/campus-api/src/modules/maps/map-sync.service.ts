@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 
@@ -497,6 +497,8 @@ class Reconciliation {
           // admin gives it one.
           name: published.key,
           isEntry: published.isEntry,
+          syncedVersion: published.version,
+          syncedAt: this.now,
           createdAt: this.now,
           updatedAt: this.now,
         })
@@ -530,6 +532,13 @@ class Reconciliation {
       result.outcome = wasRetired
         ? MapSyncOutcome.Restored
         : MapSyncOutcome.Updated;
+    }
+    // A new version alone leaves the outcome as it is: no space or desk moved.
+    if (existing.syncedVersion !== published.version) {
+      await this.tx
+        .update(maps)
+        .set({ syncedVersion: published.version, syncedAt: this.now })
+        .where(eq(maps.id, existing.id));
     }
     return { mapId: existing.id, result };
   }

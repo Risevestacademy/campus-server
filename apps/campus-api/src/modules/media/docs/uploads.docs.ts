@@ -2,6 +2,8 @@ import { applyDecorators } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiCreatedResponse,
+  ApiGoneResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiPayloadTooLargeResponse,
@@ -12,7 +14,11 @@ import {
 } from '@nestjs/swagger';
 
 import { ApiErrorResponseDto } from '../../../shared/dto/api-error-response.dto.js';
-import { UploadDto, UploadLimitsDto } from '../dto/upload.dto.js';
+import {
+  SignedReadDto,
+  UploadDto,
+  UploadLimitsDto,
+} from '../dto/upload.dto.js';
 
 const unauthorized = ApiUnauthorizedResponse({
   type: ApiErrorResponseDto,
@@ -68,5 +74,39 @@ export function ApiUploadLimits(): MethodDecorator {
     }),
     ApiOkResponse({ type: UploadLimitsDto }),
     unauthorized,
+  );
+}
+
+export function ApiReadMedia(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'A fresh link to an attachment',
+      description:
+        'For refreshing an attachment link that has expired or answered 403. ' +
+        'The link lasts 15 minutes. Images open in the browser; anything ' +
+        'else downloads. Only for someone who can see what the file is ' +
+        'attached to: a notice they can see, feedback an admin may read, or ' +
+        'a call in a space they may enter.',
+    }),
+    ApiOkResponse({ type: SignedReadDto }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'An id that is not a UUID.',
+    }),
+    unauthorized,
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'No such file, or not one you may read: the same answer either way.',
+    }),
+    ApiGoneResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'A file you could read, since let go by its owner, such as one sent in a call that has ended (`MEDIA_GONE`). Show it as no longer available.',
+    }),
+    ApiServiceUnavailableResponse({
+      type: ApiErrorResponseDto,
+      description: 'Uploads are not configured here.',
+    }),
   );
 }

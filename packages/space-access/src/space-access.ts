@@ -1,4 +1,4 @@
-import { hasAdminPowers } from '@campus/session';
+import { hasAdminPowers } from '@campus/contracts';
 
 /**
  * Whether a person may step into a space: facts in, a boolean out. One pure
@@ -7,7 +7,7 @@ import { hasAdminPowers } from '@campus/session';
  *
  * campus-api and world both have to ask it: world on every step into a space,
  * campus-api whenever a route needs the same answer. So it lives where both
- * can import it, defined once — the way `@campus/session` holds the session
+ * can import it, defined once — the way `@campus/contracts` holds the session
  * token and the system role. Two copies of this rule would drift, and the
  * drift would not show as a type error: it would show as somebody standing
  * where they should not be, on one service and not the other.

@@ -26,12 +26,14 @@ export function ApiListSpaces(): MethodDecorator {
         'Every live space, by name. Retired spaces are left out; GET ' +
         '/v1/spaces/{id} still reads one by id.\n\n' +
         '`needsKind=true` narrows the list to spaces with no kind set: the ' +
-        'queue of spaces the map drew and no admin has set up yet.',
+        'queue of spaces the map drew and no admin has set up yet. ' +
+        '`mapId` narrows it to the spaces of one map; an unknown id gives an ' +
+        'empty page.',
     }),
     ApiPaginatedResponse(SpaceResponseDto),
     ApiBadRequestResponse({
       type: ApiErrorResponseDto,
-      description: 'A page or `needsKind` is malformed.',
+      description: 'A page, `needsKind` or `mapId` is malformed.',
     }),
     ApiAdminOnly(),
   );

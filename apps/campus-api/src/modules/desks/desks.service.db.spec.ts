@@ -1,4 +1,5 @@
-import { DESKS_CHANGED_CHANNEL } from '@campus/session';
+import { createTestAnalytics } from '@campus/analytics/testing';
+import { DESKS_CHANGED_CHANNEL } from '@campus/contracts';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -341,7 +342,10 @@ describe('a membership ending', () => {
     await service.claim(grace, cohortA, 'desk_a');
     await service.claim(grace, cohortB, 'desk_b');
 
-    await new CohortMembersService(db as never).endMembership(
+    await new CohortMembersService(
+      db as never,
+      createTestAnalytics(),
+    ).endMembership(
       cohortA,
       grace.id,
       MembershipEndAction.Remove,
@@ -415,7 +419,10 @@ describe('telling world', () => {
         actorUserId: grace.id,
       });
       await service.claim(grace, cohortA, 'desk_a');
-      await new CohortMembersService(db as never).endMembership(
+      await new CohortMembersService(
+        db as never,
+        createTestAnalytics(),
+      ).endMembership(
         cohortA,
         grace.id,
         MembershipEndAction.Remove,

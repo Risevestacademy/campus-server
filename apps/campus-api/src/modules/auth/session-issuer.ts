@@ -12,13 +12,13 @@ import { SessionUnauthorizedError } from './auth.exceptions.js';
 import { refreshTokens } from './schema.js';
 import type { Invite } from '../invites/schema.js';
 import { users as usersTable, type User } from '../users/schema.js';
-import { isAdmin, isSuspended, UsersService } from '../users/users.service.js';
+import { isAdmin, isInactive, UsersService } from '../users/users.service.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import {
   isRefreshTokenLive,
   SessionScope,
   signSessionToken,
-} from '@campus/session';
+} from '@campus/contracts';
 
 /** The transaction handle drizzle hands a `db.transaction` callback. */
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -255,15 +255,21 @@ export class SessionIssuer {
     };
   }
 
-  async revokeRefreshToken(token: string): Promise<void> {
+  /** Whose session this ended, or null when it ended none. */
+  async revokeRefreshToken(token: string): Promise<string | null> {
     const [stored] = await this.db
-      .select({ familyId: refreshTokens.familyId })
+      .select({
+        familyId: refreshTokens.familyId,
+        userId: refreshTokens.userId,
+      })
       .from(refreshTokens)
       .where(eq(refreshTokens.tokenHash, hashRefreshToken(token)))
       .limit(1);
-    if (stored) {
-      await this.revokeFamily(stored.familyId, new Date());
+    if (!stored) {
+      return null;
     }
+    const revoked = await this.revokeFamily(stored.familyId, new Date());
+    return revoked > 0 ? stored.userId : null;
   }
 
   /**
@@ -348,7 +354,7 @@ export class SessionIssuer {
       await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Refresh token is not usable');
     }
-    if (isSuspended(user)) {
+    if (isInactive(user)) {
       await this.revokeFamily(stored.familyId, now);
       throw new SessionUnauthorizedError('Account is suspended');
     }
@@ -466,17 +472,16 @@ export class SessionIssuer {
     familyId: string,
     now: Date,
     tx?: Tx,
-  ): Promise<void> {
+  ): Promise<number> {
     if (!tx) {
-      await this.db.transaction((tx) => this.revokeFamily(familyId, now, tx));
-      return;
+      return this.db.transaction((tx) => this.revokeFamily(familyId, now, tx));
     }
     await tx
       .select({ id: refreshTokens.id })
       .from(refreshTokens)
       .where(eq(refreshTokens.familyId, familyId))
       .for('update');
-    await tx
+    const revoked = await tx
       .update(refreshTokens)
       .set({ revokedAt: now })
       .where(
@@ -484,7 +489,9 @@ export class SessionIssuer {
           eq(refreshTokens.familyId, familyId),
           isNull(refreshTokens.revokedAt),
         ),
-      );
+      )
+      .returning({ id: refreshTokens.id });
+    return revoked.length;
   }
 
   private async cleanupRefreshTokens(now: Date): Promise<void> {

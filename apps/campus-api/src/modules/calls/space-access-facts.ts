@@ -28,7 +28,7 @@ export async function personFacts(
     .select({ systemRole: users.systemRole, status: users.status })
     .from(users)
     .where(eq(users.id, userId));
-  if (!account || account.status === UserStatus.Suspended) return null;
+  if (!account || account.status !== UserStatus.Active) return null;
 
   const [member] = await db
     .select({

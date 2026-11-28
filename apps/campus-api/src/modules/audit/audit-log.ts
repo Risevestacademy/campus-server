@@ -137,6 +137,17 @@ interface AuditEntryShapes {
       actorRole: string;
     };
   };
+  [AuditAction.AccountDeleted]: {
+    subject: AuditSubjectType.User;
+    details: {
+      /** The actor's system_role at the time, not whatever it is now. */
+      actorRole: string;
+      /** The role the account held before it was deleted. */
+      systemRole: string;
+      /** The cohort memberships the deletion ended. */
+      endedMembershipIds: string[];
+    };
+  };
   [AuditAction.UserReinstated]: {
     subject: AuditSubjectType.User;
     details: {
@@ -238,6 +249,9 @@ interface AuditEntryShapes {
       previousPublishedAt: Date | null;
       /** When this publish made it live. */
       publishedAt: Date;
+      /** The synced version before this publish and after it. */
+      previousPublishedVersion: string | null;
+      publishedVersion: string | null;
     };
   };
   [AuditAction.FeedbackResolved]: {
@@ -373,7 +387,10 @@ interface AuditEntryShapes {
   };
   [AuditAction.NoticeUpdated]: {
     subject: AuditSubjectType.Notice;
-    details: { changes: FieldChanges<NoticeSnapshot> };
+    details: {
+      changes: FieldChanges<NoticeSnapshot>;
+      attachments?: { added: string[]; removed: string[] };
+    };
   };
   [AuditAction.NoticePinned]: {
     subject: AuditSubjectType.Notice;
@@ -438,6 +455,20 @@ interface AuditEntryShapes {
     subject: AuditSubjectType.Comment;
     /** The notice only; what the member wrote stays on the comment. */
     details: { noticeId: string };
+  };
+  [AuditAction.ReportExported]: {
+    subject: AuditSubjectType.Cohort;
+    details: {
+      /** `membership` or `attendance`. */
+      report: string;
+      state: string;
+      trackId: string | null;
+      role: string | null;
+      /** The range of class starts, as ISO timestamps; attendance only. */
+      from: string | null;
+      to: string | null;
+      rows: number;
+    };
   };
 }
 

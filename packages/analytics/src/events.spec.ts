@@ -38,6 +38,16 @@ describe('the event catalogue', () => {
 
   it('needs consent only for what describes one person minute by minute', () => {
     const needing = names.filter((event) => EVENTS[event].consent);
-    expect(needing).toEqual(['presence.started']);
+    expect(needing).toEqual([
+      'presence.started',
+      'presence.ended',
+      'status.chosen',
+      'space.visited',
+      'space.refused',
+      'space.lock_changed',
+      'entry.request_ended',
+      'walk.ended',
+      'call.left',
+    ]);
   });
 });

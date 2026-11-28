@@ -3,6 +3,7 @@ import {
   ApiBadRequestResponse,
   ApiConflictResponse,
   ApiForbiddenResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -292,6 +293,59 @@ export function ApiReinstateUser(): MethodDecorator {
           },
         },
       },
+    }),
+  );
+}
+
+export function ApiDeleteUser(): MethodDecorator {
+  return applyDecorators(
+    ApiOperation({
+      summary: 'Delete an account on the person’s request (admin only)',
+      description:
+        'Final, with no undo. The account keeps its id, so the audit log ' +
+        'and what it posted still point somewhere, but its name, email, ' +
+        'picture, phone, bio and Google identity are wiped, and it is shown ' +
+        'as `Deleted user` from then on. Its email is freed: a later invite ' +
+        'to the same address makes a new account.\n\n' +
+        'In the same step its sessions end, its cohort memberships, desks, ' +
+        'mentorship places, space grants, room link passes and pending ' +
+        'invites end, its notifications go, its Google Calendar access is ' +
+        'revoked, and every file it uploaded is released. Comments, notices, ' +
+        'feedback and attendance stay. The person is emailed at their old ' +
+        'address, and their PostHog profile is dropped shortly after.\n\n' +
+        'Who may delete whom is as for suspend: anybody but yourself, and a ' +
+        'super admin only by a super admin.\n\n' +
+        'Refusals: a 409 for **yourself**, for **an account already ' +
+        'deleted**, and for **a mentor who leads a mentorship group** — ' +
+        'reassign the group first. A 403 for a plain admin deleting a super ' +
+        'admin, for a caller whose own account is no longer active, and for ' +
+        'a caller who is not an admin.',
+    }),
+    ApiNoContentResponse({ description: 'The account is deleted.' }),
+    ApiBadRequestResponse({
+      type: ApiErrorResponseDto,
+      description: 'The id is not a UUID.',
+    }),
+    ApiAdminOnly(),
+    ApiStatusForbidden({
+      superAdminTarget: {
+        summary: 'The target is a super admin, the caller is not',
+        value: {
+          error: {
+            code: 'FORBIDDEN',
+            message: 'A super admin is required to delete a super admin',
+          },
+        },
+      },
+    }),
+    ApiNotFoundResponse({
+      type: ApiErrorResponseDto,
+      description: 'No user has this id.',
+    }),
+    ApiConflictResponse({
+      type: ApiErrorResponseDto,
+      description:
+        'The account is your own, is already deleted, or leads a mentorship group.',
     }),
   );
 }

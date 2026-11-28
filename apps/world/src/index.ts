@@ -40,11 +40,19 @@ try {
   await flushAll(console, [telemetry]);
   process.exit(1);
 }
-const { app, gateway, accounts, positions, presence, notifications, reporter } =
-  world;
+const {
+  app,
+  gateway,
+  accounts,
+  positions,
+  presence,
+  notifications,
+  reporter,
+  analytics,
+} = world;
 
 /** Last, so it sends whatever the steps before it logged. */
-const flush = () => flushAll(app.log, [reporter, telemetry]);
+const flush = () => flushAll(app.log, [analytics, reporter, telemetry]);
 
 /**
  * Sockets first, then the HTTP server: a client that is told to go away can

@@ -10,6 +10,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 
+import { AttachmentIds } from '../../media/dto/attachment-ids.decorator.js';
 import { NoticeScope } from '../schema.js';
 
 const trim = ({ value }: { value: unknown }) =>
@@ -59,4 +60,11 @@ export class CreateNoticeDto {
   @IsUUID()
   @IsOptional()
   mentorshipGroupId?: string;
+
+  /**
+   * Files to show with it, in this order: `notice_attachment` uploads of
+   * yours.
+   */
+  @AttachmentIds()
+  attachmentIds?: string[];
 }

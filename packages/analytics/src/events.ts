@@ -26,6 +26,25 @@ const signInFailure = z.enum([
 ]);
 const feedbackCategory = z.enum(['bug', 'idea', 'report']);
 const count = z.number().int().nonnegative();
+const socketMode = z.enum(['avatar', 'watcher']);
+const spaceKind = z.enum([
+  'open',
+  'classroom',
+  'meeting_room',
+  'mentor_pod',
+  'live_coding',
+  'desk',
+  'town_hall',
+  'notice_board',
+  'stage',
+  'help_desk',
+  'unset',
+]);
+const space = {
+  space_id: z.uuid(),
+  space_kind: spaceKind,
+};
+const spaceRefusal = z.enum(['designated', 'locked', 'removed', 'closed']);
 
 function event<S extends z.ZodRawShape>(shape: S, consent = false) {
   return { schema: z.strictObject(shape), consent };
@@ -60,7 +79,120 @@ export const EVENTS = {
   'profile.completed': event({}),
   'mentorship_group.created': event({ size: count }),
   'feedback.submitted': event({ category: feedbackCategory }),
-  'presence.started': event({ client, reconnect: z.boolean() }, true),
+  'presence.started': event(
+    { client, reconnect: z.boolean(), mode: socketMode },
+    true,
+  ),
+  'presence.ended': event(
+    {
+      client,
+      mode: socketMode,
+      duration_s: count,
+      reason: z.enum([
+        'closed',
+        'replaced',
+        'signed_out',
+        'access_ended',
+        'lost',
+        'shutdown',
+        'error',
+      ]),
+    },
+    true,
+  ),
+  'status.chosen': event(
+    { status: z.enum(['available', 'busy', 'away']), timed: z.boolean() },
+    true,
+  ),
+  'space.visited': event(
+    {
+      ...space,
+      access: z.enum(['normal', 'designated']),
+      audio_mode: z.enum(['proximity', 'boundary']),
+      duration_s: count,
+      arrived_by: z.enum([
+        'joined',
+        'step',
+        'go_to',
+        'go_to_space',
+        'go_to_tile',
+        'moved',
+      ]),
+      lines_said: count,
+    },
+    true,
+  ),
+  'space.refused': event(
+    {
+      ...space,
+      reason: z.enum([...spaceRefusal.options, 'full']),
+      may_ask: z.boolean(),
+    },
+    true,
+  ),
+  'space.lock_changed': event(
+    { ...space, locked: z.boolean(), occupants: count },
+    true,
+  ),
+  'entry.request_ended': event(
+    {
+      ...space,
+      reason: spaceRefusal,
+      outcome: z.enum([
+        'admitted',
+        'declined',
+        'withdrawn',
+        'walked_away',
+        'nobody_inside',
+        'not_needed',
+        'cancelled',
+      ]),
+      wait_s: count,
+    },
+    true,
+  ),
+  'walk.ended': event(
+    {
+      target: z.enum(['person', 'space', 'tile']),
+      reason: z.enum([
+        'arrived',
+        'stopped',
+        'refused',
+        'full',
+        'gone',
+        'elsewhere',
+        'no_way',
+        'moved_by_staff',
+      ]),
+      steps: count,
+    },
+    true,
+  ),
+  'call.left': event(
+    {
+      ...space,
+      audio_mode: z.enum(['proximity', 'boundary']),
+      duration_s: count,
+      video_on: z.boolean(),
+    },
+    true,
+  ),
+  'call.ended': event({
+    ...space,
+    duration_s: count,
+    participants: count,
+    peak_participants: count,
+  }),
+  'recording.started': event({ space_kind: spaceKind }),
+  'recording.finished': event({
+    outcome: z.enum(['complete', 'failed']),
+    duration_s: count,
+  }),
+  'staff.acted': event({
+    action: z.enum(['muted', 'removed']),
+    space_kind: spaceKind,
+    actor_role: z.enum(['admin', 'professor', 'mentor']),
+  }),
 } as const;
 
 export type EventName = keyof typeof EVENTS;

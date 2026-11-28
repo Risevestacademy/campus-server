@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { DRIZZLE, type Db } from '../../infra/database/database.constants.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
@@ -10,11 +10,9 @@ import { SessionIssuer } from '../auth/session-issuer.js';
 import { endDeskClaims } from '../desks/end-claims.js';
 import { DeskReleaseReason, deskClaims } from '../desks/schema.js';
 import type { UserStatusDto } from './dto/user-status.dto.js';
-import { hasAdminPowers, SystemRole, UserStatus, users } from './schema.js';
-import {
-  AccountStatusLockedException,
-  UserNotFoundException,
-} from './users.exceptions.js';
+import { lockAdminAndTarget } from './lock-admin-target.js';
+import { SystemRole, UserStatus, users } from './schema.js';
+import { AccountStatusLockedException } from './users.exceptions.js';
 
 /**
  * Suspending an account and putting it back. Admin tooling like
@@ -129,40 +127,20 @@ export class UserStatusService {
     correlationId?: string,
   ): Promise<UserStatusDto> {
     return this.db.transaction(async (tx) => {
-      const locked = await tx
-        .select({
-          id: users.id,
-          email: users.email,
-          systemRole: users.systemRole,
-          status: users.status,
-          suspendedBy: users.suspendedBy,
-          suspendedByRole: users.suspendedByRole,
-        })
-        .from(users)
-        .where(inArray(users.id, [actor.id, targetId]))
-        .orderBy(asc(users.id))
-        .for('update');
-      const caller = locked.find((row) => row.id === actor.id);
-      const target = locked.find((row) => row.id === targetId);
-
-      // The guard read the caller before this began, which is too early to
-      // stop a caller who has been demoted — or suspended — since. The row
-      // decides, under the lock.
-      if (!caller || !hasAdminPowers(caller.systemRole)) {
-        throw new AccessDeniedException('Admin role required');
-      }
-      if (caller.status !== UserStatus.Active) {
-        throw new AccessDeniedException('Your account is not active');
-      }
-      if (!target) {
-        throw new UserNotFoundException(`User ${targetId} not found`, {
-          userId: targetId,
-        });
-      }
+      const { caller, target } = await lockAdminAndTarget(
+        tx,
+        actor.id,
+        targetId,
+      );
 
       // The state of the target first: it answers the request even when the
       // caller is also of the wrong rank, so "not suspended" never comes
       // back as "a super admin is required".
+      if (target.status === UserStatus.Deleted) {
+        throw new AccountStatusLockedException('This account is deleted', {
+          userId: targetId,
+        });
+      }
       if (target.status === status) {
         throw new AccountStatusLockedException(
           status === UserStatus.Suspended

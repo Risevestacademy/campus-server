@@ -1,4 +1,4 @@
-import { SessionScope, verifySessionToken } from '@campus/session';
+import { SessionScope, verifySessionToken } from '@campus/contracts';
 
 import type { AccessGrant } from '../cohorts/cohort-members.service.js';
 import type { User } from '../users/schema.js';
@@ -25,7 +25,11 @@ const user = {
   sessionEpoch: 0,
 } as User;
 const users = {
-  findById: vi.fn(async () => ({ ...user, systemRole: 'user' })),
+  findById: vi.fn(async () => ({
+    ...user,
+    systemRole: 'user',
+    status: 'active',
+  })),
 };
 const members = {
   resolveActiveAccess: vi.fn(async () => ({ endsAt: null })),

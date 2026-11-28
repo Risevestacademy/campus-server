@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -71,6 +71,7 @@ const storage: MediaStorage = {
     objects.delete(`${bucket}:${key}`);
   },
   publicUrl: (key) => `${config.MEDIA_PUBLIC_URL}/${key}`,
+  signRead: async (key) => `https://r2.test/${key}?read`,
 };
 
 describe('profile picture (e2e)', () => {

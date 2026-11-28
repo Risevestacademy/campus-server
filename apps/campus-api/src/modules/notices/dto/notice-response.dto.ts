@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+import { AttachmentDto } from '../../media/dto/upload.dto.js';
 import { NoticeScope } from '../schema.js';
 
 export class NoticeResponseDto {
@@ -55,4 +56,7 @@ export class NoticeResponseDto {
     example: '2026-09-22T12:00:00.000Z',
   })
   updatedAt: Date;
+
+  @ApiProperty({ type: [AttachmentDto] })
+  attachments: AttachmentDto[];
 }

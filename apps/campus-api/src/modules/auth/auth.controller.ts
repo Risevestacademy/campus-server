@@ -18,18 +18,24 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { SessionScope, type SessionClaims } from '@campus/session';
+import { SessionScope, type SessionClaims } from '@campus/contracts';
 import type { Request, Response } from 'express';
 
+import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
 import { CONFIG, type Env } from '../../infra/config/config.module.js';
 import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js';
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { ApiErrorResponseDto } from '../../shared/dto/index.js';
 import { appUrl } from '../../shared/http/app-url.js';
+import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { CohortMembersService } from '../cohorts/cohort-members.service.js';
 import { InvitesService } from '../invites/invites.service.js';
 import { UsersService } from '../users/users.service.js';
 import {
+  GoogleAuthNotConfiguredError,
   GoogleSignInFailedError,
   SessionUnauthorizedError,
 } from './auth.exceptions.js';
@@ -56,7 +62,10 @@ import {
 } from './session-cookie.js';
 import { assertAllowedOrigin } from './session-origin.js';
 import { AnySessionGuard } from './session.guard.js';
-import { SignInRedirectFilter } from './sign-in-redirect.filter.js';
+import {
+  SignInRedirectFilter,
+  signInErrorCode,
+} from './sign-in-redirect.filter.js';
 import {
   STATE_COOKIE,
   STATE_COOKIE_PATH,
@@ -76,6 +85,7 @@ export class AuthController {
     private readonly members: CohortMembersService,
     private readonly invites: InvitesService,
     @Inject(CONFIG) private readonly config: Env,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
   ) {}
 
   @Get('google')
@@ -125,6 +135,7 @@ export class AuthController {
     @Query() query: GoogleCallbackQueryDto,
     @Req() req: Request,
     @Res() res: Response,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<void> {
     // Asked first, so a deployment without Google sign-in answers both routes
     // the same way instead of reporting a state problem it never had.
@@ -145,6 +156,7 @@ export class AuthController {
 
     const outcome = await this.auth.completeGoogleSignIn(query.code);
     const session = await this.issue(outcome);
+    this.trackSignIn(outcome, 'web', correlationId);
 
     // A member invited to another cohort keeps their access and goes to
     // answer the invite first; it is reachable from a full-access session.
@@ -197,9 +209,24 @@ export class AuthController {
   })
   async tokenSignIn(
     @Body() dto: GoogleTokenSignInDto,
+    @CorrelationId() correlationId: string | undefined,
   ): Promise<TokenSignInResponseDto> {
-    const outcome = await this.auth.completeGoogleIdTokenSignIn(dto.idToken);
-    const session = await this.issue(outcome);
+    let outcome: SignInOutcome;
+    let session: IssuedSession;
+    try {
+      outcome = await this.auth.completeGoogleIdTokenSignIn(dto.idToken);
+      session = await this.issue(outcome);
+    } catch (err) {
+      if (!(err instanceof GoogleAuthNotConfiguredError)) {
+        this.analytics.trackAnonymous(
+          'auth.sign_in_failed',
+          { reason: signInErrorCode(err), client: 'mobile' },
+          { correlationId },
+        );
+      }
+      throw err;
+    }
+    this.trackSignIn(outcome, 'mobile', correlationId);
     const invite =
       outcome.kind === 'full_access' ? outcome.pendingInvite : outcome.invite;
 
@@ -333,14 +360,39 @@ export class AuthController {
   async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
+    @CorrelationId() correlationId: string | undefined,
     @Body() dto?: RefreshTokenDto,
   ): Promise<void> {
     assertAllowedOrigin(this.config, req.headers.origin);
-    const token = readRefreshCookie(req.headers.cookie) ?? dto?.refreshToken;
-    if (token) {
-      await this.sessions.revokeRefreshToken(token);
-    }
+    const cookieToken = readRefreshCookie(req.headers.cookie);
+    const token = cookieToken ?? dto?.refreshToken;
+    const userId = token ? await this.sessions.revokeRefreshToken(token) : null;
     clearSessionCookies(res, cookieSite(this.config));
+    if (userId) {
+      this.analytics.track(
+        'auth.signed_out',
+        userId,
+        { client: cookieToken === undefined ? 'mobile' : 'web' },
+        { correlationId },
+      );
+    }
+  }
+
+  private trackSignIn(
+    { user, firstSignIn }: SignInOutcome,
+    client: 'web' | 'mobile',
+    correlationId: string | undefined,
+  ): void {
+    this.analytics.identifyPerson(user.id, {
+      system_role: user.systemRole,
+      first_seen_at: user.createdAt.toISOString(),
+    });
+    this.analytics.track(
+      'auth.signed_in',
+      user.id,
+      { client, first_sign_in: firstSignIn },
+      { correlationId },
+    );
   }
 
   private issue(outcome: SignInOutcome): Promise<IssuedSession> {

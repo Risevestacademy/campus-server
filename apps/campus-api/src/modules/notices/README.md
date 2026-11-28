@@ -14,6 +14,16 @@ notice.
 Writing notices — create, edit, pin and remove — is the admin and staff work
 in `notices.service.ts`; this wall does not change it.
 
+## Attachments
+
+A notice carries up to ten files, `notice_attachment` uploads of its
+author's, sent as `attachmentIds` on create and on edit. An edit that sends
+the list replaces it: new files are claimed, dropped ones released and
+deleted after seven days. Removing the notice releases all of them. Every
+notice in a response has `attachments`, each with a link that lasts 15
+minutes; `GET /v1/media/{id}/url` gives a fresh one to whoever can still see
+the notice. See `src/modules/media/README.md`.
+
 ## Visibility
 
 There is one definition, `noticesVisibleTo` in

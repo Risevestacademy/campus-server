@@ -39,6 +39,11 @@ export enum AuditAction {
    */
   UserReinstated = 'user_reinstated',
   /**
+   * An admin deleted an account on the person's request. The row stays with
+   * its personal fields stripped, so `details` names no one.
+   */
+  AccountDeleted = 'account_deleted',
+  /**
    * An admin offered somebody a place. `details` has what was offered — the
    * cohort, the roles — and never the address, which stays on the invite.
    */
@@ -190,6 +195,11 @@ export enum AuditAction {
    * the member wrote stays on the comment and never comes here.
    */
   CommentCreated = 'comment_created',
+  /**
+   * An admin downloaded a cohort report as CSV. `details` has which report,
+   * the filters it was run with and how many rows it held; never the rows.
+   */
+  ReportExported = 'report_exported',
 }
 
 export enum AuditSubjectType {

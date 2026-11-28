@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/session';
+import { PROFILE_CHANGED_CHANNEL, spriteKeyOrNone } from '@campus/contracts';
 import {
   and,
   asc,
@@ -7,7 +7,6 @@ import {
   exists,
   getTableColumns,
   inArray,
-  ne,
   or,
   sql,
 } from 'drizzle-orm';
@@ -44,6 +43,10 @@ import {
   CohortProfilesForbiddenException,
   ProfileNotFoundException,
 } from '../users.exceptions.js';
+
+/** Their row, unless it was suspended or deleted after the guard let them in. */
+const activeAccount = (userId: string) =>
+  and(eq(users.id, userId), eq(users.status, UserStatus.Active));
 
 /** The fields a person may change about themselves. */
 const EDITABLE = [
@@ -100,7 +103,7 @@ export class ProfileService {
       const [updated] = await tx
         .update(users)
         .set(changes)
-        .where(eq(users.id, userId))
+        .where(activeAccount(userId))
         .returning();
       if (!updated) {
         throw new ProfileNotFoundException('No such profile', { userId });
@@ -139,13 +142,16 @@ export class ProfileService {
       const [before] = await tx
         .select({ avatarMediaId: users.avatarMediaId })
         .from(users)
-        .where(eq(users.id, userId))
+        .where(activeAccount(userId))
         .for('update');
+      if (!before) {
+        throw new ProfileNotFoundException('No such profile', { userId });
+      }
       await tx
         .update(users)
         .set({ avatarMediaId: ready.id })
         .where(eq(users.id, userId));
-      if (before?.avatarMediaId) {
+      if (before.avatarMediaId) {
         await this.media.release(tx, [before.avatarMediaId], now);
       }
     });
@@ -164,7 +170,7 @@ export class ProfileService {
       const [before] = await tx
         .select({ avatarMediaId: users.avatarMediaId })
         .from(users)
-        .where(eq(users.id, userId))
+        .where(activeAccount(userId))
         .for('update');
       if (!before) {
         throw new ProfileNotFoundException('No such profile', { userId });
@@ -189,7 +195,7 @@ export class ProfileService {
     const [row] = await this.db
       .update(users)
       .set({ analyticsConsent: consent, analyticsConsentAt: now })
-      .where(eq(users.id, userId))
+      .where(activeAccount(userId))
       .returning({ id: users.id });
     if (!row) {
       throw new ProfileNotFoundException('No such profile', { userId });
@@ -232,8 +238,8 @@ export class ProfileService {
     let shown = memberships.get(target.id) ?? [];
 
     if (!seesEverything) {
-      // A suspended account is closed to everybody but admins.
-      if (target.status === UserStatus.Suspended) {
+      // A suspended or deleted account is closed to everybody but admins.
+      if (target.status !== UserStatus.Active) {
         throw notFound();
       }
       const mine = new Set(
@@ -311,7 +317,7 @@ export class ProfileService {
                 ),
             ),
           ),
-          admin ? undefined : ne(users.status, UserStatus.Suspended),
+          admin ? undefined : eq(users.status, UserStatus.Active),
         ),
       )
       .orderBy(

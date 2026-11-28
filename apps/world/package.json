@@ -28,9 +28,10 @@
     "ws": "^8.22.0"
   },
   "dependencies": {
+    "@campus/analytics": "workspace:*",
     "@campus/error-reporting": "workspace:*",
     "@campus/media": "workspace:*",
-    "@campus/session": "workspace:*",
+    "@campus/contracts": "workspace:*",
     "@campus/space-access": "workspace:*",
     "@campus/telemetry": "workspace:*",
     "@fastify/otel": "0.21.2",

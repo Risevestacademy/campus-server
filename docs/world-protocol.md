@@ -62,6 +62,9 @@ frame, both ways, is one JSON object with a `type`.
   account only when nobody does; otherwise you watch. See
   [Watching](#watching). Leaving it off, or `enter=take`, takes the avatar as
   every client always has.
+- **Say which app you are.** The mobile app adds `client=mobile`; leaving it
+  off means `web`. It is only counted in product analytics and changes nothing
+  about the socket.
 
 > **World on its own hostname.** Browsers cannot put an `Authorization`
 > header on a WebSocket, so the cookie is the only way in, and by default it
@@ -242,16 +245,16 @@ connected to another ends the walk with `elsewhere`.
 "spaceKey": "…" | null, "mayAsk": false }`),
   saying where you stopped and why:
 
-  | `reason`         | Meaning                                                                                                                             | What to do                                                          |
-  | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-  | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                       | Nothing                                                             |
-  | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
-  | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
-  | `full`           | A space at capacity is in the way, theirs or another; you stopped beside the first one (`spaceKey`). `mayAsk` is `false`            | Say the space is full                                               |
-  | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
-  | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                   | Say they cannot be reached right now                                |
-  | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit | Say so                                                              |
-  | `moved_by_staff` | Staff removed you from a space mid-walk                                                                                             | The `staffAction` says the rest                                     |
+  | `reason`         | Meaning                                                                                                                                                       | What to do                                                          |
+  | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+  | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                                                 | Nothing                                                             |
+  | `stopped`        | You sent `stopWalking` or a `move`                                                                                                                            | Nothing                                                             |
+  | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                                                         | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
+  | `full`           | A space at capacity is in the way, theirs or another; you stopped beside the first one (`spaceKey`). `mayAsk` is `false`                                      | Say the space is full                                               |
+  | `gone`           | They left, or were not here                                                                                                                                   | Say so                                                              |
+  | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                                             | Say they cannot be reached right now                                |
+  | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit, the map's width × height | Say so                                                              |
+  | `moved_by_staff` | Staff removed you from a space mid-walk                                                                                                                       | The `staffAction` says the rest                                     |
 
 - **It follows them.** If they move, the way is found again before the next
   step.
@@ -491,6 +494,12 @@ Text goes where voice goes: a line reaches whoever can hear you.
 
 - **Send** `{ "type": "say", "text": "…" }`. It is trimmed, and must be 1 to
   500 characters; anything else is a `BAD_MESSAGE` error.
+- **A file** goes with a line as `attachment`: `{ "mediaId", "fileName",
+"contentType", "sizeBytes" }`, as campus-api answered
+  `POST /v1/cohorts/{cohortId}/spaces/{spaceId}/call/attachments`. The text
+  may then be empty. World passes it on without checking it; whoever gets it
+  opens it with campus-api's `GET /v1/media/{mediaId}/url`, which lets in
+  whoever may enter the space and answers 410 once the call has ended.
 - **Who gets it:** in a whole-room space, everybody in that space; in a
   proximity space (the corridors included), the people within its
   subscribe radius when you send it. That is the radius exactly, without
@@ -499,7 +508,8 @@ Text goes where voice goes: a line reaches whoever can hear you.
   match. Never anybody in another space or cohort. Chat works whether or not calls are
   set up.
 - **What arrives**, to them and to you: `{ "type": "said", "id": "…",
-"userId": "…", "spaceKey": "…", "text": "…", "at": "…" }`. Show your own
+"userId": "…", "spaceKey": "…", "text": "…", "attachment": null, "at": "…" }`,
+  with the file when one was sent. Show your own
   line when its `said` comes back. `spaceKey` lets a client keep a
   meeting's chat apart from the corridor's.
 - **Nothing is kept.** A line reaches whoever is in earshot at that moment;

@@ -17,6 +17,18 @@ A member cannot read feedback, their own included. There is no route for it
 on purpose: a report is about somebody, and the fewer places it can be read
 from the better.
 
+## Reading the list
+
+`GET /v1/feedback` is newest first, paginated, and can be narrowed by `type`,
+`status`, `submittedBy` (everything one account has sent) and
+`reportedUserId` (reports naming one account). They combine with AND.
+
+`reportedUserId` is not a search of the free-text `about` line: only a report
+can name an account, so a bug, an idea, and a report with no named account
+never match it. The filter only narrows; it is combined with the rule that
+hides a report naming the admin asking, so an admin filtering their own id
+gets an empty page.
+
 ## What a member sends
 
 - `type`: `bug`, `idea` or `report`.
@@ -24,6 +36,11 @@ from the better.
 - `about`: the "who or where" line, up to 200 characters. Who a report is
   about, or where a bug happened. It is offered on every type and required on
   none; blank is taken as not given.
+
+- `attachmentIds`: up to ten screenshots or files, `feedback_attachment`
+  uploads of the sender's (see `src/modules/media/README.md`). Only admins
+  can open them, and an admin a report names cannot. They are kept as long
+  as the feedback.
 
 And three things the client fills in, not the member:
 
@@ -86,12 +103,15 @@ them and what was said, or to mark it dealt with. So for the account a
 report names by `reportedUserId`:
 
 - no email is sent to them;
-- it is not in their list;
+- it is not in their list, even when the list is filtered with
+  `reportedUserId` set to their own id;
 - reading it or resolving it answers `404`, as if it were not there.
 
 Every other admin sees it as usual. Only an account named by id can be kept
 out: a report that names somebody in words alone cannot be matched to
-anybody.
+anybody. The `reportedUserId` filter only narrows, and it is applied with the
+same rule, so filtering on the admin’s own id returns nothing rather than the
+reports about them.
 
 ## Resolving
 
@@ -109,6 +129,8 @@ A report is one member's words about another, by name. So:
 
 - Only admins can read feedback.
 - Nothing of its text goes into the audit log, an email or a log line.
+- Its attachments are read through short-lived links, signed only for an
+  admin who may read the feedback.
 - `submitted_by`, `reported_user_id` and `resolved_by` are foreign keys to
   `users`. When deleting an account is built, it has to decide what happens
   to what that person sent, and to what was sent about them.
@@ -128,7 +150,6 @@ migrations applied, in `feedback.service.db.spec.ts`.
 
 ## Not here
 
-- **Screenshots.** They need somewhere to be stored, which is not chosen.
 - **In-app notifications** for admins. Email is the only channel until
   notifications exist.
 - **A link straight to the one report** in the email. It links to the

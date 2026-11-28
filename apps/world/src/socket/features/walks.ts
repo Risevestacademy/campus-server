@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 
 import type { PresenceStore } from '../../infra/presence.js';
 import {
@@ -15,6 +15,7 @@ import { besideSpace } from '../../spaces/requests.js';
 import type { Connection } from '../connections.js';
 import type { WorldContext } from '../context.js';
 import { ServerErrorCode, type WalkEndReason } from '../protocol.js';
+import type { ArrivedBy, WorldAnalytics } from './analytics.js';
 import type { EntryRequestsFeature } from './entry-requests.js';
 
 type WalksContext = Pick<
@@ -64,6 +65,13 @@ export interface WalkDeps {
   isFull(connection: Connection, spaceKey: string): boolean;
   noteMoved(connection: Connection): void;
   arrivedAt(connection: Connection, tile: Tile): void;
+  analytics: Pick<WorldAnalytics, 'walkEnded'>;
+  /** A walk stopped at a space closed to them, or full. */
+  noteRefusal(
+    connection: Connection,
+    spaceKey: string,
+    outcome: 'refused' | 'full',
+  ): void;
 }
 
 export type Walks = ReturnType<typeof createWalks>;
@@ -78,12 +86,19 @@ export function createWalks(
     isFull,
     noteMoved,
     arrivedAt,
+    analytics,
+    noteRefusal,
   }: WalkDeps,
 ) {
   const { app, env, map, connections, players, send, isStopping } = ctx;
   const walks = new Map<Connection, Walk>();
-  const walkLimit =
-    env.WORLD_WALK_MAX_STEPS ?? map.grid.width * map.grid.height;
+
+  /**
+   * Most steps one walk takes: the map's width × height, more than any
+   * shortest path, so only a chase after somebody who keeps walking away
+   * reaches it. Read from the map as it is now, so a reload moves it.
+   */
+  const walkLimit = () => map.grid.width * map.grid.height;
 
   /**
    * Why a space is closed to this person, or null when they may step in.
@@ -238,6 +253,21 @@ export function createWalks(
         spaceKey !== null &&
         requests.mayAsk(connection, spaceKey, new Date()),
     });
+    analytics.walkEnded(connection, walk.target.kind, reason, walk.taken);
+    if ((reason === 'refused' || reason === 'full') && spaceKey !== null) {
+      noteRefusal(connection, spaceKey, reason);
+    }
+  }
+
+  /** How a step on a walk got them there, as the visit is counted. */
+  function arrivalOf(connection: Connection): ArrivedBy | undefined {
+    const walk = walks.get(connection);
+    if (!walk) return undefined;
+    return walk.target.kind === 'person'
+      ? 'go_to'
+      : walk.target.kind === 'space'
+        ? 'go_to_space'
+        : 'go_to_tile';
   }
 
   /**
@@ -427,7 +457,7 @@ export function createWalks(
       walk.path = plan.path;
       walk.aimedAt = them ? { x: them.x, y: them.y } : null;
     }
-    if (walk.taken >= walkLimit) {
+    if (walk.taken >= walkLimit()) {
       endWalk(connection, 'no_way');
       return;
     }
@@ -508,6 +538,8 @@ export function createWalks(
    * where the person now stands.
    */
   function replanAll(): void {
+    // A space's floor is worked out from the walls and bounds it had.
+    floors.clear();
     for (const walk of walks.values()) {
       walk.path = [];
       walk.failed = 0;
@@ -518,6 +550,7 @@ export function createWalks(
 
   return {
     admitsStep,
+    arrivalOf,
     goTo,
     goToSpace,
     goToTile,

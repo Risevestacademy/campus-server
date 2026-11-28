@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -26,7 +27,8 @@ const MIGRATIONS = fileURLToPath(
 const pglite = drizzle(new PGlite(), {
   schema: { users, tracks, cohorts, cohortTracks, cohortMembers, auditLog },
 });
-const repository = new CohortMembersService(pglite as unknown as Db);
+const analytics = createTestAnalytics();
+const repository = new CohortMembersService(pglite as unknown as Db, analytics);
 
 let userId: string;
 let cohortId: string;
@@ -389,6 +391,59 @@ describe('endMembership', () => {
     adminId = id;
     endSessions.mockClear();
     endSessions.mockImplementation(async () => undefined);
+  });
+
+  it('counts a student’s change of status, by the admin who made it', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    analytics.events.length = 0;
+
+    await repository.endMembership(
+      cohortId,
+      userId,
+      MembershipEndAction.Graduate,
+      undefined,
+      actor(),
+      endSessions,
+    );
+
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        distinctId: adminId,
+        event: 'member.status_changed',
+        properties: expect.objectContaining({
+          from: 'active',
+          to: 'graduated',
+          subject_user_id: userId,
+          cohort_id: cohortId,
+        }),
+      }),
+    ]);
+  });
+
+  it('counts no change of status for a removal, or one that was refused', async () => {
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    analytics.events.length = 0;
+
+    await repository.endMembership(
+      cohortId,
+      userId,
+      MembershipEndAction.Remove,
+      undefined,
+      actor(),
+      endSessions,
+    );
+    await expect(
+      repository.endMembership(
+        cohortId,
+        userId,
+        MembershipEndAction.Graduate,
+        undefined,
+        actor(),
+        endSessions,
+      ),
+    ).rejects.toThrow();
+
+    expect(analytics.events).toEqual([]);
   });
 
   const STUDENT_ENDS = [
@@ -944,6 +999,29 @@ describe('moveMemberTrack', () => {
       .insert(users)
       .values({ email: 'admin@campus.local' })
       .returning({ userId: users.id });
+  });
+
+  it('counts a move to another track, by the admin who made it', async () => {
+    const target = await attachTrack();
+    await pglite.insert(cohortMembers).values(student(StudentStatus.Active));
+    analytics.events.length = 0;
+
+    await repository.moveMemberTrack(cohortId, userId, target.trackId, actor());
+    await expect(
+      repository.moveMemberTrack(cohortId, userId, target.trackId, actor()),
+    ).rejects.toThrow();
+
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        distinctId: adminId,
+        event: 'member.track_changed',
+        properties: expect.objectContaining({
+          track_id: target.trackId,
+          subject_user_id: userId,
+          cohort_id: cohortId,
+        }),
+      }),
+    ]);
   });
 
   it('moves the student, and records the old and new track once', async () => {

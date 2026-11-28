@@ -1,7 +1,7 @@
 # PostHog
 
-campus-api and world send errors to PostHog Error Tracking. campus-api can
-send product events too, through [`packages/analytics`](../packages/analytics).
+campus-api and world send errors to PostHog Error Tracking. Both can send
+product events too, through [`packages/analytics`](../packages/analytics).
 
 ## What is reported
 
@@ -52,8 +52,21 @@ Both services read the same three variables, validated at boot:
 Use one PostHog project per environment, the same one for both services.
 
 `FF_ANALYTICS_ENABLED`, off by default, sends product events. It uses the same
-token and host, and is separate so errors can run without events. campus-api
-alone reads it for now.
+token and host, and is separate so errors can run without events. Each service
+reads its own.
+
+campus-api also reads three variables for deleting accounts:
+
+- `POSTHOG_PERSONAL_API_KEY`: a personal API key (`phx_…`) with the
+  `person:write` scope.
+- `POSTHOG_PROJECT_ID`: the numeric project id, required with the key.
+- `POSTHOG_API_HOST`: `https://eu.posthog.com` by default. This is the API
+  host, not the ingestion host.
+
+With the key and the project id set, a job every 10 minutes deletes the
+person profiles and recordings of deleted accounts, and keeps their events.
+It counts an account as erased only when PostHog reports no `deletion_errors`
+for it. Unset, the accounts wait and are erased on the first run after.
 
 ## Consent
 
@@ -69,11 +82,77 @@ cohort carries.
 Which events need consent is the `consent` flag in the package's event list;
 legal signs that list off before those events ship.
 
+## What campus-api sends
+
+Each event goes once the change it reports has committed. A refused or failed
+change sends nothing.
+
+| Event                      | When                                                     | Whose                     |
+| -------------------------- | -------------------------------------------------------- | ------------------------- |
+| `auth.signed_in`           | A session is issued, from the browser or the app         | The person signing in     |
+| `auth.sign_in_failed`      | A sign-in is turned away, with the code shown            | Nobody: no person is made |
+| `auth.signed_out`          | A sign-out ends a session                                | The person signing out    |
+| `invite.sent`              | A cohort invite is made, alone or from a file            | The admin                 |
+| `invite.resent`            | A cohort invite gets a new link                          | The admin                 |
+| `invite.revoked`           | A cohort invite is revoked                               | The admin                 |
+| `invite.accepted`          | A cohort invite is accepted                              | The person accepting      |
+| `invite.declined`          | A cohort invite is declined                              | The person declining      |
+| `cohort.created`           | A cohort is created                                      | The admin                 |
+| `member.status_changed`    | A student is dismissed, withdrawn, deferred or graduated | The admin                 |
+| `member.track_changed`     | A student moves track                                    | The admin                 |
+| `mentorship_group.created` | A mentorship group is created                            | The admin                 |
+| `feedback.submitted`       | Feedback is saved                                        | The person who sent it    |
+
+An admin invite has no cohort role, so it is not counted. Signing in also sets
+the person's `system_role` and `first_seen_at`; creating or editing a cohort
+sets its group's `status` and `start_date`.
+
+## What world sends
+
+Every event here needs consent. Without it, the event goes under the socket's
+own id, with no person, so one visit's events link up without pointing at
+anyone. world reads consent with the account, at connect and every heartbeat.
+
+| Event                 | When                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `presence.started`    | A socket is admitted: which app (the `client` parameter), whether it resumed, avatar or watcher                        |
+| `presence.ended`      | It closes, with how long it lasted and why                                                                             |
+| `status.chosen`       | Somebody chooses a status. Going away while idle is not counted                                                        |
+| `space.visited`       | Somebody leaves a drawn space they stayed in for 10 s or more, with how they came and how many lines of chat they said |
+| `space.refused`       | A step or a walk is turned away at a space, at most once a minute per person and space                                 |
+| `space.lock_changed`  | Somebody locks or unlocks the space they are in                                                                        |
+| `entry.request_ended` | A request to enter ends, under the person who asked, with how long they waited                                         |
+| `walk.ended`          | A walk to somebody, a space or a tile ends                                                                             |
+
+`staff.acted` (a mute or a removal) is the exception. It is the staff member's
+job, so it goes under their id with no consent asked, and never names the
+person it was done to. A space is named by its `spaces.id` and kind, never its
+name, and the corridors produce no space events. Chat is only ever counted,
+never sent.
+
+## What calls send
+
+campus-api sends these from LiveKit's webhooks, once each change is recorded.
+A retried webhook that changes nothing sends nothing.
+
+| Event                | When                                                                                     | Whose                                                     |
+| -------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `call.left`          | Somebody's time in a call ends: they left, the room finished, or a newer run replaced it | Theirs with consent, else a stand-in per stay in the call |
+| `call.ended`         | A call ends, with how long it ran, how many came and the most at once                    | Nobody                                                    |
+| `recording.started`  | LiveKit takes on a recording                                                             | The staff member who started it, no consent asked         |
+| `recording.finished` | A recording completes or fails, including a start LiveKit refused                        | Nobody                                                    |
+
+Calls start with audio and video off, and only video is recorded, so `call.left`
+says whether video went on and nothing about the microphone.
+
 ## How to verify it works
 
 1. Trigger a 500 → it shows up in PostHog Error Tracking with its route and
    correlation id. The id matches the response's `x-correlation-id` header
    and the request's log lines.
 2. Trigger a 4xx → nothing is reported.
-3. Enable the flag with a missing or malformed token → the service fails to
+3. With `FF_ANALYTICS_ENABLED` on, sign in → `auth.signed_in` under the
+   person's `users.id`. Sign in with an address nobody invited →
+   `auth.sign_in_failed`, and no new person in PostHog.
+4. Enable the flag with a missing or malformed token → the service fails to
    boot with a clear error, not a silent no-op.

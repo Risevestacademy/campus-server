@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -8,6 +9,7 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
 import { AuditAction, AuditSubjectType, auditLog } from '../audit/schema.js';
 import { CohortRole, cohortMembers, cohorts } from '../cohorts/schema.js';
 import { SystemRole, UserStatus, users } from '../users/schema.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
 import type { CreateFeedbackDto } from './dto/feedback.dto.js';
 import {
   FeedbackInvalidArgumentException,
@@ -29,7 +31,12 @@ const MIGRATIONS = fileURLToPath(
 const db = drizzle(new PGlite(), {
   schema: { users, cohorts, cohortMembers, feedback, auditLog },
 });
-const service = new FeedbackService(db as never);
+const analytics = createTestAnalytics();
+const service = new FeedbackService(
+  db as never,
+  mediaWithoutStorage(db),
+  analytics,
+);
 
 const NOBODY = '00000000-0000-4000-8000-000000000000';
 
@@ -114,6 +121,39 @@ beforeEach(async () => {
 });
 
 describe('sending', () => {
+  it('counts what was sent by its category, in the cohort named', async () => {
+    analytics.events.length = 0;
+    await service.create(
+      ada,
+      bug({ type: FeedbackType.Report, cohortId }),
+      undefined,
+      new Date(),
+      '6f1c2b8e-3d4a-4e5f-8a9b-0c1d2e3f4a5b',
+    );
+
+    expect(analytics.dropped).toEqual([]);
+    expect(analytics.events).toEqual([
+      expect.objectContaining({
+        distinctId: ada.id,
+        event: 'feedback.submitted',
+        properties: expect.objectContaining({
+          category: 'report',
+          cohort_id: cohortId,
+          correlation_id: '6f1c2b8e-3d4a-4e5f-8a9b-0c1d2e3f4a5b',
+        }),
+      }),
+    ]);
+  });
+
+  it('counts nothing that was refused', async () => {
+    analytics.events.length = 0;
+    await expect(
+      service.create(grace, bug({ cohortId }), undefined),
+    ).rejects.toThrow();
+
+    expect(analytics.events).toEqual([]);
+  });
+
   it('saves what was sent, from whoever the session says sent it', async () => {
     const receipt = await service.create(
       ada,
@@ -151,6 +191,7 @@ describe('sending', () => {
       resolvedBy: null,
       resolvedAt: null,
       createdAt: new Date('2026-10-12T09:30:00Z'),
+      attachments: [],
     });
   });
 
@@ -657,5 +698,152 @@ describe('who is told about a report', () => {
     ]);
     // Naming somebody who is not an admin leaves nobody out.
     await expect(service.reportRecipients(grace.id)).resolves.toHaveLength(2);
+  });
+});
+
+/**
+ * AT-35: the list narrowed to the account a report names. The filter is one
+ * more term in the list's AND, so the hiding rule still applies to it.
+ */
+describe('filtering by the account a report names', () => {
+  type ListFilter = Parameters<FeedbackService['list']>[1];
+
+  const pageOf = (filters: Omit<ListFilter, 'page' | 'perPage'> = {}) =>
+    service.list(admin, { page: 1, perPage: 20, ...filters });
+  const titlesOf = async (filters: Omit<ListFilter, 'page' | 'perPage'> = {}) =>
+    (await pageOf(filters)).items.map((item) => item.title);
+
+  beforeEach(async () => {
+    const send = (
+      author: AuthenticatedUser,
+      title: string,
+      createdAt: string,
+      overrides: Partial<CreateFeedbackDto> = {},
+    ) =>
+      service.create(
+        author,
+        bug({ title, ...overrides }),
+        undefined,
+        new Date(createdAt),
+      );
+
+    await send(ada, 'grace by ada', '2026-10-12T09:00:00Z', {
+      type: FeedbackType.Report,
+      reportedUserId: grace.id,
+    });
+    const byAdmin = await send(
+      admin,
+      'grace by admin',
+      '2026-10-13T09:00:00Z',
+      {
+        type: FeedbackType.Report,
+        reportedUserId: grace.id,
+      },
+    );
+    await service.setStatus(admin, byAdmin.id, FeedbackStatus.Resolved);
+    await send(ada, 'admin by ada', '2026-10-14T09:00:00Z', {
+      type: FeedbackType.Report,
+      reportedUserId: admin.id,
+    });
+    await send(ada, 'no account', '2026-10-11T09:00:00Z', {
+      type: FeedbackType.Report,
+    });
+    await send(ada, 'bug about grace', '2026-10-10T09:00:00Z', {
+      type: FeedbackType.Bug,
+      about: 'Grace Hopper',
+    });
+    await send(ada, 'idea about grace', '2026-10-09T09:00:00Z', {
+      type: FeedbackType.Idea,
+      about: 'Grace Hopper',
+    });
+  });
+
+  it('returns only reports naming that account, newest first, and counts only them', async () => {
+    const page = await pageOf({ reportedUserId: grace.id });
+
+    expect(page.items.map((item) => item.title)).toEqual([
+      'grace by admin',
+      'grace by ada',
+    ]);
+    expect(page.items.map((item) => item.reportedUser?.id)).toEqual([
+      grace.id,
+      grace.id,
+    ]);
+    expect(page.meta).toEqual({
+      page: 1,
+      perPage: 20,
+      total: 2,
+      totalPages: 1,
+    });
+  });
+
+  it('pages the filtered list and reports the filtered total', async () => {
+    const first = await service.list(admin, {
+      page: 1,
+      perPage: 1,
+      reportedUserId: grace.id,
+    });
+    const second = await service.list(admin, {
+      page: 2,
+      perPage: 1,
+      reportedUserId: grace.id,
+    });
+
+    expect(first.items.map((item) => item.title)).toEqual(['grace by admin']);
+    expect(second.items.map((item) => item.title)).toEqual(['grace by ada']);
+    expect(first.meta).toMatchObject({ total: 2, totalPages: 2 });
+    expect(second.meta).toMatchObject({ total: 2, totalPages: 2 });
+  });
+
+  it('combines with type, status and sender', async () => {
+    await expect(
+      titlesOf({ reportedUserId: grace.id, type: FeedbackType.Report }),
+    ).resolves.toEqual(['grace by admin', 'grace by ada']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, status: FeedbackStatus.Resolved }),
+    ).resolves.toEqual(['grace by admin']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, submittedBy: ada.id }),
+    ).resolves.toEqual(['grace by ada']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, submittedBy: admin.id }),
+    ).resolves.toEqual(['grace by admin']);
+    await expect(
+      titlesOf({ reportedUserId: grace.id, type: FeedbackType.Bug }),
+    ).resolves.toEqual([]);
+  });
+
+  it('gives an admin nothing when they filter on their own id', async () => {
+    const page = await pageOf({ reportedUserId: admin.id });
+
+    expect(page.items).toEqual([]);
+    expect(page.meta.total).toBe(0);
+  });
+
+  it('shows that person to another admin', async () => {
+    const page = await service.list(superAdmin, {
+      page: 1,
+      perPage: 20,
+      reportedUserId: admin.id,
+    });
+
+    expect(page.items.map((item) => item.title)).toEqual(['admin by ada']);
+    expect(page.meta.total).toBe(1);
+  });
+
+  it('is an empty page for an id that names nobody', async () => {
+    const page = await pageOf({ reportedUserId: NOBODY });
+
+    expect(page.items).toEqual([]);
+    expect(page.meta.total).toBe(0);
+  });
+
+  it('never matches a report with no account, a bug, an idea, or the free-text about line', async () => {
+    const titles = await titlesOf({ reportedUserId: grace.id });
+
+    expect(titles).toEqual(['grace by admin', 'grace by ada']);
+    expect(titles).not.toContain('no account');
+    expect(titles).not.toContain('bug about grace');
+    expect(titles).not.toContain('idea about grace');
   });
 });

@@ -4,6 +4,7 @@ import {
   COHORT_QUERY_PARAM,
   ENTER_QUERY_PARAM,
   RESUME_QUERY_PARAM,
+  CLIENT_QUERY_PARAM,
   SESSION_COOKIE,
   SOCKET_PATH,
 } from './endpoint.js';
@@ -50,6 +51,7 @@ describe('the AsyncAPI document', () => {
       COHORT_QUERY_PARAM,
       ENTER_QUERY_PARAM,
       RESUME_QUERY_PARAM,
+      CLIENT_QUERY_PARAM,
     ]);
     expect(channel.description).toContain(SESSION_COOKIE);
     expect(document.components.securitySchemes.session.name).toBe(

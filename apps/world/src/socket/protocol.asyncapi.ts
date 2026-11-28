@@ -1,4 +1,5 @@
 import {
+  CLIENT_QUERY_PARAM,
   COHORT_QUERY_PARAM,
   ENTER_QUERY_PARAM,
   RESUME_QUERY_PARAM,
@@ -115,6 +116,14 @@ export function protocolAsyncApi(server: AsyncApiServer): JsonObject {
                     'With ifFree: the `welcome.connectionId` of your last ' +
                     'socket here. An avatar kept for that socket to reconnect ' +
                     'to is yours, and you resume it rather than watch.',
+                },
+                [CLIENT_QUERY_PARAM]: {
+                  type: 'string',
+                  enum: ['web', 'mobile'],
+                  default: 'web',
+                  description:
+                    'Which app is opening the socket. Only counted in ' +
+                    'product analytics; it changes nothing about the socket.',
                 },
               },
             },

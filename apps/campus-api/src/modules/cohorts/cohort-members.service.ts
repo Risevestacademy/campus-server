@@ -7,6 +7,10 @@ import {
   type Db,
   type Tx,
 } from '../../infra/database/database.constants.js';
+import {
+  ANALYTICS,
+  type Analytics,
+} from '../../infra/analytics/analytics.module.js';
 import { type AuditContext, writeAuditEntry } from '../audit/audit-log.js';
 import { AuditAction, AuditSubjectType } from '../audit/schema.js';
 import { endDeskClaims } from '../desks/end-claims.js';
@@ -100,7 +104,10 @@ export interface CohortPlace extends SessionMembership {
 
 @Injectable()
 export class CohortMembersService {
-  constructor(@Inject(DRIZZLE) private readonly db: Db) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Db,
+    @Inject(ANALYTICS) private readonly analytics: Analytics,
+  ) {}
 
   /**
    * Whether this account may sign in without an invite, and the deadline
@@ -339,7 +346,7 @@ export class CohortMembersService {
       });
     }
 
-    return this.db.transaction(async (tx) => {
+    const { ended, from } = await this.db.transaction(async (tx) => {
       const [existing] = await tx
         .select()
         .from(cohortMembers)
@@ -430,7 +437,7 @@ export class CohortMembersService {
         await endSessions(tx);
       }
 
-      return {
+      const ended: EndMembershipResponseDto = {
         id: row.id,
         cohortId: row.cohortId,
         userId: row.userId,
@@ -440,7 +447,19 @@ export class CohortMembersService {
         leftAt: now,
         reason: reason ?? null,
       };
+      return { ended, from: existing.status };
     });
+
+    // Only a student carries a status; a removal sets none.
+    if (audit.actorUserId && from !== null && status !== null) {
+      this.analytics.track(
+        'member.status_changed',
+        audit.actorUserId,
+        { from, to: status, subject_user_id: userId },
+        { cohortId, correlationId: audit.correlationId },
+      );
+    }
+    return ended;
   }
 
   /**
@@ -461,7 +480,7 @@ export class CohortMembersService {
     trackId: string,
     audit: AuditContext,
   ): Promise<MoveMemberTrackResponseDto> {
-    return this.db.transaction(async (tx) => {
+    const moved = await this.db.transaction(async (tx) => {
       const [existing] = await tx
         .select()
         .from(cohortMembers)
@@ -558,6 +577,15 @@ export class CohortMembersService {
         track: { id: track.id, name: track.name, code: track.code },
       };
     });
+    if (audit.actorUserId) {
+      this.analytics.track(
+        'member.track_changed',
+        audit.actorUserId,
+        { track_id: trackId, subject_user_id: userId },
+        { cohortId, correlationId: audit.correlationId },
+      );
+    }
+    return moved;
   }
 }
 

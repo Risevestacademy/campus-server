@@ -1,6 +1,8 @@
-import type { Tile } from '../movement/grid.js';
+import { step, type Tile } from '../movement/grid.js';
+import { spaceAt } from '../movement/spaces.js';
 import type { Connection } from './connections.js';
 import type { WorldContext } from './context.js';
+import type { WorldAnalytics } from './features/analytics.js';
 import type { Chat } from './features/chat.js';
 import type { EntryRequestsFeature } from './features/entry-requests.js';
 import type { Locks } from './features/locks.js';
@@ -12,10 +14,23 @@ import { ServerErrorCode, decode, type ClientMessage } from './protocol.js';
 
 type DispatchContext = Pick<
   WorldContext,
-  'app' | 'env' | 'connections' | 'players' | 'metrics' | 'send' | 'closeFor'
+  | 'app'
+  | 'env'
+  | 'map'
+  | 'connections'
+  | 'players'
+  | 'metrics'
+  | 'send'
+  | 'closeFor'
 >;
 
 export interface DispatchDeps {
+  analytics: Pick<WorldAnalytics, 'statusChosen'>;
+  noteRefusal(
+    connection: Connection,
+    spaceKey: string,
+    outcome: 'refused' | 'full',
+  ): void;
   presence: Pick<PresenceSync, 'noteActivity' | 'statusChanged'>;
   locks: Pick<Locks, 'setLock'>;
   requests: Pick<EntryRequestsFeature, 'request' | 'withdraw' | 'answer'>;
@@ -29,8 +44,10 @@ export interface DispatchDeps {
 
 /** Reads what an open socket sends, and hands each message to the feature it is for. */
 export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
-  const { app, env, connections, players, metrics, send, closeFor } = ctx;
+  const { app, env, map, connections, players, metrics, send, closeFor } = ctx;
   const {
+    analytics,
+    noteRefusal,
     presence,
     locks,
     requests,
@@ -66,11 +83,12 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
           )
         ) {
           presence.statusChanged(holder);
+          analytics.statusChosen(holder, status, forSeconds !== undefined);
         }
         return;
       }
       case 'say':
-        chat.say(connection, message.text);
+        chat.say(connection, message);
         return;
       default:
         send(connection.socket, {
@@ -152,6 +170,11 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
             )
           ) {
             presence.statusChanged(connection);
+            analytics.statusChosen(
+              connection,
+              status,
+              forSeconds !== undefined,
+            );
           }
           return;
         }
@@ -177,7 +200,7 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
           return;
         case 'say':
           presence.noteActivity(connection);
-          chat.say(connection, result.message.text);
+          chat.say(connection, result.message);
           return;
         case 'mute':
           presence.noteActivity(connection);
@@ -225,6 +248,13 @@ export function createDispatch(ctx: DispatchContext, deps: DispatchDeps) {
             player: moved.player,
           });
           if (moved.outcome === 'moved') arrivedAt(connection, moved.player);
+          if (moved.outcome === 'refused' || moved.outcome === 'full') {
+            noteRefusal(
+              connection,
+              spaceAt(map.spaces, step(moved.player, direction)),
+              moved.outcome,
+            );
+          }
           if (moved.changed) noteMoved(connection);
           return;
         }

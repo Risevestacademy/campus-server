@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ThrottlerStorage } from '@nestjs/throttler';
 import { sql } from 'drizzle-orm';
@@ -62,6 +62,7 @@ describe('attendance (e2e)', () => {
   let app: INestApplication<App>;
   let cohortId: string;
   let studentId: string;
+  let trackId: string;
   let instanceId: string;
   let attendanceId: string;
   let professorCookie: string;
@@ -218,6 +219,7 @@ describe('attendance (e2e)', () => {
 
     cohortId = cohort.id;
     studentId = student.id;
+    trackId = track.id;
     instanceId = instance.id;
     attendanceId = row.id;
     professorCookie = await cookieFor(professor);
@@ -267,6 +269,24 @@ describe('attendance (e2e)', () => {
       classes: 1,
       runs: [{ instanceId, title: 'Backend class', status: 'partial' }],
     });
+  });
+
+  it('filters students by track', async () => {
+    const onTrack = await get(
+      `/v1/cohorts/${cohortId}/attendance/students?trackId=${trackId}`,
+    ).expect(200);
+    expect(onTrack.body).toEqual([
+      expect.objectContaining({ userId: studentId }),
+    ]);
+
+    const offTrack = await get(
+      `/v1/cohorts/${cohortId}/attendance/students?trackId=99999999-9999-4999-8999-999999999999`,
+    ).expect(200);
+    expect(offTrack.body).toEqual([]);
+
+    await get(
+      `/v1/cohorts/${cohortId}/attendance/students?trackId=backend`,
+    ).expect(400);
   });
 
   it('keeps staff reads from students', async () => {

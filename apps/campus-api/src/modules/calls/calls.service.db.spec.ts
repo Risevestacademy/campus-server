@@ -1,14 +1,17 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import { spaceRoomName, type CallEvent } from '@campus/media';
 import { PGlite } from '@electric-sql/pglite';
-import { asc, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { fileURLToPath } from 'node:url';
 
 import { cohorts } from '../cohorts/schema.js';
 import { AudioMode, SpaceAccess, maps, spaces } from '../maps/schema.js';
-import { users } from '../users/schema.js';
-import { CallsService } from './calls.service.js';
+import { AnalyticsConsent, users } from '../users/schema.js';
+import { mediaWithoutStorage } from '../media/testing/memory-media-storage.js';
+import { CallChatService } from './call-chat.service.js';
+import { CallsService, peakOf } from './calls.service.js';
 import { sessionParticipants, sessions } from './schema.js';
 
 const MIGRATIONS = fileURLToPath(
@@ -16,7 +19,14 @@ const MIGRATIONS = fileURLToPath(
 );
 const db = drizzle(new PGlite());
 const logger = { setContext: () => undefined, warn: () => undefined };
-const service = new CallsService(db as never, {} as never, logger as never);
+const analytics = createTestAnalytics();
+const service = new CallsService(
+  db as never,
+  {} as never,
+  logger as never,
+  new CallChatService(db as never, mediaWithoutStorage(db)),
+  analytics,
+);
 
 const T0 = new Date('2026-10-21T09:00:00.000Z');
 const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
@@ -335,5 +345,109 @@ describe('recording a space’s call', () => {
     );
 
     await expect(calls()).resolves.toEqual([]);
+  });
+});
+
+describe('analytics', () => {
+  const named = (event: string) =>
+    analytics.events.filter((captured) => captured.event === event);
+
+  beforeEach(() => {
+    analytics.events.length = 0;
+    analytics.dropped.length = 0;
+  });
+
+  afterEach(() => {
+    expect(analytics.dropped).toEqual([]);
+  });
+
+  it('counts somebody leaving a call once, under nobody without consent', async () => {
+    await record(joined(), 0);
+    await record(camera(true), 1);
+    await record(left(), 5);
+    await record(left(), 6);
+
+    const [stay] = named('call.left');
+    expect(named('call.left')).toHaveLength(1);
+    expect(stay.distinctId).not.toBe(userId);
+    expect(stay.properties).toMatchObject({
+      space_kind: 'unset',
+      audio_mode: 'boundary',
+      duration_s: 300,
+      video_on: true,
+      cohort_id: expect.any(String),
+      $process_person_profile: false,
+    });
+  });
+
+  it('names them once they have granted consent', async () => {
+    await db
+      .update(users)
+      .set({ analyticsConsent: AnalyticsConsent.Granted })
+      .where(eq(users.id, userId));
+    await record(joined(), 0);
+    await record(left(), 2);
+
+    expect(named('call.left')[0].distinctId).toBe(userId);
+  });
+
+  it('counts a call that ended, with everybody still in it leaving, once', async () => {
+    const [grace] = await db
+      .insert(users)
+      .values({ email: 'grace@campus.local' })
+      .returning();
+    const theirs = `${grace.id}:first`;
+    await record(joined(), 0);
+    await record(joined(theirs), 1);
+    await record(left(), 2);
+    await record(finished(), 4);
+    await record(finished(), 5);
+
+    expect(named('call.left')).toHaveLength(2);
+    expect(named('call.ended').map((e) => e.properties)).toEqual([
+      expect.objectContaining({
+        duration_s: 240,
+        participants: 2,
+        peak_participants: 2,
+        cohort_id: expect.any(String),
+        $process_person_profile: false,
+      }),
+    ]);
+  });
+
+  it('counts an older join that arrives after a newer one once, ending at the newer join', async () => {
+    await record(joined(`${userId}:second`), 3);
+    await record(joined(), 1);
+    await record(left(), 2);
+
+    expect(named('call.left').map((e) => e.properties.duration_s)).toEqual([
+      120,
+    ]);
+  });
+
+  it('counts the run a newer one replaced as ended', async () => {
+    await record(joined(), 0);
+    await record(started('RM_2'), 20);
+
+    expect(named('call.ended')).toHaveLength(1);
+    expect(named('call.left')).toHaveLength(1);
+  });
+
+  it('counts the most people at once, and a leave as someone joins as no overlap', () => {
+    const t = (minutes: number) => at(minutes);
+    expect(peakOf([])).toBe(0);
+    expect(
+      peakOf([
+        { joinedAt: t(0), leftAt: t(5) },
+        { joinedAt: t(5), leftAt: t(9) },
+      ]),
+    ).toBe(1);
+    expect(
+      peakOf([
+        { joinedAt: t(0), leftAt: t(5) },
+        { joinedAt: t(1), leftAt: t(3) },
+        { joinedAt: t(2), leftAt: null },
+      ]),
+    ).toBe(3);
   });
 });

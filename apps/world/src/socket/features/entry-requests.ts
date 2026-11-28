@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import { SPACE_ACCESS, mayEnter } from '@campus/space-access';
 
 import type { AccountLookup } from '../../infra/accounts.js';
@@ -21,6 +21,7 @@ import {
   encode,
   type EntryRequestOutcome,
 } from '../protocol.js';
+import type { RequestReason, WorldAnalytics } from './analytics.js';
 import type { Doors } from './doors.js';
 import type { Locks } from './locks.js';
 
@@ -55,6 +56,13 @@ export interface EntryRequestDeps {
   mayStepInto(connection: Connection, spaceKey: string, now: Date): boolean;
   accounts: Pick<AccountLookup, 'notifyEntryRequestAnswered'>;
   notifications: Pick<NotificationFeed, 'publish'>;
+  analytics: Pick<WorldAnalytics, 'requestOpened' | 'requestEnded'>;
+  /** Why the space is closed to them, as the request is counted. */
+  whyRefused(
+    connection: Connection,
+    spaceKey: string,
+    now: Date,
+  ): RequestReason;
 }
 
 export type EntryRequestsFeature = ReturnType<typeof createEntryRequests>;
@@ -68,6 +76,8 @@ export function createEntryRequests(
     mayStepInto,
     accounts,
     notifications,
+    analytics,
+    whyRefused,
   }: EntryRequestDeps,
 ) {
   const { app, map, connections, players, send, sendFrame, isStopping } = ctx;
@@ -179,9 +189,12 @@ export function createEntryRequests(
       });
       return;
     }
+    const requestId = (requests.openFor(connection) as EntryRequest<Connection>)
+      .id;
+    analytics.requestOpened(requestId, whyRefused(connection, spaceKey, now));
     send(connection.socket, {
       type: 'entryRequested',
-      requestId: (requests.openFor(connection) as EntryRequest<Connection>).id,
+      requestId,
       userId: connection.userId,
       spaceKey,
     });
@@ -296,6 +309,7 @@ export function createEntryRequests(
     outcome: EntryRequestOutcome,
     answeredBy: string | null,
   ): void {
+    analytics.requestEnded(ended, outcome);
     const frame = encode({
       type: 'entryRequestEnded',
       requestId: ended.id,

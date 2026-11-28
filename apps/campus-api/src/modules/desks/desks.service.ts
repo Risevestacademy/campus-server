@@ -249,7 +249,7 @@ async function admit(
     .where(eq(users.id, user.id));
   const [account] =
     purpose === 'view' ? await accountQuery : await accountQuery.for('share');
-  if (!account || account.status === UserStatus.Suspended) {
+  if (!account || account.status !== UserStatus.Active) {
     throw new DeskForbiddenException('This account may not use desks', {
       cohortId,
     });

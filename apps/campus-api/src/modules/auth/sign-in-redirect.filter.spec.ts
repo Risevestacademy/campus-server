@@ -1,3 +1,4 @@
+import { createTestAnalytics } from '@campus/analytics/testing';
 import type { ArgumentsHost } from '@nestjs/common';
 import { ThrottlerException } from '@nestjs/throttler';
 import type { PinoLogger } from 'nestjs-pino';
@@ -7,6 +8,7 @@ import type { Env } from '../../infra/config/config.module.js';
 import { ValidationException } from '../../shared/exceptions/index.js';
 import {
   AccountSuspendedError,
+  GoogleAuthNotConfiguredError,
   GoogleSignInFailedError,
   InviteRequiredError,
   SessionUnauthorizedError,
@@ -45,25 +47,58 @@ describe('signInErrorCode', () => {
   });
 });
 
+const CORRELATION_ID = '6f1c2b8e-3d4a-4e5f-8a9b-0c1d2e3f4a5b';
+
+function run(exception: unknown) {
+  const logger = { setContext: vi.fn(), error: vi.fn(), warn: vi.fn() };
+  const res = {
+    clearCookie: vi.fn(),
+    redirect: vi.fn(),
+    status: vi.fn().mockReturnThis(),
+    json: vi.fn(),
+  };
+  const host = {
+    switchToHttp: () => ({
+      getResponse: () => res,
+      getRequest: () => ({ method: 'GET', id: CORRELATION_ID }),
+    }),
+  } as unknown as ArgumentsHost;
+  const analytics = createTestAnalytics();
+  const filter = new SignInRedirectFilter(
+    { APP_PUBLIC_URL: 'http://localhost:3000' } as Env,
+    logger as unknown as PinoLogger,
+    analytics,
+  );
+
+  filter.catch(exception, host);
+  return { logger, res, analytics };
+}
+
+describe('SignInRedirectFilter analytics', () => {
+  it('counts a failed sign-in under nobody, with its reason', () => {
+    const { analytics } = run(new InviteRequiredError());
+
+    expect(analytics.dropped).toEqual([]);
+    expect(analytics.events).toHaveLength(1);
+    const [event] = analytics.events;
+    expect(event.event).toBe('auth.sign_in_failed');
+    expect(event.properties).toMatchObject({
+      reason: 'invite_required',
+      client: 'web',
+      correlation_id: CORRELATION_ID,
+      $process_person_profile: false,
+    });
+    expect(event.groups).toBeUndefined();
+  });
+
+  it('counts nothing when Google sign-in is switched off', () => {
+    const { analytics } = run(new GoogleAuthNotConfiguredError());
+
+    expect(analytics.events).toEqual([]);
+  });
+});
+
 describe('SignInRedirectFilter logging', () => {
-  function run(exception: unknown) {
-    const logger = { setContext: vi.fn(), error: vi.fn(), warn: vi.fn() };
-    const res = { clearCookie: vi.fn(), redirect: vi.fn() };
-    const host = {
-      switchToHttp: () => ({
-        getResponse: () => res,
-        getRequest: () => ({ method: 'GET', id: 'corr-1' }),
-      }),
-    } as unknown as ArgumentsHost;
-    const filter = new SignInRedirectFilter(
-      { APP_PUBLIC_URL: 'http://localhost:3000' } as Env,
-      logger as unknown as PinoLogger,
-    );
-
-    filter.catch(exception, host);
-    return { logger, res };
-  }
-
   it('logs a fault as an error', () => {
     const { logger, res } = run(new Error('db down'));
 

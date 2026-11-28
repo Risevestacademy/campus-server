@@ -1,7 +1,7 @@
 import {
   NOTIFICATION_CREATED_CHANNEL,
   type NotificationCreated,
-} from '@campus/session';
+} from '@campus/contracts';
 import { randomUUID } from 'node:crypto';
 import { Redis } from 'ioredis';
 import { afterAll, describe, expect, it } from 'vitest';

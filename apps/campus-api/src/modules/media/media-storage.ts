@@ -34,6 +34,12 @@ export interface SignedUpload {
   headers: Record<string, string>;
 }
 
+export interface ReadTerms {
+  /** False to have the browser download it rather than render it. */
+  inline: boolean;
+  fileName: string | null;
+}
+
 export interface StoredObject {
   sizeBytes: number;
   contentType: string | undefined;
@@ -55,6 +61,12 @@ export interface MediaStorage {
   ): Promise<Uint8Array>;
   /** Copies a private upload to where it is served, with the metadata given rather than the client's. */
   copyUpload(uploadKey: string, to: ServedFile): Promise<void>;
+  /** A GET of a private file. */
+  signRead(
+    key: string,
+    terms: ReadTerms,
+    expiresInSeconds: number,
+  ): Promise<string>;
   /** A key that is already gone counts as deleted. */
   delete(bucket: MediaBucket, key: string): Promise<void>;
   publicUrl(key: string): string;
@@ -117,6 +129,15 @@ export function r2Storage(
       return { url, headers: { 'Content-Type': terms.contentType } };
     },
 
+    async signRead(key, terms, expiresIn) {
+      const command = new GetObjectCommand({
+        Bucket: name(MediaBucket.Private),
+        Key: key,
+        ResponseContentDisposition: contentDisposition(terms),
+      });
+      return getSignedUrl(client, command, { expiresIn });
+    },
+
     async head(bucket, key) {
       try {
         const head = await client.send(
@@ -172,6 +193,18 @@ export function r2Storage(
       return `${options.publicUrl}/${key}`;
     },
   };
+}
+
+/** RFC 6266: an ASCII fallback, and the real name encoded for browsers that read it. */
+export function contentDisposition(terms: ReadTerms): string {
+  const type = terms.inline ? 'inline' : 'attachment';
+  if (!terms.fileName) return type;
+  const ascii = terms.fileName.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const encoded = encodeURIComponent(terms.fileName).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 function isNotFound(err: unknown): boolean {
