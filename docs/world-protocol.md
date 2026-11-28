@@ -245,16 +245,16 @@ connected to another ends the walk with `elsewhere`.
 "spaceKey": "…" | null, "mayAsk": false }`),
   saying where you stopped and why:
 
-  | `reason`         | Meaning                                                                                                                             | What to do                                                          |
-  | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-  | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                       | Nothing                                                             |
-  | `stopped`        | You sent `stopWalking` or a `move`                                                                                                  | Nothing                                                             |
-  | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                               | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
-  | `full`           | A space at capacity is in the way, theirs or another; you stopped beside the first one (`spaceKey`). `mayAsk` is `false`            | Say the space is full                                               |
-  | `gone`           | They left, or were not here                                                                                                         | Say so                                                              |
-  | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                   | Say they cannot be reached right now                                |
-  | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit | Say so                                                              |
-  | `moved_by_staff` | Staff removed you from a space mid-walk                                                                                             | The `staffAction` says the rest                                     |
+  | `reason`         | Meaning                                                                                                                                                       | What to do                                                          |
+  | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+  | `arrived`        | You stand next to them, in their space, never on their tile; for a space or a tile, see below                                                                 | Nothing                                                             |
+  | `stopped`        | You sent `stopWalking` or a `move`                                                                                                                            | Nothing                                                             |
+  | `refused`        | A space closed to you is in the way, theirs or another; you stopped beside the first one (`spaceKey`)                                                         | When `mayAsk`, offer to ask to enter: `requestEntry` for `spaceKey` |
+  | `full`           | A space at capacity is in the way, theirs or another; you stopped beside the first one (`spaceKey`). `mayAsk` is `false`                                      | Say the space is full                                               |
+  | `gone`           | They left, or were not here                                                                                                                                   | Say so                                                              |
+  | `elsewhere`      | They are online, but connected to another world server, which a walk cannot reach                                                                             | Say they cannot be reached right now                                |
+  | `no_way`         | No path reaches a tile beside them in their space: walls, a space with no room beside them, or a chase that ran past the step limit, the map's width × height | Say so                                                              |
+  | `moved_by_staff` | Staff removed you from a space mid-walk                                                                                                                       | The `staffAction` says the rest                                     |
 
 - **It follows them.** If they move, the way is found again before the next
   step.

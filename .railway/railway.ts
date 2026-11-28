@@ -124,7 +124,6 @@ export default defineRailway((ctx) => {
       WORLD_SESSION_REFRESH_WINDOW_SECONDS: preserve(),
       WORLD_STEP_MS: preserve(),
       WORLD_TICK_MS: preserve(),
-      WORLD_WALK_MAX_STEPS: preserve(),
     },
   });
   const campusApi = service('campus-api', {

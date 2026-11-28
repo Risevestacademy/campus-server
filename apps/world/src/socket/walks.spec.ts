@@ -161,11 +161,9 @@ describe('movement', () => {
       {
         walls = [],
         stepMs = env.WORLD_STEP_MS,
-        walkMaxSteps,
       }: {
         walls?: { x: number; y: number }[];
         stepMs?: number;
-        walkMaxSteps?: number;
       } = {},
     ) {
       const grid = new Uint8Array(5 * 5);
@@ -174,7 +172,6 @@ describe('movement', () => {
         env: {
           ...env,
           WORLD_STEP_MS: stepMs,
-          WORLD_WALK_MAX_STEPS: walkMaxSteps,
         },
         accounts: {
           ...accounts,
@@ -538,43 +535,52 @@ describe('movement', () => {
     });
 
     it('stops beside a door that closes mid-walk', async () => {
-      const walker = await arrive(person());
-      const grace = await inTheLibrary();
-
-      goTo(walker, grace.userId);
-      await waitFor(walker, (m) => m.type === 'walking');
-      send(grace.conn, { type: 'setLock', locked: true });
-
-      const ended = await walkEnded(walker);
-      expect(ended).toMatchObject({
-        reason: 'refused',
-        spaceKey: 'library',
-        mayAsk: true,
-        player: { x: 2 },
-      });
-      expect(
-        walker.messages.filter(
-          (m) => m.type === 'walking' && (m.player as { x: number }).x >= 3,
-        ),
-      ).toEqual([]);
-      await Promise.all([leave(walker), leave(grace.conn)]);
-    });
-
-    it('gives up with no_way once the walk reaches its step limit', async () => {
-      const own = await ownWorld([], { walkMaxSteps: 2 });
+      // A room over the right-hand three columns. The first step is taken at
+      // once and the next a second later, so the lock is in place, and seen,
+      // before the step that would cross the door: the test waits for it
+      // rather than racing the walk's timer.
+      const own = await ownWorld(
+        [
+          {
+            key: 'room',
+            access: SPACE_ACCESS.Normal,
+            x: 2,
+            y: 0,
+            width: 3,
+            height: 5,
+          },
+        ],
+        { stepMs: 1000 },
+      );
       try {
         const grace = person();
-        await own.open(grace, { x: 4, y: 4 });
+        const inside = await own.open(grace, { x: 4, y: 0 });
         const walker = await own.open(person());
 
         goTo(walker, grace);
-
-        const ended = await walkEnded(walker);
-        expect(ended).toMatchObject({ reason: 'no_way' });
-        expect(apart(ended.player, { x: 0, y: 0 })).toBe(2);
+        await waitFor(walker, (m) => m.type === 'walking');
+        send(inside, { type: 'setLock', locked: true });
+        await waitFor(
+          walker,
+          (m) => m.type === 'lockChanged' && m.locked === true,
+        );
+        // Still short of the door when the lock arrived.
         expect(
           walker.messages.filter((m) => m.type === 'walking'),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
+
+        const ended = await walkEnded(walker);
+        expect(ended).toMatchObject({
+          reason: 'refused',
+          spaceKey: 'room',
+          mayAsk: true,
+          player: { x: 1, y: 0 },
+        });
+        expect(
+          walker.messages.filter(
+            (m) => m.type === 'walking' && (m.player as { x: number }).x >= 2,
+          ),
+        ).toEqual([]);
       } finally {
         await own.close();
       }
