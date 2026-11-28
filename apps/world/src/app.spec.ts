@@ -1,4 +1,4 @@
-import { SessionScope, signSessionToken } from '@campus/session';
+import { SessionScope, signSessionToken } from '@campus/contracts';
 import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';

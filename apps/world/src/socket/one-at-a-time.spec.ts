@@ -1,4 +1,4 @@
-import {} from '@campus/session';
+import {} from '@campus/contracts';
 import {} from '@campus/space-access';
 import { describe, expect, it } from 'vitest';
 

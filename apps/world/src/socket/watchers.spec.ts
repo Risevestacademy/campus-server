@@ -1,4 +1,4 @@
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 

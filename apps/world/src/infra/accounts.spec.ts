@@ -5,7 +5,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { seatKey } from '../seat.js';
 import { mayEnter } from '@campus/space-access';
-import { isRefreshTokenLive, type RefreshTokenLiveness } from '@campus/session';
+import {
+  isRefreshTokenLive,
+  type RefreshTokenLiveness,
+} from '@campus/contracts';
 
 import {
   ACCOUNT_QUERY,
@@ -272,7 +275,7 @@ describe("world's live-session check, against campus-api's schema", () => {
     ],
     ['revoked at exactly now', { revokedAt: at(0), expiresAt: at(DAY) }, false],
   ])(
-    "agrees with @campus/session's isRefreshTokenLive on a token %s",
+    "agrees with @campus/contracts's isRefreshTokenLive on a token %s",
     async (_, row, expected) => {
       const family = randomUUID();
       await token(family, {

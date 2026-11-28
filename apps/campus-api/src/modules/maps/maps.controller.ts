@@ -1,5 +1,6 @@
 import {
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Param,
@@ -15,7 +16,8 @@ import type { AuthenticatedUser } from '../../shared/auth/authenticated-user.js'
 import { CurrentUser } from '../../shared/auth/current-user.decorator.js';
 import { CorrelationId } from '../../shared/http/correlation-id.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
-import { ApiPublishMap, ApiSyncMaps } from './docs/maps.docs.js';
+import { ApiListMaps, ApiPublishMap, ApiSyncMaps } from './docs/maps.docs.js';
+import type { MapResponseDto } from './dto/map.dto.js';
 import {
   MapIdParamDto,
   MapPublishedResponseDto,
@@ -23,6 +25,7 @@ import {
 import { MapSyncQueryDto, MapSyncResultDto } from './dto/map-sync.dto.js';
 import { MapPublishService } from './map-publish.service.js';
 import { MapSyncService } from './map-sync.service.js';
+import { MapsService } from './maps.service.js';
 
 @ApiTags('maps')
 @ApiBearerAuth()
@@ -34,7 +37,14 @@ export class MapsController {
   constructor(
     private readonly mapSync: MapSyncService,
     private readonly mapPublish: MapPublishService,
+    private readonly maps: MapsService,
   ) {}
+
+  @Get()
+  @ApiListMaps()
+  list(): Promise<MapResponseDto[]> {
+    return this.maps.list();
+  }
 
   @Post('sync')
   // 200, not POST's default 201: it answers with what it changed, and on

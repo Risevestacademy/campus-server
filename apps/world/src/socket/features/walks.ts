@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 
 import type { PresenceStore } from '../../infra/presence.js';
 import {

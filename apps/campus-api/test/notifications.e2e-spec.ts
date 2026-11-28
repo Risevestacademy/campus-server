@@ -5,7 +5,7 @@ import {
   SessionScope,
   signSessionToken,
   type NotificationCreated,
-} from '@campus/session';
+} from '@campus/contracts';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';

@@ -1,4 +1,4 @@
-import { signSessionToken, SessionScope } from '@campus/session';
+import { signSessionToken, SessionScope } from '@campus/contracts';
 import {} from '@campus/space-access';
 import { describe, expect, it } from 'vitest';
 import WebSocket from 'ws';

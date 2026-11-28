@@ -44,11 +44,13 @@ export class SpacesService {
   /**
    * Every live space, by name. `needsKind` narrows it to the ones with no
    * kind: the queue of spaces the map drew and no admin has set up yet.
+   * `mapId` narrows it to one map.
    */
   async list(query: ListSpacesQueryDto): Promise<PaginatedResponseDto<Space>> {
     const filter = and(
       isNull(spaces.retiredAt),
       query.needsKind ? isNull(spaces.kind) : undefined,
+      query.mapId ? eq(spaces.mapId, query.mapId) : undefined,
     );
 
     const [items, [{ total }]] = await Promise.all([

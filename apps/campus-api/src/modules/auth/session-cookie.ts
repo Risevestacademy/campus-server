@@ -4,7 +4,7 @@ import type { Response } from 'express';
 import type { Env } from '../../infra/config/config.module.js';
 import { requireGoogleAuth } from './google-auth.settings.js';
 import type { IssuedSession } from './session-issuer.js';
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 
 export const SESSION_COOKIE = 'campus_session';
 export const REFRESH_COOKIE = 'campus_refresh';

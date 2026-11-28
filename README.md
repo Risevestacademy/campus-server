@@ -10,8 +10,8 @@ apps/
   campus-api/   NestJS HTTP API (primary service)
   world/        Realtime WebSocket service: presence and movement
 packages/
-  session/      What campus-api and world must agree on: session tokens, roles,
-                sprite keys, the default space's key
+  contracts/    What campus-api and world must agree on: session tokens and
+                lifetimes, roles, sprite keys, shared keys and channels
   media/        LiveKit: room tokens and removals (world), webhook checks
                 (campus-api)
   space-access/ Who may enter a space, for campus-api and world alike
@@ -27,21 +27,22 @@ otel-collector.yaml        Local OpenTelemetry Collector config
 
 ## Packages
 
-| App               | Stack              | Default port | README                                                 |
-| ----------------- | ------------------ | ------------ | ------------------------------------------------------ |
-| `campus-api`      | NestJS 12          | `3000`       | [apps/campus-api/README.md](apps/campus-api/README.md) |
-| `world`           | Fastify 5          | `3001`       | [apps/world/README.md](apps/world/README.md)           |
-| `@campus/session` | TypeScript library | —            | —                                                      |
-| `@campus/media`   | TypeScript library | —            | —                                                      |
+| App                 | Stack              | Default port | README                                                       |
+| ------------------- | ------------------ | ------------ | ------------------------------------------------------------ |
+| `campus-api`        | NestJS 12          | `3000`       | [apps/campus-api/README.md](apps/campus-api/README.md)       |
+| `world`             | Fastify 5          | `3001`       | [apps/world/README.md](apps/world/README.md)                 |
+| `@campus/contracts` | TypeScript library | —            | [packages/contracts/README.md](packages/contracts/README.md) |
+| `@campus/media`     | TypeScript library | —            | —                                                            |
 
-`@campus/session` is the contract between campus-api and world: anything both
+`@campus/contracts` is the contract between campus-api and world: anything both
 services have to read or write the same way lives there, once, so the two
-cannot drift. It began with the session token, which is where its name comes
-from; it now also holds the system roles, the sprite keys and how a profile
-change is announced, and the default space's key. Nothing in it depends on
-either app. A rule only one service needs belongs in that service.
+cannot drift. It began with the session token; it now also holds the session
+lifetimes, the system roles, the sprite keys and how a profile change is
+announced, the default space's key, and the desk and notification channels.
+Nothing in it depends on either app. A rule only one service needs belongs in
+that service.
 
-`@campus/session` ships compiled output, so an app that depends on it needs it
+`@campus/contracts` ships compiled output, so an app that depends on it needs it
 built first. The root scripts below do that for you; a bare
 `pnpm --filter <app> build` does not.
 
@@ -60,7 +61,7 @@ pnpm install
 # start local infrastructure (Postgres, Redis, LiveKit, OTel Collector)
 docker compose -f docker-compose.local.yml up -d
 
-# run both apps in dev/watch mode (builds @campus/session first)
+# run both apps in dev/watch mode (builds @campus/contracts first)
 pnpm dev
 
 # run one app

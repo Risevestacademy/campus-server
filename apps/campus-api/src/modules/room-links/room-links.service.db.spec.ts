@@ -1,4 +1,4 @@
-import { DEFAULT_SPACE_KEY } from '@campus/session';
+import { DEFAULT_SPACE_KEY } from '@campus/contracts';
 import { PGlite } from '@electric-sql/pglite';
 import { asc, desc, eq, inArray } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';

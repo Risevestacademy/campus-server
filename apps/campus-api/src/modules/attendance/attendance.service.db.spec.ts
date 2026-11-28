@@ -386,6 +386,65 @@ describe('listStudents', () => {
     ]);
     expect(await service.listStudents(professorB, cohortId)).toEqual([]);
   });
+
+  describe('by track', () => {
+    /** The catalogue track a cohort track runs, as the roster filters by. */
+    const catalogue = async (cohortTrackId: string) => {
+      const [row] = await db
+        .select({ trackId: cohortTracks.trackId })
+        .from(cohortTracks)
+        .where(eq(cohortTracks.id, cohortTrackId));
+      return row.trackId;
+    };
+
+    it("keeps the track's students, each with every class the caller may read", async () => {
+      expect(
+        await service.listStudents(admin, cohortId, {
+          trackId: await catalogue(trackA),
+        }),
+      ).toEqual([
+        expect.objectContaining({ userId: ann.id, classes: 3, percentage: 77 }),
+      ]);
+      expect(
+        await service.listStudents(admin, cohortId, {
+          trackId: await catalogue(trackB),
+        }),
+      ).toEqual([
+        expect.objectContaining({ userId: bob.id, classes: 1, absent: 1 }),
+      ]);
+    });
+
+    it('still narrows to what the caller may read', async () => {
+      expect(
+        await service.listStudents(professorA, cohortId, {
+          trackId: await catalogue(trackA),
+        }),
+      ).toEqual([expect.objectContaining({ userId: ann.id, classes: 1 })]);
+      expect(
+        await service.listStudents(professorA, cohortId, {
+          trackId: await catalogue(trackB),
+        }),
+      ).toEqual([]);
+    });
+
+    it('keeps a student whose membership has ended', async () => {
+      await db
+        .update(cohortMembers)
+        .set({ status: StudentStatus.Withdrawn, leftAt: new Date() })
+        .where(eq(cohortMembers.userId, bob.id));
+      expect(
+        await service.listStudents(admin, cohortId, {
+          trackId: await catalogue(trackB),
+        }),
+      ).toEqual([expect.objectContaining({ userId: bob.id })]);
+    });
+
+    it('matches nobody for a track the cohort does not run', async () => {
+      expect(
+        await service.listStudents(admin, cohortId, { trackId: randomUUID() }),
+      ).toEqual([]);
+    });
+  });
 });
 
 describe('getStudent', () => {

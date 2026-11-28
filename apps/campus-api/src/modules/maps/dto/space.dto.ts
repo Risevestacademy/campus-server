@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -47,11 +48,14 @@ export const MIN_AUDIO_DISTANCE = 0;
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.replaceAll('\u0000', '').trim() : value;
 
-/**
- * Pagination plus the one filter this list needs: the spaces waiting for an
- * admin to say what they are.
- */
+/** Pagination, the spaces waiting for an admin, and the spaces of one map. */
 export class ListSpacesQueryDto extends PaginationQueryDto {
+  /** Only the spaces of this map. */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  mapId?: string;
+
   /**
    * Only live spaces with no kind set: the queue of spaces waiting to be set
    * up.

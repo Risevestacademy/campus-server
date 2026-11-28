@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { SessionScope } from '@campus/session';
+import { SessionScope } from '@campus/contracts';
 
 import { CohortRole } from '../../cohorts/schema.js';
 import { SystemRole } from '../../users/schema.js';
